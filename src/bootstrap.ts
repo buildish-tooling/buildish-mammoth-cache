@@ -21,7 +21,7 @@ import {
   saveBaseCache,
   type BaseCacheOperationResult,
 } from './cache/service';
-import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from './ci/types';
+import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from './ci';
 import { createCacheModel, type CacheModel, type CommandOutputCapture } from './cache/model';
 import {
   normalizeActionConfig,
@@ -132,7 +132,7 @@ export interface BootstrapDependencies {
 }
 
 /**
- * Shared startup path for both the prepare and finalize entrypoints.
+ * Shared startup path for both the "prepare" and "finalize" entrypoints.
  *
  * This is the only place that currently wires the active CI adapter, reads action inputs, and
  * normalizes runtime config.

@@ -19,7 +19,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
-import type { CiJobContext } from '../ci/types';
+import type { CiJobContext } from '../ci';
 import type { CoreExecutionPhase } from '../core/lifecycle';
 import {
   isAbsolutePosixOrWindowsPath,
@@ -142,7 +142,7 @@ export function readActionInputs(inputProvider: InputProvider): RawActionInputs 
 /**
  * Loads the optional workspace-relative config file and overlays it with explicit action inputs.
  *
- * Direct action inputs always win over file-backed values so workflows can keep local defaults in a
+ * Direct action inputs always win over file-backed values, so workflows can keep local defaults in a
  * committed config file while retaining per-job overrides in workflow YAML.
  */
 export async function resolveActionInputsFromConfigFile(

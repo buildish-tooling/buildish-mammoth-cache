@@ -34,7 +34,7 @@ export interface ReportSink {
     lines: readonly string[],
     writeLine: (message: string) => void,
   ): void;
-  /** Publishes the provided markdown lines to the provider summary surface. */
+  /** Publishes the provided Markdown lines to the provider summary surface. */
   publishSummary(lines: readonly string[]): Promise<void>;
   /** Replaces the current provider-managed summary content when supported. */
   replaceSummary(lines: readonly string[]): Promise<void>;

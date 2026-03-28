@@ -29,7 +29,7 @@ import {
   serializeCacheDeltaManifest,
 } from '../cache/manifest';
 import type { CacheModel } from '../cache/model';
-import type { CiJobContext } from '../ci/types';
+import type { CiJobContext } from '../ci';
 import type {
   ArtifactLookupOptions,
   WorkflowArtifactBackend,
@@ -326,20 +326,6 @@ export async function findDeltaArtifactByProducerJob(
   }
 
   return matches[0];
-}
-
-/**
- * Downloads a named artifact, verifies the reported content hash when available, and validates the
- * package.
- */
-export async function downloadAndVerifyDeltaArtifactPackageByName(
-  artifactBackend: WorkflowArtifactBackend,
-  artifactName: string,
-  options: DownloadDeltaArtifactPackageOptions = {},
-): Promise<DownloadedDeltaArtifactPackage> {
-  assertArtifactLookupScopeSupport(artifactBackend, options.scope, 'artifact lookup');
-  const artifact = await artifactBackend.getArtifact(artifactName, { scope: options.scope });
-  return downloadAndVerifyDeltaArtifactPackage(artifactBackend, artifact, options);
 }
 
 /**

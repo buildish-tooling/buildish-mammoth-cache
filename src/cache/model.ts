@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
-import type { CiJobContext } from '../ci/types';
+import type { CiJobContext } from '../ci';
 import type { ConfiguredCachePartitionInput, NormalizedActionConfig } from '../config/types';
 
 export const DEFAULT_CACHE_KEY_TEMPLATE =
@@ -46,7 +46,7 @@ export interface CacheModel {
    */
   readonly cacheKey: string;
   /**
-   * Detected Java major version from `java -version`.
+   * The detected Java major version, derived from `java -version`.
    *
    * Must be an integer >= 8; versions below 8 are rejected during model creation.
    */
@@ -73,8 +73,8 @@ export interface CacheModel {
   /**
    * Stable digest of the resolved active cache partition layout.
    *
-   * The fingerprint changes when the active partition order, includes, or excludes change and is
-   * part of the base cache key so different cache layouts do not collide.
+   * The fingerprint changes when at least one of the active order of partitions, or the includes or excludes change and is
+   * part of the base cache key, so different cache layouts do not collide.
    */
   readonly partitionFingerprint: string;
   /**
@@ -85,13 +85,13 @@ export interface CacheModel {
    */
   readonly partitions: readonly CachePartitionDefinition[];
   /**
-   * Absolute include globs aggregated from all partitions.
+   * Absolute include-globs aggregated from all partitions.
    *
-   * These are passed to cache and filesystem operations in listed order.
+   * These are passed to cache and filesystem operations in the listed order.
    */
   readonly includePaths: readonly string[];
   /**
-   * Absolute exclude globs aggregated and de-duplicated from all partitions.
+   * Absolute exclude-globs aggregated and deduplicated from all partitions.
    *
    * Always includes the shared exclusions for configuration-cache content and `*.lock` files.
    */
@@ -115,26 +115,26 @@ export interface CachePartitionDefinition {
   /** Longer human-readable explanation of what the partition stores. */
   readonly description: string;
   /**
-   * Partition include globs relative to `gradleUserHome`.
+   * Partition include-globs relative to `gradleUserHome`.
    *
    * These remain stable across machines and are preferred for manifests and tests.
    */
   readonly relativeIncludeGlobs: readonly string[];
   /**
-   * Partition exclude globs relative to `gradleUserHome`.
+   * Partition exclude-globs relative to `gradleUserHome`.
    *
    * The effective list always contains the non-overridable hard safety excludes plus any
    * partition-specific excludes from the built-in preset or user override.
    */
   readonly relativeExcludeGlobs: readonly string[];
   /**
-   * Absolute include globs rooted under the effective `gradleUserHome`.
+   * Absolute include-globs rooted under the effective `gradleUserHome`.
    *
    * These are the concrete paths used by cache restore/save operations for the current runner.
    */
   readonly absoluteIncludeGlobs: readonly string[];
   /**
-   * Absolute exclude globs rooted under the effective `gradleUserHome`.
+   * Absolute exclude-globs rooted under the effective `gradleUserHome`.
    *
    * These mirror `relativeExcludeGlobs` after joining against `gradleUserHome`.
    */
@@ -192,7 +192,7 @@ interface BuiltInCachePartitionPreset {
  * Built-in partition presets in their stable resolution order.
  *
  * This order is user-visible because active built-ins are emitted first, custom partitions are
- * appended afterwards, and the resulting ordered layout contributes to `partitionFingerprint`.
+ * appended afterward, and the resulting ordered layout contributes to `partitionFingerprint`.
  */
 const BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPreset[] = [
   {

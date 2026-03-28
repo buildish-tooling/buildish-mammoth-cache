@@ -28,7 +28,7 @@ export const JOB_MODES = ['standalone', 'distributed-worker', 'distributed-aggre
  *
  * Valid values are:
  * - `standalone`: single-job execution
- * - `distributed-worker`: worker job that contributes build outputs but does not save shared cache
+ * - `distributed-worker`: worker job that contributes build outputs but does not save a shared base cache
  * - `distributed-aggregator`: coordinating job that can aggregate results from dependent jobs
  */
 export type JobMode = (typeof JOB_MODES)[number];
@@ -66,9 +66,9 @@ export type RestoreCleanupMode = (typeof RESTORE_CLEANUP_MODES)[number];
 export interface ConfiguredCachePartitionInput {
   /** Stable machine-readable partition identifier. */
   readonly id: string;
-  /** Gradle-user-home-relative include globs for this partition. */
+  /** Include globs for this partition, relative to the Gradle-user-home. */
   readonly includes: readonly string[];
-  /** Gradle-user-home-relative exclude globs for this partition. */
+  /** Exclude globs for this partition, relative to the Gradle-user-home. */
   readonly excludes: readonly string[];
 }
 
@@ -228,7 +228,7 @@ export interface NormalizedActionConfig {
   /**
    * Explicit repository-relative wrapper properties files.
    *
-   * Defaults to an empty list and is populated only when wrapper selection mode is `explicit`.
+   * Defaults to an empty list and is populated only when the wrapper selection mode is `explicit`.
    */
   readonly wrapperPropertiesFiles: readonly string[];
   /** Whether post-build cleanup behavior is enabled. Defaults to `true`. */
@@ -236,7 +236,7 @@ export interface NormalizedActionConfig {
   /** Restore-time cleanup mode applied before the build starts. Defaults to `none`. */
   readonly restoreCleanupMode: RestoreCleanupMode;
   /**
-   * Absolute supported Gradle user home.
+   * Absolute path to the supported Gradle user home.
    *
    * Defaults to `$GRADLE_USER_HOME` when set, otherwise `${home}/.gradle`; v1 rejects arbitrary
    * custom locations outside that supported default.

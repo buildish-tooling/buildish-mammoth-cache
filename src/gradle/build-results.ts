@@ -17,7 +17,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { CiJobContext } from '../ci/types';
+import type { CiJobContext } from '../ci';
 import {
   parseSerializedJsonObject,
   validateNonNegativeNumber,

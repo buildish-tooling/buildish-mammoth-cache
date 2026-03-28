@@ -24,7 +24,7 @@ import {
   type CacheManifest,
 } from '../cache/manifest';
 import type { BaseCacheRestoreResult } from '../cache/service';
-import type { CiJobContext } from '../ci/types';
+import type { CiJobContext } from '../ci';
 import {
   parseSerializedJsonObject,
   validateArray,

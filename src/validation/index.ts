@@ -125,7 +125,7 @@ export function validateLowercaseSha256(value: unknown, label: string): string {
 /**
  * Treats POSIX-absolute and Windows-rooted inputs as non-relative paths.
  *
- * Windows drive prefixes are rejected even without a separator (for example `C:tmp`) because
+ * Windows drive prefixes are rejected even without a separator (for example, `C:tmp`) because
  * they are not safe portable relative paths.
  */
 export function isAbsolutePosixOrWindowsPath(value: string): boolean {
@@ -137,7 +137,7 @@ export function isAbsolutePosixOrWindowsPath(value: string): boolean {
 }
 
 /**
- * Normalizes a user-supplied repository-relative path to canonical POSIX form.
+ * Normalizes a user-supplied repository-relative path to its canonical POSIX path.
  *
  * Windows separator characters are accepted for usability, but Windows drive-prefixed,
  * UNC, and rooted paths are rejected before normalization.

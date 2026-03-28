@@ -19,7 +19,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import type { CiJobContext } from '../ci/types';
+import type { CiJobContext } from '../ci';
 
 export const JOB_SINGLE_RUN_OWNER_TOKEN_STATE =
   'buildish-mammoth-cache-gradle-job-single-run-owner-token';

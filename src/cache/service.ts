@@ -108,7 +108,7 @@ export type BaseCacheOperationResult = BaseCacheRestoreResult | BaseCacheSaveRes
 /**
  * Creates the ordered include/exclude path list expected by the current base-cache backend.
  *
- * Excludes are emitted as negated patterns so the cache backend never captures transient Gradle
+ * Excludes are emitted as negated patterns, so the cache backend never captures transient Gradle
  * state such as configuration cache content or lock files.
  */
 export function createBaseCachePaths(cacheModel: CacheModel): readonly string[] {
@@ -116,10 +116,10 @@ export function createBaseCachePaths(cacheModel: CacheModel): readonly string[] 
 }
 
 /**
- * Derives restore-key prefixes for branch fallback when the configured template supports it.
+ * Derives restore-key prefixes for the branch fallback when the configured template supports it.
  *
  * We only generate a restore prefix when `refName` is the final placeholder in the template. That
- * keeps prefix matching predictable and avoids accidentally widening fallback scope for more complex
+ * keeps prefix matching predictable and avoids accidentally widening the fallback scope for more complex
  * custom templates.
  */
 export function createBaseCacheRestoreKeys(
@@ -215,9 +215,9 @@ export async function restoreBaseCache(
 }
 
 /**
- * Saves the base Gradle cache from the post action when the current job mode allows it.
+ * Saves the base Gradle cache from the post-action when the current job mode allows it.
  *
- * Save is intentionally gated behind post-action arming, read-only mode, and job-mode checks so we
+ * Save is intentionally gated behind post-action arming, read-only mode, and job-mode checks, so we
  * avoid introducing duplicate writers or unexpected state changes in distributed execution.
  */
 export async function saveBaseCache(
@@ -313,7 +313,7 @@ export async function saveBaseCache(
  * Marks the finalize phase as eligible to consider a later base-cache save.
  *
  * Arming happens during the prepare phase after restore/setup work has completed, so the finalize phase can
- * cheaply distinguish a legitimate paired execution from a standalone post invocation.
+ * cheaply distinguish a legitimate paired execution from a standalone post-invocation.
  */
 export function armBaseCachePostAction(saveState: (name: string, value: string) => void): void {
   saveState(POST_ACTION_ARMED_STATE, 'true');

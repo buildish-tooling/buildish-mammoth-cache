@@ -27,7 +27,7 @@ export interface CiJobContext {
   /**
    * Best-effort human-readable ref name for the current execution.
    *
-   * Examples include `main`, `feature/my-branch`, or a PR head/base ref depending on event type.
+   * Examples include `main`, `feature/my-branch`, or a PR head/base ref depending on the event type.
    */
   readonly resolvedRefName: string;
   /**

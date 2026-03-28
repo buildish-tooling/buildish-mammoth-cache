@@ -507,28 +507,20 @@ async function deleteTargetPath(
   relativePath: string,
 ): Promise<void> {
   await verifyDirectoryPath(gradleUserHome, path.posix.dirname(relativePath), false);
-  const stats = await lstat(targetPath).catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return null;
-    }
-
-    throw error;
-  });
+  const stats = await statReplaceableFile(targetPath, relativePath);
 
   if (!stats) {
     return;
-  }
-  if (stats.isSymbolicLink()) {
-    throw new Error(`Merged delta target '${relativePath}' must not be a symbolic link.`);
-  }
-  if (!stats.isFile()) {
-    throw new Error(`Merged delta target '${relativePath}' must be a regular file.`);
   }
 
   await rm(targetPath);
 }
 
 async function assertReplaceableFile(targetPath: string, relativePath: string): Promise<void> {
+  await statReplaceableFile(targetPath, relativePath);
+}
+
+async function statReplaceableFile(targetPath: string, relativePath: string) {
   const stats = await lstat(targetPath).catch((error: unknown) => {
     if (isMissingPathError(error)) {
       return null;
@@ -538,7 +530,7 @@ async function assertReplaceableFile(targetPath: string, relativePath: string): 
   });
 
   if (!stats) {
-    return;
+    return null;
   }
   if (stats.isSymbolicLink()) {
     throw new Error(`Merged delta target '${relativePath}' must not be a symbolic link.`);
@@ -546,6 +538,8 @@ async function assertReplaceableFile(targetPath: string, relativePath: string): 
   if (!stats.isFile()) {
     throw new Error(`Merged delta target '${relativePath}' must be a regular file.`);
   }
+
+  return stats;
 }
 
 async function ensureDirectoryPath(

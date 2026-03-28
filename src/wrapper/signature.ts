@@ -30,9 +30,9 @@ export interface TrustedOpenPgpPublicKey {
  * Trust allowlist for Gradle wrapper detached-signature verification.
  *
  * Rotation guidance:
- * - pin only keys published at https://gradle.org/keys/
- * - keep old and new trusted keys here concurrently during Gradle key rotation
- * - remove a retired key only after supported wrapper versions are no longer signed by it
+ * - Only pin keys that are published at https://gradle.org/keys/.
+ * - Keep old and new trusted keys here concurrently during Gradle key rotation.
+ * - Remove a retired key only after it no longer signs supported wrapper versions.
  */
 export const GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST: readonly TrustedOpenPgpPublicKey[] = [
   {

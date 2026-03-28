@@ -19,7 +19,7 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path';
 import { setTimeout as sleepTimeout } from 'node:timers/promises';
 
-import type { HttpHeadersByHost } from '../ci/types';
+import type { HttpHeadersByHost } from '../ci';
 import { verifyGradleDetachedSignature } from './signature';
 import type {
   ProvisionedWrapperJar,
@@ -128,7 +128,7 @@ export function deriveWrapperDownloadPlan(
 }
 
 /**
- * Ensures each targeted wrapper has a verified `gradle-wrapper.jar` beside its properties file.
+ * Ensures each targeted wrapper has a verified `gradle-wrapper.jar` next to its properties file.
  */
 export async function provisionWrapperJars(
   wrappers: readonly ValidatedWrapperPropertiesFile[],
