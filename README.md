@@ -307,6 +307,237 @@ That example:
 This is intentionally narrower than “delete everything outside the include patterns” because the action does not own all
 of `GRADLE_USER_HOME`, especially on long-lived self-hosted runners.
 
+## Usage examples
+
+### Standalone — single Gradle job
+
+The minimal setup for a single-job workflow.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write  # required: cache write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<ref>
+      - run: ./gradlew build
+```
+
+### Standalone — pull-request read-only mode
+
+The action defaults to read-only on `pull_request` events. No extra configuration is needed.
+
+```yaml
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<ref>
+      - run: ./gradlew build
+```
+
+### Distributed — worker and aggregator jobs
+
+A distributed workflow where independent worker jobs build in parallel and an aggregator merges the
+resulting Gradle cache deltas.
+
+```yaml
+jobs:
+  worker-a:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<ref>
+        with:
+          job-mode: distributed-worker
+      - run: ./gradlew :module-a:build
+
+  worker-b:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<ref>
+        with:
+          job-mode: distributed-worker
+      - run: ./gradlew :module-b:build
+
+  aggregator:
+    needs: [worker-a, worker-b]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<ref>
+        with:
+          job-mode: distributed-aggregator
+          dependent-jobs: worker-a, worker-b
+```
+
+### Config file — centralized configuration
+
+Use a shared config file to avoid repeating inputs across jobs.
+
+```yaml
+# .github/buildish-mammoth-gradle.yml
+job-mode: distributed-worker
+cache-key-prefix: my-project-gradle-
+wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
+```
+
+```yaml
+steps:
+  - uses: actions/checkout@v5
+  - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<ref>
+    with:
+      config-file: .github/buildish-mammoth-gradle.yml
+```
+
+### Partition customization — prune kotlin-dsl, add custom partition
+
+```yaml
+steps:
+  - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<ref>
+    with:
+      cache-partitions: |
+        [
+          { "id": "kotlin-dsl", "includes": [] },
+          { "id": "my-generated", "includes": ["caches/*/my-generated/**"] }
+        ]
+```
+
+## GitHub Actions permissions
+
+The minimum required token permissions depend on the job mode and read-only setting.
+
+| Scenario | `actions` | `contents` |
+|---|---|---|
+| Standalone, cache write | `write` | `read` |
+| Standalone, read-only | `read` | `read` |
+| Distributed worker | `write` | `read` |
+| Distributed aggregator | `write` | `read` |
+| Cache disabled | none | `read` |
+
+`actions: write` is required to save cache entries and to upload or download workflow artifacts used
+by the distributed delta exchange. `contents: read` is required for workspace checkout.
+
+The `github-token` input (or `GITHUB_TOKEN` environment variable) is used only for authenticated
+wrapper JAR downloads against the GitHub API. It is never written to job summaries or persisted
+in post-action state.
+
+## Security
+
+### Gradle wrapper verification
+
+Every `gradle-wrapper.jar` provisioned by this action goes through a three-step verification chain
+before it is written to disk:
+
+1. **SHA-256 checksum** — the expected digest is downloaded from `services.gradle.org` over HTTPS
+   and compared to the downloaded JAR bytes.
+2. **Detached OpenPGP signature** — the ASCII-armored `.asc` signature is downloaded from
+   `services.gradle.org` and verified against a pinned Gradle signing-key allowlist using a fresh
+   ephemeral GnuPG home. The pinned keys live in `src/wrapper/signature.ts`.
+3. **Race-condition guard** — the JAR is written atomically via a temporary file so a partially
+   written JAR is never exposed to the Gradle invocation.
+
+The key allowlist is designed to support smooth Gradle signing-key rotation: old and new keys may
+overlap in the allowlist. Remove a retired key only after it no longer signs any wrapper version
+you intend to support.
+
+To override the GnuPG binary (for example, on Windows runners where multiple `gpg` variants may
+exist), set the `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` environment variable before the action
+runs.
+
+### Token scoping
+
+- `github-token` is used exclusively for authenticated requests to `api.github.com` and
+  `raw.githubusercontent.com` when downloading wrapper JARs. It is applied per-host so it is never
+  sent to any other endpoint.
+- The token is never written to workflow summaries, log output, or post-action state.
+
+### Hard cache safety exclusions
+
+The following paths are excluded from every cache partition unconditionally and cannot be overridden:
+
+| Pattern | Reason |
+|---|---|
+| `**/configuration-cache/**` | May contain encrypted secrets; volatile by nature |
+| `**/*.lock` | PID-bearing files that cause hangs if restored on another runner |
+| `caches/*/cc-keystore` | Configuration-cache encryption key material |
+| `caches/journal-1/**` | Gradle's local-only file-access journal; migrating it causes corruption |
+
+## Maintenance notes
+
+### Gradle signing-key rotation
+
+When Gradle publishes a new signing key at <https://gradle.org/keys/>:
+
+1. Verify the new key's fingerprint matches the published fingerprint.
+2. Add the new key to the `GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST` array in
+   `src/wrapper/signature.ts` alongside the current key.
+3. After the old key is no longer used to sign any wrapper version you support, remove it from the
+   allowlist.
+
+Keep old and new keys in the allowlist concurrently during the rotation window to avoid breaking
+builds that pin an older Gradle version.
+
+### Cache schema version
+
+`cacheSchemaVersion` in `src/config/types.ts` is part of the default cache key template. Bump it
+whenever a change to the cache content or partition layout would make an existing base cache entry
+invalid or unsafe to reuse.
+
+### Partition fingerprint changes
+
+The `partitionFingerprint` value is a 16-character SHA-256 digest of the full ordered partition
+layout. Any change to the active partition set, include globs, exclude globs, or the
+`HARD_CACHE_EXCLUDE_GLOBS` list automatically produces a new fingerprint and therefore a new cache
+key lineage. No manual bump is needed.
+
+### Adding a new CI provider
+
+See [`docs/ci-abstraction.md`](docs/ci-abstraction.md) for the provider boundary rules and the
+interfaces that a new adapter must implement.
+
 ## Current status
 
 Mammoth Cache for Gradle is under active development.
