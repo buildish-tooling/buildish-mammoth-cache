@@ -16,31 +16,16 @@ limitations under the License.
 
 # Open TODOs
 
-1. Documentation for the mammoth action
-   - Write `README.md`, examples, permissions table, security section, and maintenance notes.
-   - Explicitly document the Gradle wrapper jar download and verification process in the docs/ directory.
-     Also explain how it related to the "buildish helper tool".
-   - Explicitly document the cache key generation process in the docs/ directory.
-   - Explicitly document the base cache design in the docs/ directory.
-   - Explicitly document the CI abstraction layer in the docs/ directory.
-   - Explicitly document the bootstrap process in the docs/ directory.
-   - If diagrams help, use Mermaid
-   - All types and functions in the src/ tree must have JSDoc comments.
-   - All tests must be descriptive.
-2. Cleanup the code base
+1. Cleanup the code base
    - MANUALLY inspect all files
    - Check validate\*() functions for duplicates
-3. Validate that the action build-results (INIT_SCRIPT_CONTENTS + SERVICE_PLUGIN_CONTENTS in actions/mammoth-cache/gradle/src/gradle/build-results.ts)
-   are not too close to the Gradle action's code.
-   - The scripts look a bit GitHub CI specific, using `RUNNER_TEMP` and `GITHUB_ACTION` system properties.
-   - Why are those not env vars?
-4. Site + logo!
+2. Site + logo!
    - We need a logo for the project!
    - Leverage the work done in Polaris, use Hugo.
    - But come up with better Docker builds for the site.
    - Respect that different plugins/actions/tools have different release cadences.
    - Also respect that different plugins/actions/tools have different documentation needs.
-5. Add release workflows
+3. Add release workflows
    - Use version tags. "full" version tags like v1.2.3 become actual GitHub releases.
      We can provide "moving" tags like v1, v1.2 as well. Those would then point to the latest release in their
      respective series.
