@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { hashFileSha256, isMissingPathError } from '../fs';
 import {
   parseSerializedJsonObject,
   validateArray,
@@ -381,17 +380,6 @@ async function captureStableFileEntry(
   throw new Error(`Cache manifest could not capture a stable snapshot for '${relativePath}'.`);
 }
 
-async function hashFileSha256(filePath: string): Promise<string> {
-  const hash = createHash('sha256');
-  const stream = createReadStream(filePath);
-
-  return await new Promise<string>((resolve, reject) => {
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('error', reject);
-    stream.on('close', () => resolve(hash.digest('hex')));
-  });
-}
-
 async function walkIncludedTree(
   pathToScan: string,
   onFile: (absolutePath: string) => Promise<void>,
@@ -700,10 +688,6 @@ function isStableDuringCapture(
 
 function toPosixRelativePath(baseDirectory: string, absolutePath: string): string {
   return path.relative(baseDirectory, absolutePath).split(path.sep).join(path.posix.sep);
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return !!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
 function validateManifestPartitions(value: unknown): readonly CachePartitionManifest[] {

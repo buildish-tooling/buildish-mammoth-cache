@@ -20,6 +20,7 @@ import path from 'node:path';
 import { setTimeout as sleepTimeout } from 'node:timers/promises';
 
 import type { HttpHeadersByHost } from '../ci';
+import { isReplaceTargetError } from '../fs';
 import { verifyGradleDetachedSignature } from './signature';
 import type {
   ProvisionedWrapperJar,
@@ -602,11 +603,6 @@ async function placeFileAtomically(
 
 function computeSha256(contents: Uint8Array): string {
   return createHash('sha256').update(contents).digest('hex');
-}
-
-function isReplaceTargetError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === 'EEXIST' || code === 'EPERM' || code === 'EACCES';
 }
 
 async function defaultSleep(milliseconds: number): Promise<void> {

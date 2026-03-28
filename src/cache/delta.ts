@@ -24,6 +24,7 @@ import {
   PORTABLE_GRADLE_USER_HOME,
   type DownloadedDeltaArtifactPackage,
 } from '../artifacts/service';
+import { isMissingPathError, isReplaceTargetError, resolveNormalizedPathWithinRoot } from '../fs';
 import { validateNormalizedRelativePosixPath } from '../validation';
 
 import {
@@ -647,26 +648,11 @@ function resolvePathWithinRoot(rootDirectory: string, relativePath: string, labe
     label,
     'the target directory',
   );
-  const resolvedRoot = path.resolve(rootDirectory);
-  const resolvedPath = path.resolve(resolvedRoot, normalizedRelativePath.split('/').join(path.sep));
-  const rootWithSeparator = resolvedRoot.endsWith(path.sep)
-    ? resolvedRoot
-    : `${resolvedRoot}${path.sep}`;
-
-  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(rootWithSeparator)) {
-    throw new Error(`${label} '${relativePath}' escapes the target directory.`);
-  }
-
-  return resolvedPath;
-}
-
-function isReplaceTargetError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === 'EEXIST' || code === 'EPERM' || code === 'EACCES';
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return !!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+  return resolveNormalizedPathWithinRoot(
+    rootDirectory,
+    normalizedRelativePath,
+    `${label} '${relativePath}' escapes the target directory.`,
+  );
 }
 
 async function defaultSetTimes(filePath: string, atime: Date, mtime: Date): Promise<void> {

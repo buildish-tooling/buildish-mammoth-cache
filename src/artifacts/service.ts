@@ -21,6 +21,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
+import { hashFileSha256, resolveNormalizedPathWithinRoot } from '../fs';
+
 import {
   type CacheDeltaEntry,
   type CacheDeltaManifest,
@@ -740,38 +742,19 @@ function formatPayloadFileName(index: number): string {
 }
 
 function resolveGradleCachePath(gradleUserHome: string, relativePath: string): string {
-  const normalizedRelativePath = validatePackageRelativePath(relativePath, 'delta relativePath');
-  const resolvedRoot = path.resolve(gradleUserHome);
-  const resolvedPath = path.resolve(resolvedRoot, normalizedRelativePath.split('/').join(path.sep));
-  const rootWithSeparator = resolvedRoot.endsWith(path.sep)
-    ? resolvedRoot
-    : `${resolvedRoot}${path.sep}`;
-
-  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(rootWithSeparator)) {
-    throw new Error(`Delta relative path '${relativePath}' escapes the Gradle user home.`);
-  }
-
-  return resolvedPath;
+  return resolveNormalizedPathWithinRoot(
+    gradleUserHome,
+    validatePackageRelativePath(relativePath, 'delta relativePath'),
+    `Delta relative path '${relativePath}' escapes the Gradle user home.`,
+  );
 }
 
 function resolveArtifactPackagePath(rootDirectory: string, relativePath: string): string {
-  const normalizedRelativePath = validatePackageRelativePath(
-    relativePath,
-    'artifact package relative path',
+  return resolveNormalizedPathWithinRoot(
+    rootDirectory,
+    validatePackageRelativePath(relativePath, 'artifact package relative path'),
+    `Artifact package path '${relativePath}' escapes the extracted root directory.`,
   );
-  const resolvedRoot = path.resolve(rootDirectory);
-  const resolvedPath = path.resolve(resolvedRoot, normalizedRelativePath.split('/').join(path.sep));
-  const rootWithSeparator = resolvedRoot.endsWith(path.sep)
-    ? resolvedRoot
-    : `${resolvedRoot}${path.sep}`;
-
-  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(rootWithSeparator)) {
-    throw new Error(
-      `Artifact package path '${relativePath}' escapes the extracted root directory.`,
-    );
-  }
-
-  return resolvedPath;
 }
 
 function validatePackageSchemaVersion(
@@ -905,17 +888,6 @@ function sanitizeArtifactToken(token: string, label: string, maxLength = 64): st
 
 function validatePackageRelativePath(relativePath: string, label: string): string {
   return validateNormalizedRelativePosixPath(relativePath, label, 'the artifact package');
-}
-
-async function hashFileSha256(filePath: string): Promise<string> {
-  const hash = createHash('sha256');
-
-  return await new Promise<string>((resolve, reject) => {
-    const input = createReadStream(filePath);
-    input.on('data', (chunk: Buffer) => hash.update(chunk));
-    input.on('error', reject);
-    input.on('close', () => resolve(hash.digest('hex')));
-  });
 }
 
 function sha256Hex(value: string): string {
