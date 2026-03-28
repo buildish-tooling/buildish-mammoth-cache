@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# **The Gradle User Home Caches Directory: Portability, Internal Structures, and Optimization for Distributed Build Systems**
+# The Gradle User Home Caches Directory: Portability, Internal Structures, and Optimization for Distributed Build Systems
 
 The architecture of the Gradle build tool is predicated on a sophisticated caching hierarchy designed to minimize
 redundant computation and network overhead. Central to this system is the Gradle User Home directory, commonly referred
@@ -28,7 +28,7 @@ is essential for maintaining build determinism and optimizing performance. The f
 decomposition of the caches/ directory, identifying the specific patterns of files that are safe for cross-machine
 migration and those that must be omitted to avoid non-deterministic failures.
 
-## **Taxonomy of the Gradle User Home and Caches Hierarchy**
+## Taxonomy of the Gradle User Home and Caches Hierarchy
 
 The Gradle User Home is typically established at \~/.gradle on Unix-based systems or %USERPROFILE%\\.gradle on Windows
 environments, though its location can be overridden via the GRADLE_USER_HOME environment variable or the \-g
@@ -47,7 +47,7 @@ The caches/ subdirectory itself is a partitioned environment where data is organ
 Gradle's internal cleanup services categorize these resources into specific buckets with varying retention policies,
 reflecting their relative importance and ease of regeneration.6
 
-### **Categories of Cached Resources and Retention Policies**
+### Categories of Cached Resources and Retention Policies
 
 The management of disk space within the caches/ directory is governed by an automated garbage collection mechanism that
 evaluates the age and utility of specific files. Resources that are "downloaded" from external sources generally enjoy
@@ -66,14 +66,14 @@ This categorization provides the first major insight into portability: resources
 immutable and global, while those with 7-day retention are often ephemeral or derivative, suggesting they are safer to
 omit when storage is constrained.
 
-## **Anatomy of the Dependency Store: modules-2**
+## Anatomy of the Dependency Store: modules-2
 
 The modules-2 directory is arguably the most critical component of the cache for ensuring offline build capability and
 reducing network latency. It functions as a local proxy for all Maven, Ivy, and flat-directory repositories declared in
 a project's build scripts.8 The internal structure of modules-2 is split between raw file storage and binary metadata
 indexes.
 
-### **File-based Artifact Storage in files-2.1**
+### File-based Artifact Storage in files-2.1
 
 The files-2.1 subdirectory implements a deterministic, content-addressable storage model for external artifacts. When
 Gradle resolves a dependency, such as org.apache.httpcomponents:httpclient:4.3.3, it stores the resulting JARs and
@@ -91,7 +91,7 @@ properties:
 3. **Portability:** Because the path is derived solely from the artifact's coordinates and its content, this directory
    is perfectly portable across different machines and operating systems.8
 
-### **The Metadata Binary Store**
+### The Metadata Binary Store
 
 While files-2.1 contains the "physical" files, the metadata-x directories (where x corresponds to an internal schema
 version, such as metadata-2.107) contain the "logical" understanding of the dependency graph.8 This store is comprised
@@ -111,7 +111,7 @@ a different location on a CI agent (e.g., /home/runner/.gradle vs /Users/develop
 become invalid, leading to "File Not Found" errors despite the artifacts being present on disk. Consequently, while
 files-2.1 should always be persisted, the metadata-x folders are often better left for local regeneration.11
 
-## **Artifact Transformations and the transforms-x Directory**
+## Artifact Transformations and the transforms-x Directory
 
 One of the most complex and frequently misunderstood components of the Gradle cache is the transforms-x directory.
 Artifact transforms are a mechanism used by plugins (notably the Android Gradle Plugin) to convert dependencies from one
@@ -119,7 +119,7 @@ state to another before they are placed on the classpath.3 Common examples inclu
 migrates legacy Android support libraries to AndroidX, and the Dexing transform, which converts Java bytecode to Dalvik
 Executable format.13
 
-### **Mechanism of Transform Storage**
+### Mechanism of Transform Storage
 
 Each transform is uniquely identified by a hash of its inputs, including the transform's implementation code, the input
 artifact's content, and any parameters (such as minSdkVersion).12 The result is stored in a directory named with this
@@ -138,7 +138,7 @@ reasons:
 3. **Local Binary Indexes:** Each transforms-x directory contains a results.bin file that acts as a local index. This
    file is highly sensitive to the local file system layout and is a frequent point of corruption.18
 
-### **Portability and Omission Strategy for Transforms**
+### Portability and Omission Strategy for Transforms
 
 Experience from large-scale CI implementations, such as those documented by the Flutter and Android communities,
 suggests that the transforms-x directory is a "high-risk, high-reward" cache.19 In environments where the file system
@@ -148,13 +148,13 @@ For distributed builds, the transforms-x directory contains purely locally compu
 from shared caches unless path symmetry is guaranteed. The cost of regenerating these transforms is usually lower than
 the cost of debugging a "CorruptedCacheException" or an "Incompatible Class Version" error.18
 
-## **The Build Cache: build-cache-1**
+## The Build Cache: build-cache-1
 
 In contrast to the dependency cache, which stores external inputs, the Gradle Build Cache stores the outputs of the
 project's own tasks.21 This feature, introduced in Gradle 3.5, allows for the reuse of task outputs even when the local
 build/ directory has been cleaned or when the build is running on a completely different machine.3
 
-### **The Hashing Algorithm for Task Outputs**
+### The Hashing Algorithm for Task Outputs
 
 The build cache operates on the principle of input-output determinism. Before executing a task, Gradle computes a build
 cache key $K$ by hashing all relevant inputs 22:
@@ -163,7 +163,7 @@ $$K \= \\text{SHA-256}(\\text{Task Class} \+ \\text{Inputs} \+ \\text{Output Def
 If a result for key $K$ exists in caches/build-cache-1/, the task is marked as FROM-CACHE, and the outputs are unpacked
 directly into the project workspace.23
 
-### **Relocatability and Path Sensitivity**
+### Relocatability and Path Sensitivity
 
 The portability of the build cache is governed by the PathSensitivity setting of the task's inputs.21 If a task is
 configured with PathSensitivity.ABSOLUTE, the cache key will change if the project is moved to a different directory,
@@ -181,13 +181,13 @@ The build cache is designed to be shared. In fact, many organizations utilize a 
 the gap between CI and developer machines.3 Therefore, build-cache-1 is an excellent candidate for persistence, provided
 that the build authors have correctly configured task inputs to be path-agnostic.
 
-## **Version-Specific Internal Caches and Metadata**
+## Version-Specific Internal Caches and Metadata
 
 For each version of Gradle used on a machine, a dedicated subdirectory is created under caches/ (e.g., caches/8.10.2/ or
 caches/7.6/).3 These directories contain the "operational state" of the build tool and are almost entirely comprised of
 locally computed data that is not intended for transfer between machines.
 
-### **Execution History and File Hashes**
+### Execution History and File Hashes
 
 The execution-history/ subdirectory is the most significant component of these version-specific folders. It contains a
 persistent record of every task's inputs and outputs from the last time it ran _on that specific machine_.25 This data
@@ -202,7 +202,7 @@ Similarly, the file-hashes/ directory contains a mapping of file paths to their 
 the hashing process itself. Because this index is keyed by absolute file paths, it is useless if the project location
 changes.26
 
-### **The Kotlin DSL and Classpath Caches**
+### The Kotlin DSL and Classpath Caches
 
 For projects using the Kotlin DSL (build.gradle.kts), the version-specific directory also contains compiled versions of
 the build scripts.23 While these could theoretically be shared, they are often tied to specific versions of the Kotlin
@@ -215,12 +215,12 @@ compiler and the classpath of the build, making them fragile and prone to verifi
 | caches/\[version\]/kotlin-dsl/        | Compiled build script binaries.    | Sensitive to classpath and JVM version.23 |
 | caches/\[version\]/java-compile/      | Incremental compilation analysis.  | Non-portable analysis data.3              |
 
-## **Maintenance Metadata: journal-1 and Lock Files**
+## Maintenance Metadata: journal-1 and Lock Files
 
 The journal-1 directory and various \*.lock files found throughout the caches/ hierarchy constitute the synchronization
 and maintenance layer of Gradle.29
 
-### **The File Access Time Journal**
+### The File Access Time Journal
 
 The journal-1/file-access.bin file is a B-Tree database used by the Gradle cleanup service to track the last time any
 particular cache entry was used.30 This allows Gradle to implement the 7-day and 30-day eviction policies mentioned
@@ -231,7 +231,7 @@ CorruptedCacheException" if it is partially written or if multiple Gradle instan
 simultaneously.20 Sharing this file between machines is not only unnecessary but actively dangerous, as it can propagate
 corruption across the build fleet.
 
-### **Synchronization Locks**
+### Synchronization Locks
 
 Gradle uses \*.lock files to coordinate access to shared resources across different processes (e.g., the Gradle Daemon,
 the IDE, and the CLI).3 These lock files often contain the Process ID (PID) of the owning process.29  
@@ -240,14 +240,14 @@ machine A saves a lock file owned by PID 1234, and machine B restores that file,
 process with PID 1234 is currently modifying the cache.31 Since no such process exists on machine B, or worse, an
 unrelated process has that PID, the Gradle build will hang indefinitely waiting for the lock to be released.32
 
-## **Configuration Cache and Security Implications**
+## Configuration Cache and Security Implications
 
 The Configuration Cache is a newer feature that saves the result of the project configuration phase to disk, allowing
 Gradle to skip build script evaluation entirely for subsequent runs.33 While most of the Configuration Cache data is
 stored in the project's root .gradle/ directory, it relies on global state within the GUH, specifically an encrypted
 keystore.33
 
-### **Relocatability of Configuration Cache Data**
+### Relocatability of Configuration Cache Data
 
 Prior to Gradle 8.6, the Configuration Cache was explicitly non-relocatable and could not be shared between machines.28
 Modern versions have introduced limited support for relocatability, but this requires:
@@ -262,13 +262,13 @@ inadvertently persisted into the configuration cache.35 As a result, current bes
 involve treating the configuration cache as "local-only" data unless rigorous security controls and encryption key
 rotations are in place.34
 
-## **Identification of File Path Patterns for Strategic Omission**
+## Identification of File Path Patterns for Strategic Omission
 
 Based on the preceding architectural analysis, it is possible to define a clear boundary between files that should be
 persisted for cross-machine reuse and those that should be omitted. This "whitelist and blacklist" approach is standard
 in high-performance CI pipelines.
 
-### **The Whitelist: Essential Portable Data**
+### The Whitelist: Essential Portable Data
 
 The following directories contain immutable or content-addressable data that is safe and highly beneficial to migrate
 between machines.
@@ -280,7 +280,7 @@ between machines.
 | wrapper/dists/\*\*              | Gradle distributions.            | Avoids re-downloading the build tool itself.5                  |
 | caches/jars-\*/\*\*             | Cached plugin JARs.              | Speeds up the initial startup of the Gradle Daemon.3           |
 
-### **The Blacklist: Locally Computed and Environment-Specific Data**
+### The Blacklist: Locally Computed and Environment-Specific Data
 
 The following patterns represent data that is either unique to the local file system, prone to corruption during
 migration, or contains absolute paths that will break on other machines.
@@ -295,14 +295,14 @@ migration, or contains absolute paths that will break on other machines.
 | daemon/\*\*                                   | Daemon State    | Registry of local PIDs and ephemeral log files.1                 |
 | native/\*\*                                   | Native Binaries | Platform-specific binaries regenerated on demand.2               |
 
-## **Operational Implications for Distributed Build Systems**
+## Operational Implications for Distributed Build Systems
 
 The underlying theme of the Gradle cache is a transition from "Workspace Local" state to "Content Addressable" storage.
 Older versions of Gradle relied heavily on the absolute path of the user's home directory, but the introduction of the
 Build Cache and Artifact Transforms has pushed the architecture toward a more relocatable model. However, the legacy of
 absolute path indexing remains a significant hurdle.
 
-### **CI/CD Integration Patterns**
+### CI/CD Integration Patterns
 
 In ephemeral CI systems like GitHub Actions or CircleCI, the common mistake is to archive the entire \~/.gradle
 directory. This leads to "Cache Bloat," where the archive size grows exponentially with files that are useless on
@@ -312,7 +312,7 @@ This cleanup logic explicitly deletes the journal-1 and \*.lock files and evalua
 been "touched" during the current build. Any files that were not accessed are purged, ensuring that the persisted cache
 contains only the dependencies and task outputs relevant to the current state of the project.6
 
-### **Impact of Shared File Systems**
+### Impact of Shared File Systems
 
 In enterprise environments using shared file systems (like NFS or Lustre) for the GUH, the locking behavior of journal-1
 and the daemon registry becomes a primary failure point.2 Shared file systems often lack the consistent locking
@@ -321,7 +321,7 @@ machines attempt to use the same GUH simultaneously.2 The desired behavior in th
 directory to a local, high-speed disk (e.g., /var/tmp/gradle-cache) while keeping configuration files in the shared home
 directory.2
 
-## **Conclusion**
+## Conclusion
 
 The caches/ directory of the Gradle User Home is a dual-natured entity. On one hand, it is a highly efficient repository
 of global knowledge (modules-2/files-2.1, build-cache-1) that is deterministic and relocatable. On the other hand, it is
@@ -336,7 +336,7 @@ rather than a vector for corruption. The future of Gradle caching lies in the co
 structures, ultimately moving toward a world where the local file system path is entirely abstracted away from the
 build's persistent state.
 
-#### **Works cited**
+#### Works cited
 
 1. Anatomy of a Gradle Build, accessed March 26,
    2026, [https://docs.gradle.org/current/userguide/gradle_directories_intermediate.html](https://docs.gradle.org/current/userguide/gradle_directories_intermediate.html)
