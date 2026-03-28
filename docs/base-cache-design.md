@@ -119,7 +119,7 @@ downloads every worker's delta artifact, merges overlapping entries, and applies
 back to `GRADLE_USER_HOME` before saving the updated base cache.
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph worker-a
         WA1[pre-build snapshot] --> WA2[./gradlew :module-a:build]
         WA2 --> WA3[post-build snapshot]

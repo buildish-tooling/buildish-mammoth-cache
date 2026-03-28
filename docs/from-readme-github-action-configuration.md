@@ -37,8 +37,8 @@ This page currently carries content moved from the project README. It will likel
 
 - Default: `.`
 - Repository-relative base directory for wrapper discovery and other project-relative paths.
-- Windows-style relative paths using `\\` are accepted and normalized to internal POSIX-style paths.
-- Absolute/rooted paths are rejected, including `C:\\repo`, `\\Windows\\System32`, and `\\\\server\\share`.
+- Windows-style relative paths using `\` are accepted and normalized to internal POSIX-style paths.
+- Absolute/rooted paths are rejected, including `C:\repo`, `\Windows\System32`, and `\\server\share`.
 - Must remain inside the repository workspace.
 
 ## `cache-enabled`
@@ -116,7 +116,7 @@ This page currently carries content moved from the project README. It will likel
 
 - Default: `**/gradle/wrapper/gradle-wrapper.properties`
 - Repository-relative discovery glob used beneath `base-directory`.
-- Windows-style relative paths using `\\` are accepted and normalized before evaluation.
+- Windows-style relative paths using `\` are accepted and normalized before evaluation.
 - Absolute/rooted paths are rejected, including drive-prefixed, rooted, and UNC paths.
 
 ## `wrapper-properties-files`
@@ -124,7 +124,7 @@ This page currently carries content moved from the project README. It will likel
 - Default: empty
 - Comma- or newline-separated explicit `gradle-wrapper.properties` files.
 - Paths are relative to `base-directory`.
-- Windows-style relative paths using `\\` are accepted and normalized to internal POSIX-style paths.
+- Windows-style relative paths using `\` are accepted and normalized to internal POSIX-style paths.
 - Absolute/rooted paths are rejected, including drive-prefixed, rooted, and UNC paths.
 - Entries must be explicit file paths, not globs.
 
