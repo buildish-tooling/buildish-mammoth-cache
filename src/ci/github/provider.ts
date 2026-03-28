@@ -1,0 +1,388 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { CoreExecutionPhase } from '../../config/types';
+import type { CiJobContext, CiPlatformAdapter, HttpHeadersByHost } from '../types';
+
+/** Injectable options for {@link createGitHubPlatform}. All fields are optional for testing. */
+export interface GitHubPlatformOptions {
+  /** Environment variable map; defaults to `process.env`. */
+  readonly env?: NodeJS.ProcessEnv;
+  /** Pre-parsed GitHub event payload; skips file reading when provided. */
+  readonly eventPayload?: Record<string, unknown>;
+  /** Override for reading the event payload JSON from disk. */
+  readonly eventPayloadReader?: (eventPath: string) => string;
+  /** Value of the `github-token` action input, used for authenticated API requests. */
+  readonly githubTokenInput?: string;
+  /** Value of the `github-job-check-run-id` input used to resolve the current job URL. */
+  readonly githubJobCheckRunId?: string;
+  /** Value of the `github-event-name` action input. See {@link GitHubContextOptions.githubEventNameInput}. */
+  readonly githubEventNameInput?: string;
+  /** Value of the `github-job-name` action input. See {@link GitHubContextOptions.githubJobNameInput}. */
+  readonly githubJobNameInput?: string;
+  /** Value of the `github-ref-name` action input. See {@link GitHubContextOptions.githubRefNameInput}. */
+  readonly githubRefNameInput?: string;
+  /** Value of the `github-default-branch` action input. See {@link GitHubContextOptions.githubDefaultBranchInput}. */
+  readonly githubDefaultBranchInput?: string;
+}
+
+/**
+ * Creates the GitHub Actions {@link CiPlatformAdapter} from the runner environment.
+ *
+ * Reads GitHub-specific environment variables to populate {@link CiJobContext}, constructs
+ * per-host authentication headers, and resolves execution URLs for the current run and job.
+ */
+export function createGitHubPlatform(options: GitHubPlatformOptions = {}): CiPlatformAdapter {
+  const env = options.env ?? process.env;
+  const context = createGitHubContext({
+    env,
+    eventPayload: options.eventPayload,
+    eventPayloadReader: options.eventPayloadReader,
+    githubEventNameInput: options.githubEventNameInput,
+    githubJobNameInput: options.githubJobNameInput,
+    githubRefNameInput: options.githubRefNameInput,
+    githubDefaultBranchInput: options.githubDefaultBranchInput,
+  });
+  const executionUrls = createGitHubExecutionUrls(context, env, options.githubJobCheckRunId);
+  const httpHeadersByHost = createGitHubHttpHeadersByHost(env, options.githubTokenInput);
+
+  return {
+    context,
+    executionUrls,
+    httpHeadersByHost,
+    createBootstrapDiagnosticsLines(phase: CoreExecutionPhase): readonly string[] {
+      if (phase !== 'prepare') {
+        return [];
+      }
+
+      return [
+        `GitHub input 'github-token' present: ${options.githubTokenInput && options.githubTokenInput.trim().length > 0 ? 'yes' : 'no'}.`,
+        `GitHub environment 'GITHUB_TOKEN' available: ${env.GITHUB_TOKEN && env.GITHUB_TOKEN.trim().length > 0 ? 'yes' : 'no'}.`,
+        `GitHub input 'github-job-check-run-id': ${options.githubJobCheckRunId && options.githubJobCheckRunId.trim().length > 0 ? options.githubJobCheckRunId.trim() : 'unset'}.`,
+      ];
+    },
+  };
+}
+
+/** Injectable options for {@link createGitHubContext}. All fields are optional for testing. */
+export interface GitHubContextOptions {
+  /** Environment variable map; defaults to `process.env`. */
+  readonly env?: NodeJS.ProcessEnv;
+  /** Pre-parsed GitHub event payload; skips file reading when provided. */
+  readonly eventPayload?: Record<string, unknown>;
+  /** Override for reading the event payload JSON from disk. */
+  readonly eventPayloadReader?: (eventPath: string) => string;
+  /**
+   * Value of the `github-event-name` action input.
+   *
+   * Takes priority over `GITHUB_EVENT_NAME`. Intended for reusable workflows invoked via
+   * `workflow_call`, where GitHub sets `GITHUB_EVENT_NAME` to `workflow_call` rather than
+   * the original caller's event name. Pass `${{ github.event_name }}` from the caller.
+   */
+  readonly githubEventNameInput?: string;
+  /**
+   * Value of the `github-job-name` action input.
+   *
+   * Takes priority over `GITHUB_JOB`. Use this in reusable workflows to assign a stable,
+   * predictable job name for cache-key and artifact coordination, independent of the
+   * GitHub Actions job key or matrix label.
+   */
+  readonly githubJobNameInput?: string;
+  /**
+   * Value of the `github-ref-name` action input.
+   *
+   * Takes priority over all automatic ref resolution. Intended for reusable workflows invoked
+   * via `workflow_call` to propagate the caller's resolved ref name. Pass
+   * `${{ github.ref_name }}` (or the equivalent resolved value) from the caller.
+   */
+  readonly githubRefNameInput?: string;
+  /**
+   * Value of the `github-default-branch` action input.
+   *
+   * Takes priority over all automatic default-branch resolution. Intended for reusable
+   * workflows invoked via `workflow_call` to propagate the caller's default branch. Pass
+   * `${{ github.event.repository.default_branch }}` from the caller.
+   */
+  readonly githubDefaultBranchInput?: string;
+}
+
+/**
+ * Builds a provider-neutral {@link CiJobContext} from the GitHub Actions runner environment.
+ *
+ * Normalises refs, pull-request metadata, runner OS/architecture, and the safe branch slug used
+ * in cache keys. Action inputs passed via {@link GitHubContextOptions} take priority over the
+ * corresponding environment variables, which is the correct propagation mechanism for
+ * reusable workflows invoked via `workflow_call`.
+ */
+export function createGitHubContext(options: GitHubContextOptions = {}): CiJobContext {
+  const env = options.env ?? process.env;
+  const eventPayload = readGitHubEventPayload(
+    env,
+    options.eventPayload,
+    options.eventPayloadReader,
+  );
+  const eventName =
+    options.githubEventNameInput?.trim() || env.GITHUB_EVENT_NAME?.trim() || 'unknown';
+  const defaultBranch = resolveDefaultBranch(env, eventPayload, options.githubDefaultBranchInput);
+  const refName = resolveGitHubRefName(
+    env,
+    eventName,
+    eventPayload,
+    options.githubRefNameInput,
+    options.githubDefaultBranchInput,
+  );
+  const safeRefName = sanitizeRefName(refName);
+
+  return {
+    eventName,
+    resolvedRefName: refName,
+    safeRefName,
+    runnerOs: (env.RUNNER_OS?.trim() || 'linux').toLowerCase(),
+    runnerArch: normalizeRunnerArch(env.RUNNER_ARCH),
+    defaultBranch,
+    isPullRequest: eventName === 'pull_request' || eventName === 'pull_request_target',
+    repository: env.GITHUB_REPOSITORY?.trim() || 'unknown/unknown',
+    workflowName: env.GITHUB_WORKFLOW?.trim() || 'unknown-workflow',
+    jobName: options.githubJobNameInput?.trim() || env.GITHUB_JOB?.trim() || 'unknown-job',
+    runId: parseOptionalNumber(env.GITHUB_RUN_ID),
+    runAttempt: parseOptionalNumber(env.GITHUB_RUN_ATTEMPT),
+    sourceRevision: env.GITHUB_SHA?.trim() || null,
+    tempDirectory: normalizeOptionalPath(env.RUNNER_TEMP),
+    workspace: normalizeWorkspace(env.GITHUB_WORKSPACE),
+    actionPath: normalizeOptionalPath(env.GITHUB_ACTION_PATH),
+  };
+}
+
+function createGitHubExecutionUrls(
+  context: CiJobContext,
+  env: NodeJS.ProcessEnv,
+  githubJobCheckRunId: string | undefined,
+) {
+  const rawServerUrl = env.GITHUB_SERVER_URL?.trim() ?? '';
+  // Validate that GITHUB_SERVER_URL uses HTTPS so a non-HTTPS or javascript: scheme value
+  // cannot be injected into job-summary link hrefs. safeHttpsHost() is reused here for
+  // consistency with how GITHUB_API_URL is already guarded for auth-header scoping.
+  const serverUrl = (
+    rawServerUrl && safeHttpsHost(rawServerUrl) !== null ? rawServerUrl : 'https://github.com'
+  ).replace(/\/+$/u, '');
+  const repository = context.repository;
+  const runId = context.runId;
+  const jobCheckRunId = githubJobCheckRunId?.trim() || '';
+
+  if (!repository || runId === null) {
+    return {
+      jobUrl: null,
+      workflowRunUrl: null,
+    };
+  }
+
+  const workflowRunUrl = `${serverUrl}/${repository}/actions/runs/${runId}`;
+  const workflowAttemptUrl =
+    context.runAttempt !== null
+      ? `${workflowRunUrl}/attempts/${context.runAttempt}`
+      : workflowRunUrl;
+
+  return {
+    jobUrl:
+      jobCheckRunId.length > 0 ? `${workflowRunUrl}/job/${jobCheckRunId}` : workflowAttemptUrl,
+    workflowRunUrl: workflowAttemptUrl,
+  };
+}
+
+function createGitHubHttpHeadersByHost(
+  env: NodeJS.ProcessEnv,
+  githubTokenInput: string | undefined,
+): HttpHeadersByHost {
+  const inputToken = githubTokenInput?.trim() || '';
+  const envToken = env.GITHUB_TOKEN?.trim() || '';
+  const token = inputToken || envToken;
+  if (!token) {
+    return new Map();
+  }
+
+  const apiUrl = env.GITHUB_API_URL?.trim() || 'https://api.github.com';
+  const host = safeHttpsHost(apiUrl);
+  if (!host) {
+    return new Map();
+  }
+
+  return new Map([
+    [
+      host,
+      new Map([
+        ['accept', 'application/vnd.github.raw'],
+        ['authorization', `Bearer ${token}`],
+        ['user-agent', 'buildish-mammoth-cache-action'],
+        ['x-github-api-version', '2022-11-28'],
+      ]),
+    ],
+  ]);
+}
+
+function readGitHubEventPayload(
+  env: NodeJS.ProcessEnv,
+  providedEventPayload: Record<string, unknown> | undefined,
+  eventPayloadReader: ((eventPath: string) => string) | undefined,
+): Record<string, unknown> {
+  if (providedEventPayload) {
+    return providedEventPayload;
+  }
+
+  const eventPath = env.GITHUB_EVENT_PATH?.trim();
+  if (!eventPath) {
+    return {};
+  }
+
+  const reader = eventPayloadReader;
+  if (!reader) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(reader(eventPath));
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveGitHubRefName(
+  env: NodeJS.ProcessEnv,
+  eventName: string,
+  eventPayload: Record<string, unknown>,
+  githubRefNameInput: string | undefined,
+  githubDefaultBranchInput: string | undefined,
+): string {
+  const explicit = githubRefNameInput?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  if (eventName === 'pull_request' || eventName === 'pull_request_target') {
+    const pullRequest = isRecord(eventPayload.pull_request) ? eventPayload.pull_request : undefined;
+    const base = pullRequest && isRecord(pullRequest.base) ? pullRequest.base : undefined;
+    const baseRef = typeof base?.ref === 'string' ? base.ref.trim() : '';
+    if (baseRef) {
+      return baseRef;
+    }
+  }
+
+  const explicitRefName = env.GITHUB_REF_NAME?.trim();
+  if (explicitRefName) {
+    return explicitRefName;
+  }
+
+  const ref = env.GITHUB_REF?.trim();
+  if (!ref) {
+    return resolveDefaultBranch(env, eventPayload, githubDefaultBranchInput);
+  }
+
+  if (ref.startsWith('refs/heads/')) {
+    return ref.slice('refs/heads/'.length);
+  }
+  if (ref.startsWith('refs/tags/')) {
+    return ref.slice('refs/tags/'.length);
+  }
+  if (ref.startsWith('refs/pull/')) {
+    return ref
+      .replace(/^refs\/pull\//u, '')
+      .replace(/\/merge$/u, '')
+      .replace(/\/head$/u, '');
+  }
+
+  return ref;
+}
+
+function resolveDefaultBranch(
+  env: NodeJS.ProcessEnv,
+  eventPayload: Record<string, unknown>,
+  githubDefaultBranchInput: string | undefined,
+): string {
+  const explicit = githubDefaultBranchInput?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const repo = isRecord(eventPayload.repository) ? eventPayload.repository : undefined;
+  const defaultBranch = typeof repo?.default_branch === 'string' ? repo.default_branch.trim() : '';
+  return defaultBranch || env.GITHUB_DEFAULT_BRANCH?.trim() || 'main';
+}
+
+function normalizeRunnerArch(value: string | undefined): string {
+  const normalized = (value?.trim() || 'x64').toLowerCase();
+  switch (normalized) {
+    case 'amd64':
+    case 'x86_64':
+      return 'x64';
+    case 'aarch64':
+      return 'arm64';
+    default:
+      return normalized;
+  }
+}
+
+function normalizeWorkspace(workspace: string | undefined): string {
+  const normalized = normalizeOptionalPath(workspace);
+  return normalized ?? process.cwd();
+}
+
+function normalizeOptionalPath(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function parseOptionalNumber(value: string | undefined): number | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function sanitizeRefName(refName: string): string {
+  const trimmed = refName.trim();
+  if (!trimmed) {
+    return 'unknown-ref';
+  }
+
+  const sanitized = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/-+/gu, '-')
+    .replace(/^-|-$/gu, '')
+    .slice(0, 64)
+    .replace(/^-|-$/gu, '');
+
+  return sanitized || 'unknown-ref';
+}
+
+function safeHttpsHost(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

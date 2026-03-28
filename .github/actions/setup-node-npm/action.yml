@@ -1,0 +1,113 @@
+#
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Set Up Node.js And npm
+description: >-
+  Internal repository helper that sets up Node.js and provisions the exact npm
+  version selected by package.json. Callers must run actions/checkout first.
+
+inputs:
+  node-version:
+    description: Explicit Node.js version. When empty, node-version-file is used.
+    required: false
+    default: ''
+  node-version-file:
+    description: File selecting the Node.js version.
+    required: false
+    default: .nvmrc
+  npm-version:
+    description: Explicit npm version. When empty, package-json-path is used.
+    required: false
+    default: ''
+  package-json-path:
+    description: package.json file containing the packageManager selection.
+    required: false
+    default: package.json
+  cache:
+    description: >-
+      Package manager cache handled by actions/setup-node. Leave blank to
+      disable explicit and automatically inferred package manager caching.
+    required: false
+    default: ''
+  cache-dependency-path:
+    description: Dependency file path used to key the package manager cache.
+    required: false
+    default: package-lock.json
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js from version file
+      if: inputs.node-version == ''
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: ${{ inputs.node-version-file }}
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        package-manager-cache: ${{ inputs.cache != '' }}
+
+    - name: Set up explicit Node.js version
+      if: inputs.node-version != ''
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        package-manager-cache: ${{ inputs.cache != '' }}
+
+    - id: npm-version
+      name: Resolve npm version
+      shell: bash
+      env:
+        INPUT_NPM_VERSION: ${{ inputs.npm-version }}
+        INPUT_PACKAGE_JSON_PATH: ${{ inputs.package-json-path }}
+      run: |
+        if [[ -n "$INPUT_NPM_VERSION" ]]; then
+          npm_version="$(
+            node scripts/resolve-npm-version.mjs \
+              --package-manager "npm@${INPUT_NPM_VERSION}"
+          )"
+        else
+          npm_version="$(
+            node scripts/resolve-npm-version.mjs \
+              --package-json "$INPUT_PACKAGE_JSON_PATH"
+          )"
+        fi
+        printf 'version=%s\n' "$npm_version" >> "$GITHUB_OUTPUT"
+
+    - name: Provision exact npm version
+      shell: bash
+      env:
+        EXPECTED_NPM_VERSION: ${{ steps.npm-version.outputs.version }}
+      # npm CLI releases bundle their dependencies; packageManager pins the exact release.
+      run: | # zizmor: ignore[adhoc-packages]
+        actual_npm_version="$(npm --version)"
+        if [[ "$actual_npm_version" != "$EXPECTED_NPM_VERSION" ]]; then
+          npm install \
+            --global \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund \
+            "npm@${EXPECTED_NPM_VERSION}"
+        fi
+
+        actual_npm_version="$(npm --version)"
+        if [[ "$actual_npm_version" != "$EXPECTED_NPM_VERSION" ]]; then
+          printf 'Expected npm %s, found %s.\n' \
+            "$EXPECTED_NPM_VERSION" "$actual_npm_version" >&2
+          exit 1
+        fi
+        printf 'Using Node.js %s and npm %s.\n' \
+          "$(node --version)" "$actual_npm_version"

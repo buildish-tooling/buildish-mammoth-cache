@@ -1,0 +1,113 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  runPrepareExecution,
+  type PrepareEntrypointDependencies,
+} from '../../../src/phases/prepare/cli';
+
+const prepareFlowMock = vi.hoisted(() => ({
+  createPrepareActionOutputs: vi.fn(() => ({
+    'cache-family-key': 'cache-family-key-value',
+  })),
+  executePrepareAction: vi.fn(async () => ({
+    bootstrap: { baseCacheResult: null },
+    restoreCleanupResult: null,
+    dependentDeltaResult: null,
+    message: 'Prepare execution completed.',
+    preBuildManifestState: null,
+  })),
+}));
+
+const jobSingleRunMock = vi.hoisted(() => ({
+  claimSingleRunPrepareExecution: vi.fn(async () => ({
+    accepted: true,
+    message: 'Claimed ownership.',
+  })),
+}));
+
+vi.mock('../../../src/phases/prepare/flow', () => prepareFlowMock);
+vi.mock('../../../src/guard/job-single-run', () => jobSingleRunMock);
+
+describe('prepare entrypoint', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('persists single-run ownership state for the post action', async () => {
+    const runtimeHost = {
+      getInput: vi.fn(() => ''),
+      getState: vi.fn(() => ''),
+      saveState: vi.fn(),
+      setOutput: vi.fn(),
+      info: vi.fn(),
+      warning: vi.fn(),
+      setFailed: vi.fn(),
+    };
+    const ciProvider = {
+      context: {
+        eventName: 'push',
+        resolvedRefName: 'main',
+        safeRefName: 'main',
+        runnerOs: 'linux',
+        runnerArch: 'x64',
+        defaultBranch: 'main',
+        isPullRequest: false,
+        repository: 'buildish-tooling/buildish',
+        workflowName: 'CI',
+        jobName: 'test',
+        runId: 123,
+        runAttempt: 1,
+        sourceRevision: null,
+        tempDirectory: '/tmp',
+        workspace: '/workspace',
+        actionPath: null,
+      },
+      httpHeadersByHost: new Map(),
+      executionUrls: { jobUrl: null, workflowRunUrl: null },
+      createBootstrapDiagnosticsLines: vi.fn(() => []),
+    };
+    const reportSink = {
+      publishLogGroup: vi.fn(),
+      publishSummary: vi.fn(async () => undefined),
+      replaceSummary: vi.fn(async () => undefined),
+    };
+    const dependencies = {
+      runtimeHost,
+      ciProvider,
+      reportSink,
+      env: process.env,
+      config: {} as PrepareEntrypointDependencies['config'],
+      cacheBackend: {} as PrepareEntrypointDependencies['cacheBackend'],
+      artifactBackend: {} as PrepareEntrypointDependencies['artifactBackend'],
+      buildToolAdapterFactory: {} as PrepareEntrypointDependencies['buildToolAdapterFactory'],
+    } satisfies PrepareEntrypointDependencies;
+
+    await runPrepareExecution(dependencies);
+
+    expect(jobSingleRunMock.claimSingleRunPrepareExecution).toHaveBeenCalledWith({
+      ciContext: ciProvider.context,
+      saveState: runtimeHost.saveState,
+    });
+    expect(prepareFlowMock.executePrepareAction).toHaveBeenCalledWith(dependencies);
+    expect(runtimeHost.setOutput).toHaveBeenCalledWith(
+      'cache-family-key',
+      'cache-family-key-value',
+    );
+  });
+});

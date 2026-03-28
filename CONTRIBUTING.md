@@ -1,0 +1,60 @@
+<!--
+Copyright 2026 The Buildish Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+# Contributing to Buildish Mammoth Cache
+
+Thank you for considering a contribution to Mammoth Cache, a component of the
+Buildish tooling family. Please follow the repository's
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Before opening a pull request
+
+- Check whether an existing issue or pull request already covers the change.
+- For larger changes, start a short design discussion on a GitHub issue before investing heavily in implementation.
+- Keep pull requests focused; split unrelated work into separate changes.
+
+## Pull request expectations
+
+- Base pull requests on `main`.
+- Describe the motivation and the change clearly.
+- Add or update tests and documentation when applicable.
+- Keep commit messages and pull request text readable for future project history.
+
+## Security issues
+
+Do **not** open a public issue for a suspected security vulnerability. Instead, report it to [security@buildish.org](mailto:security@buildish.org).
+
+## Development
+
+For the full developer guide — local setup, running unit and integration tests, the code quality
+gate, and how to add a new build-tool adapter — see the documentation site:
+
+**<https://buildish.org/components/mammoth-cache/development/contributing/>**
+
+The short version:
+
+```bash
+nvm install
+nvm use
+npm_version="$(node scripts/resolve-npm-version.mjs)"
+if [[ "$(npm --version)" != "$npm_version" ]]; then
+  npm install --global --ignore-scripts --no-audit --no-fund "npm@$npm_version"
+fi
+make build
+make check
+```
+
+See `make help` for all available targets.

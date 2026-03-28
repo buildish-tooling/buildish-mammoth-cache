@@ -1,0 +1,348 @@
+#
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: CI
+
+# Single entry workflow for local verification plus real GitHub integration scenarios.
+#
+# Event routing:
+# - push -> trusted writable integration scenario suite
+# - pull_request -> fork-safe read-only integration scenario suite
+
+on:
+  push:
+    branches:
+      - main
+      - release/**
+  # IMPORTANT: Zizmor is a _static_ analzyer. It does not look into the actual `cache`
+  # rules, so it flags _all_ usages of the setup-node action here. The _only_ way out
+  # is to have this global ignore rule.
+  # zizmor: ignore[cache-poisoning]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Make check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js and npm
+        uses: ./.github/actions/setup-node-npm
+        with:
+          cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Show available Make targets
+        run: make help
+
+      - name: Clean workspace outputs
+        run: make clean-all
+
+      - name: Build the project
+        run: make build
+
+      - name: Run unit tests
+        run: make test
+
+      - name: Run lint and formatting checks
+        run: make lint-check
+
+      - name: Run Apache RAT
+        run: npm run rat-check
+
+      - name: Run legal check
+        run: make release-legal-check
+
+      - name: Fail when checks leave Git changes behind
+        run: |
+          modified="$(git status --short)"
+          test -z "$modified" || { printf 'Checks left Git changes behind:\n%s\n' "$modified"; exit 1; }
+
+  smoke-test-gradle:
+    name: Run local Gradle action
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js and npm
+        uses: ./.github/actions/setup-node-npm
+        with:
+          cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Build the action bundle
+        run: make build
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Stage smoke fixture in build directory
+        run: |
+          rm -rf build/smoke-fixture
+          mkdir -p build
+          cp -R test/fixtures/smoke build/smoke-fixture
+
+      - name: Run the local Gradle action
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/smoke-fixture
+
+  smoke-test-maven:
+    name: Run local Maven action
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js and npm
+        uses: ./.github/actions/setup-node-npm
+        with:
+          cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Build the action bundle
+        run: make build
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Stage Maven smoke fixture in build directory
+        run: |
+          rm -rf build/smoke-fixture-maven
+          mkdir -p build
+          cp -R test/fixtures/smoke/maven build/smoke-fixture-maven
+
+      - name: Run the local Maven action
+        uses: ./actions/github/maven
+        with:
+          base-directory: build/smoke-fixture-maven
+
+  local-integration-tests:
+    name: Local integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js and npm
+        uses: ./.github/actions/setup-node-npm
+        with:
+          cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build the project
+        run: make build
+
+      - name: Run local integration tests
+        run: make integration-test
+
+  integration-trusted-gradle:
+    name: Trusted GitHub integration scenarios (Gradle)
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/it-reusable-gradle.yml
+    with:
+      caller-event-name: ${{ github.event_name }}
+      caller-resolved-ref-name: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.ref_name }}
+      caller-default-branch: ${{ github.event.repository.default_branch }}
+      run-pr-scenarios: false
+      run-writable-scenarios: true
+      run-cross-platform: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch }}
+
+  integration-pr-gradle:
+    name: Pull request GitHub integration scenarios (Gradle)
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/it-reusable-gradle.yml
+    with:
+      caller-event-name: ${{ github.event_name }}
+      caller-resolved-ref-name: ${{ github.base_ref }}
+      caller-default-branch: ${{ github.event.repository.default_branch }}
+      run-pr-scenarios: true
+      run-writable-scenarios: false
+      run-cross-platform: false
+
+  integration-trusted-maven:
+    name: Trusted GitHub integration scenarios (Maven)
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/it-reusable-maven.yml
+    with:
+      caller-event-name: ${{ github.event_name }}
+      caller-resolved-ref-name: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.ref_name }}
+      caller-default-branch: ${{ github.event.repository.default_branch }}
+      run-pr-scenarios: false
+      run-writable-scenarios: true
+      run-cross-platform: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch }}
+
+  integration-pr-maven:
+    name: Pull request GitHub integration scenarios (Maven)
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/it-reusable-maven.yml
+    with:
+      caller-event-name: ${{ github.event_name }}
+      caller-resolved-ref-name: ${{ github.base_ref }}
+      caller-default-branch: ${{ github.event.repository.default_branch }}
+      run-pr-scenarios: true
+      run-writable-scenarios: false
+      run-cross-platform: false
+
+  codeql:
+    name: CodeQL (JavaScript / TypeScript)
+    # Temporarily disabled because GitHub Advanced Security is unavailable.
+    if: false
+    #if: github.repository_owner == 'buildish-tooling'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        with:
+          category: /language:javascript-typescript
+
+  zizmor:
+    name: Zizmor (GitHub Actions security)
+    if: github.repository_owner == 'buildish-tooling'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Zizmor 🌈
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        with:
+          advanced-security: false
+
+  required_checks:
+    name: Required Checks
+    if: ${{ always() }}
+    needs:
+      - check
+      - smoke-test-gradle
+      - smoke-test-maven
+      - local-integration-tests
+      - integration-trusted-gradle
+      - integration-pr-gradle
+      - integration-trusted-maven
+      - integration-pr-maven
+      - codeql
+      - zizmor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert all required jobs succeeded or were intentionally skipped
+        env:
+          CHECK_RESULT: ${{ needs.check.result }}
+          SMOKE_TEST_RESULT: ${{ needs.smoke-test-gradle.result }}
+          SMOKE_TEST_MAVEN_RESULT: ${{ needs.smoke-test-maven.result }}
+          LOCAL_INTEGRATION_TESTS_RESULT: ${{ needs.local-integration-tests.result }}
+          INTEGRATION_TRUSTED_GRADLE_RESULT: ${{ needs.integration-trusted-gradle.result }}
+          INTEGRATION_PR_GRADLE_RESULT: ${{ needs.integration-pr-gradle.result }}
+          INTEGRATION_TRUSTED_MAVEN_RESULT: ${{ needs.integration-trusted-maven.result }}
+          INTEGRATION_PR_MAVEN_RESULT: ${{ needs.integration-pr-maven.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          ZIZMOR_RESULT: ${{ needs.zizmor.result }}
+        run: |
+          for result in \
+            "$CHECK_RESULT" \
+            "$SMOKE_TEST_RESULT" \
+            "$SMOKE_TEST_MAVEN_RESULT" \
+            "$LOCAL_INTEGRATION_TESTS_RESULT" \
+            "$INTEGRATION_TRUSTED_GRADLE_RESULT" \
+            "$INTEGRATION_PR_GRADLE_RESULT" \
+            "$INTEGRATION_TRUSTED_MAVEN_RESULT" \
+            "$INTEGRATION_PR_MAVEN_RESULT" \
+            "$CODEQL_RESULT" \
+            "$ZIZMOR_RESULT"; do
+            case "$result" in
+              success|skipped) ;;
+              *)
+                echo "Unexpected dependency result: $result"
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "All required jobs succeeded for this event."
+
+  publish-site:
+    name: Publish aggregate site
+    needs: required_checks
+    # Requires BUILDISH_SITE_PUBLISH_TOKEN with Actions write access to the
+    # buildish-tooling/buildish repository.
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.required_checks.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+      && false
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Dispatch aggregate site publishing
+        env:
+          GH_TOKEN: ${{ secrets.BUILDISH_SITE_PUBLISH_TOKEN }}
+        run: gh workflow run site-publish.yml --repo buildish-tooling/buildish --ref main
