@@ -1,0 +1,676 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  bootstrapPhase,
+  createBootstrapLogLines,
+  createBootstrapStatus,
+  createBootstrapSummaryLines,
+  type BootstrapPhase,
+} from '../../src/phases/bootstrap';
+import type { BaseCacheRestoreResult } from '../../src/cache/service';
+import type { CacheModel } from '../../src/cache/model';
+import type { SummaryWriter } from '../../src/ci/github/report-sink';
+import {
+  STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
+  type BaseCacheBackend,
+} from '../../src/cache/backend';
+import type { BuildToolProvisioning } from '../../src/build-tool/types';
+import type { GradleAdapterOptions } from '../../src/build-tool/gradle/adapter';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import {
+  normalizeGradleActionConfig,
+  readGradleActionInputs,
+  resolveGradleActionInputsFromConfigFile,
+} from '../../src/build-tool/gradle/config';
+import type { NormalizedGradleConfig } from '../../src/config/types';
+import {
+  createTestGitHubProvider,
+  createTestGitHubReportSink,
+  createTestRuntimeHost,
+} from '../support/github-test-runtime';
+
+const config: NormalizedGradleConfig = {
+  phase: 'prepare',
+  baseDirectory: '.',
+  cacheEnabled: true,
+  readOnly: false,
+  jobMode: 'standalone',
+  dependentJobs: [],
+  allowDuplicateDependentDeltaPaths: false,
+  cacheKeyPrefix: 'buildish-mammoth-cache-',
+  cachePartitions: [],
+  cacheSchemaVersion: 2,
+  wrapperSelectionMode: 'default',
+  wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
+  defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
+  wrapperPropertiesFiles: [],
+  cleanupEnabled: true,
+  restoreCleanupMode: 'none',
+  cacheGcMode: 'off',
+  cacheGcOlderThanDays: 14,
+  gradleUserHome: '/home/runner/.gradle',
+};
+
+const ciContext = {
+  eventName: 'push',
+  resolvedRefName: 'main',
+  safeRefName: 'main',
+  runnerOs: 'linux',
+  runnerArch: 'x64',
+  defaultBranch: 'main',
+  isPullRequest: false,
+  repository: 'buildish-tooling/buildish',
+  workflowName: 'CI',
+  jobName: 'check',
+  runId: 123,
+  runAttempt: 1,
+  sourceRevision: null,
+  tempDirectory: null,
+  workspace: '/workspace',
+  actionPath: '/workspace',
+} as const;
+
+/**
+ * Creates the CI-level bootstrap dependencies for Gradle tests.
+ *
+ * Config resolution (input reading → config-file overlay → normalization) is performed inside
+ * this helper because bootstrap no longer does it — callers supply the pre-resolved `config`
+ * directly.  The resolved config is captured in the `buildToolAdapterFactory` closure the same
+ * way the real Gradle entrypoint does it.
+ */
+async function createBootstrapDependencies(
+  phase: BootstrapPhase,
+  options: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly eventPayload?: Record<string, unknown>;
+    readonly summaryWriter: SummaryWriter;
+    readonly inputs?: Readonly<Record<string, string>>;
+    readonly getState?: (name: string) => string;
+    readonly saveState?: (name: string, value: string) => void;
+    readonly adapterOptions?: GradleAdapterOptions;
+    readonly workspace: string;
+  },
+) {
+  const runtimeHost = createTestRuntimeHost({
+    inputs: options.inputs,
+    getState: options.getState,
+    saveState: options.saveState,
+  });
+  const ciProvider = createTestGitHubProvider(runtimeHost, {
+    env: options.env,
+    eventPayload: options.eventPayload,
+  });
+
+  const directInputs = readGradleActionInputs(runtimeHost);
+  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, {
+    workspace: options.workspace,
+  });
+  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
+    phase,
+    ciContext: ciProvider.context,
+    env: options.env,
+  });
+
+  return {
+    runtimeHost,
+    ciProvider,
+    config,
+    reportSink: createTestGitHubReportSink(runtimeHost, {
+      env: options.env,
+      summaryWriter: options.summaryWriter,
+    }),
+    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
+  };
+}
+
+const toolProvisioning: BuildToolProvisioning = {
+  items: [
+    {
+      label: 'gradle/wrapper/gradle-wrapper.properties',
+      version: '8.14.0',
+      wasDownloaded: true,
+    },
+  ],
+  warnings: [],
+  additionalOutputs: {
+    'wrapper-count': '1',
+    'gradle-versions': '8.14.0',
+    'wrapper-downloaded-count': '1',
+    'wrapper-reused-count': '0',
+  },
+};
+
+const cacheModel: CacheModel = {
+  buildToolId: 'gradle',
+  cacheRoot: '/home/runner/.gradle',
+  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
+  currentRefToken: 'main-aaaaaaaaaaaa',
+  currentRefLineagePrefix:
+    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
+  fallbackRefLineagePrefixes: [],
+  plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
+  javaMajor: 21,
+  runnerOs: 'linux',
+  runnerArch: 'x64',
+  safeRefName: 'main',
+  partitionFingerprint: 'feedcafe1234abcd',
+  includePaths: ['/home/runner/.gradle/caches/modules-*/files-*/**'],
+  excludePaths: [
+    '/home/runner/.gradle/**/configuration-cache/**',
+    '/home/runner/.gradle/**/*.lock',
+    '/home/runner/.gradle/caches/*/cc-keystore',
+    '/home/runner/.gradle/caches/modules-*/metadata-*/**',
+  ],
+  partitions: [
+    {
+      id: 'modules',
+      displayName: 'Dependency modules',
+      description: 'Downloaded dependency artifacts and artifact stores shared across builds.',
+      relativeIncludeGlobs: ['caches/modules-*/files-*/**'],
+      relativeExcludeGlobs: [
+        '**/configuration-cache/**',
+        '**/*.lock',
+        'caches/*/cc-keystore',
+        'caches/modules-*/metadata-*/**',
+      ],
+      absoluteIncludeGlobs: ['/home/runner/.gradle/caches/modules-*/files-*/**'],
+      absoluteExcludeGlobs: [
+        '/home/runner/.gradle/**/configuration-cache/**',
+        '/home/runner/.gradle/**/*.lock',
+        '/home/runner/.gradle/caches/*/cc-keystore',
+        '/home/runner/.gradle/caches/modules-*/metadata-*/**',
+      ],
+    },
+  ],
+};
+
+const restoreResult: BaseCacheRestoreResult = {
+  operation: 'restore',
+  status: 'current-lineage-hit',
+  cacheFamilyKey: cacheModel.cacheFamilyKey,
+  currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
+  matchedKey: `${cacheModel.currentRefLineagePrefix}run-122-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb`,
+  matchedLineagePrefix: cacheModel.currentRefLineagePrefix,
+  restoreCandidates: [{ lineage: 'current-ref', keyPrefix: cacheModel.currentRefLineagePrefix }],
+  paths: [
+    '/home/runner/.gradle/caches/modules-*/files-*/**',
+    '!/home/runner/.gradle/**/configuration-cache/**',
+    '!/home/runner/.gradle/**/*.lock',
+    '!/home/runner/.gradle/caches/*/cc-keystore',
+    '!/home/runner/.gradle/caches/modules-*/metadata-*/**',
+  ],
+  message: `Base cache restore reused current-ref generation '${cacheModel.currentRefLineagePrefix}run-122-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb'.`,
+};
+
+describe('bootstrap helpers', () => {
+  it('creates a status message with config and CI context details', () => {
+    expect(
+      createBootstrapStatus(
+        'prepare',
+        config,
+        ciContext,
+        cacheModel,
+        restoreResult,
+        toolProvisioning,
+      ),
+    ).toEqual({
+      phase: 'prepare',
+      config,
+      ciContext,
+      cacheModel,
+      baseCacheResult: restoreResult,
+      toolProvisioning,
+      ciDiagnosticsLines: [],
+      ciExecutionUrls: { jobUrl: null, workflowRunUrl: null },
+      message: 'Prepared prepare phase for push on main in standalone mode.',
+    });
+  });
+
+  it('renders summary lines for the bootstrap status', () => {
+    const summaryText = createBootstrapSummaryLines(
+      createBootstrapStatus(
+        'prepare',
+        config,
+        ciContext,
+        cacheModel,
+        restoreResult,
+        toolProvisioning,
+      ),
+    ).join('\n');
+
+    expect(summaryText).toContain('- Base cache restore: current-lineage-hit');
+    expect(summaryText).toContain('- Tool provisioning: 1 ready (1 downloaded, 0 reused)');
+    expect(summaryText).toContain('<summary>Execution context</summary>');
+    expect(summaryText).toContain('- Cache partitions: 1');
+    expect(summaryText).toContain('- Job mode: standalone');
+    expect(summaryText).toContain('<summary>Tool provisioning</summary>');
+    expect(summaryText).toContain('<table>');
+    expect(summaryText).toContain('gradle/wrapper/gradle-wrapper.properties');
+    expect(summaryText).toContain(
+      '- Cache family: buildish\\-mammoth\\-cache\\-gradle\\-v2\\-21\\-linux\\-x64\\-feedcafe1234abcd',
+    );
+  });
+
+  it('renders log lines for the bootstrap status', () => {
+    const logText = createBootstrapLogLines(
+      createBootstrapStatus(
+        'prepare',
+        config,
+        ciContext,
+        cacheModel,
+        restoreResult,
+        toolProvisioning,
+        [
+          "GitHub input 'github-token' present: yes.",
+          "GitHub environment 'GITHUB_TOKEN' available: yes.",
+          "GitHub input 'github-job-check-run-id': 987654321.",
+        ],
+      ),
+    ).join('\n');
+
+    expect(logText).toContain(
+      'Bootstrap: Prepared prepare phase for push on main in standalone mode.',
+    );
+    expect(logText).toContain('Base cache restore: current-lineage-hit.');
+    expect(logText).toContain('Tool provisioning: 1 ready (1 downloaded, 0 reused).');
+    expect(logText).toContain("Execution context: workflow 'CI', job 'check', event 'push'");
+    expect(logText).toContain("GitHub input 'github-token' present: yes.");
+    expect(logText).toContain("GitHub environment 'GITHUB_TOKEN' available: yes.");
+    expect(logText).toContain("GitHub input 'github-job-check-run-id': 987654321.");
+    expect(logText).toContain(
+      `Cache family: ${cacheModel.cacheFamilyKey}; current ref lineage: ${cacheModel.currentRefLineagePrefix}; Java major: 21; cache partitions: 1.`,
+    );
+    expect(logText).toContain("Downloaded 'gradle/wrapper/gradle-wrapper.properties' (8.14.0).");
+  });
+
+  it('bootstraps the prepare phase without publishing a job summary directly', async () => {
+    const wrapperJarBytes = Buffer.from('verified wrapper jar');
+    const wrapperJarSha256 = createHash('sha256').update(wrapperJarBytes).digest('hex');
+    const summaryLines: string[] = [];
+    let writeCalls = 0;
+    const savedState = new Map<string, string>();
+    const cacheBackend: BaseCacheBackend = {
+      capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
+      isFeatureAvailable(): boolean {
+        return true;
+      },
+      async restoreCache(_paths: string[], primaryKey: string): Promise<string | undefined> {
+        return `${primaryKey}run-122-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb`;
+      },
+      async saveCache(): Promise<number> {
+        throw new Error('saveCache should not be called during main bootstrap');
+      },
+      isMissingPathsError(): boolean {
+        return false;
+      },
+    };
+    const summaryWriter: SummaryWriter = {
+      addRaw(text: string, _addEol?: boolean): SummaryWriter {
+        summaryLines.push(text);
+        return this;
+      },
+      async write(): Promise<void> {
+        writeCalls += 1;
+      },
+    };
+    await withWorkspaceWithWrapper(async (workspace) => {
+      const fetchImpl = async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const url = String(input);
+
+        if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+          // The timeout signal is always present; only verify that no auth headers are sent.
+          expect(init?.headers).toBeUndefined();
+          return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+        }
+
+        if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+          expect(init?.headers).toBeUndefined();
+          return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+        }
+
+        if (
+          url ===
+          'https://api.github.com/repos/gradle/gradle/contents/gradle/wrapper/gradle-wrapper.jar?ref=v8.14.0'
+        ) {
+          const headers = new Headers(init?.headers);
+          expect(headers.get('authorization')).toBe('Bearer ghs_bootstrap_token');
+          expect(headers.get('accept')).toBe('application/vnd.github.raw');
+          return new Response(wrapperJarBytes, { status: 200 });
+        }
+
+        throw new Error(`Unexpected fetch URL: ${url}`);
+      };
+      const verifyWrapperSignature = async (jarBytes: Uint8Array, armoredSignature: string) => {
+        expect(Buffer.from(jarBytes)).toEqual(wrapperJarBytes);
+        expect(armoredSignature).toBe(TEST_SIGNATURE_ARMORED);
+      };
+
+      const bootstrapEnv = {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+      };
+      const deps = await createBootstrapDependencies('prepare', {
+        env: bootstrapEnv,
+        eventPayload: {
+          repository: { default_branch: 'main' },
+        },
+        inputs: {
+          'github-token': 'ghs_bootstrap_token',
+        },
+        saveState(name: string, value: string): void {
+          savedState.set(name, value);
+        },
+        summaryWriter,
+        adapterOptions: { fetchImpl, verifyWrapperSignature },
+        workspace,
+      });
+      const status = await bootstrapPhase('prepare', {
+        env: bootstrapEnv,
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        cacheBackend,
+        ...deps,
+      });
+
+      expect(status.message).toBe('Prepared prepare phase for push on main in standalone mode.');
+      expect(status.cacheModel?.currentRefLineagePrefix).toMatch(
+        /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
+      );
+      expect(status.baseCacheResult?.status).toBe('current-lineage-hit');
+      expect(status.toolProvisioning.items).toHaveLength(1);
+      expect(status.ciDiagnosticsLines).toEqual([
+        "GitHub input 'github-token' present: yes.",
+        "GitHub environment 'GITHUB_TOKEN' available: no.",
+        "GitHub input 'github-job-check-run-id': unset.",
+      ]);
+      expect(status.ciExecutionUrls).toEqual({ jobUrl: null, workflowRunUrl: null });
+      expect(summaryLines).toEqual([]);
+      expect(savedState.size).toBe(0);
+      expect(writeCalls).toBe(0);
+      await expect(
+        readFile(path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar')),
+      ).resolves.toEqual(wrapperJarBytes);
+    });
+  });
+
+  it('bootstraps the finalize phase without saving the base cache', async () => {
+    const summaryLines: string[] = [];
+    let writeCalls = 0;
+    const cacheBackend: BaseCacheBackend = {
+      capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
+      isFeatureAvailable(): boolean {
+        return true;
+      },
+      async restoreCache(): Promise<string | undefined> {
+        throw new Error('restoreCache should not be called during post bootstrap');
+      },
+      async saveCache(): Promise<number> {
+        throw new Error('saveCache should not be called during finalize bootstrap');
+      },
+      isMissingPathsError(): boolean {
+        return false;
+      },
+    };
+    const summaryWriter: SummaryWriter = {
+      addRaw(text: string, _addEol?: boolean): SummaryWriter {
+        summaryLines.push(text);
+        return this;
+      },
+      async write(): Promise<void> {
+        writeCalls += 1;
+      },
+    };
+
+    await withWorkspace({}, async (workspace) => {
+      const finalizeEnv = {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+      };
+      const deps = await createBootstrapDependencies('finalize', {
+        env: finalizeEnv,
+        eventPayload: {
+          repository: { default_branch: 'main' },
+        },
+        getState: () => '',
+        summaryWriter,
+        workspace,
+      });
+      const status = await bootstrapPhase('finalize', {
+        env: finalizeEnv,
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        cacheBackend,
+        ...deps,
+      });
+
+      expect(status.baseCacheResult).toBeNull();
+      expect(summaryLines).toEqual([]);
+      expect(writeCalls).toBe(0);
+    });
+  });
+
+  it('loads optional config-file values during bootstrap while allowing direct overrides', async () => {
+    const summaryLines: string[] = [];
+    const cacheBackend: BaseCacheBackend = {
+      capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
+      isFeatureAvailable(): boolean {
+        throw new Error('cacheBackend should not be touched when config-file disables caching');
+      },
+      async restoreCache(): Promise<string | undefined> {
+        throw new Error('restoreCache should not be called when caching is disabled');
+      },
+      async saveCache(): Promise<number> {
+        throw new Error('saveCache should not be called when caching is disabled');
+      },
+      isMissingPathsError(): boolean {
+        return false;
+      },
+    };
+    const summaryWriter: SummaryWriter = {
+      addRaw(text: string, _addEol?: boolean): SummaryWriter {
+        summaryLines.push(text);
+        return this;
+      },
+      async write(): Promise<void> {
+        // no-op
+      },
+    };
+
+    await withWorkspace(
+      {
+        '.github/buildish-mammoth-cache.yml': [
+          'cache-enabled: false',
+          'read-only: true',
+          'job-mode: distributed-aggregator',
+          'dependent-jobs:',
+          '  - worker_a',
+          '  - worker_b',
+          '',
+        ].join('\n'),
+      },
+      async (workspace) => {
+        const cfEnv = {
+          GITHUB_EVENT_NAME: 'push',
+          GITHUB_REF: 'refs/heads/main',
+          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+          GITHUB_WORKFLOW: 'CI',
+          GITHUB_JOB: 'check',
+          GITHUB_WORKSPACE: workspace,
+          RUNNER_OS: 'Linux',
+          RUNNER_ARCH: 'X64',
+        };
+        const deps = await createBootstrapDependencies('finalize', {
+          env: cfEnv,
+          eventPayload: {
+            repository: { default_branch: 'main' },
+          },
+          inputs: {
+            'config-file': '.github/buildish-mammoth-cache.yml',
+            'read-only': 'false',
+          },
+          summaryWriter,
+          workspace,
+        });
+        const status = await bootstrapPhase('finalize', {
+          env: cfEnv,
+          captureCommandOutput: async (): Promise<string> =>
+            'openjdk version "21.0.4" 2024-07-16\n',
+          cacheBackend,
+          ...deps,
+        });
+
+        expect(status.config).toMatchObject({
+          cacheEnabled: false,
+          readOnly: false,
+          jobMode: 'distributed-aggregator',
+          dependentJobs: ['worker_a', 'worker_b'],
+        });
+        expect(status.cacheModel).toBeNull();
+        expect(status.baseCacheResult).toBeNull();
+      },
+    );
+  });
+
+  it('falls back to process.env when resolving gradle user home during bundled entrypoint execution', async () => {
+    const summaryWriter: SummaryWriter = {
+      addRaw(): SummaryWriter {
+        return this;
+      },
+      async write(): Promise<void> {
+        // no-op
+      },
+    };
+
+    await withWorkspace({}, async (workspace) => {
+      const customGradleUserHome = path.join(workspace, 'custom-gradle-home');
+
+      vi.stubEnv('GITHUB_EVENT_NAME', 'push');
+      vi.stubEnv('GITHUB_REF', 'refs/heads/main');
+      vi.stubEnv('GITHUB_REPOSITORY', 'buildish-tooling/buildish');
+      vi.stubEnv('GITHUB_WORKFLOW', 'CI');
+      vi.stubEnv('GITHUB_JOB', 'check');
+      vi.stubEnv('GITHUB_WORKSPACE', workspace);
+      vi.stubEnv('RUNNER_OS', 'Linux');
+      vi.stubEnv('RUNNER_ARCH', 'X64');
+      vi.stubEnv('GRADLE_USER_HOME', customGradleUserHome);
+
+      try {
+        const deps = await createBootstrapDependencies('finalize', {
+          env: process.env,
+          eventPayload: {
+            repository: { default_branch: 'main' },
+          },
+          inputs: {
+            'cache-enabled': 'false',
+          },
+          summaryWriter,
+          workspace,
+        });
+        const status = await bootstrapPhase('finalize', {
+          captureCommandOutput: async (): Promise<string> =>
+            'openjdk version "21.0.4" 2024-07-16\n',
+          cacheBackend: {
+            capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
+            isFeatureAvailable(): boolean {
+              throw new Error('cacheBackend should not be touched when caching is disabled');
+            },
+            async restoreCache(): Promise<string | undefined> {
+              throw new Error('restoreCache should not be called when caching is disabled');
+            },
+            async saveCache(): Promise<number> {
+              throw new Error('saveCache should not be called when caching is disabled');
+            },
+            isMissingPathsError(): boolean {
+              return false;
+            },
+          },
+          ...deps,
+        });
+
+        const gradleConfig = status.config as NormalizedGradleConfig;
+        expect(gradleConfig.gradleUserHome).toBe(customGradleUserHome);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+});
+
+async function withWorkspaceWithWrapper(
+  testBody: (workspace: string) => Promise<void>,
+): Promise<void> {
+  await withWorkspace(
+    {
+      'gradle/wrapper/gradle-wrapper.properties': [
+        'distributionBase=GRADLE_USER_HOME',
+        'distributionPath=wrapper/dists',
+        'distributionSha256Sum=61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa',
+        'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip',
+        'validateDistributionUrl=true',
+        'zipStoreBase=GRADLE_USER_HOME',
+        'zipStorePath=wrapper/dists',
+        '',
+      ].join('\n'),
+    },
+    testBody,
+  );
+}
+
+async function withWorkspace(
+  files: Record<string, string>,
+  testBody: (workspace: string) => Promise<void>,
+): Promise<void> {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-bootstrap-'));
+
+  try {
+    for (const [relativePath, contents] of Object.entries(files)) {
+      const absolutePath = path.join(workspace, relativePath);
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, contents, 'utf8');
+    }
+
+    await testBody(workspace);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+const TEST_SIGNATURE_ARMORED = `-----BEGIN PGP SIGNATURE-----
+Version: test
+
+ZmFrZQ==
+=abcd
+-----END PGP SIGNATURE-----`;

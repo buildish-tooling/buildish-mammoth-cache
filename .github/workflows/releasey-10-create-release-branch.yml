@@ -1,0 +1,65 @@
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Releasey Create Release Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_line:
+        description: Release line such as 1.x or 1.2.x
+        required: true
+        type: string
+      source_ref:
+        description: Source ref such as main or release/1.x
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  BUILDISH_RELEASE_TOOLING_REF: f37e09cc223d1e58d3095ad875db989fd8d5defe # renovate: datasource=github-releases depName=buildish-tooling/buildish-release-tooling currentValue=v0.0.0
+  BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH: .buildish-internal/buildish-release-tooling
+
+jobs:
+  create-release-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: buildish-tooling/buildish-release-tooling
+          ref: ${{ env.BUILDISH_RELEASE_TOOLING_REF }}
+          path: ${{ env.BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Install Python 3.13 for uv-managed commands
+        run: uv python install 3.13
+      - name: Fetch remote heads and tags
+        run: |
+          git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+      - name: Draft branch creation
+        env:
+          RELEASE_LINE: ${{ inputs.release_line }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          bash buildish-release-tooling/release-tooling.sh create-release-branch \
+            --apply \
+            "$RELEASE_LINE" \
+            "$SOURCE_REF"
