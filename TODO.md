@@ -25,7 +25,8 @@ limitations under the License.
    - Explicitly document the CI abstraction layer in the docs/ directory.
    - Explicitly document the bootstrap process in the docs/ directory.
    - If diagrams help, use Mermaid
-   - All types and functions must have JSDoc comments.
+   - All types and functions in the src/ tree must have JSDoc comments.
+   - All tests must be descriptive.
 2. Cleanup the code base
    - MANUALLY inspect all files
    - Check validate\*() functions for duplicates

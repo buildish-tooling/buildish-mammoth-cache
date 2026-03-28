@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: CI Mammoth Cache for Gradle
+name: CI
 
 # Single entry workflow for local verification plus real GitHub integration scenarios.
 #
