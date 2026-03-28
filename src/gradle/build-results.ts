@@ -413,118 +413,116 @@ function createInitScriptContents(captureRoot: string | null): string {
   const captureRootLiteral = captureRoot ? JSON.stringify(captureRoot) : 'null';
 
   return `/*
- * Capture information for each executed Gradle build to display in the job summary.
+ * Apache Buildish Mammoth Cache for Gradle — per-invocation build result capture
+ *
+ * Installed as a Gradle init script. Records metadata for each top-level build and writes it
+ * to structured JSON files that the action finalize phase collects for the job summary.
  */
 import org.gradle.util.GradleVersion
 import org.slf4j.LoggerFactory
 
-def SKIP_BUILD_CAPTURE = "${SKIP_CAPTURE_ENVIRONMENT_VARIABLE}"
-def CAPTURE_ROOT_DIR = ${captureRootLiteral}
-def CAPTURE_INVOCATION_NAMESPACE = "${DEFAULT_CAPTURE_INVOCATION_NAMESPACE}"
-def BUILD_SCAN_PLUGIN_ID = "com.gradle.build-scan"
-def BUILD_SCAN_EXTENSION = "buildScan"
-def DEVELOCITY_PLUGIN_ID = "com.gradle.develocity"
-def DEVELOCITY_EXTENSION = "develocity"
-def GE_PLUGIN_ID = "com.gradle.enterprise"
-def GE_EXTENSION = "gradleEnterprise"
+// Plugin / extension identifiers for the supported build-scan ecosystems
+def DEVELOCITY_EXT    = "develocity"
+def DEVELOCITY_PLUGIN = "com.gradle.develocity"
+def GE_EXT            = "gradleEnterprise"
+def GE_PLUGIN         = "com.gradle.enterprise"
+def SCAN_EXT          = "buildScan"
+def SCAN_PLUGIN       = "com.gradle.build-scan"
 
-if (System.properties[SKIP_BUILD_CAPTURE] ?: System.getenv(SKIP_BUILD_CAPTURE)) {
+// Opt-out: skip capture when the environment flag is set
+def skipEnvKey = "${SKIP_CAPTURE_ENVIRONMENT_VARIABLE}"
+if (System.properties[skipEnvKey] ?: System.getenv(skipEnvKey)) {
     logger.lifecycle("buildish/mammoth-cache/gradle: Not capturing build results")
     return
 }
 
-def isTopLevelBuild = gradle.getParent() == null
-if (isTopLevelBuild) {
-    def resultsWriter = new ResultsWriter()
-    def version = GradleVersion.current().baseVersion
-    def minimumSupportedVersion = GradleVersion.version("7.0")
-    def invocationId = "-" + java.util.UUID.randomUUID().toString()
+// Only the outermost Gradle invocation participates in capture
+if (gradle.getParent() != null) {
+    return
+}
 
-    if (version < minimumSupportedVersion) {
-        logger.warn("buildish/mammoth-cache/gradle: Gradle build-result capture requires Gradle 7.0+; current version is ${'$'}{GradleVersion.current().version}. Skipping capture.")
-        return
-    }
+// Require Gradle 7.0 or newer for BuildService support
+if (GradleVersion.current().baseVersion < GradleVersion.version("7.0")) {
+    logger.warn("buildish/mammoth-cache/gradle: Gradle build-result capture requires Gradle 7.0+; current version is ${'$'}{GradleVersion.current().version}. Skipping capture.")
+    return
+}
 
-    captureUsingBuildService(invocationId)
+def invocId = "-" + java.util.UUID.randomUUID().toString()
 
-    settingsEvaluated { settings ->
-        def captureBuildScanLink = {
-            if (settings.extensions.findByName(DEVELOCITY_EXTENSION)) {
-                captureUsingBuildScanPublished(settings.extensions[DEVELOCITY_EXTENSION].buildScan, invocationId, resultsWriter)
-            } else if (settings.extensions.findByName(GE_EXTENSION)) {
-                captureUsingBuildScanPublished(settings.extensions[GE_EXTENSION].buildScan, invocationId, resultsWriter)
-            }
-        }
-        settings.pluginManager.withPlugin(GE_PLUGIN_ID, captureBuildScanLink)
-        settings.pluginManager.withPlugin(DEVELOCITY_PLUGIN_ID) {
-            if (settings.pluginManager.hasPlugin(GE_PLUGIN_ID)) return
-            captureBuildScanLink()
+// Store the invocation identifier before applying the service plugin so it can read it
+gradle.ext.invocationId = invocId
+apply from: '${SERVICE_PLUGIN_FILE_NAME}'
+
+// Attach scan-published / scan-error callbacks for settings-level plugins (Develocity / GE)
+settingsEvaluated { settings ->
+    def onScanReady = {
+        if (settings.extensions.findByName(DEVELOCITY_EXT)) {
+            hookScanCallbacks(settings.extensions[DEVELOCITY_EXT].buildScan, invocId)
+        } else if (settings.extensions.findByName(GE_EXT)) {
+            hookScanCallbacks(settings.extensions[GE_EXT].buildScan, invocId)
         }
     }
+    settings.pluginManager.withPlugin(GE_PLUGIN, onScanReady)
+    settings.pluginManager.withPlugin(DEVELOCITY_PLUGIN) {
+        if (settings.pluginManager.hasPlugin(GE_PLUGIN)) return
+        onScanReady()
+    }
+}
 
-    projectsEvaluated { gradle ->
-        def captureBuildScanLink = {
-            if (gradle.rootProject.extensions.findByName(DEVELOCITY_EXTENSION)) {
-                captureUsingBuildScanPublished(gradle.rootProject.extensions[DEVELOCITY_EXTENSION].buildScan, invocationId, resultsWriter)
-            } else if (gradle.rootProject.extensions.findByName(BUILD_SCAN_EXTENSION)) {
-                captureUsingBuildScanPublished(gradle.rootProject.extensions[BUILD_SCAN_EXTENSION], invocationId, resultsWriter)
-            }
+// Attach scan-published / scan-error callbacks for project-level plugins (build-scan / Develocity)
+projectsEvaluated { g ->
+    def onScanReady = {
+        if (g.rootProject.extensions.findByName(DEVELOCITY_EXT)) {
+            hookScanCallbacks(g.rootProject.extensions[DEVELOCITY_EXT].buildScan, invocId)
+        } else if (g.rootProject.extensions.findByName(SCAN_EXT)) {
+            hookScanCallbacks(g.rootProject.extensions[SCAN_EXT], invocId)
         }
+    }
+    g.rootProject.pluginManager.withPlugin(SCAN_PLUGIN, onScanReady)
+    g.rootProject.pluginManager.withPlugin(DEVELOCITY_PLUGIN) {
+        if (g.rootProject.pluginManager.hasPlugin(SCAN_PLUGIN)) return
+        onScanReady()
+    }
+}
 
-        gradle.rootProject.pluginManager.withPlugin(BUILD_SCAN_PLUGIN_ID, captureBuildScanLink)
-        gradle.rootProject.pluginManager.withPlugin(DEVELOCITY_PLUGIN_ID) {
-            if (gradle.rootProject.pluginManager.hasPlugin(BUILD_SCAN_PLUGIN_ID)) return
-            captureBuildScanLink()
+// Register buildScanPublished / onError hooks on the given scan extension
+void hookScanCallbacks(scanExt, String invocId) {
+    def writer = new ScanResultsWriter()
+    scanExt.with {
+        buildScanPublished { scan ->
+            writer.record("${BUILD_SCANS_SUBDIRECTORY}", invocId, [
+                buildScanUri   : scan.buildScanUri.toASCIIString(),
+                buildScanFailed: false,
+            ])
+        }
+        onError { err ->
+            writer.record("${BUILD_SCANS_SUBDIRECTORY}", invocId, [
+                buildScanUri   : null,
+                buildScanFailed: true,
+            ])
         }
     }
 }
 
-def captureUsingBuildService(invocationId) {
-    gradle.ext.invocationId = invocationId
-    apply from: '${SERVICE_PLUGIN_FILE_NAME}'
-}
-
-void captureUsingBuildScanPublished(buildScanExtension, String invocationId, ResultsWriter resultsWriter) {
-    buildScanExtension.with {
-        buildScanPublished { buildScan ->
-            def scanResults = [
-                buildScanUri: buildScan.buildScanUri.toASCIIString(),
-                buildScanFailed: false
-            ]
-            resultsWriter.writeToResultsFile("${BUILD_SCANS_SUBDIRECTORY}", invocationId, scanResults)
-        }
-
-        onError { error ->
-            def scanResults = [
-                buildScanUri: null,
-                buildScanFailed: true
-            ]
-            resultsWriter.writeToResultsFile("${BUILD_SCANS_SUBDIRECTORY}", invocationId, scanResults)
-        }
-    }
-}
-
-class ResultsWriter {
+class ScanResultsWriter {
     private final logger = LoggerFactory.getLogger("buildish/mammoth-cache/gradle")
 
-    void writeToResultsFile(String subDir, String invocationId, def content) {
+    void record(String subDir, String invocId, def payload) {
         def captureRootDir = ${captureRootLiteral}
         def captureInvocationNamespace = "${DEFAULT_CAPTURE_INVOCATION_NAMESPACE}"
 
-        if (!captureRootDir) {
-            return
-        }
+        if (!captureRootDir) return
 
         try {
-            def buildResultsDir = new File(captureRootDir, subDir)
-            buildResultsDir.mkdirs()
-            def buildResultsFile = new File(buildResultsDir, captureInvocationNamespace + invocationId + ".json")
-            if (!buildResultsFile.exists()) {
-                logger.lifecycle("buildish/mammoth-cache/gradle: Writing build results to ${'$'}{buildResultsFile}")
-                buildResultsFile << groovy.json.JsonOutput.toJson(content)
+            def outDir  = new File(captureRootDir, subDir)
+            outDir.mkdirs()
+            def outFile = new File(outDir, captureInvocationNamespace + invocId + ".json")
+            if (!outFile.exists()) {
+                logger.lifecycle("buildish/mammoth-cache/gradle: Writing build results to ${'$'}{outFile}")
+                outFile << groovy.json.JsonOutput.toJson(payload)
             }
-        } catch (Exception e) {
-            println "buildish/mammoth-cache/gradle failed to write build-results file. Will continue. > ${'$'}{e.getLocalizedMessage()}"
+        } catch (Exception ex) {
+            println "buildish/mammoth-cache/gradle failed to write build-results file. Will continue. > ${'$'}{ex.getLocalizedMessage()}"
         }
     }
 }
@@ -537,28 +535,27 @@ function createServicePluginContents(captureRoot: string | null): string {
   return `import org.gradle.api.provider.Property
 import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
-import org.gradle.tooling.events.*
+import org.gradle.internal.build.event.BuildEventListenerRegistryInternal
 import org.gradle.internal.operations.*
 import org.gradle.initialization.*
 import org.gradle.execution.*
-import org.gradle.internal.build.event.BuildEventListenerRegistryInternal
+import org.gradle.tooling.events.*
 import org.gradle.util.GradleVersion
 import org.slf4j.LoggerFactory
 
 settingsEvaluated { settings ->
-    def projectTracker = gradle.sharedServices.registerIfAbsent("buildish-mammoth-cache-gradle-buildResultsRecorder", BuildResultsRecorder, { spec ->
+    def svc = gradle.sharedServices.registerIfAbsent(
+        "buildish-mammoth-cache-gradle-buildResultsRecorder",
+        BuildResultsRecorder) { spec ->
         spec.getParameters().getRootProjectName().set(settings.rootProject.name)
         spec.getParameters().getRequestedTasks().set(gradle.startParameter.taskNames.join(" "))
         spec.getParameters().getInvocationId().set(gradle.ext.invocationId)
-    })
-
-    gradle.services.get(BuildEventListenerRegistryInternal).onOperationCompletion(projectTracker)
+    }
+    gradle.services.get(BuildEventListenerRegistryInternal).onOperationCompletion(svc)
 }
 
-abstract class BuildResultsRecorder implements BuildService<BuildResultsRecorder.Params>, BuildOperationListener, AutoCloseable {
-    private final logger = LoggerFactory.getLogger("buildish/mammoth-cache/gradle")
-    private boolean buildFailed = false
-    private boolean configCacheHit = true
+abstract class BuildResultsRecorder
+        implements BuildService<BuildResultsRecorder.Params>, BuildOperationListener, AutoCloseable {
 
     interface Params extends BuildServiceParameters {
         Property<String> getRootProjectName()
@@ -566,50 +563,55 @@ abstract class BuildResultsRecorder implements BuildService<BuildResultsRecorder
         Property<String> getInvocationId()
     }
 
-    void started(BuildOperationDescriptor buildOperation, OperationStartEvent startEvent) {}
+    private final logger = LoggerFactory.getLogger("buildish/mammoth-cache/gradle")
+    private boolean configCacheHit = true
+    private boolean buildFailed    = false
 
-    void progress(OperationIdentifier operationIdentifier, OperationProgressEvent progressEvent) {}
+    @Override
+    void started(BuildOperationDescriptor descriptor, OperationStartEvent start) {}
 
-    void finished(BuildOperationDescriptor buildOperation, OperationFinishEvent finishEvent) {
-        if (buildOperation.details in EvaluateSettingsBuildOperationType.Details) {
+    @Override
+    void progress(OperationIdentifier id, OperationProgressEvent progress) {}
+
+    @Override
+    void finished(BuildOperationDescriptor descriptor, OperationFinishEvent finish) {
+        if (descriptor.details in EvaluateSettingsBuildOperationType.Details) {
             configCacheHit = false
         }
-        if (buildOperation.metadata == BuildOperationCategory.RUN_WORK ||
-            buildOperation.metadata == BuildOperationCategory.CONFIGURE_PROJECT) {
-            if (finishEvent.failure != null) {
+        if (descriptor.metadata == BuildOperationCategory.RUN_WORK ||
+            descriptor.metadata == BuildOperationCategory.CONFIGURE_PROJECT) {
+            if (finish.failure != null) {
                 buildFailed = true
             }
         }
     }
 
     @Override
-    public void close() {
+    void close() {
         def captureRootDir = ${captureRootLiteral}
         def captureInvocationNamespace = "${DEFAULT_CAPTURE_INVOCATION_NAMESPACE}"
-        def buildResults = [
+        def snapshot = [
             capturedAtEpochMillis: System.currentTimeMillis(),
-            rootProjectName: getParameters().getRootProjectName().get(),
-            requestedTasks: getParameters().getRequestedTasks().get(),
-            gradleVersion: GradleVersion.current().version,
-            javaVersion: System.getProperty("java.version") ?: "unknown",
-            buildFailed: buildFailed,
-            configCacheHit: configCacheHit
+            rootProjectName      : getParameters().getRootProjectName().get(),
+            requestedTasks       : getParameters().getRequestedTasks().get(),
+            gradleVersion        : GradleVersion.current().version,
+            javaVersion          : System.getProperty("java.version") ?: "unknown",
+            buildFailed          : buildFailed,
+            configCacheHit       : configCacheHit,
         ]
 
-        if (!captureRootDir) {
-            return
-        }
+        if (!captureRootDir) return
 
         try {
-            def buildResultsDir = new File(captureRootDir, "${BUILD_RESULTS_SUBDIRECTORY}")
-            buildResultsDir.mkdirs()
-            def buildResultsFile = new File(buildResultsDir, captureInvocationNamespace + getParameters().getInvocationId().get() + ".json")
-            if (!buildResultsFile.exists()) {
-                logger.lifecycle("buildish/mammoth-cache/gradle: Writing build results to ${'$'}{buildResultsFile}")
-                buildResultsFile << groovy.json.JsonOutput.toJson(buildResults)
+            def resultsDir  = new File(captureRootDir, "${BUILD_RESULTS_SUBDIRECTORY}")
+            resultsDir.mkdirs()
+            def resultsFile = new File(resultsDir, captureInvocationNamespace + getParameters().getInvocationId().get() + ".json")
+            if (!resultsFile.exists()) {
+                logger.lifecycle("buildish/mammoth-cache/gradle: Writing build results to ${'$'}{resultsFile}")
+                resultsFile << groovy.json.JsonOutput.toJson(snapshot)
             }
-        } catch (Exception e) {
-            println "buildish/mammoth-cache/gradle failed to write build-results file. Will continue. > ${'$'}{e.getLocalizedMessage()}"
+        } catch (Exception ex) {
+            println "buildish/mammoth-cache/gradle failed to write build-results file. Will continue. > ${'$'}{ex.getLocalizedMessage()}"
         }
     }
 }
