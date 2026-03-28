@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# The Gradle User Home Caches Directory: Portability, Internal Structures, and Optimization for Distributed Build Systems
+# Gradle Cache Internals
+
+The Gradle User Home Caches Directory: Portability, Internal Structures, and Optimization for Distributed Build Systems
 
 The architecture of the Gradle build tool is predicated on a sophisticated caching hierarchy designed to minimize
 redundant computation and network overhead. Central to this system is the Gradle User Home directory, commonly referred
