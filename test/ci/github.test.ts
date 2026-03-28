@@ -1,0 +1,496 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { mkdtemp, readFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import { createGitHubContext, createGitHubPlatform } from '../../src/ci/github';
+import { createGitHubBaseCacheBackend } from '../../src/ci/github/cache';
+import { createGitHubReportSink, type SummaryWriter } from '../../src/ci/github/report-sink';
+
+describe('createGitHubContext', () => {
+  it('treats unsafe or non-integral run identity values as unavailable', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_RUN_ID: '9007199254740992',
+        GITHUB_RUN_ATTEMPT: '1.5',
+      },
+    });
+
+    expect(context.runId).toBeNull();
+    expect(context.runAttempt).toBeNull();
+  });
+
+  it('resolves push refs from branch refs', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/feature/cache-improvements',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        GITHUB_SHA: '0123456789abcdef0123456789abcdef01234567',
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+    });
+
+    expect(context.resolvedRefName).toBe('feature/cache-improvements');
+    expect(context.safeRefName).toBe('feature-cache-improvements');
+    expect(context.runnerOs).toBe('linux');
+    expect(context.runnerArch).toBe('x64');
+    expect(context.sourceRevision).toBe('0123456789abcdef0123456789abcdef01234567');
+    expect(context.tempDirectory).toBeNull();
+  });
+
+  it('uses the pull request base branch for pull_request events', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'pull_request',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+        pull_request: { base: { ref: 'release/1.0' } },
+      },
+    });
+
+    expect(context.isPullRequest).toBe(true);
+    expect(context.resolvedRefName).toBe('release/1.0');
+  });
+
+  it('treats pull_request_target like a pull request for ref resolution and trust checks', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'pull_request_target',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+        pull_request: { base: { ref: 'stable/2.x' } },
+      },
+    });
+
+    expect(context.isPullRequest).toBe(true);
+    expect(context.resolvedRefName).toBe('stable/2.x');
+    expect(context.safeRefName).toBe('stable-2.x');
+  });
+
+  it('uses the triggering branch for workflow_dispatch events', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        GITHUB_REF: 'refs/heads/release/2026.03',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+    });
+
+    expect(context.isPullRequest).toBe(false);
+    expect(context.resolvedRefName).toBe('release/2026.03');
+    expect(context.safeRefName).toBe('release-2026.03');
+  });
+
+  it('honors action inputs for reusable workflow runs (workflow_call caller-context propagation)', () => {
+    // Simulate a reusable workflow: GITHUB_EVENT_NAME is 'workflow_call', but the caller
+    // passes its own context as action inputs so the action sees the real triggering event.
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'workflow_call',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+      },
+      eventPayload: {
+        repository: { default_branch: 'ignored-default' },
+      },
+      githubEventNameInput: 'pull_request',
+      githubRefNameInput: 'release/1.1',
+      githubDefaultBranchInput: 'main',
+      githubJobNameInput: 'worker_a',
+    });
+
+    expect(context.eventName).toBe('pull_request');
+    expect(context.isPullRequest).toBe(true);
+    expect(context.defaultBranch).toBe('main');
+    expect(context.resolvedRefName).toBe('release/1.1');
+    expect(context.safeRefName).toBe('release-1.1');
+    expect(context.jobName).toBe('worker_a');
+  });
+
+  it('normalizes runner metadata into cache-safe values', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        RUNNER_OS: 'macOS',
+        RUNNER_ARCH: 'AMD64',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+    });
+
+    expect(context.runnerOs).toBe('macos');
+    expect(context.runnerArch).toBe('x64');
+  });
+
+  it('normalizes Windows runner metadata into cache-safe values', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        RUNNER_OS: 'Windows',
+        RUNNER_ARCH: 'ARM64',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+    });
+
+    expect(context.runnerOs).toBe('windows');
+    expect(context.runnerArch).toBe('arm64');
+  });
+
+  it('falls back to the repository default branch for unsupported events', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'schedule',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+    });
+
+    expect(context.resolvedRefName).toBe('main');
+  });
+});
+
+describe('createGitHubPlatform', () => {
+  it('exposes exact-host GitHub API headers when a token is configured', () => {
+    const platform = createGitHubPlatform({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+      githubTokenInput: '  ghs_test_token  ',
+    });
+
+    expect(platform.httpHeadersByHost.get('api.github.com')).toEqual(
+      new Map([
+        ['accept', 'application/vnd.github.raw'],
+        ['authorization', 'Bearer ghs_test_token'],
+        ['user-agent', 'buildish-mammoth-cache-action'],
+        ['x-github-api-version', '2022-11-28'],
+      ]),
+    );
+    expect(platform.httpHeadersByHost.get('raw.githubusercontent.com')).toBeUndefined();
+  });
+
+  it('falls back to GITHUB_TOKEN from the environment when the input token is omitted', () => {
+    const platform = createGitHubPlatform({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        GITHUB_TOKEN: '  ghs_env_token  ',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+    });
+
+    expect(platform.httpHeadersByHost.get('api.github.com')).toEqual(
+      new Map([
+        ['accept', 'application/vnd.github.raw'],
+        ['authorization', 'Bearer ghs_env_token'],
+        ['user-agent', 'buildish-mammoth-cache-action'],
+        ['x-github-api-version', '2022-11-28'],
+      ]),
+    );
+  });
+
+  it('exposes provider diagnostics and execution URLs through the adapter', () => {
+    const platform = createGitHubPlatform({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        GITHUB_RUN_ID: '101',
+        GITHUB_RUN_ATTEMPT: '2',
+        GITHUB_SERVER_URL: 'https://github.com/',
+        GITHUB_TOKEN: 'ghs_env_token',
+      },
+      eventPayload: {
+        repository: { default_branch: 'main' },
+      },
+      githubTokenInput: 'ghs_input_token',
+      githubJobCheckRunId: '987654321',
+    });
+
+    expect(platform.createBootstrapDiagnosticsLines('prepare')).toEqual([
+      "GitHub input 'github-token' present: yes.",
+      "GitHub environment 'GITHUB_TOKEN' available: yes.",
+      "GitHub input 'github-job-check-run-id': 987654321.",
+    ]);
+    expect(platform.createBootstrapDiagnosticsLines('finalize')).toEqual([]);
+    expect(platform.executionUrls).toEqual({
+      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/job/987654321',
+      workflowRunUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/attempts/2',
+    });
+  });
+
+  it('falls back to https://github.com when GITHUB_SERVER_URL is not HTTPS', () => {
+    // F-4: a non-HTTPS GITHUB_SERVER_URL must not appear in job-summary link hrefs because
+    // createHtmlLink does not strip URL schemes. safeHttpsHost rejects non-HTTPS values and
+    // the code falls back to the canonical public GitHub URL.
+    const platform = createGitHubPlatform({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_RUN_ID: '101',
+        GITHUB_RUN_ATTEMPT: '1',
+        GITHUB_SERVER_URL: 'http://insecure.example.com',
+      },
+    });
+
+    expect(platform.executionUrls).toEqual({
+      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/attempts/1',
+      workflowRunUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/attempts/1',
+    });
+  });
+});
+
+describe('createGitHubBaseCacheBackend', () => {
+  // Minimal stub satisfying the Pick<BaseCacheBackend, …> constructor parameter. The methods
+  // are never called by isMissingPathsError, so they can safely be no-op stubs.
+  const stubBackend = {
+    isFeatureAvailable: () => false,
+    restoreCache: async () => undefined as string | undefined,
+    saveCache: async () => 0,
+  };
+
+  it('forwards ordered lineage prefixes to the toolkit cache lookup', async () => {
+    const calls: Array<{
+      readonly paths: string[];
+      readonly primaryKeyPrefix: string;
+      readonly fallbackKeyPrefixes: string[] | undefined;
+    }> = [];
+    const backend = createGitHubBaseCacheBackend({
+      isFeatureAvailable: () => true,
+      async restoreCache(paths, primaryKeyPrefix, fallbackKeyPrefixes) {
+        calls.push({ paths, primaryKeyPrefix, fallbackKeyPrefixes });
+        return `${primaryKeyPrefix}run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb`;
+      },
+      saveCache: async () => 0,
+    });
+
+    const matchedKey = await backend.restoreCache(['/tmp/cache'], 'family-ref-current-gen-', [
+      'family-ref-main-gen-',
+    ]);
+
+    expect(calls).toEqual([
+      {
+        paths: ['/tmp/cache'],
+        primaryKeyPrefix: 'family-ref-current-gen-',
+        fallbackKeyPrefixes: ['family-ref-main-gen-'],
+      },
+    ]);
+    expect(matchedKey).toBe('family-ref-current-gen-run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb');
+  });
+
+  describe('isMissingPathsError', () => {
+    it('returns true for the known path-validation error message emitted by @actions/cache', () => {
+      const backend = createGitHubBaseCacheBackend(stubBackend);
+      // The exact fragment matched is:
+      // 'Path Validation Error: Path(s) specified in the action for caching do(es) not exist'
+      // This test uses the full message as @actions/cache would produce it.
+      const error = new Error(
+        'Path Validation Error: Path(s) specified in the action for caching do(es) not exist, hence not saving cache.',
+      );
+
+      expect(backend.isMissingPathsError(error)).toBe(true);
+    });
+
+    it('returns false for an unrelated Error', () => {
+      const backend = createGitHubBaseCacheBackend(stubBackend);
+
+      expect(backend.isMissingPathsError(new Error('ENOENT: no such file or directory'))).toBe(
+        false,
+      );
+    });
+
+    it('returns false for non-Error values (string, null, undefined)', () => {
+      const backend = createGitHubBaseCacheBackend(stubBackend);
+
+      expect(backend.isMissingPathsError('string error')).toBe(false);
+      expect(backend.isMissingPathsError(null)).toBe(false);
+      expect(backend.isMissingPathsError(undefined)).toBe(false);
+    });
+  });
+});
+
+describe('createGitHubReportSink', () => {
+  it('publishes summaries through the configured writer', async () => {
+    const summaryLines: Array<{ text: string; addEol: boolean | undefined }> = [];
+    let writeCalls = 0;
+    const writer: SummaryWriter = {
+      addRaw(text: string, addEol?: boolean): SummaryWriter {
+        summaryLines.push({ text, addEol });
+        return this;
+      },
+      async write(): Promise<void> {
+        writeCalls += 1;
+      },
+    };
+
+    const reportSink = createGitHubReportSink({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+      },
+      summaryWriter: writer,
+    });
+
+    await reportSink.publishSummary(['first line', 'second line']);
+
+    expect(summaryLines).toEqual([
+      { text: 'first line', addEol: true },
+      { text: 'second line', addEol: true },
+    ]);
+    expect(writeCalls).toBe(1);
+  });
+
+  it('publishes grouped log lines with GitHub group markers', () => {
+    const messages: string[] = [];
+    const reportSink = createGitHubReportSink({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+      },
+    });
+
+    reportSink.publishLogGroup('Post action', ['first line', 'second line'], (message) => {
+      messages.push(message);
+    });
+
+    expect(messages).toEqual(['::group::Post action', 'first line', 'second line', '::endgroup::']);
+  });
+
+  it('replaces the current summary file when the runner exposes a step-summary path', async () => {
+    const summaryDir = await mkdtemp(path.join(os.tmpdir(), 'github-platform-summary-'));
+    const summaryPath = path.join(summaryDir, 'step-summary.md');
+    const summaryLines: Array<{ text: string; addEol: boolean | undefined }> = [];
+    let writeCalls = 0;
+    const writer: SummaryWriter = {
+      addRaw(text: string, addEol?: boolean): SummaryWriter {
+        summaryLines.push({ text, addEol });
+        return this;
+      },
+      async write(): Promise<void> {
+        writeCalls += 1;
+      },
+    };
+
+    const reportSink = createGitHubReportSink({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'check',
+        GITHUB_STEP_SUMMARY: summaryPath,
+      },
+      summaryWriter: writer,
+    });
+
+    await reportSink.replaceSummary(['summary line']);
+
+    expect(await readFile(summaryPath, 'utf8')).toBe('summary line\n');
+    expect(summaryLines).toEqual([]);
+    expect(writeCalls).toBe(0);
+  });
+
+  it('falls back to publishSummary when GITHUB_STEP_SUMMARY is not an absolute path', async () => {
+    // F-1: a relative GITHUB_STEP_SUMMARY value (which a compromised earlier step could inject
+    // via $GITHUB_ENV) must not be used as a write target. The action must fall back to the
+    // @actions/core summary writer instead.
+    const summaryLines: Array<{ text: string; addEol: boolean | undefined }> = [];
+    let writeCalls = 0;
+    const writer: SummaryWriter = {
+      addRaw(text: string, addEol?: boolean): SummaryWriter {
+        summaryLines.push({ text, addEol });
+        return this;
+      },
+      async write(): Promise<void> {
+        writeCalls += 1;
+      },
+    };
+
+    const reportSink = createGitHubReportSink({
+      env: { GITHUB_STEP_SUMMARY: '../../../etc/cron.d/evil' },
+      summaryWriter: writer,
+    });
+
+    await reportSink.replaceSummary(['summary line']);
+
+    // Must NOT have written to the relative path; must have fallen back to the summary writer.
+    expect(summaryLines).toEqual([{ text: 'summary line', addEol: true }]);
+    expect(writeCalls).toBe(1);
+  });
+});

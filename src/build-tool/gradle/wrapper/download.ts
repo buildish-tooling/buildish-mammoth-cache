@@ -1,0 +1,844 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { setTimeout as sleepTimeout } from 'node:timers/promises';
+
+import type { HttpHeadersByHost } from '../../../ci';
+import { isReplaceTargetError } from '../../../util/fs';
+import { verifyGradleDetachedSignature } from './signature';
+import type {
+  ProvisionedWrapperJar,
+  ValidatedWrapperPropertiesFile,
+  WrapperDownloadPlan,
+} from './types';
+
+const DISTRIBUTION_HOST = 'services.gradle.org';
+const GITHUB_API_HOST = 'api.github.com';
+const GRADLE_SOURCE_HOST = 'raw.githubusercontent.com';
+const GRADLE_SOURCE_API_BASE_URL = `https://${GITHUB_API_HOST}/repos/gradle/gradle/contents/gradle/wrapper/gradle-wrapper.jar`;
+const DISTRIBUTION_PATH_PATTERN =
+  /^\/distributions\/gradle-([0-9]+(?:\.[0-9]+){1,2})-[A-Za-z][A-Za-z0-9-]*\.zip$/u;
+const SHA256_PATTERN = /^[A-Fa-f0-9]{64}$/;
+const DEFAULT_RETRY_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 1000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_RETRY_AFTER_DELAY_MS = 300_000;
+/** Upper bound accepted for {@link WrapperProvisionOptions.requestTimeoutMs}. */
+const MAX_REQUEST_TIMEOUT_MS = 300_000;
+const EMPTY_HTTP_HEADERS_BY_HOST: HttpHeadersByHost = new Map();
+
+/**
+ * Maximum number of bytes accepted for a wrapper checksum response.
+ *
+ * A SHA-256 hex digest is exactly 64 ASCII characters. Capping at 64 KiB is extremely
+ * generous while preventing memory exhaustion from an unexpectedly large response body.
+ */
+export const MAX_CHECKSUM_RESPONSE_BYTES = 64 * 1024;
+
+/**
+ * Maximum number of bytes accepted for a wrapper PGP signature response.
+ *
+ * An ASCII-armored detached signature for a small file is typically a few hundred bytes.
+ * Capping at 64 KiB is extremely generous while preventing memory exhaustion.
+ */
+export const MAX_SIGNATURE_RESPONSE_BYTES = 64 * 1024;
+
+/**
+ * Maximum number of bytes accepted for the wrapper JAR response.
+ *
+ * The `gradle-wrapper.jar` is typically 60–70 KiB. Capping at 10 MiB is very generous
+ * while preventing memory exhaustion if a compromised or man-in-the-middle server returns
+ * an arbitrarily large response body.
+ */
+export const MAX_JAR_RESPONSE_BYTES = 10 * 1024 * 1024;
+
+interface WrapperRemoteRequest {
+  readonly url: string;
+  readonly requestInit?: RequestInit;
+}
+
+/**
+ * Options that control the wrapper JAR download, retry, and verification behaviour.
+ *
+ * All fields are optional; defaults are suitable for production use and are documented on each
+ * field. Inject overrides in tests to avoid real network calls and GnuPG invocations.
+ */
+export interface WrapperProvisionOptions {
+  /**
+   * Optional HTTP fetch implementation override.
+   *
+   * Defaults to the runtime global `fetch` when omitted.
+   */
+  readonly fetchImpl?: typeof fetch;
+  /**
+   * Optional sleep implementation used between retry attempts.
+   *
+   * Defaults to the internal timer-based sleep helper when omitted.
+   */
+  readonly sleep?: (milliseconds: number) => Promise<unknown>;
+  /**
+   * Maximum number of download attempts per resource.
+   *
+   * Defaults to `3` and must be an integer between `1` and `10` inclusive.
+   */
+  readonly retryAttempts?: number;
+  /**
+   * Base retry delay in milliseconds before exponential backoff is applied.
+   *
+   * Defaults to `1000` and must be an integer between `0` and `60000` inclusive.
+   */
+  readonly retryDelayMs?: number;
+  /**
+   * Optional logger invoked immediately before a retry delay is applied.
+   *
+   * This keeps retry observability injectable without coupling this module to a specific runtime
+   * logging API.
+   */
+  readonly logRetry?: (message: string) => void;
+  /**
+   * Per-request wall-clock timeout in milliseconds applied to each individual fetch attempt.
+   *
+   * A fresh {@link AbortSignal} is created per attempt so each retry receives a full timeout
+   * window. An attempt that exceeds the timeout is aborted and treated as a transient failure
+   * eligible for retry. Defaults to `30000` (30 seconds) and must be an integer between `1`
+   * and `300000` inclusive.
+   */
+  readonly requestTimeoutMs?: number;
+  /**
+   * Optional exact-host HTTP headers applied only to matching HTTPS requests.
+   *
+   * This is used for authenticated GitHub API wrapper downloads without sending credentials to
+   * unrelated hosts.
+   */
+  readonly httpHeadersByHost?: HttpHeadersByHost;
+  /**
+   * Optional detached-signature verifier override used by focused tests.
+   *
+   * Defaults to the pinned Gradle signing-key verifier when omitted.
+   */
+  readonly verifyWrapperSignature?: (
+    jarBytes: Uint8Array,
+    armoredSignature: string,
+    plan: WrapperDownloadPlan,
+  ) => Promise<void>;
+}
+
+/**
+ * Maps a validated distribution URL to the remote resources needed to provision a trusted
+ * wrapper JAR.
+ *
+ * Gradle publishes the wrapper JAR checksum and detached signature on `services.gradle.org`, but
+ * not the wrapper JAR bytes themselves. The actual JAR still has to be fetched from the matching
+ * Gradle source tag on GitHub and then verified against both Gradle-published authenticity and
+ * integrity metadata.
+ */
+export function deriveWrapperDownloadPlan(
+  wrapper: ValidatedWrapperPropertiesFile,
+): WrapperDownloadPlan {
+  const distributionUrl = parseDistributionUrl(wrapper);
+  const distributionVersion = extractDistributionVersion(
+    distributionUrl.pathname,
+    wrapper.relativePath,
+  );
+  const wrapperSourceVersion = normalizeWrapperSourceVersion(
+    distributionVersion,
+    wrapper.relativePath,
+  );
+
+  return {
+    relativePath: wrapper.relativePath,
+    distributionVersion,
+    wrapperSourceVersion,
+    wrapperChecksumUrl: `https://${DISTRIBUTION_HOST}/distributions/gradle-${distributionVersion}-wrapper.jar.sha256`,
+    wrapperSignatureUrl: `https://${DISTRIBUTION_HOST}/distributions/gradle-${distributionVersion}-wrapper.jar.asc`,
+    wrapperJarUrl: `https://${GRADLE_SOURCE_HOST}/gradle/gradle/v${wrapperSourceVersion}/gradle/wrapper/gradle-wrapper.jar`,
+  };
+}
+
+/**
+ * Ensures each targeted wrapper has a verified `gradle-wrapper.jar` next to its properties file.
+ */
+export async function provisionWrapperJars(
+  wrappers: readonly ValidatedWrapperPropertiesFile[],
+  options: WrapperProvisionOptions = {},
+): Promise<readonly ProvisionedWrapperJar[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const sleep = options.sleep ?? sleepTimeout;
+  const retryAttempts = validateRetryAttempts(options.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS);
+  const retryDelayMs = validateRetryDelay(options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+  const requestTimeoutMs = validateRequestTimeout(
+    options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+  const logRetry = options.logRetry;
+  const httpHeadersByHost = options.httpHeadersByHost ?? EMPTY_HTTP_HEADERS_BY_HOST;
+  const verifyWrapperSignature = options.verifyWrapperSignature ?? defaultVerifyWrapperSignature;
+  const checksumCache = new Map<string, Promise<string>>();
+  const signatureCache = new Map<string, Promise<string>>();
+  const jarCache = new Map<string, Promise<Uint8Array>>();
+  const results: ProvisionedWrapperJar[] = [];
+
+  for (const wrapper of wrappers) {
+    const plan = deriveWrapperDownloadPlan(wrapper);
+    const expectedWrapperJarSha256Promise = getOrCreate(
+      checksumCache,
+      plan.wrapperChecksumUrl,
+      async () =>
+        await downloadExpectedWrapperJarSha256(
+          plan,
+          fetchImpl,
+          sleep,
+          retryAttempts,
+          retryDelayMs,
+          requestTimeoutMs,
+          logRetry,
+        ),
+    );
+    const wrapperJarSignaturePromise = getOrCreate(
+      signatureCache,
+      plan.wrapperSignatureUrl,
+      async () =>
+        await downloadExpectedWrapperJarSignature(
+          plan,
+          fetchImpl,
+          sleep,
+          retryAttempts,
+          retryDelayMs,
+          requestTimeoutMs,
+          logRetry,
+        ),
+    );
+    const [expectedWrapperJarSha256, wrapperJarSignature] = await Promise.all([
+      expectedWrapperJarSha256Promise,
+      wrapperJarSignaturePromise,
+    ]);
+    const wrapperJarAbsolutePath = path.join(
+      path.dirname(wrapper.absolutePath),
+      'gradle-wrapper.jar',
+    );
+    const existingJarBytes = await readExistingWrapperJarIfExpectedSha256(
+      wrapperJarAbsolutePath,
+      expectedWrapperJarSha256,
+      wrapper.relativePath,
+    );
+    let wasDownloaded = false;
+
+    if (existingJarBytes) {
+      await verifyWrapperSignature(existingJarBytes, wrapperJarSignature, plan);
+    } else {
+      const wrapperJarRequest = resolveWrapperJarRequest(plan, httpHeadersByHost);
+      const jarBytes = await getOrCreate(
+        jarCache,
+        wrapperJarRequest.url,
+        async () =>
+          await downloadWrapperJar(
+            plan,
+            wrapperJarRequest,
+            fetchImpl,
+            sleep,
+            retryAttempts,
+            retryDelayMs,
+            requestTimeoutMs,
+            logRetry,
+          ),
+      );
+      const downloadedJarSha256 = computeSha256(jarBytes);
+
+      if (downloadedJarSha256 !== expectedWrapperJarSha256) {
+        throw new Error(
+          `Downloaded wrapper JAR for '${wrapper.relativePath}' failed checksum verification.`,
+        );
+      }
+
+      await verifyWrapperSignature(jarBytes, wrapperJarSignature, plan);
+
+      await placeWrapperJarAtomically(wrapperJarAbsolutePath, jarBytes);
+      wasDownloaded = true;
+    }
+
+    await retainWrapperMetadataFiles(
+      wrapper.absolutePath,
+      plan.distributionVersion,
+      expectedWrapperJarSha256,
+      wrapperJarSignature,
+    );
+
+    results.push({
+      ...plan,
+      wrapperJarRelativePath: wrapper.wrapperJarRelativePath,
+      wrapperJarAbsolutePath,
+      expectedWrapperJarSha256,
+      wasDownloaded,
+    });
+  }
+
+  return results;
+}
+
+function parseDistributionUrl(wrapper: ValidatedWrapperPropertiesFile): URL {
+  let distributionUrl: URL;
+
+  try {
+    distributionUrl = new URL(wrapper.distributionUrl);
+  } catch {
+    throw new Error(
+      `Wrapper properties file '${wrapper.relativePath}' has an invalid distributionUrl.`,
+    );
+  }
+
+  if (
+    distributionUrl.protocol !== 'https:' ||
+    distributionUrl.hostname !== DISTRIBUTION_HOST ||
+    distributionUrl.port.length > 0 ||
+    distributionUrl.username.length > 0 ||
+    distributionUrl.password.length > 0 ||
+    distributionUrl.search.length > 0 ||
+    distributionUrl.hash.length > 0
+  ) {
+    throw new Error(
+      `Wrapper properties file '${wrapper.relativePath}' must use a canonical HTTPS services.gradle.org distributionUrl without credentials, query parameters, or fragments.`,
+    );
+  }
+
+  return distributionUrl;
+}
+
+function extractDistributionVersion(pathname: string, relativePath: string): string {
+  const match = DISTRIBUTION_PATH_PATTERN.exec(pathname);
+
+  if (!match) {
+    throw new Error(
+      `Wrapper properties file '${relativePath}' must use a supported Gradle distributionUrl ending in 'gradle-<version>-bin.zip' or 'gradle-<version>-all.zip'.`,
+    );
+  }
+
+  return match[1];
+}
+
+function normalizeWrapperSourceVersion(distributionVersion: string, relativePath: string): string {
+  const segments = distributionVersion.split('.');
+
+  if (segments.length === 2) {
+    return `${distributionVersion}.0`;
+  }
+
+  if (segments.length === 3) {
+    return distributionVersion;
+  }
+
+  throw new Error(
+    `Wrapper properties file '${relativePath}' uses unsupported Gradle version '${distributionVersion}'. Expected a major.minor or major.minor.patch version.`,
+  );
+}
+
+/**
+ * Reads a response body into memory while enforcing a hard byte cap.
+ *
+ * Two independent checks are applied:
+ * 1. **`Content-Length` pre-check** — if the server declares a `Content-Length` header that
+ *    already exceeds `maxBytes`, the body is rejected immediately without being read at all.
+ * 2. **Streaming byte counter** — the body is consumed chunk-by-chunk; as soon as the
+ *    running total exceeds `maxBytes` the stream is cancelled and an error is thrown.
+ *    This catches cases where `Content-Length` is absent, inaccurate, or deliberately omitted
+ *    by an adversarial server.
+ *
+ * @param response - The HTTP response whose body should be read.
+ * @param maxBytes - Maximum number of bytes to accept.
+ * @param description - Human-readable resource label used in error messages.
+ * @returns The complete response body as a `Uint8Array`.
+ */
+async function readBodyWithSizeLimit(
+  response: Response,
+  maxBytes: number,
+  description: string,
+): Promise<Uint8Array> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null) {
+    const declared = Number.parseInt(contentLength, 10);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(
+        `${description}: response Content-Length (${declared} bytes) exceeds the ${maxBytes}-byte limit.`,
+      );
+    }
+  }
+
+  const body = response.body;
+  if (!body) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      throw new Error(
+        `${description}: response body (${buffer.byteLength} bytes) exceeds the ${maxBytes}-byte limit.`,
+      );
+    }
+    return new Uint8Array(buffer);
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    let next;
+    try {
+      next = await reader.read();
+    } catch (error) {
+      reader.releaseLock();
+      throw error;
+    }
+
+    if (next.done) {
+      reader.releaseLock();
+      break;
+    }
+
+    if (next.value) {
+      totalBytes += next.value.byteLength;
+      if (totalBytes > maxBytes) {
+        // Cancel the stream to release the underlying network connection, then throw.
+        reader.cancel().catch(() => {});
+        throw new Error(
+          `${description}: response body exceeded the ${maxBytes}-byte limit during streaming (${totalBytes} bytes read so far).`,
+        );
+      }
+      chunks.push(next.value);
+    }
+  }
+
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+async function downloadExpectedWrapperJarSha256(
+  plan: WrapperDownloadPlan,
+  fetchImpl: typeof fetch,
+  sleep: (milliseconds: number) => Promise<unknown>,
+  retryAttempts: number,
+  retryDelayMs: number,
+  requestTimeoutMs: number,
+  logRetry: ((message: string) => void) | undefined,
+): Promise<string> {
+  const description = `wrapper checksum for '${plan.relativePath}'`;
+  const response = await fetchWithRetries(
+    plan.wrapperChecksumUrl,
+    undefined,
+    fetchImpl,
+    sleep,
+    retryAttempts,
+    retryDelayMs,
+    requestTimeoutMs,
+    description,
+    logRetry,
+  );
+  const checksum = new TextDecoder()
+    .decode(await readBodyWithSizeLimit(response, MAX_CHECKSUM_RESPONSE_BYTES, description))
+    .trim();
+
+  if (!SHA256_PATTERN.test(checksum)) {
+    throw new Error(
+      `Wrapper checksum response for '${plan.relativePath}' was not a valid SHA-256.`,
+    );
+  }
+
+  return checksum.toLowerCase();
+}
+
+async function downloadExpectedWrapperJarSignature(
+  plan: WrapperDownloadPlan,
+  fetchImpl: typeof fetch,
+  sleep: (milliseconds: number) => Promise<unknown>,
+  retryAttempts: number,
+  retryDelayMs: number,
+  requestTimeoutMs: number,
+  logRetry: ((message: string) => void) | undefined,
+): Promise<string> {
+  const description = `wrapper signature for '${plan.relativePath}'`;
+  const response = await fetchWithRetries(
+    plan.wrapperSignatureUrl,
+    undefined,
+    fetchImpl,
+    sleep,
+    retryAttempts,
+    retryDelayMs,
+    requestTimeoutMs,
+    description,
+    logRetry,
+  );
+  const armoredSignature = new TextDecoder()
+    .decode(await readBodyWithSizeLimit(response, MAX_SIGNATURE_RESPONSE_BYTES, description))
+    .trim();
+
+  if (!armoredSignature.startsWith('-----BEGIN PGP SIGNATURE-----')) {
+    throw new Error(
+      `Wrapper signature response for '${plan.relativePath}' was not valid ASCII-armored OpenPGP data.`,
+    );
+  }
+
+  return armoredSignature;
+}
+
+async function downloadWrapperJar(
+  plan: WrapperDownloadPlan,
+  request: WrapperRemoteRequest,
+  fetchImpl: typeof fetch,
+  sleep: (milliseconds: number) => Promise<unknown>,
+  retryAttempts: number,
+  retryDelayMs: number,
+  requestTimeoutMs: number,
+  logRetry: ((message: string) => void) | undefined,
+): Promise<Uint8Array> {
+  const description = `wrapper JAR for '${plan.relativePath}'`;
+  const response = await fetchWithRetries(
+    request.url,
+    request.requestInit,
+    fetchImpl,
+    sleep,
+    retryAttempts,
+    retryDelayMs,
+    requestTimeoutMs,
+    description,
+    logRetry,
+  );
+  return await readBodyWithSizeLimit(response, MAX_JAR_RESPONSE_BYTES, description);
+}
+
+/**
+ * Fetches a URL with exponential-backoff retry and a per-request wall-clock timeout.
+ *
+ * A fresh {@link AbortSignal} is created for every individual attempt via
+ * {@link AbortSignal.timeout}, so each retry starts with a full `requestTimeoutMs` window.
+ * When the signal fires the fetch throws a `DOMException` whose `name` is `'TimeoutError'`;
+ * this is detected in the catch branch and wrapped in a descriptive message before being
+ * treated as a retryable transient failure.
+ *
+ * HTTP 404 responses are not retried: they indicate the resource is absent, not a transient
+ * infrastructure issue. All other non-OK responses and network errors are eligible for retry.
+ */
+async function fetchWithRetries(
+  url: string,
+  requestInit: RequestInit | undefined,
+  fetchImpl: typeof fetch,
+  sleep: (milliseconds: number) => Promise<unknown>,
+  retryAttempts: number,
+  retryDelayMs: number,
+  requestTimeoutMs: number,
+  resourceDescription: string,
+  logRetry: ((message: string) => void) | undefined,
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    // A fresh AbortSignal is created per attempt so each retry gets a full timeout window.
+    // AbortSignal.timeout() manages its own internal timer and cleans it up automatically.
+    const timedRequestInit: RequestInit = {
+      ...requestInit,
+      signal: AbortSignal.timeout(requestTimeoutMs),
+    };
+
+    try {
+      const response = await fetchImpl(url, timedRequestInit);
+
+      if (response.ok) {
+        return response;
+      }
+
+      if (response.status === 404) {
+        throw new Error(
+          `Could not download ${resourceDescription}: '${url}' returned 404 Not Found.`,
+        );
+      }
+
+      const retryAfterDelayMs = parseRetryAfterDelay(response.headers.get('retry-after'));
+
+      lastError = new Error(
+        `Could not download ${resourceDescription}: '${url}' returned HTTP ${response.status}.`,
+      );
+
+      if (attempt < retryAttempts) {
+        const delayMs = Math.max(retryDelayMs * 2 ** (attempt - 1), retryAfterDelayMs ?? 0);
+        logRetryAttempt(
+          logRetry,
+          resourceDescription,
+          attempt,
+          retryAttempts,
+          delayMs,
+          `HTTP ${response.status}`,
+        );
+        await sleep(delayMs);
+      }
+      continue;
+    } catch (error) {
+      // 'TimeoutError' is the DOMException.name produced by AbortSignal.timeout() when the
+      // per-request timeout fires before the server responds.  Wrap it in a clear message so
+      // operators can distinguish stalled connections from other transient failures.
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        lastError = new Error(
+          `Could not download ${resourceDescription}: request to '${url}' timed out after ${requestTimeoutMs}ms.`,
+        );
+      } else {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+
+      if (lastError.message.includes('404 Not Found')) {
+        throw lastError;
+      }
+    }
+
+    if (attempt < retryAttempts) {
+      const delayMs = retryDelayMs * 2 ** (attempt - 1);
+      logRetryAttempt(
+        logRetry,
+        resourceDescription,
+        attempt,
+        retryAttempts,
+        delayMs,
+        lastError.message,
+      );
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError ?? new Error(`Could not download ${resourceDescription}.`);
+}
+
+function resolveWrapperJarRequest(
+  plan: WrapperDownloadPlan,
+  httpHeadersByHost: HttpHeadersByHost,
+): WrapperRemoteRequest {
+  const authenticatedUrl = `${GRADLE_SOURCE_API_BASE_URL}?ref=v${encodeURIComponent(plan.wrapperSourceVersion)}`;
+  const authenticatedRequestInit = createRequestInitForUrl(authenticatedUrl, httpHeadersByHost);
+
+  if (authenticatedRequestInit) {
+    return {
+      url: authenticatedUrl,
+      requestInit: authenticatedRequestInit,
+    };
+  }
+
+  return {
+    url: plan.wrapperJarUrl,
+    requestInit: createRequestInitForUrl(plan.wrapperJarUrl, httpHeadersByHost),
+  };
+}
+
+function createRequestInitForUrl(
+  url: string,
+  httpHeadersByHost: HttpHeadersByHost,
+): RequestInit | undefined {
+  let parsedUrl: URL;
+
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    return undefined;
+  }
+
+  if (
+    parsedUrl.protocol !== 'https:' ||
+    parsedUrl.port.length > 0 ||
+    parsedUrl.username.length > 0 ||
+    parsedUrl.password.length > 0
+  ) {
+    return undefined;
+  }
+
+  const hostHeaders = httpHeadersByHost.get(parsedUrl.hostname.toLowerCase());
+  if (!hostHeaders || hostHeaders.size === 0) {
+    return undefined;
+  }
+
+  return {
+    headers: new Headers(Array.from(hostHeaders.entries())),
+  };
+}
+
+async function defaultVerifyWrapperSignature(
+  jarBytes: Uint8Array,
+  armoredSignature: string,
+  plan: WrapperDownloadPlan,
+): Promise<void> {
+  await verifyGradleDetachedSignature(
+    jarBytes,
+    armoredSignature,
+    `wrapper JAR for '${plan.relativePath}'`,
+  );
+}
+
+async function readExistingWrapperJarIfExpectedSha256(
+  wrapperJarAbsolutePath: string,
+  expectedWrapperJarSha256: string,
+  relativePath: string,
+): Promise<Uint8Array | null> {
+  let stats;
+  try {
+    stats = await lstat(wrapperJarAbsolutePath);
+  } catch {
+    return null;
+  }
+
+  if (stats.isSymbolicLink()) {
+    throw new Error(
+      `Existing wrapper JAR for '${relativePath}' must not be a symbolic link: '${wrapperJarAbsolutePath}'.`,
+    );
+  }
+
+  if (!stats.isFile()) {
+    throw new Error(
+      `Existing wrapper JAR for '${relativePath}' must be a regular file: '${wrapperJarAbsolutePath}'.`,
+    );
+  }
+
+  const existingContents = await readFile(wrapperJarAbsolutePath);
+  return computeSha256(existingContents) === expectedWrapperJarSha256 ? existingContents : null;
+}
+
+async function placeWrapperJarAtomically(
+  wrapperJarAbsolutePath: string,
+  jarBytes: Uint8Array,
+): Promise<void> {
+  await placeFileAtomically(wrapperJarAbsolutePath, jarBytes, '.gradle-wrapper');
+}
+
+async function retainWrapperMetadataFiles(
+  wrapperPropertiesAbsolutePath: string,
+  distributionVersion: string,
+  expectedWrapperJarSha256: string,
+  wrapperJarSignature: string,
+): Promise<void> {
+  const wrapperDirectory = path.dirname(wrapperPropertiesAbsolutePath);
+
+  await Promise.all([
+    placeFileAtomically(
+      path.join(wrapperDirectory, `gradle-wrapper-${distributionVersion}.sha256`),
+      `${expectedWrapperJarSha256}\n`,
+      '.gradle-wrapper-sha256',
+    ),
+    placeFileAtomically(
+      path.join(wrapperDirectory, `gradle-wrapper-${distributionVersion}.asc`),
+      wrapperJarSignature,
+      '.gradle-wrapper-signature',
+    ),
+  ]);
+}
+
+async function placeFileAtomically(
+  targetAbsolutePath: string,
+  contents: Uint8Array | string,
+  temporaryPrefix: string,
+): Promise<void> {
+  const directory = path.dirname(targetAbsolutePath);
+  const temporaryPath = path.join(directory, `${temporaryPrefix}.${randomUUID()}.tmp`);
+
+  await mkdir(directory, { recursive: true });
+
+  try {
+    await writeFile(temporaryPath, contents, { flag: 'wx' });
+
+    try {
+      await rename(temporaryPath, targetAbsolutePath);
+    } catch (error) {
+      if (!isReplaceTargetError(error)) {
+        throw error;
+      }
+
+      await rm(targetAbsolutePath, { force: true });
+      await rename(temporaryPath, targetAbsolutePath);
+    }
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+function computeSha256(contents: Uint8Array): string {
+  return createHash('sha256').update(contents).digest('hex');
+}
+
+function validateRetryAttempts(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 10) {
+    throw new Error('retryAttempts must be an integer between 1 and 10.');
+  }
+
+  return value;
+}
+
+function validateRetryDelay(value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > 60_000) {
+    throw new Error('retryDelayMs must be an integer between 0 and 60000.');
+  }
+
+  return value;
+}
+
+function validateRequestTimeout(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_REQUEST_TIMEOUT_MS) {
+    throw new Error(`requestTimeoutMs must be an integer between 1 and ${MAX_REQUEST_TIMEOUT_MS}.`);
+  }
+
+  return value;
+}
+
+function parseRetryAfterDelay(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const retryAfterSeconds = Number(value);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    return Math.min(Math.ceil(retryAfterSeconds * 1000), MAX_RETRY_AFTER_DELAY_MS);
+  }
+
+  const retryAfterDate = Date.parse(value);
+  if (!Number.isNaN(retryAfterDate)) {
+    return Math.min(Math.max(retryAfterDate - Date.now(), 0), MAX_RETRY_AFTER_DELAY_MS);
+  }
+
+  return null;
+}
+
+function logRetryAttempt(
+  logRetry: ((message: string) => void) | undefined,
+  resourceDescription: string,
+  attempt: number,
+  retryAttempts: number,
+  delayMs: number,
+  reason: string,
+): void {
+  logRetry?.(
+    `Retrying download of ${resourceDescription} after attempt ${attempt} of ${retryAttempts} failed with ${reason}; waiting ${delayMs}ms before retrying.`,
+  );
+}
+
+function getOrCreate<T>(
+  map: Map<string, Promise<T>>,
+  key: string,
+  createValue: () => Promise<T>,
+): Promise<T> {
+  const existingValue = map.get(key);
+
+  if (existingValue) {
+    return existingValue;
+  }
+
+  const createdValue = createValue();
+  map.set(key, createdValue);
+  return createdValue;
+}

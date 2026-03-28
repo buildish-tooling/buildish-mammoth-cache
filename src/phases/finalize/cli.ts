@@ -1,0 +1,56 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { executeFinalizeAction, type FinalizeActionDependencies } from './flow';
+import { decideSingleRunFinalizeExecution } from '../../guard/job-single-run';
+
+/** Full dependency bundle required by the finalize entrypoint; aliases {@link FinalizeActionDependencies}. */
+export type FinalizeEntrypointDependencies = FinalizeActionDependencies;
+
+/**
+ * Entrypoint for the finalize (post) phase of the action.
+ *
+ * Checks the single-run guard before delegating to {@link executeFinalizeAction}. When the guard
+ * indicates this invocation should not run (duplicate or missing prepare), the function logs a
+ * diagnostic message and returns without performing any cache or artifact operations.
+ */
+export async function runFinalizeExecution(
+  dependencies: FinalizeEntrypointDependencies,
+): Promise<void> {
+  const { runtimeHost } = dependencies;
+  const finalizeDecision = decideSingleRunFinalizeExecution({
+    getState: runtimeHost.getState,
+  });
+  if (!finalizeDecision.shouldRun) {
+    runtimeHost.info(finalizeDecision.message);
+    return;
+  }
+
+  const status = await executeFinalizeAction(dependencies);
+  if (status.bootstrap.baseCacheResult) {
+    runtimeHost.info(status.bootstrap.baseCacheResult.message);
+  }
+  if (status.consumedDeltaCleanupResult) {
+    runtimeHost.info(status.consumedDeltaCleanupResult.message);
+    for (const warning of status.consumedDeltaCleanupResult.warnings) {
+      runtimeHost.warning(warning);
+    }
+  }
+  if (status.deltaArtifactResult) {
+    runtimeHost.info(status.deltaArtifactResult.message);
+  }
+  runtimeHost.info(status.message);
+}

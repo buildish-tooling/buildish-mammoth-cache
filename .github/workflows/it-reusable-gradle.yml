@@ -1,0 +1,438 @@
+#
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: IT Mammoth Cache for Gradle (Reusable)
+
+# Real GitHub integration scenario graph for Mammoth Cache for Gradle.
+#
+# Scenario layout:
+# - standalone_round_trip exercises a writable Linux cache round-trip by capturing the
+#   action-generated cache key, saving a cache snapshot immediately, wiping Gradle user home,
+#   restoring that exact key, and proving the fixture resolves offline.
+# - worker_a + worker_b -> aggregator exercises distributed worker delta publication plus
+#   same-run aggregator download/merge/apply using deterministic worker job names.
+# - duplicate_invocation_guard proves duplicate same-job action usage is rejected.
+# - pull_request_worker -> pull_request_read_only checks the full PR read-only distributed topology
+#   under minimal permissions: no worker upload and an explicit aggregator no-op.
+# - standalone_cross_platform is a lightweight smoke check on macOS/Windows only.
+#
+# Isolation/safety notes:
+# - Every scenario stages a fresh fixture copy into a unique per-job build directory.
+# - Every cache-key-prefix includes github.run_id/github.run_attempt, so parallel workflow runs,
+#   retries, and sequential branch builds do not reuse writable cache keys accidentally.
+# - Distributed artifact exchange stays within the current workflow run only; the action never uses
+#   cross-run `findBy` lookups here.
+# - The Windows smoke job intentionally runs under `shell: bash` and executes `./gradlew`, so the
+#   fixture does not currently need a `gradlew.bat` launcher.
+
+on:
+  workflow_call:
+    inputs:
+      caller-event-name:
+        description: >-
+          Original caller workflow event name. Reusable workflows execute as `workflow_call`, so
+          the action needs the caller event to preserve event-based read-only and ref behavior.
+        required: true
+        type: string
+      caller-resolved-ref-name:
+        description: >-
+          Logical ref name from the caller workflow that the action should treat as the effective
+          branch for cache partitioning and summaries.
+        required: true
+        type: string
+      caller-default-branch:
+        description: >-
+          Repository default branch from the caller workflow so reusable runs do not depend on the
+          callee's `workflow_call` payload shape.
+        required: true
+        type: string
+      run-pr-scenarios:
+        description: >-
+          Run the fork-safe pull-request worker/aggregator topology that verifies PR events stay
+          read-only, workers upload nothing, and aggregation is an explicit no-op.
+        required: true
+        type: boolean
+      run-writable-scenarios:
+        description: >-
+          Run the trusted Linux scenarios that are allowed to publish cache/artifact outputs:
+          standalone cache round-trip, distributed worker/aggregator flow, and duplicate-job guard.
+        required: true
+        type: boolean
+      run-cross-platform:
+        description: >-
+          Run the lightweight standalone macOS/Windows smoke scenario that verifies wrapper setup
+          and action/runtime compatibility without enabling writable cross-platform coverage.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  # The scenarios are designed to work with repository read-access only. Cache and current-run
+  # artifact operations use the Actions runtime; this workflow does not require broader repo scopes.
+  contents: read
+
+env:
+  ACTION_DIRECTORY: .
+  FIXTURE_SOURCE_DIRECTORY: test/fixtures/integration/gradle-project
+
+jobs:
+  # Performs a deterministic same-job save -> wipe -> restore cycle using the action-generated
+  # cache key, which avoids relying on post-job cache propagation timing between separate jobs.
+  standalone_round_trip:
+    name: Linux standalone round-trip (offline exact restore)
+    if: inputs.run-writable-scenarios
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh standalone-round-trip
+
+      - name: Prepare Mammoth Cache for Gradle
+        id: prepare
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/standalone-round-trip
+          cache-key-prefix: it-standalone-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: standalone_round_trip
+
+      - name: Assert prepare outputs
+        env:
+          ACTION_CACHE_FAMILY_KEY: ${{ steps.prepare.outputs.cache-family-key }}
+          ACTION_CACHE_LINEAGE_PREFIX: ${{ steps.prepare.outputs.cache-lineage-prefix }}
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
+        run: bash .github/scripts/it-assert-gradle-standalone.sh
+
+      - name: Resolve standalone dependencies online
+        working-directory: build/integration-fixtures/standalone-round-trip
+        run: ./gradlew --info --no-daemon resolveStandalone
+
+      - name: Save exact standalone cache snapshot
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
+
+      - name: Wipe Gradle user home to prove restore
+        run: |
+          rm -rf "$HOME/.gradle"
+          mkdir -p "$HOME/.gradle"
+
+      - name: Restore exact standalone cache snapshot
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
+
+      - name: Verify the saved cache restores offline
+        working-directory: build/integration-fixtures/standalone-round-trip
+        run: ./gradlew --info --offline --no-daemon resolveStandalone
+
+      - name: Assert exact cache reuse
+        run: test "${STEPS_RESTORE_OUTPUTS_CACHE_HIT}" = 'true'
+        env:
+          STEPS_RESTORE_OUTPUTS_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+
+  # Workers A and B each publish one independent same-run delta artifact for the aggregator.
+  # They run in parallel via a matrix; both must complete before the aggregator starts.
+  workers:
+    name: Linux distributed ${{ matrix.worker.label }} (publish delta artifact)
+    if: inputs.run-writable-scenarios
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker:
+          - { id: worker_a, label: 'worker A', task: resolveWorkerA }
+          - { id: worker_b, label: 'worker B', task: resolveWorkerB }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
+
+      - name: Prepare Mammoth Cache for Gradle
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/${{ matrix.worker.id }}
+          job-mode: distributed-worker
+          cache-key-prefix: it-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: ${{ matrix.worker.id }}
+
+      - name: Produce worker cache delta
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        run: ./gradlew --info --no-daemon ${{ matrix.worker.task }}
+
+  # Aggregator waits for both workers, downloads their current-run artifacts, applies both deltas,
+  # and confirms the restored dependency jars are reused without being downloaded again before
+  # post-action cleanup removes consumed worker artifacts.
+  aggregator:
+    name: Linux distributed aggregator (download+merge worker deltas)
+    if: inputs.run-writable-scenarios
+    needs: [workers]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh aggregator
+
+      - name: Prepare Mammoth Cache for Gradle
+        id: prepare
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/aggregator
+          job-mode: distributed-aggregator
+          dependent-jobs: worker_a,worker_b
+          cache-key-prefix: it-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: aggregator
+
+      - name: Verify dependent worker delta jars are reused without re-download
+        working-directory: build/integration-fixtures/aggregator
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/it-verify-worker-deltas.sh"
+
+      - name: Assert both worker artifacts were consumed
+        env:
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
+        run: bash .github/scripts/it-assert-gradle-aggregator.sh
+
+  # Proves that two action invocations in the same GitHub job cannot race or double-run post-work.
+  duplicate_invocation_guard:
+    name: Linux duplicate invocation guard (same-job safety)
+    if: inputs.run-writable-scenarios
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh duplicate-guard
+
+      - name: First action invocation succeeds
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/duplicate-guard
+          cache-enabled: false
+          read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: duplicate_invocation_guard
+
+      - name: Confirm the fixture Gradle wrapper runs
+        working-directory: build/integration-fixtures/duplicate-guard
+        run: ./gradlew --info --version
+
+      - name: Duplicate action invocation is rejected
+        id: duplicate_action
+        continue-on-error: true
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/duplicate-guard
+          cache-enabled: false
+          read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: duplicate_invocation_guard
+
+      - name: Assert the duplicate invocation failed
+        run: test "${STEPS_DUPLICATE_ACTION_OUTCOME}" = 'failure'
+        env:
+          STEPS_DUPLICATE_ACTION_OUTCOME: ${{ steps.duplicate_action.outcome }}
+
+  # A PR worker exercises the distributed-worker finalize path under read-only permissions. It must
+  # complete without uploading an envelope for the downstream no-op aggregator.
+  pull_request_worker:
+    name: Pull request distributed worker (no artifact upload)
+    if: inputs.run-pr-scenarios
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh pull-request-worker
+
+      - name: Prepare Mammoth Cache for Gradle
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/pull-request-worker
+          job-mode: distributed-worker
+          cache-key-prefix: it-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: pull_request_worker
+
+      - name: Run a read-only PR worker build
+        working-directory: build/integration-fixtures/pull-request-worker
+        run: ./gradlew --info --no-daemon resolveWorkerA
+
+  # Validates the full PR worker/aggregator topology under minimal permissions.
+  pull_request_read_only:
+    name: Pull request aggregator (explicit read-only no-op)
+    if: inputs.run-pr-scenarios
+    needs: [pull_request_worker]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh pull-request
+
+      - name: Prepare Mammoth Cache for Gradle
+        id: prepare
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/pull-request
+          job-mode: distributed-aggregator
+          dependent-jobs: pull_request_worker
+          cache-key-prefix: it-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: pull_request_read_only
+
+      - name: Run a read-only PR aggregator build
+        working-directory: build/integration-fixtures/pull-request
+        run: ./gradlew --info --no-daemon resolveStandalone
+
+      - name: Assert the PR default stayed read-only
+        env:
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
+        run: bash .github/scripts/it-assert-gradle-pr.sh
+
+  # Lightweight macOS/Windows smoke coverage only. This runs under bash on both platforms and uses
+  # `./gradlew`, so the fixture intentionally relies on the POSIX launcher rather than `gradlew.bat`.
+  standalone_cross_platform:
+    name: Cross-platform standalone smoke (${{ matrix.os }})
+    if: inputs.run-cross-platform
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Expose GnuPG on Windows PATH
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh cross-platform-${{ matrix.os }}
+
+      - name: Prepare Mammoth Cache for Gradle
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/cross-platform-${{ matrix.os }}
+          cache-key-prefix: it-cross-platform-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-
+          read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: standalone_cross_platform
+
+      - name: Verify Gradle runs on this runner
+        working-directory: build/integration-fixtures/cross-platform-${{ matrix.os }}
+        run: ./gradlew --info --version
