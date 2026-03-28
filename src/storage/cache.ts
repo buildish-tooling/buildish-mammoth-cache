@@ -33,6 +33,13 @@ export const STANDARD_BASE_CACHE_BACKEND_CAPABILITIES: BaseCacheBackendCapabilit
   supportsExplicitSave: true,
 };
 
+/**
+ * Provider-neutral interface for base cache operations.
+ *
+ * Shared orchestration code calls only this interface; provider-specific implementations
+ * (e.g. `createGitHubBaseCacheBackend`) adapt the underlying toolkit APIs to this surface.
+ * Use `capabilities` to branch on optional features rather than checking the provider identity.
+ */
 export interface BaseCacheBackend {
   /** Declares optional cache features that shared orchestration may need to branch on. */
   readonly capabilities: BaseCacheBackendCapabilities;

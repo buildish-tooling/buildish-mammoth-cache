@@ -19,6 +19,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+/**
+ * A pinned OpenPGP public key used to verify Gradle wrapper detached signatures.
+ *
+ * Both fields must match: the key bytes are imported and `gpg --verify` is run, then the
+ * actual fingerprint is compared to `expectedFingerprint` to detect key substitution.
+ */
 export interface TrustedOpenPgpPublicKey {
   /** ASCII-armored OpenPGP public key block. */
   readonly armoredKey: string;
@@ -153,6 +159,16 @@ export function normalizePathForGpgCommand(
   return `/${driveLetter.toLowerCase()}/${remainder.replaceAll('\\', '/')}`;
 }
 
+/**
+ * Validates and returns the entries in `trustedKeyAllowlist` after verifying that each
+ * key's actual GnuPG fingerprint matches its declared `expectedFingerprint`.
+ *
+ * Throws when the allowlist is empty, any key has an invalid or mismatched fingerprint, or
+ * any fingerprint appears more than once (duplicate-key guard).
+ *
+ * @param options - GnuPG command overrides for testing.
+ * @returns The validated allowlist entries in their original order.
+ */
 export async function loadTrustedOpenPgpPublicKeys(
   trustedKeyAllowlist: readonly TrustedOpenPgpPublicKey[],
   options: GpgCommandOptions = {},
@@ -196,6 +212,20 @@ export async function loadTrustedOpenPgpPublicKeys(
   );
 }
 
+/**
+ * Verifies a detached OpenPGP signature against a set of trusted public keys using GnuPG.
+ *
+ * Creates an isolated ephemeral GnuPG home for each call so verification calls do not share
+ * mutable keyring state. The temporary directory is removed in a `finally` block regardless of
+ * whether verification succeeds or fails.
+ *
+ * @param payload - Raw bytes of the signed resource.
+ * @param armoredSignature - ASCII-armored detached signature (`.asc` content).
+ * @param verificationKeys - Validated trusted keys to import; must be non-empty.
+ * @param resourceDescription - Human-readable label used in error messages.
+ * @param options - GnuPG command overrides for testing.
+ * @throws When the signature cannot be verified by any of the trusted keys.
+ */
 export async function verifyDetachedOpenPgpSignature(
   payload: Uint8Array,
   armoredSignature: string,
@@ -257,6 +287,15 @@ export async function verifyDetachedOpenPgpSignature(
   });
 }
 
+/**
+ * Convenience wrapper that verifies a Gradle wrapper JAR detached signature against the pinned
+ * {@link GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST}.
+ *
+ * The trusted key set is loaded and validated lazily on the first call and cached for reuse
+ * across subsequent wrapper verifications within the same process.
+ *
+ * @throws When the signature cannot be verified by any Gradle trusted key.
+ */
 export async function verifyGradleDetachedSignature(
   payload: Uint8Array,
   armoredSignature: string,

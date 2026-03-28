@@ -17,8 +17,16 @@
 import { executePostAction, type PostActionDependencies } from '../../post-flow';
 import { decideSingleRunFinalizeExecution } from '../../runtime/job-single-run';
 
+/** Full dependency bundle required by the finalize entrypoint; aliases {@link PostActionDependencies}. */
 export type FinalizeEntrypointDependencies = PostActionDependencies;
 
+/**
+ * Entrypoint for the finalize (post) phase of the action.
+ *
+ * Checks the single-run guard before delegating to {@link executePostAction}. When the guard
+ * indicates this invocation should not run (duplicate or missing prepare), the function logs a
+ * diagnostic message and returns without performing any cache or artifact operations.
+ */
 export async function runFinalizeExecution(
   dependencies: FinalizeEntrypointDependencies,
 ): Promise<void> {

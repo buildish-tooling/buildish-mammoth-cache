@@ -49,6 +49,16 @@ import type { WorkflowArtifactBackend } from './storage/artifacts';
 
 const DELTA_ARTIFACT_RETENTION_DAYS = 7;
 
+/**
+ * Outcome of the delta artifact upload step in the finalize phase.
+ *
+ * `status` describes why the artifact was or was not uploaded:
+ * - `missing-pre-build-manifest` — no pre-build manifest was persisted by the prepare phase
+ * - `not-distributed-worker` — job mode is not `distributed-worker`
+ * - `read-only` — action is in read-only mode
+ * - `no-changes` — diff between pre- and post-build manifests was empty
+ * - `uploaded` — delta artifact was successfully packaged and uploaded
+ */
 export interface PostDeltaArtifactResult {
   readonly status:
     | 'missing-pre-build-manifest'
@@ -60,7 +70,9 @@ export interface PostDeltaArtifactResult {
   readonly modifiedCount: number;
   readonly deletedCount: number;
   readonly totalChangedCount: number;
+  /** Name of the uploaded artifact; `null` when `status` is not `uploaded`. */
   readonly artifactName: string | null;
+  /** Provider artifact identifier; `null` when `status` is not `uploaded`. */
   readonly artifactId: number | null;
   readonly artifactSizeBytes: number | null;
   readonly message: string;
@@ -82,11 +94,16 @@ interface PostCacheStatistics {
   readonly rows: readonly PostCacheStatisticRow[];
 }
 
+/** Complete status snapshot produced by {@link executePostAction} at the end of the finalize phase. */
 export interface PostActionStatus {
   readonly bootstrap: BootstrapExecution;
+  /** Restored base cache result read from persisted prepare-phase state; `null` when cache is disabled. */
   readonly baseCacheRestoreResult: BaseCacheRestoreResult | null;
+  /** Cache size statistics computed from the post-build manifest; `null` when cache is disabled. */
   readonly cacheStatistics: PostCacheStatistics | null;
+  /** Result of deleting consumed worker delta artifacts; `null` when no artifacts were consumed. */
   readonly consumedDeltaCleanupResult: PostConsumedDeltaCleanupResult | null;
+  /** Result of uploading the worker delta artifact; `null` for non-worker job modes. */
   readonly deltaArtifactResult: PostDeltaArtifactResult | null;
   readonly gradleBuildReport: GradleBuildReport;
   readonly jobUrl: string | null;
@@ -94,17 +111,34 @@ export interface PostActionStatus {
   readonly message: string;
 }
 
+/** Outcome of deleting consumed worker delta artifacts at the end of the aggregator finalize phase. */
 export interface PostConsumedDeltaCleanupResult {
   readonly attemptedArtifactNames: readonly string[];
   readonly deletedArtifactNames: readonly string[];
+  /** Non-fatal warnings for artifacts that could not be deleted (e.g. permission errors). */
   readonly warnings: readonly string[];
   readonly message: string;
 }
 
+/**
+ * Injectable dependencies for the post (finalize) action flow.
+ *
+ * Extends {@link BootstrapDependencies} with the optional artifact backend used to upload worker
+ * deltas or clean up consumed aggregator delta artifacts.
+ */
 export interface PostActionDependencies extends BootstrapDependencies {
   readonly artifactBackend?: WorkflowArtifactBackend;
 }
 
+/**
+ * Runs the full finalize phase of the action.
+ *
+ * Sequence: bootstrap → cleanup consumed delta artifacts → load Gradle build report → capture
+ * post-build manifest → save base cache (standalone/aggregator) or upload delta artifact
+ * (distributed-worker) → publish log group and job summary.
+ *
+ * @returns A {@link PostActionStatus} snapshot covering all finalize-phase outcomes.
+ */
 export async function executePostAction(
   dependencies: PostActionDependencies,
 ): Promise<PostActionStatus> {
@@ -403,6 +437,13 @@ function createPostActionMessage(deltaArtifactResult: PostDeltaArtifactResult): 
   return 'Finalize execution completed.';
 }
 
+/**
+ * Renders the Markdown job-summary lines for the finalize phase.
+ *
+ * Produces a top-level status heading with an overall health icon, a Gradle build section
+ * (invocation table with outcomes and scan links), and collapsible details covering cache
+ * statistics, delta artifact results, and any warnings.
+ */
 export function createPostActionSummaryLines(status: PostActionStatus): readonly string[] {
   const buildSummary = summarizeGradleBuildReport(status.gradleBuildReport);
   const summaryIssues = collectPostActionSummaryIssues(status, buildSummary);

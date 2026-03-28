@@ -41,20 +41,20 @@ src/storage/artifacts.ts WorkflowArtifactBackend
 Normalised, read-only metadata about the current CI execution. Shared code reads only from this
 struct; it never reads provider-specific environment variables directly.
 
-| Field | Description |
-|---|---|
-| `eventName` | Raw CI event name, e.g. `push`, `pull_request` |
-| `resolvedRefName` | Human-readable ref, e.g. `main`, `feature/my-branch` |
-| `safeRefName` | Cache-key-safe slug derived from `resolvedRefName` |
-| `runnerOs` / `runnerArch` | Lowercased OS and CPU architecture |
-| `defaultBranch` | Repository default branch |
-| `isPullRequest` | Whether the event is a pull-request trigger |
-| `repository` | `owner/name` slug |
-| `workflowName` / `jobName` | Display names |
-| `runId` / `runAttempt` | Numeric execution identifiers, or `null` |
-| `tempDirectory` | Absolute path to the runner temp directory, or `null` |
-| `workspace` | Absolute path to the checked-out workspace |
-| `actionPath` | Absolute path to the action checkout, or `null` |
+| Field                      | Description                                           |
+| -------------------------- | ----------------------------------------------------- |
+| `eventName`                | Raw CI event name, e.g. `push`, `pull_request`        |
+| `resolvedRefName`          | Human-readable ref, e.g. `main`, `feature/my-branch`  |
+| `safeRefName`              | Cache-key-safe slug derived from `resolvedRefName`    |
+| `runnerOs` / `runnerArch`  | Lowercased OS and CPU architecture                    |
+| `defaultBranch`            | Repository default branch                             |
+| `isPullRequest`            | Whether the event is a pull-request trigger           |
+| `repository`               | `owner/name` slug                                     |
+| `workflowName` / `jobName` | Display names                                         |
+| `runId` / `runAttempt`     | Numeric execution identifiers, or `null`              |
+| `tempDirectory`            | Absolute path to the runner temp directory, or `null` |
+| `workspace`                | Absolute path to the checked-out workspace            |
+| `actionPath`               | Absolute path to the action checkout, or `null`       |
 
 ### `CiPlatformAdapter` (`src/ci/types.ts`)
 
@@ -78,13 +78,13 @@ headers only to exact hostname matches over HTTPS.
 Thin wrapper around provider-specific runtime APIs for input resolution, state persistence, output
 emission, and diagnostics.
 
-| Interface | Methods | GitHub Actions mapping |
-|---|---|---|
-| `RuntimeInputSource` | `getInput(name)` | `@actions/core.getInput` |
-| `RuntimeStateStore` | `saveState`, `getState` | `@actions/core.saveState / getState` |
-| `RuntimeOutputSink` | `setOutput` | `@actions/core.setOutput` |
-| `RuntimeReporter` | `info`, `warning` | `@actions/core.info / warning` |
-| `RuntimeFailureReporter` | `setFailed` | `@actions/core.setFailed` |
+| Interface                | Methods                 | GitHub Actions mapping               |
+| ------------------------ | ----------------------- | ------------------------------------ |
+| `RuntimeInputSource`     | `getInput(name)`        | `@actions/core.getInput`             |
+| `RuntimeStateStore`      | `saveState`, `getState` | `@actions/core.saveState / getState` |
+| `RuntimeOutputSink`      | `setOutput`             | `@actions/core.setOutput`            |
+| `RuntimeReporter`        | `info`, `warning`       | `@actions/core.info / warning`       |
+| `RuntimeFailureReporter` | `setFailed`             | `@actions/core.setFailed`            |
 
 ### `ReportSink` (`src/reporting/types.ts`)
 
@@ -119,7 +119,7 @@ download per-worker delta packages. A provider implementation wraps its own arti
 These rules are enforced as a review checklist in [`docs/ci-abstraction-rule.md`](ci-abstraction-rule.md).
 
 - **No raw `process.env` reads outside `src/ci/**`**. All environment information must flow
-  through `CiJobContext`, `CompositeRuntimeHost`, or a backend interface.
+through `CiJobContext`, `CompositeRuntimeHost`, or a backend interface.
 - **No provider-specific rendering in shared flows**. HTML, annotations, and summary formatting
   stay inside provider `ReportSink` implementations.
 - **Lifecycle names are `prepare` / `finalize`**. Provider-level names (`main` / `post` for
@@ -146,4 +146,3 @@ To add support for a new CI platform (e.g. Codeberg/Forgejo or GitLab):
 
 No changes to shared `src/cache/`, `src/wrapper/`, `src/bootstrap.ts`, or `src/main-flow.ts`
 should be required for a straightforward provider port.
-

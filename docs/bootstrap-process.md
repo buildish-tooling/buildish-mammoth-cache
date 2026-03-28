@@ -149,13 +149,12 @@ applies all worker deltas via `applyMergedDeltaPlan()` and then saves the combin
 
 ## State flow summary
 
-| State key | Set during | Read during | Purpose |
-|---|---|---|---|
-| single-run owner token | prepare | finalize | Verify finalize belongs to this invocation |
-| single-run duplicate flag | prepare | finalize | Skip finalize if prepare was rejected |
-| base-cache-armed | prepare (after restore) | finalize | Gate the explicit cache save |
-| pre-build manifest blob | prepare | finalize | Delta computation input |
-| base cache restore result | prepare | finalize | Metadata for the finalize log summary |
-| consumed delta artifact names | prepare (aggregator) | finalize (aggregator) | Artifact cleanup |
-| delta artifact execution identity | prepare | finalize | Cross-phase identity for artifact lookup |
-
+| State key                         | Set during              | Read during           | Purpose                                    |
+| --------------------------------- | ----------------------- | --------------------- | ------------------------------------------ |
+| single-run owner token            | prepare                 | finalize              | Verify finalize belongs to this invocation |
+| single-run duplicate flag         | prepare                 | finalize              | Skip finalize if prepare was rejected      |
+| base-cache-armed                  | prepare (after restore) | finalize              | Gate the explicit cache save               |
+| pre-build manifest blob           | prepare                 | finalize              | Delta computation input                    |
+| base cache restore result         | prepare                 | finalize              | Metadata for the finalize log summary      |
+| consumed delta artifact names     | prepare (aggregator)    | finalize (aggregator) | Artifact cleanup                           |
+| delta artifact execution identity | prepare                 | finalize              | Cross-phase identity for artifact lookup   |

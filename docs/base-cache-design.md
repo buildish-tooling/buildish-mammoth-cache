@@ -48,23 +48,23 @@ sequenceDiagram
 State is passed between the two phases using the CI runtime state store (on GitHub Actions this is
 `@actions/core` `saveState` / `getState`). The key state values are:
 
-| State key | Set by | Read by | Purpose |
-|---|---|---|---|
-| `buildish-mammoth-cache-gradle-base-cache-armed` | `prepare` after restore | `finalize` | Gate on whether a save should be attempted |
-| pre-build manifest blob | `prepare` | `finalize` | Delta computation between pre- and post-build snapshots |
-| base cache restore result | `prepare` | `finalize` | Lets `finalize` know whether the restore was an exact-hit |
-| consumed delta artifact names | `prepare` | `finalize` | Used when cleaning up consumed worker delta artifacts |
+| State key                                        | Set by                  | Read by    | Purpose                                                   |
+| ------------------------------------------------ | ----------------------- | ---------- | --------------------------------------------------------- |
+| `buildish-mammoth-cache-gradle-base-cache-armed` | `prepare` after restore | `finalize` | Gate on whether a save should be attempted                |
+| pre-build manifest blob                          | `prepare`               | `finalize` | Delta computation between pre- and post-build snapshots   |
+| base cache restore result                        | `prepare`               | `finalize` | Lets `finalize` know whether the restore was an exact-hit |
+| consumed delta artifact names                    | `prepare`               | `finalize` | Used when cleaning up consumed worker delta artifacts     |
 
 ## Base cache restore
 
 `restoreBaseCache()` classifies the restore outcome into one of four statuses:
 
-| Status | Meaning |
-|---|---|
-| `feature-unavailable` | The cache backend is not available (e.g. not a supported CI environment) |
-| `miss` | No cache entry matched the primary key or any restore-key prefix |
-| `exact-hit` | The primary key matched an existing entry exactly |
-| `partial-hit` | A restore-key prefix matched a cache entry from a different ref or earlier run |
+| Status                | Meaning                                                                        |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `feature-unavailable` | The cache backend is not available (e.g. not a supported CI environment)       |
+| `miss`                | No cache entry matched the primary key or any restore-key prefix               |
+| `exact-hit`           | The primary key matched an existing entry exactly                              |
+| `partial-hit`         | A restore-key prefix matched a cache entry from a different ref or earlier run |
 
 Both `exact-hit` and `partial-hit` restore cache content to `GRADLE_USER_HOME`. A `partial-hit`
 restore does not suppress a later save — it is expected that the build will add or modify files
@@ -171,4 +171,3 @@ Before each payload file is written to `GRADLE_USER_HOME` the action:
 - Rejects symbolic links at the destination.
 - Re-hashes the payload bytes and compares them to the manifest digest.
 - Writes the file atomically via a temporary file + rename, the same pattern used for wrapper JARs.
-

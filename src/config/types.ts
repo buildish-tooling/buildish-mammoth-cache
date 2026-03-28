@@ -55,6 +55,7 @@ export type WrapperSelectionMode = (typeof WRAPPER_SELECTION_MODES)[number];
  *   matched base cache again so the managed partition space reflects only the restored cache content
  */
 export const RESTORE_CLEANUP_MODES = ['none', 'prune-managed'] as const;
+/** Union of valid restore-time cleanup policy strings derived from {@link RESTORE_CLEANUP_MODES}. */
 export type RestoreCleanupMode = (typeof RESTORE_CLEANUP_MODES)[number];
 
 /**

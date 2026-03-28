@@ -36,15 +36,15 @@ buildish-mammoth-gradle-cache-1-21-linux-x64-a1b2c3d4e5f6a7b8-main
 
 ## Placeholder reference
 
-| Placeholder | Source | Example |
-|---|---|---|
-| `${cacheKeyPrefix}` | `cache-key-prefix` input; default `buildish-mammoth-gradle-cache-` | `buildish-mammoth-gradle-cache-` |
-| `${schemaVersion}` | `cacheSchemaVersion` constant in `src/config/types.ts` | `1` |
-| `${javaMajor}` | `java -version` output parsed at runtime | `21` |
-| `${runnerOs}` | Lowercased OS from the CI adapter | `linux` |
-| `${runnerArch}` | Lowercased architecture from the CI adapter | `x64` |
-| `${partitionFingerprint}` | SHA-256 digest of the resolved partition layout (first 16 hex chars) | `a1b2c3d4e5f6a7b8` |
-| `${refName}` | Cache-safe ref slug from the CI adapter | `main` or `feature-my-branch` |
+| Placeholder               | Source                                                               | Example                          |
+| ------------------------- | -------------------------------------------------------------------- | -------------------------------- |
+| `${cacheKeyPrefix}`       | `cache-key-prefix` input; default `buildish-mammoth-gradle-cache-`   | `buildish-mammoth-gradle-cache-` |
+| `${schemaVersion}`        | `cacheSchemaVersion` constant in `src/config/types.ts`               | `1`                              |
+| `${javaMajor}`            | `java -version` output parsed at runtime                             | `21`                             |
+| `${runnerOs}`             | Lowercased OS from the CI adapter                                    | `linux`                          |
+| `${runnerArch}`           | Lowercased architecture from the CI adapter                          | `x64`                            |
+| `${partitionFingerprint}` | SHA-256 digest of the resolved partition layout (first 16 hex chars) | `a1b2c3d4e5f6a7b8`               |
+| `${refName}`              | Cache-safe ref slug from the CI adapter                              | `main` or `feature-my-branch`    |
 
 Any placeholder that appears in a custom template but is not in the table above is left as-is in
 the rendered key (no silent substitution with empty string).
@@ -121,4 +121,3 @@ Example — add a project prefix before the default layout:
 ```
 my-project-${cacheKeyPrefix}${schemaVersion}-${javaMajor}-${runnerOs}-${runnerArch}-${partitionFingerprint}-${refName}
 ```
-

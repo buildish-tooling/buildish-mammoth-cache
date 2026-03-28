@@ -41,6 +41,7 @@ interface MergedDeltaState {
   readonly payloadPath: string | null;
 }
 
+/** A single file entry resolved from one or more downloaded delta artifact packages. */
 export interface MergedDeltaPayload {
   readonly relativePath: string;
   readonly payloadPath: string;
@@ -48,15 +49,24 @@ export interface MergedDeltaPayload {
   readonly producerJobName: string;
 }
 
+/**
+ * The result of merging one or more downloaded delta artifact packages into a single apply plan.
+ *
+ * Contains a portable delta manifest (using the sentinel Gradle user home) and the resolved
+ * payload file paths that back each changed entry.
+ */
 export interface MergedDeltaPlan {
   readonly deltaManifest: CacheDeltaManifest;
   readonly payloads: readonly MergedDeltaPayload[];
 }
 
+/** Options that control how a merged delta plan is applied to a Gradle user home directory. */
 export interface DeltaApplyOptions {
+  /** Override the filesystem `utimes` call for testing; defaults to `node:fs/promises` `utimes`. */
   readonly setTimes?: (filePath: string, atime: Date, mtime: Date) => Promise<unknown>;
 }
 
+/** Summary counts and warnings produced after applying a merged delta plan. */
 export interface DeltaApplyResult {
   readonly gradleUserHome: string;
   readonly addedCount: number;
@@ -65,10 +75,27 @@ export interface DeltaApplyResult {
   readonly warnings: readonly string[];
 }
 
+/** Options that control conflict resolution when merging overlapping delta artifact packages. */
 export interface MergeDeltaOptions {
+  /**
+   * When `true`, overlapping paths with different content are resolved by taking the entry with
+   * the newer modification timestamp rather than throwing a hard error.
+   *
+   * Use only when multiple workers are known to produce compatible Gradle cache entries for the
+   * same path (e.g. identical downloaded dependency JARs with differing timestamps).
+   */
   readonly allowDuplicateDependentDeltaPaths?: boolean;
 }
 
+/**
+ * Merges an ordered list of downloaded delta artifact packages into a single {@link MergedDeltaPlan}.
+ *
+ * Overlapping paths (same relative path across multiple packages) are resolved according to
+ * `options.allowDuplicateDependentDeltaPaths`. Content conflicts that cannot be resolved throw
+ * a hard error so the aggregator never silently drops changes.
+ *
+ * Returns an empty plan when `packages` is empty.
+ */
 export function mergeDeltaArtifactPackages(
   packages: readonly DownloadedDeltaArtifactPackage[],
   options: MergeDeltaOptions = {},
@@ -157,6 +184,16 @@ export function mergeDeltaArtifactPackages(
   };
 }
 
+/**
+ * Applies a {@link MergedDeltaPlan} to the given Gradle user home directory.
+ *
+ * Each payload file is written atomically via a temporary file followed by a rename so a
+ * partially written file is never visible to a concurrent Gradle invocation. The destination
+ * path is validated to stay within `gradleUserHome` before each write (no path traversal).
+ * Access and modification timestamps are restored from the manifest when supported by the OS.
+ *
+ * @returns Counts of added, modified, and deleted files plus any non-fatal warnings.
+ */
 export async function applyMergedDeltaPlan(
   plan: MergedDeltaPlan,
   gradleUserHome: string,

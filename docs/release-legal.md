@@ -16,7 +16,7 @@ limitations under the License.
 
 # GitHub action distribution legal files
 
-This directory holds the legal files for the bundled GitHub Action distribution under `dist/github/`.
+The `legal/github/` directory holds the legal files for the bundled GitHub Action distribution produced under `dist/github/`.
 
 The generated distribution files are:
 

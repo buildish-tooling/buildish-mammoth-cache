@@ -46,6 +46,12 @@ import { installGradleBuildResultCapture } from './gradle/build-results';
 import { createDetailsSection, escapeSummaryText, publishJobLogGroup } from './logging/summary';
 import type { WorkflowArtifactBackend } from './storage/artifacts';
 
+/**
+ * Combined result of downloading and applying dependent worker delta artifacts during the prepare phase.
+ *
+ * Extends {@link DeltaApplyResult} with the job names and artifact names that were requested
+ * and actually applied, plus a human-readable summary message for the runtime log.
+ */
 export interface MainDependentDeltaResult extends DeltaApplyResult {
   readonly requestedJobs: readonly string[];
   readonly downloadedArtifactNames: readonly string[];
@@ -53,25 +59,46 @@ export interface MainDependentDeltaResult extends DeltaApplyResult {
   readonly message: string;
 }
 
+/** Complete status snapshot produced by {@link executeMainAction} at the end of the prepare phase. */
 export interface MainActionStatus {
   readonly bootstrap: BootstrapExecution;
+  /** Result of the optional prune-managed restore cleanup step; `null` when cleanup was not configured. */
   readonly restoreCleanupResult: RestoreCleanupResult | null;
+  /** Result of downloading and applying dependent worker deltas; `null` when no dependent jobs were configured. */
   readonly dependentDeltaResult: MainDependentDeltaResult | null;
+  /** Path and metadata of the persisted pre-build cache manifest; `null` when the cache is disabled. */
   readonly preBuildManifestState: PersistedPreBuildCacheManifestState | null;
   readonly message: string;
 }
 
+/** Result of the optional prune-managed restore cleanup step performed after a cache hit. */
 export interface RestoreCleanupResult {
   readonly mode: 'prune-managed';
+  /** `skipped-no-hit` when no cache entry was restored; `pruned` when managed files were deleted and re-restored. */
   readonly status: 'skipped-no-hit' | 'pruned';
   readonly deletedFileCount: number;
   readonly message: string;
 }
 
+/**
+ * Injectable dependencies for the main (prepare) action flow.
+ *
+ * Extends {@link BootstrapDependencies} with the optional artifact backend used to download
+ * dependent worker delta artifacts in `distributed-aggregator` mode.
+ */
 export interface MainActionDependencies extends BootstrapDependencies {
   readonly artifactBackend?: WorkflowArtifactBackend;
 }
 
+/**
+ * Runs the full prepare phase of the action.
+ *
+ * Sequence: bootstrap → install build-result capture hook → restore base cache → optional
+ * prune-managed cleanup → download and apply dependent deltas (aggregator mode) → capture
+ * pre-build manifest → persist state for the finalize phase.
+ *
+ * @returns A {@link MainActionStatus} snapshot covering all prepare-phase outcomes.
+ */
 export async function executeMainAction(
   dependencies: MainActionDependencies,
 ): Promise<MainActionStatus> {
@@ -299,6 +326,12 @@ function createMainActionMessage(dependentDeltaResult: MainDependentDeltaResult 
   return 'Prepare execution completed and captured the pre-build cache manifest for finalize processing.';
 }
 
+/**
+ * Renders the Markdown job-summary lines for the prepare phase.
+ *
+ * Includes a top-level status overview and a collapsible details section with per-phase
+ * counters for restore cleanup, dependent delta apply, and manifest persistence.
+ */
 export function createMainActionSummaryLines(status: MainActionStatus): readonly string[] {
   const dependentDelta = status.dependentDeltaResult;
 
@@ -384,6 +417,13 @@ function describeDependentDeltaSummary(result: MainDependentDeltaResult | null):
   return `${result.appliedArtifactCount} artifact(s) from ${result.requestedJobs.length} job(s)`;
 }
 
+/**
+ * Derives the action output key-value map from a completed prepare-phase status.
+ *
+ * The returned map is passed to the CI runtime output sink (e.g. `setOutput` on GitHub Actions).
+ * Outputs include the resolved cache key, restore status, provisioned Gradle versions, and
+ * wrapper download counts so downstream steps can branch on cache or wrapper outcomes.
+ */
 export function createMainActionOutputs(status: MainActionStatus): Record<string, string> {
   const gradleVersions = [
     ...new Set(status.bootstrap.provisionedWrappers.map((wrapper) => wrapper.wrapperSourceVersion)),

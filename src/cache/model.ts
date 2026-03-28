@@ -21,9 +21,24 @@ import path from 'node:path';
 import type { CiJobContext } from '../ci';
 import type { ConfiguredCachePartitionInput, NormalizedActionConfig } from '../config/types';
 
+/**
+ * Default cache key template used when the `cache-key-template` input is not set.
+ *
+ * Placeholders are resolved at runtime: `${cacheKeyPrefix}` (user-configurable prefix),
+ * `${schemaVersion}` (schema bump counter), `${javaMajor}` (detected Java major version),
+ * `${runnerOs}` / `${runnerArch}` (normalized runner platform), `${partitionFingerprint}`
+ * (16-char SHA-256 of the active partition layout), and `${refName}` (cache-safe branch slug).
+ */
 export const DEFAULT_CACHE_KEY_TEMPLATE =
   '${cacheKeyPrefix}${schemaVersion}-${javaMajor}-${runnerOs}-${runnerArch}-${partitionFingerprint}-${refName}';
 const CACHE_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,512}$/;
+/**
+ * Glob patterns that are unconditionally excluded from every cache partition.
+ *
+ * These exclusions cannot be overridden by user configuration. They protect against caching
+ * files that are unsafe to restore on a different runner (lock files, configuration-cache
+ * encryption keys, Gradle's local file-access journal).
+ */
 export const HARD_CACHE_EXCLUDE_GLOBS = [
   '**/configuration-cache/**',
   '**/*.lock',

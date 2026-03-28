@@ -35,7 +35,14 @@ const DEFAULT_CAPTURE_INVOCATION_NAMESPACE = 'buildish-mammoth-cache-gradle';
 
 type BuildCaptureContext = Pick<CiJobContext, 'tempDirectory'>;
 
+/**
+ * Merged metadata for a single Gradle invocation captured by the build-result init script.
+ *
+ * Combines the core build-result file with the optional Develocity build scan file written
+ * by the Gradle Enterprise / Develocity plugin.
+ */
 export interface CapturedGradleBuild {
+  /** Stable key derived from the result file name; used to correlate build and scan files. */
   readonly invocationKey: string;
   readonly capturedAtEpochMillis: number;
   readonly rootProjectName: string;
@@ -44,12 +51,16 @@ export interface CapturedGradleBuild {
   readonly javaVersion: string;
   readonly buildFailed: boolean;
   readonly configCacheHit: boolean;
+  /** URI of the published build scan, or `null` if none was published. */
   readonly buildScanUri: string | null;
+  /** `true` when the Develocity plugin attempted to publish a scan but failed. */
   readonly buildScanFailed: boolean;
 }
 
+/** Aggregated report covering all Gradle invocations captured during the current job. */
 export interface GradleBuildReport {
   readonly builds: readonly CapturedGradleBuild[];
+  /** Non-fatal warnings encountered while loading or parsing the capture files. */
   readonly warnings: readonly string[];
 }
 
@@ -68,6 +79,16 @@ interface CapturedBuildScanFile {
   readonly buildScanFailed: boolean;
 }
 
+/**
+ * Installs the Gradle build-result capture init script and Groovy service plugin into the
+ * `init.d` directory of the given Gradle user home.
+ *
+ * The init script is picked up automatically by every subsequent Gradle invocation that uses
+ * this Gradle user home. It writes per-invocation JSON result files to the CI temp directory,
+ * which are later collected by {@link loadGradleBuildReport} in the finalize phase.
+ *
+ * Requires Gradle 7.0 or newer; emits a warning and exits gracefully on older versions.
+ */
 export async function installGradleBuildResultCapture(
   gradleUserHome: string,
   context: BuildCaptureContext = { tempDirectory: null },
@@ -91,6 +112,14 @@ export async function installGradleBuildResultCapture(
   );
 }
 
+/**
+ * Removes the capture init script and service plugin from the `init.d` directory.
+ *
+ * Called during the finalize phase so the installed files are not included in the cache snapshot.
+ * Removal failures are collected as non-fatal warnings rather than hard errors.
+ *
+ * @returns Any warnings encountered while removing the capture files.
+ */
 export async function cleanupGradleBuildResultCapture(
   gradleUserHome: string,
 ): Promise<readonly string[]> {
@@ -112,6 +141,14 @@ export async function cleanupGradleBuildResultCapture(
   return warnings;
 }
 
+/**
+ * Reads all Gradle build-result and build-scan capture files written during the job and
+ * merges them into a single {@link GradleBuildReport}.
+ *
+ * Returns an empty report with a warning when the CI temp directory is unavailable.
+ * Parse errors for individual capture files are collected as warnings rather than hard errors
+ * so a single malformed file does not suppress all other captured build metadata.
+ */
 export async function loadGradleBuildReport(
   context: BuildCaptureContext = { tempDirectory: null },
 ): Promise<GradleBuildReport> {
@@ -170,6 +207,12 @@ export async function loadGradleBuildReport(
   return { builds, warnings };
 }
 
+/**
+ * Renders Markdown summary lines for the Gradle build section of the job summary.
+ *
+ * Produces a table of captured Gradle invocations with outcome, configuration-cache state,
+ * and build scan links when available. Returns an empty array when no builds were captured.
+ */
 export function createGradleBuildSummaryLines(report: GradleBuildReport): readonly string[] {
   const successfulBuildCount = report.builds.filter((build) => !build.buildFailed).length;
   const failedBuildCount = report.builds.length - successfulBuildCount;

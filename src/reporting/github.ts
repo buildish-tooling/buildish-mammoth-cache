@@ -20,11 +20,21 @@ import * as core from '@actions/core';
 
 import type { ReportSink, SummaryWriter } from './types';
 
+/** Injectable options for {@link createGitHubReportSink}. */
 export interface GitHubReportSinkOptions {
+  /** Environment variable map used to locate `GITHUB_STEP_SUMMARY`; defaults to `process.env`. */
   readonly env?: NodeJS.ProcessEnv;
+  /** Summary writer implementation; defaults to `@actions/core` summary. */
   readonly summaryWriter?: SummaryWriter;
 }
 
+/**
+ * Creates a {@link ReportSink} backed by `@actions/core` grouped log output and the GitHub
+ * Actions step summary API.
+ *
+ * Log groups use `::group::` / `::endgroup::` annotations. Summary lines are appended to the
+ * step summary file via the `@actions/core` summary writer.
+ */
 export function createGitHubReportSink(options: GitHubReportSinkOptions = {}): ReportSink {
   const env = options.env ?? process.env;
   const summaryWriter = options.summaryWriter ?? core.summary;

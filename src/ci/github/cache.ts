@@ -21,6 +21,12 @@ import {
   type BaseCacheBackend,
 } from '../../storage/cache';
 
+/**
+ * Creates a {@link BaseCacheBackend} backed by the `@actions/cache` toolkit package.
+ *
+ * @param cacheBackend - Cache implementation to delegate to; defaults to the toolkit cache client.
+ *   Inject a test double to exercise cache logic without touching the GitHub cache API.
+ */
 export function createGitHubBaseCacheBackend(
   cacheBackend: Pick<
     BaseCacheBackend,

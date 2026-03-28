@@ -61,6 +61,12 @@ export async function publishJobLogGroup(
   reportSink.publishLogGroup(title, lines, writeLine);
 }
 
+/**
+ * Wraps `bodyLines` in an HTML `<details>/<summary>` block for use inside GitHub job summaries.
+ *
+ * The title text is HTML-escaped automatically. Returns the complete block as an array of strings,
+ * each representing one rendered line.
+ */
 export function createDetailsSection(
   title: string,
   bodyLines: readonly string[],
@@ -75,6 +81,12 @@ export function createDetailsSection(
   ];
 }
 
+/**
+ * Renders an HTML `<table>` as an array of lines suitable for GitHub job summaries.
+ *
+ * Header cells are HTML-escaped. Cell content in `rows` is inserted verbatim so callers can
+ * include pre-built HTML fragments (e.g. links from {@link createHtmlLink}).
+ */
 export function createHtmlTable(
   headers: readonly string[],
   rows: readonly (readonly string[])[],
@@ -90,10 +102,17 @@ export function createHtmlTable(
   ];
 }
 
+/** Returns an HTML anchor tag with both the `href` and label HTML-escaped. */
 export function createHtmlLink(url: string, label: string): string {
   return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
 }
 
+/**
+ * Escapes special HTML characters in `value` to their entity equivalents.
+ *
+ * Covers `&`, `<`, `>`, `"`, and `'`. Use this for any user-supplied or dynamic content
+ * inserted into raw HTML strings in job summaries.
+ */
 export function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -103,6 +122,12 @@ export function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
+/**
+ * Escapes Markdown special characters in `value` so they render as literal text.
+ *
+ * Useful when dynamic content (e.g. branch names, file paths) is embedded in Markdown summary
+ * lines that will be interpreted by GitHub's Markdown renderer.
+ */
 export function escapeSummaryText(value: string): string {
   return value.replaceAll(/[\\`*_{}[\]()#+.!|-]/g, '\\$&');
 }

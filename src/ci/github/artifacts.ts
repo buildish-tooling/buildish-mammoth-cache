@@ -23,6 +23,11 @@ import {
   type WorkflowArtifactDescriptor,
 } from '../../storage/artifacts';
 
+/**
+ * Creates a {@link WorkflowArtifactBackend} backed by the `@actions/artifact` client.
+ *
+ * @param client - Artifact client to delegate to; defaults to the global `artifactClient`.
+ */
 export function createGitHubWorkflowArtifactBackend(
   client: ArtifactClient = artifactClient,
 ): WorkflowArtifactBackend {

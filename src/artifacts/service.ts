@@ -46,7 +46,9 @@ import {
   validateString,
 } from '../validation';
 
+/** Schema version embedded in every delta artifact package metadata file. Increment on breaking format changes. */
 export const DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION = 1;
+/** Sentinel value used in place of the absolute Gradle user home path inside portable delta manifests. */
 export const PORTABLE_GRADLE_USER_HOME = '<portable-gradle-user-home>';
 
 const DELTA_ARTIFACT_NAME_PREFIX = 'buildish-mammoth-cache-gradle-delta';

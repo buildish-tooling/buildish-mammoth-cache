@@ -31,11 +31,11 @@ This action enforces a strict multi-step verification chain so you never execute
 During the `prepare` phase the action locates `gradle-wrapper.properties` files using one of three
 mutually-exclusive modes:
 
-| Mode | Input | Behaviour |
-|---|---|---|
-| Auto-discover (default) | `wrapper-properties-glob` | Scans `base-directory` for all files matching the glob; default glob is `**/gradle/wrapper/gradle-wrapper.properties` |
-| Process-all | `process-all-wrapper-files: true` | Equivalent to auto-discover with the default glob but made explicit for multi-project repositories |
-| Explicit list | `wrapper-properties-files` | Comma- or newline-separated list of paths relative to `base-directory`; no globbing |
+| Mode                    | Input                             | Behaviour                                                                                                             |
+| ----------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Auto-discover (default) | `wrapper-properties-glob`         | Scans `base-directory` for all files matching the glob; default glob is `**/gradle/wrapper/gradle-wrapper.properties` |
+| Process-all             | `process-all-wrapper-files: true` | Equivalent to auto-discover with the default glob but made explicit for multi-project repositories                    |
+| Explicit list           | `wrapper-properties-files`        | Comma- or newline-separated list of paths relative to `base-directory`; no globbing                                   |
 
 ## Static validation
 
@@ -149,4 +149,3 @@ disable capture entirely for a specific invocation.
 The capture tool is a companion to wrapper provisioning: the provisioned JAR launches Gradle, and
 Gradle then picks up the init script automatically because init scripts in `GRADLE_USER_HOME/` are
 applied to every build.
-

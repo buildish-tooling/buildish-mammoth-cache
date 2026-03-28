@@ -44,6 +44,12 @@ interface WrapperRemoteRequest {
   readonly requestInit?: RequestInit;
 }
 
+/**
+ * Options that control the wrapper JAR download, retry, and verification behaviour.
+ *
+ * All fields are optional; defaults are suitable for production use and are documented on each
+ * field. Inject overrides in tests to avoid real network calls and GnuPG invocations.
+ */
 export interface WrapperProvisionOptions {
   /**
    * Optional HTTP fetch implementation override.

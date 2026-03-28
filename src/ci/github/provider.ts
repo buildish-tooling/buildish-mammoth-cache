@@ -17,14 +17,26 @@
 import type { CoreExecutionPhase } from '../../core/lifecycle';
 import type { CiJobContext, CiPlatformAdapter, HttpHeadersByHost } from '../types';
 
+/** Injectable options for {@link createGitHubPlatform}. All fields are optional for testing. */
 export interface GitHubPlatformOptions {
+  /** Environment variable map; defaults to `process.env`. */
   readonly env?: NodeJS.ProcessEnv;
+  /** Pre-parsed GitHub event payload; skips file reading when provided. */
   readonly eventPayload?: Record<string, unknown>;
+  /** Override for reading the event payload JSON from disk. */
   readonly eventPayloadReader?: (eventPath: string) => string;
+  /** Value of the `github-token` action input, used for authenticated API requests. */
   readonly githubTokenInput?: string;
+  /** Value of the `github-job-check-run-id` input used to resolve the current job URL. */
   readonly githubJobCheckRunId?: string;
 }
 
+/**
+ * Creates the GitHub Actions {@link CiPlatformAdapter} from the runner environment.
+ *
+ * Reads GitHub-specific environment variables to populate {@link CiJobContext}, constructs
+ * per-host authentication headers, and resolves execution URLs for the current run and job.
+ */
 export function createGitHubPlatform(options: GitHubPlatformOptions = {}): CiPlatformAdapter {
   const env = options.env ?? process.env;
   const context = createGitHubContext({
@@ -53,12 +65,22 @@ export function createGitHubPlatform(options: GitHubPlatformOptions = {}): CiPla
   };
 }
 
+/** Injectable options for {@link createGitHubContext}. All fields are optional for testing. */
 export interface GitHubContextOptions {
+  /** Environment variable map; defaults to `process.env`. */
   readonly env?: NodeJS.ProcessEnv;
+  /** Pre-parsed GitHub event payload; skips file reading when provided. */
   readonly eventPayload?: Record<string, unknown>;
+  /** Override for reading the event payload JSON from disk. */
   readonly eventPayloadReader?: (eventPath: string) => string;
 }
 
+/**
+ * Builds a provider-neutral {@link CiJobContext} from the GitHub Actions runner environment.
+ *
+ * Normalises refs, pull-request metadata, runner OS/architecture, and the safe branch slug used
+ * in cache keys. Supports `BUILDISH_MAMMOTH_CACHE_GITHUB_EVENT_NAME_OVERRIDE` for test injection.
+ */
 export function createGitHubContext(options: GitHubContextOptions = {}): CiJobContext {
   const env = options.env ?? process.env;
   const eventPayload = readGitHubEventPayload(

@@ -22,13 +22,32 @@ import {
 import type { RuntimeOutputSink } from '../../runtime-host/types';
 import { claimSingleRunPrepareExecution } from '../../runtime/job-single-run';
 
+/**
+ * Runtime host required at the prepare entrypoint boundary.
+ *
+ * Extends the base main-action runtime host with {@link RuntimeOutputSink} so the entrypoint can
+ * emit action outputs (e.g. `cache-key`) after the prepare phase completes.
+ */
 export type PrepareEntrypointRuntimeHost = MainActionDependencies['runtimeHost'] &
   RuntimeOutputSink;
 
+/**
+ * Full dependency bundle for the prepare entrypoint.
+ *
+ * Same as {@link MainActionDependencies} but with the runtime host narrowed to
+ * {@link PrepareEntrypointRuntimeHost} so output emission is available.
+ */
 export type PrepareEntrypointDependencies = Omit<MainActionDependencies, 'runtimeHost'> & {
   readonly runtimeHost: PrepareEntrypointRuntimeHost;
 };
 
+/**
+ * Entrypoint for the prepare (main) phase of the action.
+ *
+ * Claims the single-run guard before delegating to {@link executeMainAction}. Emits action
+ * outputs and forwards log/warning messages from the main flow to the runtime reporter.
+ * Throws if another action invocation already claimed ownership of this CI job.
+ */
 export async function runPrepareExecution(
   dependencies: PrepareEntrypointDependencies,
 ): Promise<void> {

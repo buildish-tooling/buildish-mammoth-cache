@@ -90,11 +90,21 @@ export interface BootstrapStatus {
   readonly ciExecutionUrls: CiExecutionUrls;
 }
 
+/**
+ * Fully resolved bootstrap result that also exposes the live provider and report sink needed by
+ * downstream prepare/finalize logic.
+ */
 export interface BootstrapExecution extends BootstrapStatus {
   readonly ciProvider: CiPlatformAdapter;
   readonly reportSink: ReportSink;
 }
 
+/**
+ * Minimal runtime host surface required during the bootstrap phase.
+ *
+ * Combines input reading, state persistence, and log reporting into a single injectable type so
+ * callers do not need to pass three separate dependencies.
+ */
 export type BootstrapRuntimeHost = RuntimeInputSource & RuntimeStateStore & RuntimeReporter;
 
 /**
@@ -256,6 +266,13 @@ export function createBootstrapSummaryLines(status: BootstrapStatus): readonly s
   ];
 }
 
+/**
+ * Renders a compact set of single-line log messages summarizing the bootstrap outcome.
+ *
+ * These lines are emitted via the runtime reporter before the log group is closed, giving
+ * operators a quick overview of cache, wrapper, and configuration state without opening
+ * the details section.
+ */
 export function createBootstrapLogLines(status: BootstrapStatus): readonly string[] {
   const downloadedWrapperCount = status.provisionedWrappers.filter(
     (wrapper) => wrapper.wasDownloaded,

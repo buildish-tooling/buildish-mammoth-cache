@@ -318,7 +318,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      actions: write  # required: cache write
+      actions: write # required: cache write
       contents: read
     steps:
       - uses: actions/checkout@v5
@@ -449,13 +449,13 @@ steps:
 
 The minimum required token permissions depend on the job mode and read-only setting.
 
-| Scenario | `actions` | `contents` |
-|---|---|---|
-| Standalone, cache write | `write` | `read` |
-| Standalone, read-only | `read` | `read` |
-| Distributed worker | `write` | `read` |
-| Distributed aggregator | `write` | `read` |
-| Cache disabled | none | `read` |
+| Scenario                | `actions` | `contents` |
+| ----------------------- | --------- | ---------- |
+| Standalone, cache write | `write`   | `read`     |
+| Standalone, read-only   | `read`    | `read`     |
+| Distributed worker      | `write`   | `read`     |
+| Distributed aggregator  | `write`   | `read`     |
+| Cache disabled          | none      | `read`     |
 
 `actions: write` is required to save cache entries and to upload or download workflow artifacts used
 by the distributed delta exchange. `contents: read` is required for workspace checkout.
@@ -498,12 +498,12 @@ runs.
 
 The following paths are excluded from every cache partition unconditionally and cannot be overridden:
 
-| Pattern | Reason |
-|---|---|
-| `**/configuration-cache/**` | May contain encrypted secrets; volatile by nature |
-| `**/*.lock` | PID-bearing files that cause hangs if restored on another runner |
-| `caches/*/cc-keystore` | Configuration-cache encryption key material |
-| `caches/journal-1/**` | Gradle's local-only file-access journal; migrating it causes corruption |
+| Pattern                     | Reason                                                                  |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `**/configuration-cache/**` | May contain encrypted secrets; volatile by nature                       |
+| `**/*.lock`                 | PID-bearing files that cause hangs if restored on another runner        |
+| `caches/*/cc-keystore`      | Configuration-cache encryption key material                             |
+| `caches/journal-1/**`       | Gradle's local-only file-access journal; migrating it causes corruption |
 
 ## Maintenance notes
 

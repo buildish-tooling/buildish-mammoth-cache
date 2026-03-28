@@ -21,8 +21,10 @@ import * as path from 'node:path';
 
 import type { CiJobContext } from '../ci';
 
+/** CI state key used to persist the UUID owner token written by the prepare phase. */
 export const JOB_SINGLE_RUN_OWNER_TOKEN_STATE =
   'buildish-mammoth-cache-gradle-job-single-run-owner-token';
+/** CI state key set to `'true'` when the prepare phase was rejected as a duplicate. */
 export const JOB_SINGLE_RUN_DUPLICATE_STATE =
   'buildish-mammoth-cache-gradle-job-single-run-duplicate';
 
@@ -33,23 +35,40 @@ type JobSingleRunCiIdentity = Pick<
   'repository' | 'workflowName' | 'jobName' | 'runId' | 'runAttempt' | 'tempDirectory'
 >;
 
+/** Injectable dependencies for single-run guard operations. */
 export interface JobSingleRunDependencies {
   readonly ciContext: JobSingleRunCiIdentity;
   readonly saveState: (name: string, value: string) => void;
+  /** State reader used during finalize; defaults to a no-op that returns an empty string. */
   readonly getState?: (name: string) => string;
+  /** Factory for the owner token UUID; defaults to `crypto.randomUUID()`. */
   readonly createOwnerToken?: () => string;
 }
 
+/** Result of a single-run prepare-phase claim attempt. */
 export interface JobSingleRunClaimResult {
+  /** `true` when this invocation successfully claimed ownership of the current CI job. */
   readonly accepted: boolean;
   readonly message: string;
 }
 
+/** Decision produced by the finalize phase about whether it should execute. */
 export interface JobSingleRunPostDecision {
+  /** `true` when the finalize phase should proceed; `false` when it must be skipped. */
   readonly shouldRun: boolean;
   readonly message: string;
 }
 
+/**
+ * Attempts to claim single-run ownership for the current CI job.
+ *
+ * Writes a guard file using `O_EXCL` (atomic create) semantics so concurrent action
+ * invocations within the same job cannot both succeed. On success, persists the owner token
+ * in CI state for the finalize phase to verify. On conflict, marks the invocation as a
+ * duplicate so its finalize phase is skipped.
+ *
+ * @throws When the guard file cannot be created for a reason other than `EEXIST`.
+ */
 export async function claimSingleRunPrepareExecution(
   dependencies: JobSingleRunDependencies,
 ): Promise<JobSingleRunClaimResult> {
@@ -92,6 +111,13 @@ export async function claimSingleRunPrepareExecution(
   };
 }
 
+/**
+ * Reads the CI state written by the prepare phase and decides whether the finalize phase
+ * should execute.
+ *
+ * Returns `shouldRun: false` when the prepare phase was rejected as a duplicate or when no
+ * owner token is present (meaning prepare never ran for this invocation).
+ */
 export function decideSingleRunFinalizeExecution(
   dependencies: Pick<JobSingleRunDependencies, 'getState'> = {},
 ): JobSingleRunPostDecision {
@@ -119,6 +145,13 @@ export function decideSingleRunFinalizeExecution(
   };
 }
 
+/**
+ * Derives the absolute path of the per-job guard file for the given CI execution context.
+ *
+ * The file name is a SHA-256 hash of the composite job identity (repository, workflow, job name,
+ * run ID, run attempt) so distinct jobs never share a guard file even if they run concurrently
+ * on the same runner.
+ */
 export function resolveSingleRunGuardFilePath(ciContext: JobSingleRunCiIdentity): string {
   const guardRoot = resolveGuardRoot(ciContext);
   const jobIdentity = [

@@ -31,6 +31,7 @@ import {
 } from '../validation';
 import type { CacheModel, CachePartitionDefinition } from './model';
 
+/** Schema version embedded in every captured cache manifest. Increment on breaking format changes. */
 export const CACHE_MANIFEST_SCHEMA_VERSION = 2;
 const STABLE_ENTRY_CAPTURE_ATTEMPTS = 3;
 const CACHE_PARTITION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
