@@ -18,7 +18,6 @@ limitations under the License.
 
 1. Cleanup the code base
    - MANUALLY inspect all files
-   - Check validate\*() functions for duplicates
 2. Site + logo!
    - We need a logo for the project!
    - Leverage the work done in Polaris, use Hugo.
