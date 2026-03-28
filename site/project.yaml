@@ -20,7 +20,6 @@ project:
   repository: https://github.com/apache/buildish-mammoth-cache-gradle
   defaultBranch: main
 content:
-  readmePath: README.md
   docsRoot: docs
 versioning:
   unreleasedLabel: Unreleased
