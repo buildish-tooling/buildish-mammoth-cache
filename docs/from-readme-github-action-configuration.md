@@ -1,5 +1,5 @@
 ---
-title: "[FROM README] GitHub action configuration"
+title: '[FROM README] GitHub action configuration'
 description: Temporary home for configuration details moved from the project README.
 ---
 

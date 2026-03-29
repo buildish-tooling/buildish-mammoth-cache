@@ -1,5 +1,5 @@
 ---
-title: "[FROM README] Permissions, security, maintenance, and current status"
+title: '[FROM README] Permissions, security, maintenance, and current status'
 description: Temporary home for permissions, security, maintenance, and status details moved from the project README.
 ---
 

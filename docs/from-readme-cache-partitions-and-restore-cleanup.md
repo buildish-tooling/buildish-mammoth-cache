@@ -1,5 +1,5 @@
 ---
-title: "[FROM README] Cache partitions and restore cleanup"
+title: '[FROM README] Cache partitions and restore cleanup'
 description: Temporary home for cache-partition guidance moved from the project README.
 ---
 

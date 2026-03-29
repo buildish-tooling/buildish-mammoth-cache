@@ -1,5 +1,5 @@
 ---
-title: "[FROM README] Usage in GitHub workflows and runtime requirements"
+title: '[FROM README] Usage in GitHub workflows and runtime requirements'
 description: Temporary home for usage and runtime guidance moved from the project README.
 ---
 

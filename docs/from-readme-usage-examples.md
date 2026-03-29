@@ -1,5 +1,5 @@
 ---
-title: "[FROM README] Usage examples"
+title: '[FROM README] Usage examples'
 description: Temporary home for usage examples moved from the project README.
 ---
 
