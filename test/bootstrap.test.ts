@@ -28,7 +28,7 @@ import {
 } from '../src/bootstrap';
 import type { BaseCacheRestoreResult } from '../src/cache/service';
 import type { CacheModel } from '../src/cache/model';
-import type { SummaryWriter } from '../src/reporting/types';
+import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,

@@ -47,3 +47,19 @@ export type CompositeHost = HostInputSource &
   HostOutputSink &
   HostReporter &
   HostFailureReporter;
+
+/**
+ * Provider-specific reporting surface used by shared action flows.
+ */
+export interface ReportSink {
+  /** Publishes the provided lines as a grouped log block using the provider-specific log surface. */
+  publishLogGroup(
+    title: string,
+    lines: readonly string[],
+    writeLine: (message: string) => void,
+  ): void;
+  /** Publishes the provided Markdown lines to the provider summary surface. */
+  publishSummary(lines: readonly string[]): Promise<void>;
+  /** Replaces the current provider-managed summary content when supported. */
+  replaceSummary(lines: readonly string[]): Promise<void>;
+}

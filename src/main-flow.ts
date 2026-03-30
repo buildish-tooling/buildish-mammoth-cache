@@ -43,7 +43,7 @@ import {
   type PersistedPreBuildCacheManifestState,
 } from './state/post-action';
 import { installGradleBuildResultCapture } from './gradle/build-results';
-import { createDetailsSection, escapeSummaryText, publishJobLogGroup } from './logging/summary';
+import { createDetailsSection, escapeSummaryText } from './util/html';
 import type { WorkflowArtifactBackend } from './storage/artifacts';
 
 /**
@@ -121,12 +121,10 @@ export async function executeMainAction(
       message: 'Prepare execution completed without cache orchestration.',
     } satisfies MainActionStatus;
 
-    await publishJobLogGroup(
-      bootstrap.reportSink,
-      'Apache Buildish prepare execution',
-      createMainActionLogLines(status),
-      logInfo,
-    );
+    const logLines = createMainActionLogLines(status);
+    if (logLines.length > 0) {
+      bootstrap.reportSink.publishLogGroup('Apache Buildish prepare execution', logLines, logInfo);
+    }
     return status;
   }
 
@@ -158,12 +156,10 @@ export async function executeMainAction(
       'Prepare execution completed and captured the pre-build cache manifest for finalize processing.',
   } satisfies MainActionStatus;
 
-  await publishJobLogGroup(
-    bootstrap.reportSink,
-    'Apache Buildish prepare execution',
-    createMainActionLogLines(status),
-    logInfo,
-  );
+  const logLines = createMainActionLogLines(status);
+  if (logLines.length > 0) {
+    bootstrap.reportSink.publishLogGroup('Apache Buildish prepare execution', logLines, logInfo);
+  }
 
   return status;
 }

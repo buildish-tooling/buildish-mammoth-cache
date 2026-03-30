@@ -29,15 +29,9 @@ import {
   resolveActionInputsFromConfigFile,
 } from './config/action-config';
 import type { NormalizedActionConfig } from './config/types';
-import {
-  createDetailsSection,
-  createHtmlTable,
-  escapeHtml,
-  escapeSummaryText,
-} from './logging/summary';
+import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } from './util/html';
 import type { CoreExecutionPhase } from './config/types';
-import type { ReportSink } from './reporting/types';
-import type { HostInputSource, HostReporter, HostStateStore } from './host/types';
+import type { HostInputSource, HostReporter, HostStateStore, ReportSink } from './host/types';
 import type { BaseCacheBackend } from './storage/cache';
 import { provisionWrapperJars, type WrapperProvisionOptions } from './gradle/wrapper/download';
 import { validateTargetWrapperProperties } from './gradle/wrapper/static-validation';

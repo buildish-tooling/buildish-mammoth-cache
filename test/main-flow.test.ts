@@ -46,7 +46,7 @@ import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
 } from '../src/storage/cache';
-import type { SummaryWriter } from '../src/reporting/types';
+import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,

@@ -18,7 +18,17 @@ import { writeFile } from 'node:fs/promises';
 
 import * as core from '@actions/core';
 
-import type { ReportSink, SummaryWriter } from './types';
+import type { ReportSink } from '../../host/types';
+
+/**
+ * Minimal interface for job summary writers.
+ */
+export interface SummaryWriter {
+  /** Appends raw text to the job summary buffer. */
+  addRaw(text: string, addEol?: boolean): SummaryWriter;
+  /** Flushes the accumulated summary content to the provider. */
+  write(): Promise<unknown>;
+}
 
 /** Injectable options for {@link createGitHubReportSink}. */
 export interface GitHubReportSinkOptions {

@@ -14,53 +14,6 @@
  * limitations under the License.
  */
 
-import type { ReportSink } from '../reporting/types';
-
-/**
- * Appends a follow-up summary section using the active CI provider summary surface.
- */
-export async function appendJobSummary(
-  reportSink: Pick<ReportSink, 'publishSummary'>,
-  lines: readonly string[],
-): Promise<void> {
-  if (lines.length === 0) {
-    return;
-  }
-
-  await reportSink.publishSummary(lines);
-}
-
-/**
- * Replaces the current provider-managed job summary when supported, falling back to append mode.
- */
-export async function replaceJobSummary(
-  reportSink: Pick<ReportSink, 'replaceSummary'>,
-  lines: readonly string[],
-): Promise<void> {
-  if (lines.length === 0) {
-    return;
-  }
-
-  await reportSink.replaceSummary(lines);
-}
-
-/**
- * Publishes a grouped log block through the active CI adapter so main/post details stay out of the
- * provider summary surface.
- */
-export async function publishJobLogGroup(
-  reportSink: Pick<ReportSink, 'publishLogGroup'>,
-  title: string,
-  lines: readonly string[],
-  writeLine: (message: string) => void,
-): Promise<void> {
-  if (lines.length === 0) {
-    return;
-  }
-
-  reportSink.publishLogGroup(title, lines, writeLine);
-}
-
 /**
  * Wraps `bodyLines` in an HTML `<details>/<summary>` block for use inside GitHub job summaries.
  *

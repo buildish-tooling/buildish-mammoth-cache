@@ -23,4 +23,8 @@ export {
 export { createGitHubHost } from './host';
 export { createGitHubBaseCacheBackend } from './cache';
 export { createGitHubWorkflowArtifactBackend } from './artifacts';
-export { createGitHubReportSink, type GitHubReportSinkOptions } from '../../reporting/github';
+export {
+  createGitHubReportSink,
+  type GitHubReportSinkOptions,
+  type SummaryWriter,
+} from './report-sink';

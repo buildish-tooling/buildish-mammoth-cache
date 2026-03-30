@@ -29,7 +29,7 @@ import {
 import { captureCacheManifest, computeCacheDelta } from '../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../src/cache/model';
 import { createPostActionSummaryLines, executePostAction } from '../src/post-flow';
-import type { SummaryWriter } from '../src/reporting/types';
+import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
   DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE,

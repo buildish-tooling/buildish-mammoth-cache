@@ -24,7 +24,7 @@ import type { WorkflowArtifactDescriptor } from '../src/artifacts/service';
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
 import { createMainActionOutputs, executeMainAction } from '../src/main-flow';
 import { executePostAction } from '../src/post-flow';
-import type { SummaryWriter } from '../src/reporting/types';
+import type { SummaryWriter } from '../src/ci/github/report-sink';
 import type { CompositeHost } from '../src/host/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,

@@ -32,13 +32,7 @@ import {
   loadGradleBuildReport,
   type GradleBuildReport,
 } from './gradle/build-results';
-import {
-  createHtmlLink,
-  createHtmlTable,
-  escapeHtml,
-  publishJobLogGroup,
-  replaceJobSummary,
-} from './logging/summary';
+import { createHtmlLink, createHtmlTable, escapeHtml } from './util/html';
 import {
   getPersistedBaseCacheRestoreResult,
   getPersistedDeltaArtifactExecutionIdentity,
@@ -168,8 +162,18 @@ export async function executePostAction(
       workflowRunUrl,
       message: 'Finalize execution completed without cache orchestration.',
     } satisfies PostActionStatus;
-    await publishPostActionLogGroup(dependencies, status, logInfo);
-    await replaceJobSummary(bootstrap.reportSink, createPostActionSummaryLines(status));
+    const logLines1 = createPostActionLogLines(status);
+    if (logLines1.length > 0) {
+      bootstrap.reportSink.publishLogGroup(
+        'Apache Buildish Mammoth Cache for Gradle',
+        logLines1,
+        logInfo,
+      );
+    }
+    const summaryLines1 = createPostActionSummaryLines(status);
+    if (summaryLines1.length > 0) {
+      await bootstrap.reportSink.replaceSummary(summaryLines1);
+    }
     return status;
   }
 
@@ -199,8 +203,18 @@ export async function executePostAction(
       workflowRunUrl,
       message: 'Finalize execution completed without a persisted pre-build cache manifest.',
     } satisfies PostActionStatus;
-    await publishPostActionLogGroup(dependencies, status, logInfo);
-    await replaceJobSummary(bootstrap.reportSink, createPostActionSummaryLines(status));
+    const logLines2 = createPostActionLogLines(status);
+    if (logLines2.length > 0) {
+      bootstrap.reportSink.publishLogGroup(
+        'Apache Buildish Mammoth Cache for Gradle',
+        logLines2,
+        logInfo,
+      );
+    }
+    const summaryLines2 = createPostActionSummaryLines(status);
+    if (summaryLines2.length > 0) {
+      await bootstrap.reportSink.replaceSummary(summaryLines2);
+    }
     return status;
   }
 
@@ -231,8 +245,18 @@ export async function executePostAction(
         : 'Finalize execution completed.',
   } satisfies PostActionStatus;
 
-  await publishPostActionLogGroup(dependencies, status, logInfo);
-  await replaceJobSummary(bootstrap.reportSink, createPostActionSummaryLines(status));
+  const logLines3 = createPostActionLogLines(status);
+  if (logLines3.length > 0) {
+    bootstrap.reportSink.publishLogGroup(
+      'Apache Buildish Mammoth Cache for Gradle',
+      logLines3,
+      logInfo,
+    );
+  }
+  const summaryLines3 = createPostActionSummaryLines(status);
+  if (summaryLines3.length > 0) {
+    await bootstrap.reportSink.replaceSummary(summaryLines3);
+  }
 
   return status;
 }
@@ -450,19 +474,6 @@ export function createPostActionSummaryLines(status: PostActionStatus): readonly
     status.jobUrl ? `### ${createHtmlLink(status.jobUrl, 'Gradle builds')}` : '### Gradle builds',
     ...createGradleBuildSectionLines(status),
   ];
-}
-
-async function publishPostActionLogGroup(
-  dependencies: PostActionDependencies,
-  status: PostActionStatus,
-  logInfo: (message: string) => void,
-): Promise<void> {
-  await publishJobLogGroup(
-    status.bootstrap.reportSink,
-    'Apache Buildish Mammoth Cache for Gradle',
-    createPostActionLogLines(status),
-    logInfo,
-  );
 }
 
 function createPostActionLogLines(status: PostActionStatus): readonly string[] {

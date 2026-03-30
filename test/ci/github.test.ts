@@ -21,8 +21,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { createGitHubContext, createGitHubPlatform } from '../../src/ci/github';
-import { createGitHubReportSink } from '../../src/reporting/github';
-import type { SummaryWriter } from '../../src/reporting/types';
+import { createGitHubReportSink, type SummaryWriter } from '../../src/ci/github/report-sink';
 
 describe('createGitHubContext', () => {
   it('resolves push refs from branch refs', () => {
