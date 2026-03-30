@@ -59,10 +59,10 @@ requiring a manual schema version bump. This covers:
 
 ## Adding a new CI provider
 
-See [CI Abstraction Layer](../architecture/ci-abstraction/) for the interfaces a new provider
+See [CI Abstraction Layer](../../architecture/ci-abstraction/) for the interfaces a new provider
 adapter must implement and the rules that keep provider-specific logic out of the shared core.
 
 Per-provider implementation notes:
 
-- [Codeberg / Forgejo CI](./portability/codeberg/)
-- [GitLab CI](./portability/gitlab/)
+- [Codeberg / Forgejo CI](../portability/codeberg/)
+- [GitLab CI](../portability/gitlab/)

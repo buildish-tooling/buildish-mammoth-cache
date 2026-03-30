@@ -33,9 +33,9 @@ between runs. On each run it:
 
 Two job modes are available:
 
-- **[Single-job](./single-job/)** — one Gradle job per workflow run. The action wraps that job and
+- **[Single-job](../single-job/)** — one Gradle job per workflow run. The action wraps that job and
   handles everything automatically.
-- **[Distributed multi-job](./distributed-jobs/)** — multiple parallel Gradle jobs. Each job
+- **[Distributed multi-job](../distributed-jobs/)** — multiple parallel Gradle jobs. Each job
   uploads only the delta it produced; a dedicated aggregator job merges all deltas into the next
   cache entry so no job's work is lost.
 
@@ -62,7 +62,7 @@ jobs:
 ```
 
 `actions: write` is required so the action can save cache entries and exchange delta artifacts.
-See [Security & Maintenance](./security/) for the full permissions breakdown.
+See [Security & Maintenance](../security/) for the full permissions breakdown.
 
 The action defaults to **read-only** on `pull_request` and `pull_request_target` events, so
 cache writes from untrusted forks are automatically suppressed.
@@ -93,4 +93,4 @@ sequenceDiagram
 
 For distributed multi-job builds, worker jobs upload their delta as a workflow artifact instead of
 saving the cache directly. An aggregator job then merges all worker deltas into a single cache
-entry. See [Distributed multi-job](./distributed-jobs/) for details.
+entry. See [Distributed multi-job](../distributed-jobs/) for details.

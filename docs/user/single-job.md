@@ -111,6 +111,6 @@ for all available options.
 
 ## Next steps
 
-- [Configuration Reference](./configuration/) — all inputs and config-file options
-- [Cache Partitions](./cache-partitions/) — customize which parts of `GRADLE_USER_HOME` are cached
-- [Distributed multi-job builds](./distributed-jobs/) — if you run multiple Gradle jobs in parallel
+- [Configuration Reference](../configuration/) — all inputs and config-file options
+- [Cache Partitions](../cache-partitions/) — customize which parts of `GRADLE_USER_HOME` are cached
+- [Distributed multi-job builds](../distributed-jobs/) — if you run multiple Gradle jobs in parallel
