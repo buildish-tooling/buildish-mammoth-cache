@@ -25,7 +25,7 @@ import { parseSerializedJson, parseWithZod } from '../util/serialization';
 import type { CacheModel } from './model';
 
 /** Schema version embedded in every captured cache manifest. Increment on breaking format changes. */
-export const CACHE_MANIFEST_SCHEMA_VERSION = 2;
+export const CACHE_MANIFEST_SCHEMA_VERSION = 1;
 const STABLE_ENTRY_CAPTURE_ATTEMPTS = 3;
 const CACHE_PARTITION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -36,12 +36,12 @@ const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const cacheRelativePathSchema = z.string().refine((val) => {
   try {
-    validateNormalizedRelativePosixPath(val, '', 'Gradle user home');
+    validateNormalizedRelativePosixPath(val, '', 'cache root');
     return true;
   } catch {
     return false;
   }
-}, 'Must be a normalized relative POSIX path inside Gradle user home');
+}, 'Must be a normalized relative POSIX path inside the cache root');
 
 const snapshotSchema = z.object({
   contentSha256: z
@@ -78,7 +78,8 @@ const manifestPartitionSchema = z.object({
 
 const cacheManifestSchema = z.object({
   schemaVersion: z.literal(CACHE_MANIFEST_SCHEMA_VERSION),
-  gradleUserHome: z.string(),
+  buildToolId: z.string().min(1),
+  cacheRoot: z.string(),
   partitions: z.array(manifestPartitionSchema).superRefine((partitions, ctx) => {
     const seen = new Set<string>();
     for (const [i, p] of partitions.entries()) {
@@ -143,7 +144,8 @@ const deltaPartitionSchema = z.object({
 
 const cacheDeltaManifestSchema = z.object({
   schemaVersion: z.literal(CACHE_MANIFEST_SCHEMA_VERSION),
-  gradleUserHome: z.string(),
+  buildToolId: z.string().min(1),
+  cacheRoot: z.string(),
   partitions: z.array(deltaPartitionSchema).superRefine((partitions, ctx) => {
     const seen = new Set<string>();
     for (const [i, p] of partitions.entries()) {
@@ -169,7 +171,7 @@ const cacheDeltaManifestSchema = z.object({
 export type CacheFileSnapshot = z.infer<typeof snapshotSchema>;
 
 /**
- * Captured manifest entry for one regular file rooted under the supported Gradle user home.
+ * Captured manifest entry for one regular file rooted under the build tool's cache root.
  */
 export type CacheFileManifestEntry = z.infer<typeof manifestEntrySchema>;
 
@@ -179,7 +181,7 @@ export type CacheFileManifestEntry = z.infer<typeof manifestEntrySchema>;
 export type CachePartitionManifest = z.infer<typeof manifestPartitionSchema>;
 
 /**
- * Full pre- or post-build cache manifest for all configured Gradle cache partitions.
+ * Full pre- or post-build cache manifest for all configured build tool cache partitions.
  */
 export type CacheManifest = z.infer<typeof cacheManifestSchema>;
 
@@ -194,7 +196,7 @@ export type CacheDeltaEntry = z.infer<typeof deltaEntrySchema>;
 export type CachePartitionDelta = z.infer<typeof deltaPartitionSchema>;
 
 /**
- * Full delta manifest between two cache manifests.
+ * Full delta manifest between two cache manifests for the same build tool cache root.
  */
 export type CacheDeltaManifest = z.infer<typeof cacheDeltaManifestSchema>;
 
@@ -221,7 +223,7 @@ type CompiledGlobSegment =
  * computation does not observe inconsistent size/hash metadata for the same path.
  */
 export async function captureCacheManifest(cacheModel: CacheModel): Promise<CacheManifest> {
-  const gradleUserHome = deriveGradleUserHome(cacheModel);
+  const cacheRoot = cacheModel.cacheRoot;
   const compiledPartitions = cacheModel.partitions.map((partition) => ({
     partition,
     includePatterns: partition.relativeIncludeGlobs.map(compileGlobPattern),
@@ -233,11 +235,11 @@ export async function captureCacheManifest(cacheModel: CacheModel): Promise<Cach
 
   for (const compiledPartition of compiledPartitions) {
     for (const includePattern of compiledPartition.includePatterns) {
-      const includeRoots = await expandIncludePatternRoots(gradleUserHome, includePattern);
+      const includeRoots = await expandIncludePatternRoots(cacheRoot, includePattern);
 
       for (const includeRoot of includeRoots) {
         await walkIncludedTree(includeRoot, async (absolutePath) => {
-          const relativePath = toPosixRelativePath(gradleUserHome, absolutePath);
+          const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
           if (
             compiledPartition.seenRelativePaths.has(relativePath) ||
             matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)
@@ -252,7 +254,7 @@ export async function captureCacheManifest(cacheModel: CacheModel): Promise<Cach
             );
           }
 
-          const entry = await captureStableFileEntry(gradleUserHome, absolutePath, relativePath);
+          const entry = await captureStableFileEntry(cacheRoot, absolutePath, relativePath);
           if (!entry) {
             return;
           }
@@ -267,7 +269,8 @@ export async function captureCacheManifest(cacheModel: CacheModel): Promise<Cach
 
   return {
     schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
-    gradleUserHome,
+    buildToolId: cacheModel.buildToolId,
+    cacheRoot,
     partitions: cacheModel.partitions.map((partition) => ({
       partitionId: partition.id,
       entries: [
@@ -279,7 +282,7 @@ export async function captureCacheManifest(cacheModel: CacheModel): Promise<Cach
 }
 
 /**
- * Computes the partitioned file delta between two manifests captured from the same Gradle user home.
+ * Computes the partitioned file delta between two manifests captured from the same build tool cache root.
  */
 export function computeCacheDelta(
   previousManifest: CacheManifest,
@@ -289,7 +292,8 @@ export function computeCacheDelta(
 
   return {
     schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
-    gradleUserHome: previousManifest.gradleUserHome,
+    buildToolId: previousManifest.buildToolId,
+    cacheRoot: previousManifest.cacheRoot,
     partitions: previousManifest.partitions.map((previousPartition, index) => {
       const currentPartition = currentManifest.partitions[index];
       const entries: CacheDeltaEntry[] = [];
@@ -391,7 +395,7 @@ export function deserializeCacheDeltaManifest(serializedDeltaManifest: string): 
 }
 
 async function captureStableFileEntry(
-  gradleUserHome: string,
+  cacheRoot: string,
   absolutePath: string,
   relativePath: string,
 ): Promise<CacheFileManifestEntry | null> {
@@ -442,7 +446,7 @@ async function captureStableFileEntry(
 
     if (isStableDuringCapture(beforeStat, afterStat)) {
       return {
-        relativePath: toPosixRelativePath(gradleUserHome, absolutePath),
+        relativePath: toPosixRelativePath(cacheRoot, absolutePath),
         contentSha256,
         size: afterStat.size,
         mode: afterStat.mode,
@@ -507,25 +511,6 @@ async function walkIncludedTree(
       await onFile(absolutePath);
     }
   }
-}
-
-function deriveGradleUserHome(cacheModel: CacheModel): string {
-  const firstPartition = cacheModel.partitions[0];
-  const firstRelativeGlob = firstPartition?.relativeIncludeGlobs[0];
-  const firstAbsoluteGlob = firstPartition?.absoluteIncludeGlobs[0];
-
-  if (!firstRelativeGlob || !firstAbsoluteGlob) {
-    throw new Error('Cache manifest capture requires at least one include path.');
-  }
-
-  const relativeGlobPath = firstRelativeGlob.split('/').join(path.sep);
-  if (!firstAbsoluteGlob.endsWith(relativeGlobPath)) {
-    throw new Error(
-      `Unable to derive Gradle user home from include path '${firstAbsoluteGlob}' and relative glob '${firstRelativeGlob}'.`,
-    );
-  }
-
-  return firstAbsoluteGlob.slice(0, firstAbsoluteGlob.length - relativeGlobPath.length - 1);
 }
 
 async function expandIncludePatternRoots(
@@ -694,8 +679,14 @@ function validateComparableManifests(
     throw new Error('Cache delta computation only supports the current manifest schema version.');
   }
 
-  if (previousManifest.gradleUserHome !== currentManifest.gradleUserHome) {
-    throw new Error('Cache delta computation requires manifests from the same Gradle user home.');
+  if (previousManifest.buildToolId !== currentManifest.buildToolId) {
+    throw new Error(
+      `Cache delta computation requires manifests from the same build tool, but got '${previousManifest.buildToolId}' and '${currentManifest.buildToolId}'.`,
+    );
+  }
+
+  if (previousManifest.cacheRoot !== currentManifest.cacheRoot) {
+    throw new Error('Cache delta computation requires manifests from the same cache root.');
   }
 
   if (previousManifest.partitions.length !== currentManifest.partitions.length) {

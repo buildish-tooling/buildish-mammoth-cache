@@ -20,6 +20,8 @@ import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/prom
 import path from 'node:path';
 
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
+import { GradleBuildToolAdapter } from '../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../src/config/types';
 import { executePrepareAction } from '../src/phases/prepare/flow';
 import {
   createFinalizeActionSummaryLines,
@@ -122,29 +124,21 @@ async function main(): Promise<void> {
       'utf8',
     );
 
-    assert.equal(finalizeStatus.gradleBuildReport.builds.length, 4);
-    assert.equal(
-      finalizeStatus.gradleBuildReport.builds.filter((build) => !build.buildFailed).length,
-      3,
-    );
-    assert.equal(
-      finalizeStatus.gradleBuildReport.builds.filter((build) => build.buildFailed).length,
-      1,
-    );
+    assert.equal(finalizeStatus.buildReport.builds.length, 4);
+    assert.equal(finalizeStatus.buildReport.builds.filter((build) => !build.buildFailed).length, 3);
+    assert.equal(finalizeStatus.buildReport.builds.filter((build) => build.buildFailed).length, 1);
     assert.ok(
-      finalizeStatus.gradleBuildReport.builds.some(
+      finalizeStatus.buildReport.builds.some(
         (build) => build.buildScanUri === 'https://scans.gradle.com/s/fake-published-scan',
       ),
     );
-    assert.ok(finalizeStatus.gradleBuildReport.builds.some((build) => build.buildScanFailed));
+    assert.ok(finalizeStatus.buildReport.builds.some((build) => build.buildScanFailed));
     assert.ok(
-      finalizeStatus.gradleBuildReport.builds.some(
+      finalizeStatus.buildReport.builds.some(
         (build) => build.requestedTasks === 'failingVerification',
       ),
     );
-    assert.ok(
-      finalizeStatus.gradleBuildReport.builds.some((build) => build.requestedTasks === 'help'),
-    );
+    assert.ok(finalizeStatus.buildReport.builds.some((build) => build.requestedTasks === 'help'));
 
     const summaryText = await readFile(summaryPath, 'utf8');
     assert.match(summaryText, /## Apache Buildish Mammoth Cache for Gradle/u);
@@ -327,6 +321,7 @@ function createGitHubActionDependencies(
       env: runtime.env,
       summaryWriter,
     }),
+    buildToolAdapterFactory: (config: NormalizedActionConfig) => new GradleBuildToolAdapter(config),
   };
 }
 

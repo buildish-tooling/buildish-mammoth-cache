@@ -56,6 +56,8 @@ import {
   createTestGitHubReportSink,
   createTestRuntimeHost,
 } from '../../support/github-test-runtime';
+import type { GradleAdapterOptions } from '../../../src/build-tool/gradle/adapter';
+import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
 
 function createPrepareActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
@@ -64,6 +66,7 @@ function createPrepareActionDependencies(options: {
   readonly inputs?: Readonly<Record<string, string>>;
   readonly saveState?: (name: string, value: string) => void;
   readonly info?: (message: string) => void;
+  readonly adapterOptions?: GradleAdapterOptions;
 }) {
   const runtimeHost = createTestRuntimeHost({
     inputs: options.inputs,
@@ -81,6 +84,8 @@ function createPrepareActionDependencies(options: {
       env: options.env,
       summaryWriter: options.summaryWriter,
     }),
+    buildToolAdapterFactory: (config: NormalizedActionConfig) =>
+      new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
   };
 }
 
@@ -143,16 +148,6 @@ describe('executePrepareAction', () => {
           RUNNER_ARCH: 'X64',
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        fetchImpl: async (input: string | URL | Request): Promise<Response> => {
-          const url = String(input);
-          if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-            return new Response(`${wrapperJarSha256}\n`, { status: 200 });
-          }
-          if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-            return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-          }
-          throw new Error(`Unexpected fetch URL: ${url}`);
-        },
         ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
@@ -183,8 +178,20 @@ describe('executePrepareAction', () => {
             savedState.set(name, value);
           },
           summaryWriter: summary.writer,
+          adapterOptions: {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+            verifyWrapperSignature: async () => {},
+          },
         }),
-        verifyWrapperSignature: async () => {},
       });
 
       expect(status.bootstrap.config.jobMode).toBe('distributed-aggregator');
@@ -202,9 +209,9 @@ describe('executePrepareAction', () => {
           'utf8',
         ),
       ).resolves.toBe('from-worker-delta');
-      expect(savedState.get('buildish-mammoth-cache-gradle-base-cache-armed')).toBe('true');
+      expect(savedState.get('buildish-mammoth-cache-base-cache-armed')).toBe('true');
       expect(savedState.get(CONSUMED_DELTA_ARTIFACT_NAMES_STATE)).toContain(
-        'buildish-mammoth-cache-gradle-delta-',
+        'buildish-mammoth-cache-delta-',
       );
 
       const manifestPath = savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE);
@@ -233,7 +240,7 @@ describe('executePrepareAction', () => {
           "GitHub input 'github-token' present: no.",
           "GitHub environment 'GITHUB_TOKEN' available: no.",
           "GitHub input 'github-job-check-run-id': unset.",
-          'Wrapper provisioning: 1 ready (0 downloaded, 1 reused).',
+          'Tool provisioning: 1 ready (0 downloaded, 1 reused).',
           `Downloaded dependent delta artifacts: ${status.dependentDeltaResult!.downloadedArtifactNames[0]}.`,
           `Persisted pre-build cache manifest to '${manifestPath}'.`,
           '::endgroup::',
@@ -319,16 +326,6 @@ describe('executePrepareAction', () => {
             RUNNER_ARCH: 'X64',
             RUNNER_TEMP: path.join(workspace, 'runner-temp'),
           },
-          fetchImpl: async (input: string | URL | Request): Promise<Response> => {
-            const url = String(input);
-            if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-              return new Response(`${wrapperJarSha256}\n`, { status: 200 });
-            }
-            if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-              return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-            }
-            throw new Error(`Unexpected fetch URL: ${url}`);
-          },
           ...createPrepareActionDependencies({
             env: {
               GITHUB_EVENT_NAME: 'push',
@@ -354,8 +351,20 @@ describe('executePrepareAction', () => {
             },
             saveState(): void {},
             summaryWriter: createSummaryCapture().writer,
+            adapterOptions: {
+              fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+                const url = String(input);
+                if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                  return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+                }
+                if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                  return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+                }
+                throw new Error(`Unexpected fetch URL: ${url}`);
+              },
+              verifyWrapperSignature: async () => {},
+            },
           }),
-          verifyWrapperSignature: async () => {},
         }),
       ).rejects.toThrow(/targets cache key 'mismatched-cache-key'/);
     });
@@ -409,16 +418,6 @@ describe('executePrepareAction', () => {
           RUNNER_ARCH: 'X64',
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        fetchImpl: async (input: string | URL | Request): Promise<Response> => {
-          const url = String(input);
-          if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-            return new Response(`${wrapperJarSha256}\n`, { status: 200 });
-          }
-          if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-            return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-          }
-          throw new Error(`Unexpected fetch URL: ${url}`);
-        },
         ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
@@ -442,8 +441,20 @@ describe('executePrepareAction', () => {
             savedState.set(name, value);
           },
           summaryWriter: summary.writer,
+          adapterOptions: {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+            verifyWrapperSignature: async () => {},
+          },
         }),
-        verifyWrapperSignature: async () => {},
       });
 
       expect(status.dependentDeltaResult).toBeNull();
@@ -545,16 +556,6 @@ describe('executePrepareAction', () => {
           RUNNER_ARCH: 'X64',
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        fetchImpl: async (input: string | URL | Request): Promise<Response> => {
-          const url = String(input);
-          if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-            return new Response(`${wrapperJarSha256}\n`, { status: 200 });
-          }
-          if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-            return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-          }
-          throw new Error(`Unexpected fetch URL: ${url}`);
-        },
         ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
@@ -581,8 +582,20 @@ describe('executePrepareAction', () => {
             savedState.set(name, value);
           },
           summaryWriter: summary.writer,
+          adapterOptions: {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+            verifyWrapperSignature: async () => {},
+          },
         }),
-        verifyWrapperSignature: async () => {},
       });
 
       expect(status.restoreCleanupResult).toEqual(
@@ -660,16 +673,6 @@ describe('executePrepareAction', () => {
             RUNNER_ARCH: 'X64',
             RUNNER_TEMP: path.join(workspace, 'runner-temp'),
           },
-          fetchImpl: async (input: string | URL | Request): Promise<Response> => {
-            const url = String(input);
-            if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-              return new Response(`${wrapperJarSha256}\n`, { status: 200 });
-            }
-            if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-              return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-            }
-            throw new Error(`Unexpected fetch URL: ${url}`);
-          },
           ...createPrepareActionDependencies({
             env: {
               GITHUB_EVENT_NAME: 'push',
@@ -694,8 +697,20 @@ describe('executePrepareAction', () => {
               'dependent-jobs': 'windows-worker',
             },
             summaryWriter: createSummaryCapture().writer,
+            adapterOptions: {
+              fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+                const url = String(input);
+                if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                  return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+                }
+                if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                  return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+                }
+                throw new Error(`Unexpected fetch URL: ${url}`);
+              },
+              verifyWrapperSignature: async () => {},
+            },
           }),
-          verifyWrapperSignature: async () => {},
         }),
       ).rejects.toThrow(/Cross-runner dependent delta reuse is not supported/u);
     });
@@ -767,16 +782,6 @@ describe('executePrepareAction', () => {
           HOME: workspace,
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        fetchImpl: async (input: string | URL | Request): Promise<Response> => {
-          const url = String(input);
-          if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-            return new Response(`${wrapperJarSha256}\n`, { status: 200 });
-          }
-          if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-            return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-          }
-          throw new Error(`Unexpected fetch URL: ${url}`);
-        },
         ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
@@ -802,8 +807,20 @@ describe('executePrepareAction', () => {
             'allow-duplicate-dependent-delta-paths': 'true',
           },
           summaryWriter: createSummaryCapture().writer,
+          adapterOptions: {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+            verifyWrapperSignature: async () => {},
+          },
         }),
-        verifyWrapperSignature: async () => {},
       });
 
       expect(status.dependentDeltaResult).toEqual(
@@ -882,9 +899,11 @@ async function createTestCacheModel(
   runnerOs = 'linux',
   runnerArch = 'x64',
 ): Promise<CacheModel> {
+  const config = createTestConfig(gradleUserHome);
   return createCacheModel(
-    createTestConfig(gradleUserHome),
+    config,
     createCiContext('worker', gradleUserHome, 1, 1, runnerOs, runnerArch),
+    new GradleBuildToolAdapter(config),
     {
       captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
     },

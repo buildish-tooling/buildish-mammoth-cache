@@ -27,6 +27,8 @@ import {
   serializeCacheManifest,
 } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../../src/config/types';
 
 interface MemoryReading {
   readonly rss: number;
@@ -200,8 +202,16 @@ async function writeSyntheticFile(
 }
 
 function createBenchmarkCacheModel(gradleUserHome: string): CacheModel {
-  const partitions = createCachePartitions(gradleUserHome);
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const partitions = createCachePartitions(
+    gradleUserHome,
+    [],
+    adapter.getBuiltInPartitionPresets(),
+    adapter.getHardCacheExcludeGlobs(),
+  );
   return {
+    buildToolId: adapter.getBuildToolId(),
+    cacheRoot: gradleUserHome,
     cacheKey: 'benchmark-cache-key',
     javaMajor: 21,
     runnerOs: 'linux',

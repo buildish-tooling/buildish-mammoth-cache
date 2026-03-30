@@ -24,7 +24,7 @@ import {
   createGradleBuildSummaryLines,
   installGradleBuildResultCapture,
   loadGradleBuildReport,
-} from '../../src/gradle/build-results';
+} from '../../../src/build-tool/gradle/build-results';
 
 describe('Gradle build reporting', () => {
   const temporaryDirectories: string[] = [];

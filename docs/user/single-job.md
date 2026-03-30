@@ -53,7 +53,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
       - run: ./gradlew build
 ```
 
@@ -81,7 +81,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
       - run: ./gradlew build
 ```
 
@@ -100,7 +100,7 @@ wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
 ```yaml
 steps:
   - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-  - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+  - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
     with:
       config-file: .github/buildish-mammoth-gradle.yml
   - run: ./gradlew build

@@ -57,7 +57,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
       - run: ./gradlew build
 ```
 

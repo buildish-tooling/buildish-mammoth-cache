@@ -46,9 +46,9 @@ import { parseSerializedJson, parseWithZod } from '../util/serialization';
 /** Schema version embedded in every delta artifact package metadata file. Increment on breaking format changes. */
 export const DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION = 1;
 /** Sentinel value used in place of the absolute Gradle user home path inside portable delta manifests. */
-export const PORTABLE_GRADLE_USER_HOME = '<portable-gradle-user-home>';
+export const PORTABLE_CACHE_ROOT = '<portable-cache-root>';
 
-const DELTA_ARTIFACT_NAME_PREFIX = 'buildish-mammoth-cache-gradle-delta';
+const DELTA_ARTIFACT_NAME_PREFIX = 'buildish-mammoth-cache-delta';
 const DELTA_PACKAGE_METADATA_FILE = 'delta-package.json';
 const DELTA_PACKAGE_MANIFEST_FILE = 'delta-manifest.json';
 const DELTA_PACKAGE_PAYLOAD_DIRECTORY = 'payload';
@@ -250,7 +250,7 @@ export function createDeltaArtifactName(
 /**
  * Stages one delta artifact package on disk using generated payload paths under `payload/`.
  *
- * The staged package intentionally serializes a *portable* delta manifest whose `gradleUserHome`
+ * The staged package intentionally serializes a *portable* delta manifest whose `cacheRoot`
  * field is redacted to a constant sentinel. Worker absolute filesystem paths should not leave the
  * worker machine in distributed mode.
  */
@@ -262,7 +262,7 @@ export async function stageDeltaArtifactPackage(
 ): Promise<StagedDeltaArtifactPackage> {
   const stagingParent = options.parentDirectory ?? os.tmpdir();
   const stagingDirectory = await mkdtemp(
-    path.join(stagingParent, 'buildish-mammoth-cache-gradle-delta-artifact-'),
+    path.join(stagingParent, 'buildish-mammoth-cache-delta-artifact-'),
   );
   const rootDirectory = stagingDirectory;
   const artifactName =
@@ -472,7 +472,7 @@ export async function verifyExtractedDeltaArtifactPackage(
   }
 
   const deltaManifest = deserializeCacheDeltaManifest(serializedDeltaManifest);
-  if (deltaManifest.gradleUserHome !== PORTABLE_GRADLE_USER_HOME) {
+  if (deltaManifest.cacheRoot !== PORTABLE_CACHE_ROOT) {
     throw new Error('Downloaded delta artifact must use the portable Gradle user home sentinel.');
   }
 
@@ -579,7 +579,7 @@ async function stagePayloadEntries(
   for (const [index, { entry, currentSnapshot }] of changedEntries.entries()) {
     const payloadPath = `${DELTA_PACKAGE_PAYLOAD_DIRECTORY}/${formatPayloadFileName(index)}`;
     const destinationPath = path.join(payloadDirectory, formatPayloadFileName(index));
-    const sourcePath = resolveGradleCachePath(deltaManifest.gradleUserHome, entry.relativePath);
+    const sourcePath = resolveGradleCachePath(deltaManifest.cacheRoot, entry.relativePath);
     await copyAndVerifySourceFile(sourcePath, destinationPath, entry.relativePath, currentSnapshot);
     payloadEntries.push({
       relativePath: entry.relativePath,
@@ -597,7 +597,7 @@ async function stagePayloadEntries(
 function createPortableDeltaManifest(deltaManifest: CacheDeltaManifest): CacheDeltaManifest {
   return {
     ...deltaManifest,
-    gradleUserHome: PORTABLE_GRADLE_USER_HOME,
+    cacheRoot: PORTABLE_CACHE_ROOT,
   };
 }
 

@@ -89,6 +89,7 @@ describe('finalize entrypoint', () => {
       env: process.env,
       cacheBackend: {} as FinalizeEntrypointDependencies['cacheBackend'],
       artifactBackend: {} as FinalizeEntrypointDependencies['artifactBackend'],
+      buildToolAdapterFactory: {} as FinalizeEntrypointDependencies['buildToolAdapterFactory'],
     } satisfies FinalizeEntrypointDependencies;
 
     await runFinalizeExecution(dependencies);

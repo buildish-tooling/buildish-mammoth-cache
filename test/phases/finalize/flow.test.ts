@@ -55,6 +55,9 @@ import {
   createTestGitHubReportSink,
   createTestRuntimeHost,
 } from '../../support/github-test-runtime';
+import type { GradleAdapterOptions } from '../../../src/build-tool/gradle/adapter';
+import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../../../src/config/types';
 
 function createFinalizeActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
@@ -63,6 +66,7 @@ function createFinalizeActionDependencies(options: {
   readonly inputProvider: { getInput(name: string): string };
   readonly getState?: (name: string) => string;
   readonly info?: (message: string) => void;
+  readonly adapterOptions?: GradleAdapterOptions;
 }) {
   const runtimeHost = createTestRuntimeHost({
     getInput(name: string): string {
@@ -82,6 +86,8 @@ function createFinalizeActionDependencies(options: {
       env: options.env,
       summaryWriter: options.summaryWriter,
     }),
+    buildToolAdapterFactory: (config: NormalizedActionConfig) =>
+      new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
   };
 }
 
@@ -116,7 +122,7 @@ describe('executeFinalizeAction', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-gradle-base-cache-armed') {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') {
               return 'true';
             }
             return savedState.get(name) ?? '';
@@ -199,7 +205,7 @@ describe('executeFinalizeAction', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-gradle-base-cache-armed') {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') {
               return 'true';
             }
             return savedState.get(name) ?? '';
@@ -213,7 +219,7 @@ describe('executeFinalizeAction', () => {
         expect.objectContaining({
           status: 'uploaded',
           artifactName: expect.stringMatching(
-            /^buildish-mammoth-cache-gradle-delta-worker_a-run-101-attempt-2-/u,
+            /^buildish-mammoth-cache-delta-worker_a-run-101-attempt-2-/u,
           ),
         }),
       );
@@ -279,7 +285,7 @@ describe('executeFinalizeAction', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-gradle-base-cache-armed') {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') {
               return 'true';
             }
             return savedState.get(name) ?? '';
@@ -299,7 +305,7 @@ describe('executeFinalizeAction', () => {
       expect(summaryContent).toContain(
         '### <a href="https://github.com/apache/buildish/actions/runs/101/job/987654321">Gradle builds</a>',
       );
-      expect(summaryContent).toContain('Gradle 8.14.3 / Java 21.0.4');
+      expect(summaryContent).toContain('Gradle 8\\.14\\.3 / Java 21\\.0\\.4');
       expect(summaryContent).not.toContain('<summary>Cache details</summary>');
       expect(summaryContent).not.toContain('Pulled base cache');
       expect(summaryContent).not.toContain('Delta artifact');
@@ -315,8 +321,8 @@ describe('executeFinalizeAction', () => {
           'Delta artifact: uploaded.',
           'Execution details: https://github.com/apache/buildish/actions/runs/101/job/987654321',
           'Cache partition statistics (manifest-derived, uncompressed content sizes):',
-          expect.stringContaining("Uploaded delta artifact 'buildish-mammoth-cache-gradle-delta-"),
-          'Captured Gradle build 1: platform — build --scan; Gradle 8.14.3 / Java 21.0.4; configuration cache reused; Build Scan https://scans.gradle.com/s/local-it-published.',
+          expect.stringContaining("Uploaded delta artifact 'buildish-mammoth-cache-delta-"),
+          "Gradle 8.14.3 SUCCESS (config-cache hit) tasks='build --scan' project='platform' scan=https://scans.gradle.com/s/local-it-published",
           '::endgroup::',
         ]),
       );
@@ -380,7 +386,7 @@ describe('executeFinalizeAction', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-gradle-base-cache-armed') {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') {
               return 'true';
             }
             return savedState.get(name) ?? '';
@@ -450,7 +456,7 @@ describe('executeFinalizeAction', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-gradle-base-cache-armed') {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') {
               return 'true';
             }
             return savedState.get(name) ?? '';
@@ -530,7 +536,7 @@ describe('executeFinalizeAction', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-gradle-base-cache-armed') {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') {
               return 'true';
             }
             return savedState.get(name) ?? '';
@@ -581,7 +587,7 @@ describe('executeFinalizeAction', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-gradle-base-cache-armed') {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') {
               return 'true';
             }
             return savedState.get(name) ?? '';
@@ -712,9 +718,17 @@ function createSummaryCapture(): {
 }
 
 function createTestCacheModel(gradleUserHome: string): CacheModel {
-  const partitions = createCachePartitions(gradleUserHome);
+  const gradleAdapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const partitions = createCachePartitions(
+    gradleUserHome,
+    [],
+    gradleAdapter.getBuiltInPartitionPresets(),
+    gradleAdapter.getHardCacheExcludeGlobs(),
+  );
   return {
-    cacheKey: 'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-main',
+    buildToolId: gradleAdapter.getBuildToolId(),
+    cacheRoot: gradleUserHome,
+    cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',

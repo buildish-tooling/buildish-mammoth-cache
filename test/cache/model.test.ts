@@ -22,6 +22,7 @@ import {
   parseJavaMajor,
   renderCacheKey,
 } from '../../src/cache/model';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { CiJobContext } from '../../src/ci/types';
 import type { NormalizedActionConfig } from '../../src/config/types';
 
@@ -45,6 +46,9 @@ const baseConfig: NormalizedActionConfig = {
   restoreCleanupMode: 'none',
   gradleUserHome: '/home/runner/.gradle',
 };
+
+/** Shared Gradle adapter instance for cache model tests. Constructed from baseConfig so the cacheRoot matches. */
+const gradleAdapter = new GradleBuildToolAdapter(baseConfig);
 
 const baseCiContext: CiJobContext = {
   eventName: 'push',
@@ -103,7 +107,12 @@ describe('renderCacheKey', () => {
 
 describe('createCachePartitions', () => {
   it('defines the default active partitions and enforces hard excludes', () => {
-    const partitions = createCachePartitions('/home/runner/.gradle');
+    const partitions = createCachePartitions(
+      '/home/runner/.gradle',
+      [],
+      gradleAdapter.getBuiltInPartitionPresets(),
+      gradleAdapter.getHardCacheExcludeGlobs(),
+    );
 
     expect(partitions.map((partition) => partition.id)).toEqual([
       'modules',
@@ -140,28 +149,33 @@ describe('createCachePartitions', () => {
   });
 
   it('supports built-in overrides, opt-in transforms, and custom partitions', () => {
-    const partitions = createCachePartitions('/home/runner/.gradle', [
-      {
-        id: 'modules',
-        includes: ['caches/modules-*/files-*/**'],
-        excludes: [],
-      },
-      {
-        id: 'transforms-metadata',
-        includes: ['caches/transforms-*/**'],
-        excludes: [],
-      },
-      {
-        id: 'kotlin-dsl',
-        includes: [],
-        excludes: [],
-      },
-      {
-        id: 'custom-generated-jars',
-        includes: ['caches/*/generated-gradle-jars/**'],
-        excludes: [],
-      },
-    ]);
+    const partitions = createCachePartitions(
+      '/home/runner/.gradle',
+      [
+        {
+          id: 'modules',
+          includes: ['caches/modules-*/files-*/**'],
+          excludes: [],
+        },
+        {
+          id: 'transforms-metadata',
+          includes: ['caches/transforms-*/**'],
+          excludes: [],
+        },
+        {
+          id: 'kotlin-dsl',
+          includes: [],
+          excludes: [],
+        },
+        {
+          id: 'custom-generated-jars',
+          includes: ['caches/*/generated-gradle-jars/**'],
+          excludes: [],
+        },
+      ],
+      gradleAdapter.getBuiltInPartitionPresets(),
+      gradleAdapter.getHardCacheExcludeGlobs(),
+    );
 
     expect(partitions.map((partition) => partition.id)).toEqual([
       'modules',
@@ -176,22 +190,26 @@ describe('createCachePartitions', () => {
 
   it('rejects empty custom partitions', () => {
     expect(() =>
-      createCachePartitions('/home/runner/.gradle', [
-        { id: 'custom-empty', includes: [], excludes: [] },
-      ]),
+      createCachePartitions(
+        '/home/runner/.gradle',
+        [{ id: 'custom-empty', includes: [], excludes: [] }],
+        gradleAdapter.getBuiltInPartitionPresets(),
+        gradleAdapter.getHardCacheExcludeGlobs(),
+      ),
     ).toThrow(/must declare at least one include glob/);
   });
 });
 
 describe('createCacheModel', () => {
   it('derives the cache model from the normalized config and ci context', async () => {
-    const cacheModel = await createCacheModel(baseConfig, baseCiContext, {
+    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
       captureCommandOutput: async () => 'openjdk version "21.0.4" 2024-07-16\n',
     });
 
     expect(cacheModel.cacheKey).toMatch(
       /^buildish-mammoth-gradle-cache-2-21-linux-x64-[a-f0-9]{16}-feature-cache-model$/,
     );
+    expect(cacheModel.cacheRoot).toBe('/home/runner/.gradle');
     expect(cacheModel.javaMajor).toBe(21);
     expect(cacheModel.partitionFingerprint).toMatch(/^[a-f0-9]{16}$/);
     expect(cacheModel.partitions).toHaveLength(4);
@@ -207,21 +225,24 @@ describe('createCacheModel', () => {
   it('changes the partition fingerprint and cache key when the partition layout changes', async () => {
     const captureCommandOutput = async () => 'openjdk version "21.0.4" 2024-07-16\n';
 
-    const defaultModel = await createCacheModel(baseConfig, baseCiContext, {
+    const defaultModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
       captureCommandOutput,
     });
+    const customizedConfig = {
+      ...baseConfig,
+      cachePartitions: [
+        {
+          id: 'transforms-metadata',
+          includes: ['caches/transforms-*/**'],
+          excludes: [],
+        },
+      ],
+    };
+    const customizedAdapter = new GradleBuildToolAdapter(customizedConfig);
     const customizedModel = await createCacheModel(
-      {
-        ...baseConfig,
-        cachePartitions: [
-          {
-            id: 'transforms-metadata',
-            includes: ['caches/transforms-*/**'],
-            excludes: [],
-          },
-        ],
-      },
+      customizedConfig,
       baseCiContext,
+      customizedAdapter,
       { captureCommandOutput },
     );
 
@@ -234,7 +255,7 @@ describe('createCacheModel', () => {
 
   it('fails hard with an actionable message when no Java runtime is available', async () => {
     await expect(
-      createCacheModel(baseConfig, baseCiContext, {
+      createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
         env: {
           ...process.env,
           JAVA_BIN: '__cache_gradle_missing_java_binary__',
@@ -245,7 +266,7 @@ describe('createCacheModel', () => {
 
   it('preserves non-missing Java detection failures as probe errors', async () => {
     await expect(
-      createCacheModel(baseConfig, baseCiContext, {
+      createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
         captureCommandOutput: async () => {
           throw new Error("'java -version' failed with exit code 2.");
         },

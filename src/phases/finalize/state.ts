@@ -30,17 +30,15 @@ import { z } from 'zod';
 import { parseSerializedJson, parseWithZod } from '../../util/serialization';
 
 /** CI state key holding the absolute path to the persisted pre-build cache manifest file. */
-export const PRE_BUILD_CACHE_MANIFEST_PATH_STATE =
-  'buildish-mammoth-cache-gradle-pre-build-manifest-path';
+export const PRE_BUILD_CACHE_MANIFEST_PATH_STATE = 'buildish-mammoth-cache-pre-build-manifest-path';
 /** CI state key holding a JSON array of consumed delta artifact names to delete in the finalize phase. */
 export const CONSUMED_DELTA_ARTIFACT_NAMES_STATE =
-  'buildish-mammoth-cache-gradle-consumed-delta-artifact-names';
+  'buildish-mammoth-cache-consumed-delta-artifact-names';
 /** CI state key holding the serialized {@link PersistedDeltaArtifactExecutionIdentity} JSON. */
 export const DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE =
-  'buildish-mammoth-cache-gradle-delta-artifact-execution-identity';
+  'buildish-mammoth-cache-delta-artifact-execution-identity';
 /** CI state key holding the serialized {@link BaseCacheRestoreResult} JSON. */
-export const BASE_CACHE_RESTORE_RESULT_STATE =
-  'buildish-mammoth-cache-gradle-base-cache-restore-result';
+export const BASE_CACHE_RESTORE_RESULT_STATE = 'buildish-mammoth-cache-base-cache-restore-result';
 const BASE_CACHE_RESTORE_STATUSES = [
   'feature-unavailable',
   'miss',
@@ -119,7 +117,7 @@ export async function persistPreBuildCacheManifest(
   const parentDirectory = resolveStateParentDirectory(options);
   await mkdir(parentDirectory, { recursive: true });
   const stateDirectory = await mkdtemp(
-    path.join(parentDirectory, 'buildish-mammoth-cache-gradle-post-state-'),
+    path.join(parentDirectory, 'buildish-mammoth-cache-post-state-'),
   );
   const manifestPath = path.join(stateDirectory, PRE_BUILD_CACHE_MANIFEST_FILE);
 

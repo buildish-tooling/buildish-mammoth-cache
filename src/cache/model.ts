@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { CiJobContext } from '../ci';
+import type { BuildToolAdapter, BuiltInCachePartitionPreset } from '../build-tool/types';
 import type { ConfiguredCachePartitionInput, NormalizedActionConfig } from '../config/types';
 
 /**
@@ -32,19 +33,6 @@ import type { ConfiguredCachePartitionInput, NormalizedActionConfig } from '../c
 export const DEFAULT_CACHE_KEY_TEMPLATE =
   '${cacheKeyPrefix}${schemaVersion}-${javaMajor}-${runnerOs}-${runnerArch}-${partitionFingerprint}-${refName}';
 const CACHE_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,512}$/;
-/**
- * Glob patterns that are unconditionally excluded from every cache partition.
- *
- * These exclusions cannot be overridden by user configuration. They protect against caching
- * files that are unsafe to restore on a different runner (lock files, configuration-cache
- * encryption keys, Gradle's local file-access journal).
- */
-export const HARD_CACHE_EXCLUDE_GLOBS = [
-  '**/configuration-cache/**',
-  '**/*.lock',
-  'caches/*/cc-keystore',
-  'caches/journal-1/**',
-] as const;
 
 /**
  * Fully derived cache identity and partition metadata for a single job execution.
@@ -93,7 +81,21 @@ export interface CacheModel {
    */
   readonly partitionFingerprint: string;
   /**
-   * Ordered logical cache partitions that make up the Gradle cache model.
+   * Stable machine-readable build tool identifier from the active {@link BuildToolAdapter}.
+   *
+   * Embedded in every cache manifest so that a manifest produced by one build tool (e.g. `'gradle'`)
+   * is rejected with a clear error when read by a different build tool (e.g. `'maven'`).
+   */
+  readonly buildToolId: string;
+  /**
+   * Absolute path to the build tool's user home / cache root directory.
+   *
+   * Provided by the active {@link BuildToolAdapter}. Used as the base for all relative globs in
+   * the partition definitions and as the root for manifest capture and delta application.
+   */
+  readonly cacheRoot: string;
+  /**
+   * Ordered logical cache partitions that make up the build tool cache model.
    *
    * Contains the active built-in partitions plus any custom partitions after overrides and opt-outs
    * have been resolved.
@@ -114,11 +116,11 @@ export interface CacheModel {
 }
 
 /**
- * Describes one logical slice of Gradle user home content that should participate in cache
+ * Describes one logical slice of build tool cache content that should participate in cache
  * restore/save and later delta computation.
  *
  * Relative globs are stable identifiers for manifests and tests, while absolute globs are ready
- * to pass to filesystem or cache APIs for the current `gradleUserHome`.
+ * to pass to filesystem or cache APIs for the current {@link CacheModel.cacheRoot}.
  */
 export interface CachePartitionDefinition {
   /**
@@ -130,28 +132,28 @@ export interface CachePartitionDefinition {
   /** Longer human-readable explanation of what the partition stores. */
   readonly description: string;
   /**
-   * Partition include-globs relative to `gradleUserHome`.
+   * Partition include-globs relative to the build tool's cache root.
    *
    * These remain stable across machines and are preferred for manifests and tests.
    */
   readonly relativeIncludeGlobs: readonly string[];
   /**
-   * Partition exclude-globs relative to `gradleUserHome`.
+   * Partition exclude-globs relative to the build tool's cache root.
    *
    * The effective list always contains the non-overridable hard safety excludes plus any
    * partition-specific excludes from the built-in preset or user override.
    */
   readonly relativeExcludeGlobs: readonly string[];
   /**
-   * Absolute include-globs rooted under the effective `gradleUserHome`.
+   * Absolute include-globs rooted under the effective cache root.
    *
    * These are the concrete paths used by cache restore/save operations for the current runner.
    */
   readonly absoluteIncludeGlobs: readonly string[];
   /**
-   * Absolute exclude-globs rooted under the effective `gradleUserHome`.
+   * Absolute exclude-globs rooted under the effective cache root.
    *
-   * These mirror `relativeExcludeGlobs` after joining against `gradleUserHome`.
+   * These mirror `relativeExcludeGlobs` after joining against the cache root.
    */
   readonly absoluteExcludeGlobs: readonly string[];
 }
@@ -194,97 +196,36 @@ export type CommandOutputCapture = (
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
-interface BuiltInCachePartitionPreset {
-  readonly id: string;
-  readonly displayName: string;
-  readonly description: string;
-  readonly defaultEnabled: boolean;
-  readonly relativeIncludeGlobs: readonly string[];
-  readonly relativeExcludeGlobs: readonly string[];
-}
-
-/**
- * Built-in partition presets in their stable resolution order.
- *
- * This order is user-visible because active built-ins are emitted first, custom partitions are
- * appended afterward, and the resulting ordered layout contributes to `partitionFingerprint`.
- */
-const BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPreset[] = [
-  {
-    id: 'modules',
-    displayName: 'Dependency modules',
-    description:
-      'Downloaded dependency artifacts, plugin jars, and shared resource stores reused across builds.',
-    defaultEnabled: true,
-    relativeIncludeGlobs: [
-      'caches/modules-*/files-*/**',
-      'caches/jars-*/**',
-      'caches/resources-*/**',
-    ],
-    relativeExcludeGlobs: ['caches/modules-*/metadata-*/**'],
-  },
-  {
-    id: 'transforms-metadata',
-    displayName: 'Transforms and metadata',
-    description:
-      'Artifact transforms and related metadata that can be fast but environment-sensitive to reuse.',
-    defaultEnabled: false,
-    relativeIncludeGlobs: ['caches/transforms-*/**'],
-    relativeExcludeGlobs: [],
-  },
-  {
-    id: 'kotlin-dsl',
-    displayName: 'Kotlin DSL caches',
-    description: 'Compiled Kotlin DSL scripts and generated Gradle API jars.',
-    defaultEnabled: true,
-    relativeIncludeGlobs: [
-      'caches/*/kotlin-dsl/**',
-      'caches/*/scripts/**',
-      'caches/*/generated-gradle-jars/**',
-    ],
-    relativeExcludeGlobs: [],
-  },
-  {
-    id: 'build-cache',
-    displayName: 'Local build cache',
-    description: 'Reusable local task output cache entries maintained by Gradle.',
-    defaultEnabled: true,
-    relativeIncludeGlobs: ['caches/build-cache-*/**'],
-    relativeExcludeGlobs: [],
-  },
-  {
-    id: 'wrapper-dists',
-    displayName: 'Wrapper distributions',
-    description:
-      'Wrapper-downloaded Gradle distributions stored under the supported wrapper layout.',
-    defaultEnabled: true,
-    relativeIncludeGlobs: ['wrapper/dists/**'],
-    relativeExcludeGlobs: [],
-  },
-];
-
-const BUILT_IN_CACHE_PARTITION_IDS = new Set(
-  BUILT_IN_CACHE_PARTITION_PRESETS.map((preset) => preset.id),
-);
-
 /**
  * Derives the cache key coordinates and partition definitions for the current job.
  */
 export async function createCacheModel(
   config: NormalizedActionConfig,
   ciContext: CiJobContext,
+  adapter: BuildToolAdapter,
   options: CacheModelOptions = {},
 ): Promise<CacheModel> {
   const javaMajor = await detectJavaMajor(
     options.captureCommandOutput ?? captureCombinedOutput,
     options.env,
   );
-  const partitions = createCachePartitions(config.gradleUserHome, config.cachePartitions);
-  const partitionFingerprint = createPartitionFingerprint(partitions);
+  const cacheRoot = adapter.getCacheRoot();
+  const partitions = createCachePartitions(
+    cacheRoot,
+    config.cachePartitions,
+    adapter.getBuiltInPartitionPresets(),
+    adapter.getHardCacheExcludeGlobs(),
+  );
+  const partitionFingerprint = createPartitionFingerprint(
+    partitions,
+    adapter.getHardCacheExcludeGlobs(),
+  );
   const cacheKey = renderCacheKey(config, ciContext, javaMajor, partitionFingerprint);
 
   return {
     cacheKey,
+    buildToolId: adapter.getBuildToolId(),
+    cacheRoot,
     javaMajor,
     runnerOs: ciContext.runnerOs,
     runnerArch: ciContext.runnerArch,
@@ -351,7 +292,7 @@ export function parseJavaMajor(versionOutput: string): number {
 }
 
 /**
- * Computes the Gradle user home partitions used by cache restore/save and delta tracking.
+ * Computes the build tool cache partitions used by cache restore/save and delta tracking.
  *
  * Rules:
  * - built-ins are considered in stable preset order
@@ -360,13 +301,16 @@ export function parseJavaMajor(versionOutput: string): number {
  * - custom partitions are appended in declaration order and must keep at least one include glob
  */
 export function createCachePartitions(
-  gradleUserHome: string,
+  cacheRoot: string,
   configuredPartitions: readonly ConfiguredCachePartitionInput[] = [],
+  builtInPresets: readonly BuiltInCachePartitionPreset[] = [],
+  hardCacheExcludeGlobs: readonly string[] = [],
 ): readonly CachePartitionDefinition[] {
+  const builtInPresetIds = new Set(builtInPresets.map((preset) => preset.id));
   const configuredById = new Map(
     configuredPartitions.map((partition) => [partition.id, partition]),
   );
-  const builtIns = BUILT_IN_CACHE_PARTITION_PRESETS.flatMap((preset) => {
+  const builtIns = builtInPresets.flatMap((preset) => {
     const override = configuredById.get(preset.id);
     if (!override && !preset.defaultEnabled) {
       return [];
@@ -382,15 +326,16 @@ export function createCachePartitions(
         preset.id,
         preset.displayName,
         preset.description,
-        gradleUserHome,
+        cacheRoot,
         includeGlobs,
         deduplicatePaths(override?.excludes ?? preset.relativeExcludeGlobs),
+        hardCacheExcludeGlobs,
       ),
     ];
   });
 
   const customPartitions = configuredPartitions.flatMap((partition) => {
-    if (BUILT_IN_CACHE_PARTITION_IDS.has(partition.id)) {
+    if (builtInPresetIds.has(partition.id)) {
       return [];
     }
     if (partition.includes.length === 0) {
@@ -403,10 +348,11 @@ export function createCachePartitions(
       createPartition(
         partition.id,
         `Custom partition '${partition.id}'`,
-        `User-defined Gradle cache partition '${partition.id}'.`,
-        gradleUserHome,
+        `User-defined build tool cache partition '${partition.id}'.`,
+        cacheRoot,
         deduplicatePaths(partition.includes),
         deduplicatePaths(partition.excludes),
+        hardCacheExcludeGlobs,
       ),
     ];
   });
@@ -481,13 +427,14 @@ function createPartition(
   id: CachePartitionDefinition['id'],
   displayName: string,
   description: string,
-  gradleUserHome: string,
+  cacheRoot: string,
   relativeIncludeGlobs: readonly string[],
   partitionRelativeExcludeGlobs: readonly string[],
+  hardCacheExcludeGlobs: readonly string[],
 ): CachePartitionDefinition {
   const deduplicatedIncludeGlobs = deduplicatePaths(relativeIncludeGlobs);
   const relativeExcludeGlobs = deduplicatePaths([
-    ...HARD_CACHE_EXCLUDE_GLOBS,
+    ...hardCacheExcludeGlobs,
     ...partitionRelativeExcludeGlobs,
   ]);
 
@@ -497,16 +444,19 @@ function createPartition(
     description,
     relativeIncludeGlobs: deduplicatedIncludeGlobs,
     relativeExcludeGlobs,
-    absoluteIncludeGlobs: deduplicatedIncludeGlobs.map((glob) => path.join(gradleUserHome, glob)),
-    absoluteExcludeGlobs: relativeExcludeGlobs.map((glob) => path.join(gradleUserHome, glob)),
+    absoluteIncludeGlobs: deduplicatedIncludeGlobs.map((glob) => path.join(cacheRoot, glob)),
+    absoluteExcludeGlobs: relativeExcludeGlobs.map((glob) => path.join(cacheRoot, glob)),
   };
 }
 
-function createPartitionFingerprint(partitions: readonly CachePartitionDefinition[]): string {
+function createPartitionFingerprint(
+  partitions: readonly CachePartitionDefinition[],
+  hardCacheExcludeGlobs: readonly string[],
+): string {
   // Include the hard excludes and fully resolved ordered partition layout so cache keys diverge
   // whenever the managed cache surface changes.
   const serializedLayout = JSON.stringify({
-    hardExcludes: HARD_CACHE_EXCLUDE_GLOBS,
+    hardExcludes: hardCacheExcludeGlobs,
     partitions: partitions.map((partition) => ({
       id: partition.id,
       includes: partition.relativeIncludeGlobs,

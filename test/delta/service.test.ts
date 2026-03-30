@@ -23,7 +23,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  PORTABLE_GRADLE_USER_HOME,
+  PORTABLE_CACHE_ROOT,
   createDeltaArtifactName,
   deserializeDeltaArtifactPackageMetadata,
   downloadAndVerifyDeltaArtifactPackage,
@@ -35,6 +35,8 @@ import {
 } from '../../src/delta/service';
 import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../../src/config/types';
 import type { CiJobContext } from '../../src/ci/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
@@ -82,7 +84,7 @@ describe('artifact exchange service', () => {
     );
 
     expect(artifactName).toMatch(
-      /^buildish-mammoth-cache-gradle-delta-gradle-worker-run-12345-attempt-2-[a-f0-9]{12}-[a-f0-9]{12}$/u,
+      /^buildish-mammoth-cache-delta-gradle-worker-run-12345-attempt-2-[a-f0-9]{12}-[a-f0-9]{12}$/u,
     );
     expect(artifactName).toBe(
       createDeltaArtifactName(createFixtureCiContext(), cacheModel, deltaManifest),
@@ -133,7 +135,7 @@ describe('artifact exchange service', () => {
     ]);
 
     const serializedPortableManifest = await readFile(stagedPackage.deltaManifestPath, 'utf8');
-    expect(serializedPortableManifest).toContain(PORTABLE_GRADLE_USER_HOME);
+    expect(serializedPortableManifest).toContain(PORTABLE_CACHE_ROOT);
     expect(serializedPortableManifest).not.toContain(gradleUserHome);
 
     const serializedMetadata = await readFile(stagedPackage.metadataPath, 'utf8');
@@ -183,7 +185,7 @@ describe('artifact exchange service', () => {
       },
     );
 
-    expect(downloadedPackage.deltaManifest.gradleUserHome).toBe(PORTABLE_GRADLE_USER_HOME);
+    expect(downloadedPackage.deltaManifest.cacheRoot).toBe(PORTABLE_CACHE_ROOT);
     expect(downloadedPackage.metadata.deltaManifestSha256).toBe(metadata.deltaManifestSha256);
     expect(downloadedPackage.metadata.payloadEntries).toEqual(metadata.payloadEntries);
   });
@@ -430,9 +432,17 @@ async function createStagedDeltaFixture(temporaryDirectories: Set<string>) {
 }
 
 function createFixtureCacheModel(gradleUserHome: string): CacheModel {
-  const partitions = createCachePartitions(gradleUserHome);
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const partitions = createCachePartitions(
+    gradleUserHome,
+    [],
+    adapter.getBuiltInPartitionPresets(),
+    adapter.getHardCacheExcludeGlobs(),
+  );
 
   return {
+    buildToolId: adapter.getBuildToolId(),
+    cacheRoot: gradleUserHome,
     cacheKey: 'buildish-mammoth-gradle-cache-v1:21:linux:x64:main',
     javaMajor: 21,
     runnerOs: 'linux',

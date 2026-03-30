@@ -52,7 +52,9 @@ const baseConfig: NormalizedActionConfig = {
 };
 
 const cacheModel: CacheModel = {
-  cacheKey: 'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-feature-cache-model',
+  buildToolId: 'gradle',
+  cacheRoot: '/home/runner/.gradle',
+  cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-feature-cache-model',
   javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',
@@ -295,7 +297,7 @@ describe('isBaseCacheFinalizeArmed', () => {
   it('detects the saved post-action arm state', () => {
     expect(
       isBaseCacheFinalizeArmed((name) =>
-        name === 'buildish-mammoth-cache-gradle-base-cache-armed' ? 'true' : '',
+        name === 'buildish-mammoth-cache-base-cache-armed' ? 'true' : '',
       ),
     ).toBe(true);
   });

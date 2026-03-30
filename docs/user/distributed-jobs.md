@@ -82,7 +82,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: ./gradlew :module-a:build
@@ -98,7 +98,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: ./gradlew :module-b:build
@@ -115,7 +115,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-aggregator
           dependent-jobs: worker-a, worker-b
@@ -149,13 +149,13 @@ wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
 
 ```yaml
 # Each worker job
-- uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+- uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
   with:
     job-mode: distributed-worker
     config-file: .github/buildish-mammoth-gradle.yml
 
 # Aggregator job
-- uses: apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>
+- uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
   with:
     job-mode: distributed-aggregator
     dependent-jobs: worker-a, worker-b

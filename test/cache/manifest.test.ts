@@ -32,6 +32,8 @@ import {
   type CacheModel,
   type CachePartitionDefinition,
 } from '../../src/cache/model';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../../src/config/types';
 
 describe('captureCacheManifest', () => {
   it('captures regular files by partition and excludes lock/configuration-cache content', async () => {
@@ -79,7 +81,7 @@ describe('captureCacheManifest', () => {
       )?.entries[0];
       expect(wrapperEntry).toBeDefined();
       expect(wrapperEntry!.mode & 0o777).toBe(0o755);
-      expect(serializeCacheManifest(manifest)).toContain('"schemaVersion":2');
+      expect(serializeCacheManifest(manifest)).toContain('"schemaVersion":1');
     });
   });
 
@@ -182,21 +184,38 @@ describe('computeCacheDelta', () => {
     });
   });
 
-  it('rejects manifests from different Gradle user homes', () => {
+  it('rejects manifests from different build tools', () => {
     const previousManifest: CacheManifest = {
-      schemaVersion: 2,
-      gradleUserHome: '/tmp/one',
+      schemaVersion: 1,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp/one',
       partitions: [{ partitionId: 'modules', entries: [] }],
     };
     const currentManifest: CacheManifest = {
-      schemaVersion: 2,
-      gradleUserHome: '/tmp/two',
+      schemaVersion: 1,
+      buildToolId: 'maven',
+      cacheRoot: '/tmp/one',
       partitions: [{ partitionId: 'modules', entries: [] }],
     };
 
-    expect(() => computeCacheDelta(previousManifest, currentManifest)).toThrow(
-      /same Gradle user home/,
-    );
+    expect(() => computeCacheDelta(previousManifest, currentManifest)).toThrow(/same build tool/);
+  });
+
+  it('rejects manifests from different cache roots', () => {
+    const previousManifest: CacheManifest = {
+      schemaVersion: 1,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp/one',
+      partitions: [{ partitionId: 'modules', entries: [] }],
+    };
+    const currentManifest: CacheManifest = {
+      schemaVersion: 1,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp/two',
+      partitions: [{ partitionId: 'modules', entries: [] }],
+    };
+
+    expect(() => computeCacheDelta(previousManifest, currentManifest)).toThrow(/same cache root/);
   });
 
   it('ignores atime-only differences so manifest capture does not manufacture large deltas', async () => {
@@ -246,18 +265,31 @@ async function writeTrackedFile(
 
 function createTestCacheModel(
   gradleUserHome: string,
-  partitions = createCachePartitions(gradleUserHome),
+  partitions?: readonly CachePartitionDefinition[],
 ): CacheModel {
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const resolvedPartitions =
+    partitions ??
+    createCachePartitions(
+      gradleUserHome,
+      [],
+      adapter.getBuiltInPartitionPresets(),
+      adapter.getHardCacheExcludeGlobs(),
+    );
   return {
-    cacheKey: 'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-main',
+    buildToolId: adapter.getBuildToolId(),
+    cacheRoot: gradleUserHome,
+    cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',
     safeRefName: 'main',
     partitionFingerprint: 'feedcafe1234abcd',
-    partitions,
-    includePaths: partitions.flatMap((partition) => partition.absoluteIncludeGlobs),
-    excludePaths: [...new Set(partitions.flatMap((partition) => partition.absoluteExcludeGlobs))],
+    partitions: resolvedPartitions,
+    includePaths: resolvedPartitions.flatMap((partition) => partition.absoluteIncludeGlobs),
+    excludePaths: [
+      ...new Set(resolvedPartitions.flatMap((partition) => partition.absoluteExcludeGlobs)),
+    ],
   };
 }
 
@@ -268,6 +300,8 @@ function createOverlappingCacheModel(gradleUserHome: string): CacheModel {
   ];
 
   return {
+    buildToolId: 'gradle',
+    cacheRoot: gradleUserHome,
     cacheKey: 'overlap',
     javaMajor: 21,
     runnerOs: 'linux',

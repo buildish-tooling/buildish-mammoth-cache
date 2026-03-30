@@ -20,7 +20,7 @@ import { chmod, lstat, mkdir, rename, rm, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-import { PORTABLE_GRADLE_USER_HOME, type DownloadedDeltaArtifactPackage } from './service';
+import { PORTABLE_CACHE_ROOT, type DownloadedDeltaArtifactPackage } from './service';
 import { isMissingPathError, isReplaceTargetError } from '../util/fs';
 import {
   resolveNormalizedPathWithinRoot,
@@ -69,7 +69,7 @@ export interface DeltaApplyOptions {
 
 /** Summary counts and warnings produced after applying a merged delta plan. */
 export interface DeltaApplyResult {
-  readonly gradleUserHome: string;
+  readonly cacheRoot: string;
   readonly addedCount: number;
   readonly modifiedCount: number;
   readonly deletedCount: number;
@@ -105,12 +105,15 @@ export function mergeDeltaArtifactPackages(
     return {
       deltaManifest: {
         schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
-        gradleUserHome: PORTABLE_GRADLE_USER_HOME,
+        buildToolId: '',
+        cacheRoot: PORTABLE_CACHE_ROOT,
         partitions: [],
       },
       payloads: [],
     };
   }
+
+  const expectedBuildToolId = packages[0]!.deltaManifest.buildToolId;
 
   const expectedPartitionIds = packages[0]!.deltaManifest.partitions.map(
     (partition) => partition.partitionId,
@@ -121,7 +124,7 @@ export function mergeDeltaArtifactPackages(
   >();
 
   for (const artifactPackage of packages) {
-    assertPortableDeltaPackage(artifactPackage, expectedPartitionIds);
+    assertPortableDeltaPackage(artifactPackage, expectedPartitionIds, expectedBuildToolId);
     const payloads = collectPayloadPaths(artifactPackage);
 
     for (const partition of artifactPackage.deltaManifest.partitions) {
@@ -178,7 +181,8 @@ export function mergeDeltaArtifactPackages(
   return {
     deltaManifest: {
       schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
-      gradleUserHome: PORTABLE_GRADLE_USER_HOME,
+      buildToolId: expectedBuildToolId,
+      cacheRoot: PORTABLE_CACHE_ROOT,
       partitions,
     },
     payloads,
@@ -190,7 +194,7 @@ export function mergeDeltaArtifactPackages(
  *
  * Each payload file is written atomically via a temporary file followed by a rename so a
  * partially written file is never visible to a concurrent Gradle invocation. The destination
- * path is validated to stay within `gradleUserHome` before each write (no path traversal).
+ * path is validated to stay within the cache root before each write (no path traversal).
  * Access and modification timestamps are restored from the manifest when supported by the OS.
  *
  * @returns Counts of added, modified, and deleted files plus any non-fatal warnings.
@@ -262,7 +266,7 @@ export async function applyMergedDeltaPlan(
   }
 
   return {
-    gradleUserHome: resolvedGradleUserHome,
+    cacheRoot: resolvedGradleUserHome,
     addedCount,
     modifiedCount,
     deletedCount,
@@ -273,10 +277,17 @@ export async function applyMergedDeltaPlan(
 function assertPortableDeltaPackage(
   artifactPackage: DownloadedDeltaArtifactPackage,
   expectedPartitionIds: readonly CachePartitionDefinition['id'][],
+  expectedBuildToolId: string,
 ): void {
-  if (artifactPackage.deltaManifest.gradleUserHome !== PORTABLE_GRADLE_USER_HOME) {
+  if (artifactPackage.deltaManifest.buildToolId !== expectedBuildToolId) {
     throw new Error(
-      `Downloaded delta artifact '${artifactPackage.artifact.name}' must use the portable Gradle user home sentinel.`,
+      `Downloaded delta artifact '${artifactPackage.artifact.name}' has build tool '${artifactPackage.deltaManifest.buildToolId}', but expected '${expectedBuildToolId}'.`,
+    );
+  }
+
+  if (artifactPackage.deltaManifest.cacheRoot !== PORTABLE_CACHE_ROOT) {
+    throw new Error(
+      `Downloaded delta artifact '${artifactPackage.artifact.name}' must use the portable cache root sentinel.`,
     );
   }
 
@@ -446,7 +457,7 @@ async function writePayloadAtomically(
   await statReplaceableFile(targetPath, relativePath);
   const temporaryPath = path.join(
     path.dirname(targetPath),
-    `.buildish-mammoth-cache-gradle-delta.${randomUUID()}.tmp`,
+    `.buildish-mammoth-cache-delta.${randomUUID()}.tmp`,
   );
 
   try {

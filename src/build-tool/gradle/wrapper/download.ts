@@ -19,8 +19,8 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path';
 import { setTimeout as sleepTimeout } from 'node:timers/promises';
 
-import type { HttpHeadersByHost } from '../../ci';
-import { isReplaceTargetError } from '../../util/fs';
+import type { HttpHeadersByHost } from '../../../ci';
+import { isReplaceTargetError } from '../../../util/fs';
 import { verifyGradleDetachedSignature } from './signature';
 import type {
   ProvisionedWrapperJar,

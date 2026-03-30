@@ -27,7 +27,7 @@ Use the site docs for workflow usage, configuration, cache-partition behavior, s
 and current project status.
 
 Until the first public release exists, test the action with a repository ref you control, for example
-`apache/buildish-mammoth-cache-gradle/descriptors/github/internal-unreleased-consumer-path@<commit-sha>`.
+`apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>`.
 
 ## License
 

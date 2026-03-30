@@ -15,6 +15,7 @@
  */
 
 import { runPrepareExecution } from '../../phases/prepare/cli';
+import { GradleBuildToolAdapter } from '../../build-tool/gradle/adapter';
 
 import {
   createGitHubBaseCacheBackend,
@@ -41,6 +42,7 @@ void runPrepareExecution({
   env: process.env,
   cacheBackend: createGitHubBaseCacheBackend(),
   artifactBackend: createGitHubWorkflowArtifactBackend(),
+  buildToolAdapterFactory: (config) => new GradleBuildToolAdapter(config),
 }).catch((error: unknown) => {
   runtimeHost.setFailed(error instanceof Error ? error.message : String(error));
 });

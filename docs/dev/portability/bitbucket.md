@@ -118,12 +118,12 @@ The prepare/finalize split maps cleanly onto Bitbucket's `script` / `after-scrip
 - step:
     name: Build
     script:
-      - node dist/prepare.js    # restore cache, provision wrapper
+      - node dist/prepare.js # restore cache, provision wrapper
       - ./gradlew build
     after-script:
-      - node dist/finalize.js   # compute delta, save cache / upload artifact
+      - node dist/finalize.js # compute delta, save cache / upload artifact
     artifacts:
-      - .gradle-delta/**        # pre-declared delta package path
+      - .gradle-delta/** # pre-declared delta package path
 ```
 
 ## Key uncertainties
@@ -144,4 +144,3 @@ The prepare/finalize split maps cleanly onto Bitbucket's `script` / `after-scrip
 2. Implement the adapter in `src/ci/bitbucket/` using `after-script` for the finalize phase.
 3. Require users to pass the step name as an explicit input (`step-name:`) in distributed mode.
 4. Add a `bitbucket-pipelines.yml` template to `descriptors/bitbucket/` that users can `include`.
-

@@ -19,7 +19,7 @@ import type { BaseCacheBackend } from './backend';
 
 import { DEFAULT_CACHE_KEY_TEMPLATE, type CacheModel } from './model';
 
-const FINALIZE_ARMED_STATE = 'buildish-mammoth-cache-gradle-base-cache-armed';
+const FINALIZE_ARMED_STATE = 'buildish-mammoth-cache-base-cache-armed';
 const REF_NAME_PLACEHOLDER = '${refName}';
 const NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT =
   'Path Validation Error: Path(s) specified in the action for caching do(es) not exist';

@@ -125,8 +125,8 @@ shapes, never the concrete implementations.
 2. Create phase entrypoints (equivalent to `src/ci/github/main.ts` and `src/ci/github/post.ts`)
    that construct the concrete implementations and pass them to `runPrepareExecution()` /
    `runFinalizeExecution()`.
-3. Create a descriptor directory (equivalent to `descriptors/github/`) for the CI platform's
-   action or pipeline descriptor files.
+3. Create an action directory under `actions/<provider>/<build-tool>/` with an `action.yml`
+   (equivalent to `actions/github/gradle/`) for the CI platform's action descriptor files.
 4. No changes to `src/phases/`, `src/cache/`, `src/delta/`, or `src/config/` should be needed
    unless the new provider reveals a missing abstraction.
 

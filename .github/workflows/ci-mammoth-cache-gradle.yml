@@ -108,7 +108,7 @@ jobs:
           cp -R test/fixtures/smoke build/smoke-fixture
 
       - name: Run the local action
-        uses: ./descriptors/github/internal-unreleased-consumer-path
+        uses: ./actions/github/gradle
         with:
           base-directory: build/smoke-fixture
 

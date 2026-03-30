@@ -42,7 +42,6 @@ import {
   persistPreBuildCacheManifest,
   type PersistedPreBuildCacheManifestState,
 } from '../finalize/state';
-import { installGradleBuildResultCapture } from '../../gradle/build-results';
 import { createDetailsSection, escapeSummaryText } from '../../util/html';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
@@ -104,13 +103,13 @@ export async function executePrepareAction(
 ): Promise<PrepareActionStatus> {
   const logInfo = dependencies.runtimeHost.info;
   const bootstrap = await bootstrapPhase('prepare', dependencies);
-  await installGradleBuildResultCapture(bootstrap.config.gradleUserHome, bootstrap.ciContext).catch(
-    (error: unknown) => {
+  await bootstrap.buildToolAdapter
+    .installBuildHooks(bootstrap.ciContext)
+    .catch((error: unknown) => {
       logInfo(
-        `Gradle build reporting could not install capture hooks and will be skipped for this job: ${error instanceof Error ? error.message : String(error)}`,
+        `${bootstrap.buildToolAdapter.getName()} build reporting could not install capture hooks and will be skipped for this job: ${error instanceof Error ? error.message : String(error)}`,
       );
-    },
-  );
+    });
 
   if (!bootstrap.cacheModel) {
     const status = {
@@ -191,7 +190,7 @@ async function applyDependentJobDeltas(
     const plan = mergeDeltaArtifactPackages(downloadedPackages, {
       allowDuplicateDependentDeltaPaths: bootstrap.config.allowDuplicateDependentDeltaPaths,
     });
-    const applied = await applyMergedDeltaPlan(plan, bootstrap.config.gradleUserHome);
+    const applied = await applyMergedDeltaPlan(plan, bootstrap.cacheModel!.cacheRoot);
     return createPrepareDependentDeltaResult(requestedJobs, downloadedPackages, applied);
   } finally {
     await cleanupDownloadedPackages(downloadedPackages);
@@ -262,9 +261,10 @@ async function maybePruneManagedFilesAfterRestore(
   const relativePaths = manifest.partitions.flatMap((partition) =>
     partition.entries.map((entry) => entry.relativePath),
   );
+  const cacheRoot = bootstrap.cacheModel.cacheRoot;
   await Promise.all(
     relativePaths.map(async (relativePath) => {
-      await rm(path.join(bootstrap.config.gradleUserHome, relativePath), { force: true });
+      await rm(path.join(cacheRoot, relativePath), { force: true });
     }),
   );
 
@@ -274,7 +274,7 @@ async function maybePruneManagedFilesAfterRestore(
     (reRestore.status !== 'exact-hit' && reRestore.status !== 'partial-hit')
   ) {
     throw new Error(
-      `restore-cleanup-mode=prune-managed deleted ${relativePaths.length} managed file(s), but the follow-up base cache restore did not hit again. Refusing to continue with a partially pruned Gradle user home.`,
+      `restore-cleanup-mode=prune-managed deleted ${relativePaths.length} managed file(s), but the follow-up base cache restore did not hit again. Refusing to continue with a partially pruned cache root.`,
     );
   }
 
@@ -410,20 +410,12 @@ function describeDependentDeltaSummary(result: PrepareDependentDeltaResult | nul
  * Derives the action output key-value map from a completed prepare-phase status.
  *
  * The returned map is passed to the CI runtime output sink (e.g. `setOutput` on GitHub Actions).
- * Outputs include the resolved cache key, restore status, provisioned Gradle versions, and
- * wrapper download counts so downstream steps can branch on cache or wrapper outcomes.
+ * Outputs include the resolved cache key, restore status, and any tool-specific outputs contributed
+ * by the active {@link BuildToolAdapter} via {@link BuildToolProvisioning.additionalOutputs}.
  */
 export function createPrepareActionOutputs(status: PrepareActionStatus): Record<string, string> {
-  const gradleVersions = [
-    ...new Set(status.bootstrap.provisionedWrappers.map((wrapper) => wrapper.wrapperSourceVersion)),
-  ]
-    .sort()
-    .join(',');
-  const wrapperDownloadedCount = status.bootstrap.provisionedWrappers.filter(
-    (wrapper) => wrapper.wasDownloaded,
-  ).length;
-
   return {
+    // Generic outputs
     'cache-key': status.bootstrap.cacheModel?.cacheKey ?? '',
     'base-cache-restore-status':
       status.bootstrap.baseCacheResult?.operation === 'restore'
@@ -432,12 +424,6 @@ export function createPrepareActionOutputs(status: PrepareActionStatus): Record<
     'java-major': status.bootstrap.cacheModel?.javaMajor?.toString() ?? '',
     'job-mode': status.bootstrap.config.jobMode,
     'read-only': String(status.bootstrap.config.readOnly),
-    'wrapper-count': String(status.bootstrap.provisionedWrappers.length),
-    'gradle-versions': gradleVersions,
-    'wrapper-downloaded-count': String(wrapperDownloadedCount),
-    'wrapper-reused-count': String(
-      status.bootstrap.provisionedWrappers.length - wrapperDownloadedCount,
-    ),
     'resolved-ref-name': status.bootstrap.ciContext.resolvedRefName,
     'safe-ref-name': status.bootstrap.ciContext.safeRefName,
     'dependent-jobs-count': String(status.bootstrap.config.dependentJobs.length),
@@ -445,6 +431,8 @@ export function createPrepareActionOutputs(status: PrepareActionStatus): Record<
       status.dependentDeltaResult?.appliedArtifactCount ?? 0,
     ),
     'job-name': status.bootstrap.ciContext.jobName,
+    // Tool-specific outputs contributed by the active build tool adapter
+    ...status.bootstrap.toolProvisioning.additionalOutputs,
   };
 }
 

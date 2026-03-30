@@ -33,12 +33,8 @@ import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } 
 import type { CoreExecutionPhase } from '../config/types';
 import type { HostInputSource, HostReporter, HostStateStore, ReportSink } from '../host/types';
 import type { BaseCacheBackend } from '../cache/backend';
-import { provisionWrapperJars, type WrapperProvisionOptions } from '../gradle/wrapper/download';
-import { validateTargetWrapperProperties } from '../gradle/wrapper/static-validation';
-import type {
-  ProvisionedWrapperJar,
-  ValidatedWrapperPropertiesFile,
-} from '../gradle/wrapper/types';
+import type { BuildToolAdapter, BuildToolProvisioning } from '../build-tool/types';
+export type { BuildToolAdapter };
 
 /**
  * Action execution phase.
@@ -70,17 +66,12 @@ export interface BootstrapStatus {
    */
   readonly baseCacheResult: BaseCacheOperationResult | null;
   /**
-   * Wrapper properties files validated during bootstrap.
+   * Build tool provisioning result from the prepare phase.
    *
-   * Defaults to an empty array and is empty in the `finalize` phase.
+   * Contains the list of provisioned items (e.g. verified wrapper JARs), any non-fatal warnings,
+   * and additional CI outputs contributed by the adapter. Empty in the `finalize` phase.
    */
-  readonly validatedWrappers: readonly ValidatedWrapperPropertiesFile[];
-  /**
-   * Wrapper JAR provisioning results for validated wrappers.
-   *
-   * Defaults to an empty array and is empty in the `finalize` phase.
-   */
-  readonly provisionedWrappers: readonly ProvisionedWrapperJar[];
+  readonly toolProvisioning: BuildToolProvisioning;
   /** Provider-specific bootstrap diagnostics rendered by the active CI adapter. */
   readonly ciDiagnosticsLines: readonly string[];
   /** Provider-specific execution URLs for the current job/run when available. */
@@ -88,12 +79,13 @@ export interface BootstrapStatus {
 }
 
 /**
- * Fully resolved bootstrap result that also exposes the live provider and report sink needed by
- * downstream prepare/finalize logic.
+ * Fully resolved bootstrap result that also exposes the live provider, report sink, and active
+ * build tool adapter needed by downstream prepare/finalize logic.
  */
 export interface BootstrapExecution extends BootstrapStatus {
   readonly ciProvider: CiPlatformAdapter;
   readonly reportSink: ReportSink;
+  readonly buildToolAdapter: BuildToolAdapter;
 }
 
 /**
@@ -117,11 +109,14 @@ export interface BootstrapDependencies {
   /** Provider-specific reporting sink used for grouped logs and summaries. */
   readonly reportSink: ReportSink;
   /**
-   * Optional `fetch` override used by wrapper download tests.
+   * Factory that constructs the active build tool adapter from the normalized config.
    *
-   * Defaults to the runtime global `fetch` when omitted.
+   * Bootstrap calls this factory after reading and normalizing action inputs so the adapter can
+   * access the fully resolved configuration (e.g. `gradleUserHome`, wrapper settings).
+   * Tool-specific test overrides (e.g. `fetchImpl`, `verifyWrapperSignature` for Gradle) are
+   * captured inside the factory closure rather than passed as separate bootstrap dependencies.
    */
-  readonly fetchImpl?: typeof fetch;
+  readonly buildToolAdapterFactory: (config: NormalizedActionConfig) => BuildToolAdapter;
   /**
    * Optional command-capture override for Java version detection.
    *
@@ -130,12 +125,6 @@ export interface BootstrapDependencies {
   readonly captureCommandOutput?: CommandOutputCapture;
   /** Preferred provider-neutral base-cache backend for the active CI provider. */
   readonly cacheBackend?: BaseCacheBackend;
-  /**
-   * Optional detached-signature verifier override used by focused wrapper tests.
-   *
-   * Defaults to the pinned Gradle signing-key verifier when omitted.
-   */
-  readonly verifyWrapperSignature?: WrapperProvisionOptions['verifyWrapperSignature'];
 }
 
 /**
@@ -159,25 +148,21 @@ export async function bootstrapPhase(
     ciContext: ciProvider.context,
     env: runtimeEnv,
   });
+  const adapter = dependencies.buildToolAdapterFactory(config);
   const cacheModel = config.cacheEnabled
-    ? await createCacheModel(config, ciProvider.context, {
+    ? await createCacheModel(config, ciProvider.context, adapter, {
         captureCommandOutput: dependencies.captureCommandOutput,
         env: runtimeEnv,
       })
     : null;
-  const validatedWrappers =
+  const toolProvisioning: BuildToolProvisioning =
     phase === 'prepare'
-      ? await validateTargetWrapperProperties(config, ciProvider.context.workspace)
-      : [];
-  const provisionedWrappers =
-    phase === 'prepare'
-      ? await provisionWrapperJars(validatedWrappers, {
-          fetchImpl: dependencies.fetchImpl,
+      ? await adapter.provision({
+          workspace: ciProvider.context.workspace,
           httpHeadersByHost: ciProvider.httpHeadersByHost,
           logRetry: dependencies.runtimeHost.info,
-          verifyWrapperSignature: dependencies.verifyWrapperSignature,
         })
-      : [];
+      : { items: [], warnings: [], additionalOutputs: {} };
   const baseCacheResult = await runBaseCachePhase(phase, config, cacheModel, dependencies);
   const status = createBootstrapStatus(
     phase,
@@ -185,8 +170,7 @@ export async function bootstrapPhase(
     ciProvider.context,
     cacheModel,
     baseCacheResult,
-    validatedWrappers,
-    provisionedWrappers,
+    toolProvisioning,
     ciProvider.createBootstrapDiagnosticsLines(phase),
     ciProvider.executionUrls,
   );
@@ -195,6 +179,7 @@ export async function bootstrapPhase(
     ...status,
     ciProvider,
     reportSink: dependencies.reportSink,
+    buildToolAdapter: adapter,
   };
 }
 
@@ -207,8 +192,7 @@ export function createBootstrapStatus(
   ciContext: CiJobContext,
   cacheModel: CacheModel | null = null,
   baseCacheResult: BaseCacheOperationResult | null = null,
-  validatedWrappers: readonly ValidatedWrapperPropertiesFile[] = [],
-  provisionedWrappers: readonly ProvisionedWrapperJar[] = [],
+  toolProvisioning: BuildToolProvisioning = { items: [], warnings: [], additionalOutputs: {} },
   ciDiagnosticsLines: readonly string[] = [],
   ciExecutionUrls: CiExecutionUrls = { jobUrl: null, workflowRunUrl: null },
 ): BootstrapStatus {
@@ -218,8 +202,7 @@ export function createBootstrapStatus(
     ciContext,
     cacheModel,
     baseCacheResult,
-    validatedWrappers,
-    provisionedWrappers,
+    toolProvisioning,
     ciDiagnosticsLines,
     ciExecutionUrls,
     message: `Prepared ${phase} phase for ${ciContext.eventName} on ${ciContext.safeRefName} in ${config.jobMode} mode.`,
@@ -230,15 +213,13 @@ export function createBootstrapStatus(
  * Builds the initial job summary section emitted during bootstrap.
  */
 export function createBootstrapSummaryLines(status: BootstrapStatus): readonly string[] {
-  const downloadedWrapperCount = status.provisionedWrappers.filter(
-    (wrapper) => wrapper.wasDownloaded,
-  ).length;
-  const reusedWrapperCount = status.provisionedWrappers.length - downloadedWrapperCount;
+  const downloadedCount = status.toolProvisioning.items.filter((item) => item.wasDownloaded).length;
+  const reusedCount = status.toolProvisioning.items.length - downloadedCount;
 
   return [
     '## Apache Buildish bootstrap',
     `- Base cache ${status.baseCacheResult?.operation ?? 'state'}: ${status.baseCacheResult?.status ?? (status.cacheModel ? 'not-run' : 'disabled')}`,
-    `- Wrapper provisioning: ${status.provisionedWrappers.length} ready (${downloadedWrapperCount} downloaded, ${reusedWrapperCount} reused)`,
+    `- Tool provisioning: ${status.toolProvisioning.items.length} ready (${downloadedCount} downloaded, ${reusedCount} reused)`,
     ...createDetailsSection('Execution context', [
       `- Phase: ${escapeSummaryText(status.phase)}`,
       `- Workflow: ${escapeSummaryText(status.ciContext.workflowName)}`,
@@ -253,13 +234,11 @@ export function createBootstrapSummaryLines(status: BootstrapStatus): readonly s
       `- Cache key: ${escapeSummaryText(status.cacheModel?.cacheKey ?? 'disabled')}`,
       `- Java major: ${escapeSummaryText(String(status.cacheModel?.javaMajor ?? 'n/a'))}`,
       `- Cache partitions: ${status.cacheModel?.partitions.length ?? 0}`,
-      `- Wrapper selection: ${escapeSummaryText(status.config.wrapperSelectionMode)}`,
-      `- Wrapper files: ${status.validatedWrappers.length}`,
       ...(status.baseCacheResult
         ? [`- Base cache detail: ${escapeSummaryText(status.baseCacheResult.message)}`]
         : []),
     ]),
-    ...createDetailsSection('Wrapper provisioning', createWrapperProvisioningSummaryLines(status)),
+    ...createDetailsSection('Tool provisioning', createToolProvisioningSummaryLines(status)),
   ];
 }
 
@@ -267,20 +246,17 @@ export function createBootstrapSummaryLines(status: BootstrapStatus): readonly s
  * Renders a compact set of single-line log messages summarizing the bootstrap outcome.
  *
  * These lines are emitted via the runtime reporter before the log group is closed, giving
- * operators a quick overview of cache, wrapper, and configuration state without opening
+ * operators a quick overview of cache, tool provisioning, and configuration state without opening
  * the details section.
  */
 export function createBootstrapLogLines(status: BootstrapStatus): readonly string[] {
-  const downloadedWrapperCount = status.provisionedWrappers.filter(
-    (wrapper) => wrapper.wasDownloaded,
-  ).length;
-  const reusedWrapperCount = status.provisionedWrappers.length - downloadedWrapperCount;
+  const downloadedCount = status.toolProvisioning.items.filter((item) => item.wasDownloaded).length;
+  const reusedCount = status.toolProvisioning.items.length - downloadedCount;
   const lines = [
     `Bootstrap: ${status.message}`,
     `Base cache ${status.baseCacheResult?.operation ?? 'state'}: ${status.baseCacheResult?.status ?? (status.cacheModel ? 'not-run' : 'disabled')}.`,
-    `Wrapper provisioning: ${status.provisionedWrappers.length} ready (${downloadedWrapperCount} downloaded, ${reusedWrapperCount} reused).`,
+    `Tool provisioning: ${status.toolProvisioning.items.length} ready (${downloadedCount} downloaded, ${reusedCount} reused).`,
     `Execution context: workflow '${status.ciContext.workflowName}', job '${status.ciContext.jobName}', event '${status.ciContext.eventName}', ref '${status.ciContext.resolvedRefName}', safe ref '${status.ciContext.safeRefName}', runner '${status.ciContext.runnerOs}/${status.ciContext.runnerArch}', job mode '${status.config.jobMode}', read only ${status.config.readOnly ? 'yes' : 'no'}, cache ${status.config.cacheEnabled ? 'enabled' : 'disabled'}.`,
-    `Wrapper selection: ${status.config.wrapperSelectionMode}; wrapper files: ${status.validatedWrappers.length}.`,
   ];
 
   if (status.cacheModel) {
@@ -298,46 +274,39 @@ export function createBootstrapLogLines(status: BootstrapStatus): readonly strin
   }
 
   if (status.phase === 'finalize') {
-    lines.push('Wrapper provisioning is skipped during the finalize phase.');
+    lines.push('Tool provisioning is skipped during the finalize phase.');
     return lines;
   }
 
-  if (status.provisionedWrappers.length === 0) {
-    lines.push('No Gradle wrapper properties files were selected for provisioning.');
+  if (status.toolProvisioning.items.length === 0) {
+    lines.push('No build tool items were selected for provisioning.');
     return lines;
   }
 
-  for (const wrapper of status.provisionedWrappers) {
-    lines.push(createWrapperProvisioningLogMessage(wrapper));
+  for (const item of status.toolProvisioning.items) {
+    const action = capitalize(item.wasDownloaded ? 'downloaded' : 'reused');
+    lines.push(`${action} '${item.label}' (${item.version}).`);
   }
 
   return lines;
 }
 
-function createWrapperProvisioningSummaryLines(status: BootstrapStatus): readonly string[] {
+function createToolProvisioningSummaryLines(status: BootstrapStatus): readonly string[] {
   if (status.phase === 'finalize') {
-    return ['- Wrapper provisioning is skipped during the finalize phase.'];
+    return ['- Tool provisioning is skipped during the finalize phase.'];
   }
 
-  if (status.provisionedWrappers.length === 0) {
-    return ['- No Gradle wrapper properties files were selected for provisioning.'];
+  if (status.toolProvisioning.items.length === 0) {
+    return ['- No build tool items were selected for provisioning.'];
   }
 
   return createHtmlTable(
-    ['Wrapper properties', 'Action', 'Wrapper JAR', 'Gradle'],
-    status.provisionedWrappers.map((wrapper) => [
-      escapeHtml(wrapper.relativePath),
-      escapeHtml(capitalize(wrapper.wasDownloaded ? 'downloaded' : 'reused')),
-      escapeHtml(wrapper.wrapperJarRelativePath),
-      escapeHtml(wrapper.wrapperSourceVersion),
+    ['Properties file', 'Action', 'Version'],
+    status.toolProvisioning.items.map((item) => [
+      escapeHtml(item.label),
+      escapeHtml(capitalize(item.wasDownloaded ? 'downloaded' : 'reused')),
+      escapeHtml(item.version),
     ]),
-  );
-}
-
-function createWrapperProvisioningLogMessage(wrapper: ProvisionedWrapperJar): string {
-  return (
-    `${capitalize(wrapper.wasDownloaded ? 'downloaded' : 'reused')} trusted wrapper JAR for ` +
-    `'${wrapper.relativePath}' at '${wrapper.wrapperJarRelativePath}' using Gradle ${wrapper.wrapperSourceVersion}.`
   );
 }
 

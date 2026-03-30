@@ -55,7 +55,7 @@ describe('post-action state helpers', () => {
 
       expect(persisted.manifestPath.startsWith(path.resolve(runnerTemp) + path.sep)).toBe(true);
       expect(savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE)).toBe(persisted.manifestPath);
-      await expect(readFile(persisted.manifestPath, 'utf8')).resolves.toContain('"gradleUserHome"');
+      await expect(readFile(persisted.manifestPath, 'utf8')).resolves.toContain('"cacheRoot"');
       await expect(
         loadPersistedPreBuildCacheManifest((name: string) => savedState.get(name) ?? ''),
       ).resolves.toEqual(SAMPLE_MANIFEST);
@@ -166,7 +166,8 @@ describe('post-action state helpers', () => {
 
 const SAMPLE_MANIFEST: CacheManifest = {
   schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
-  gradleUserHome: '/tmp/gradle-home',
+  buildToolId: 'gradle',
+  cacheRoot: '/tmp/gradle-home',
   partitions: [
     {
       partitionId: 'modules',

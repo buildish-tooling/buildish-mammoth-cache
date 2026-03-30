@@ -39,12 +39,12 @@ graph LR
     BB -. seam interfaces .-> CORE
 ```
 
-| Provider             | Cache backend          | Artifact backend | Host adapters | Entrypoints | Status      |
-| -------------------- | ---------------------- | ---------------- | ------------- | ----------- | ----------- |
-| GitHub Actions       | ✓                      | ✓                | ✓             | ✓           | Implemented |
-| Codeberg / Forgejo   | —                      | —                | —             | —           | Planned     |
-| GitLab CI            | —                      | —                | —             | —           | Planned     |
-| Bitbucket Pipelines  | ⚠ no native frontend  | —                | —             | —           | Planned     |
+| Provider            | Cache backend        | Artifact backend | Host adapters | Entrypoints | Status      |
+| ------------------- | -------------------- | ---------------- | ------------- | ----------- | ----------- |
+| GitHub Actions      | ✓                    | ✓                | ✓             | ✓           | Implemented |
+| Codeberg / Forgejo  | —                    | —                | —             | —           | Planned     |
+| GitLab CI           | —                    | —                | —             | —           | Planned     |
+| Bitbucket Pipelines | ⚠ no native frontend | —                | —             | —           | Planned     |
 
 ## Architecture
 

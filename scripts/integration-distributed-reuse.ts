@@ -22,6 +22,8 @@ import path from 'node:path';
 
 import type { WorkflowArtifactDescriptor } from '../src/delta/service';
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
+import { GradleBuildToolAdapter } from '../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../src/config/types';
 import { createPrepareActionOutputs, executePrepareAction } from '../src/phases/prepare/flow';
 import { executeFinalizeAction } from '../src/phases/finalize/flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
@@ -325,6 +327,7 @@ function createGitHubActionDependencies(
       env: job.env,
       summaryWriter,
     }),
+    buildToolAdapterFactory: (config: NormalizedActionConfig) => new GradleBuildToolAdapter(config),
   };
 }
 

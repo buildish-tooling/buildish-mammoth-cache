@@ -37,6 +37,8 @@ import {
 import { applyMergedDeltaPlan, mergeDeltaArtifactPackages } from '../../src/delta/apply';
 import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../../src/config/types';
 import type { CiJobContext } from '../../src/ci/types';
 
 describe('cache delta merge/apply engine', () => {
@@ -332,9 +334,17 @@ async function createGradleUserHome(
 }
 
 function createFixtureCacheModel(gradleUserHome: string): CacheModel {
-  const partitions = createCachePartitions(gradleUserHome);
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const partitions = createCachePartitions(
+    gradleUserHome,
+    [],
+    adapter.getBuiltInPartitionPresets(),
+    adapter.getHardCacheExcludeGlobs(),
+  );
 
   return {
+    buildToolId: adapter.getBuildToolId(),
+    cacheRoot: gradleUserHome,
     cacheKey: 'buildish-mammoth-gradle-cache-v1:21:linux:x64:main',
     javaMajor: 21,
     runnerOs: 'linux',

@@ -33,10 +33,10 @@ import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
 } from '../../src/cache/backend';
-import type {
-  ProvisionedWrapperJar,
-  ValidatedWrapperPropertiesFile,
-} from '../../src/gradle/wrapper/types';
+import type { BuildToolProvisioning } from '../../src/build-tool/types';
+import type { GradleAdapterOptions } from '../../src/build-tool/gradle/adapter';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import type { NormalizedActionConfig } from '../../src/config/types';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,
@@ -89,6 +89,7 @@ function createBootstrapDependencies(options: {
   readonly inputs?: Readonly<Record<string, string>>;
   readonly getState?: (name: string) => string;
   readonly saveState?: (name: string, value: string) => void;
+  readonly adapterOptions?: GradleAdapterOptions;
 }) {
   const runtimeHost = createTestRuntimeHost({
     inputs: options.inputs,
@@ -106,27 +107,32 @@ function createBootstrapDependencies(options: {
       env: options.env,
       summaryWriter: options.summaryWriter,
     }),
+    buildToolAdapterFactory: (resolvedConfig: NormalizedActionConfig) =>
+      new GradleBuildToolAdapter(resolvedConfig, options.adapterOptions ?? {}),
   };
 }
 
-const validatedWrappers: readonly ValidatedWrapperPropertiesFile[] = [
-  {
-    relativePath: 'gradle/wrapper/gradle-wrapper.properties',
-    absolutePath: '/workspace/gradle/wrapper/gradle-wrapper.properties',
-    wrapperDirectoryRelativePath: 'gradle/wrapper',
-    wrapperJarRelativePath: 'gradle/wrapper/gradle-wrapper.jar',
-    properties: {
-      distributionUrl: 'https://services.gradle.org/distributions/gradle-8.14-bin.zip',
-      distributionSha256Sum: '61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa',
-      validateDistributionUrl: 'true',
+const toolProvisioning: BuildToolProvisioning = {
+  items: [
+    {
+      label: 'gradle/wrapper/gradle-wrapper.properties',
+      version: '8.14.0',
+      wasDownloaded: true,
     },
-    distributionUrl: 'https://services.gradle.org/distributions/gradle-8.14-bin.zip',
-    distributionSha256Sum: '61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa',
+  ],
+  warnings: [],
+  additionalOutputs: {
+    'wrapper-count': '1',
+    'gradle-versions': '8.14.0',
+    'wrapper-downloaded-count': '1',
+    'wrapper-reused-count': '0',
   },
-] as const;
+};
 
 const cacheModel: CacheModel = {
-  cacheKey: 'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-main',
+  buildToolId: 'gradle',
+  cacheRoot: '/home/runner/.gradle',
+  cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
   javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',
@@ -179,22 +185,6 @@ const restoreResult: BaseCacheRestoreResult = {
     "Base cache restore hit exact key 'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-main'.",
 };
 
-const provisionedWrappers: readonly ProvisionedWrapperJar[] = [
-  {
-    relativePath: 'gradle/wrapper/gradle-wrapper.properties',
-    distributionVersion: '8.14',
-    wrapperSourceVersion: '8.14.0',
-    wrapperChecksumUrl: 'https://services.gradle.org/distributions/gradle-8.14-wrapper.jar.sha256',
-    wrapperSignatureUrl: 'https://services.gradle.org/distributions/gradle-8.14-wrapper.jar.asc',
-    wrapperJarUrl:
-      'https://raw.githubusercontent.com/gradle/gradle/v8.14.0/gradle/wrapper/gradle-wrapper.jar',
-    wrapperJarRelativePath: 'gradle/wrapper/gradle-wrapper.jar',
-    wrapperJarAbsolutePath: '/workspace/gradle/wrapper/gradle-wrapper.jar',
-    expectedWrapperJarSha256: 'ecf4726f7d253471e541f6385b55d00e809387ed44250fb53f65b0deaf8e72ad',
-    wasDownloaded: true,
-  },
-] as const;
-
 describe('bootstrap helpers', () => {
   it('creates a status message with config and CI context details', () => {
     expect(
@@ -204,8 +194,7 @@ describe('bootstrap helpers', () => {
         ciContext,
         cacheModel,
         restoreResult,
-        validatedWrappers,
-        provisionedWrappers,
+        toolProvisioning,
       ),
     ).toEqual({
       phase: 'prepare',
@@ -213,8 +202,7 @@ describe('bootstrap helpers', () => {
       ciContext,
       cacheModel,
       baseCacheResult: restoreResult,
-      validatedWrappers,
-      provisionedWrappers,
+      toolProvisioning,
       ciDiagnosticsLines: [],
       ciExecutionUrls: { jobUrl: null, workflowRunUrl: null },
       message: 'Prepared prepare phase for push on main in standalone mode.',
@@ -229,21 +217,20 @@ describe('bootstrap helpers', () => {
         ciContext,
         cacheModel,
         restoreResult,
-        validatedWrappers,
-        provisionedWrappers,
+        toolProvisioning,
       ),
     ).join('\n');
 
     expect(summaryText).toContain('- Base cache restore: exact-hit');
-    expect(summaryText).toContain('- Wrapper provisioning: 1 ready (1 downloaded, 0 reused)');
+    expect(summaryText).toContain('- Tool provisioning: 1 ready (1 downloaded, 0 reused)');
     expect(summaryText).toContain('<summary>Execution context</summary>');
     expect(summaryText).toContain('- Cache partitions: 1');
     expect(summaryText).toContain('- Job mode: standalone');
-    expect(summaryText).toContain('<summary>Wrapper provisioning</summary>');
+    expect(summaryText).toContain('<summary>Tool provisioning</summary>');
     expect(summaryText).toContain('<table>');
     expect(summaryText).toContain('gradle/wrapper/gradle-wrapper.properties');
     expect(summaryText).toMatch(
-      /- Cache key: buildish\\-mammoth\\-gradle\\-cache\\-2\\-21\\-linux\\-x64\\-feedcafe1234abcd\\-main/u,
+      /- Cache key: buildish\\-mammoth\\-gradle\\-cache\\-1\\-21\\-linux\\-x64\\-feedcafe1234abcd\\-main/u,
     );
   });
 
@@ -255,8 +242,7 @@ describe('bootstrap helpers', () => {
         ciContext,
         cacheModel,
         restoreResult,
-        validatedWrappers,
-        provisionedWrappers,
+        toolProvisioning,
         [
           "GitHub input 'github-token' present: yes.",
           "GitHub environment 'GITHUB_TOKEN' available: yes.",
@@ -269,17 +255,15 @@ describe('bootstrap helpers', () => {
       'Bootstrap: Prepared prepare phase for push on main in standalone mode.',
     );
     expect(logText).toContain('Base cache restore: exact-hit.');
-    expect(logText).toContain('Wrapper provisioning: 1 ready (1 downloaded, 0 reused).');
+    expect(logText).toContain('Tool provisioning: 1 ready (1 downloaded, 0 reused).');
     expect(logText).toContain("Execution context: workflow 'CI', job 'check', event 'push'");
     expect(logText).toContain("GitHub input 'github-token' present: yes.");
     expect(logText).toContain("GitHub environment 'GITHUB_TOKEN' available: yes.");
     expect(logText).toContain("GitHub input 'github-job-check-run-id': 987654321.");
     expect(logText).toContain(
-      'Cache key: buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-main; Java major: 21; cache partitions: 1.',
+      'Cache key: buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main; Java major: 21; cache partitions: 1.',
     );
-    expect(logText).toContain(
-      "Downloaded trusted wrapper JAR for 'gradle/wrapper/gradle-wrapper.properties'",
-    );
+    expect(logText).toContain("Downloaded 'gradle/wrapper/gradle-wrapper.properties' (8.14.0).");
   });
 
   it('bootstraps the prepare phase without publishing a job summary directly', async () => {
@@ -310,6 +294,39 @@ describe('bootstrap helpers', () => {
       },
     };
     await withWorkspaceWithWrapper(async (workspace) => {
+      const fetchImpl = async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const url = String(input);
+
+        if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+          expect(init).toBeUndefined();
+          return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+        }
+
+        if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+          expect(init).toBeUndefined();
+          return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+        }
+
+        if (
+          url ===
+          'https://api.github.com/repos/gradle/gradle/contents/gradle/wrapper/gradle-wrapper.jar?ref=v8.14.0'
+        ) {
+          const headers = new Headers(init?.headers);
+          expect(headers.get('authorization')).toBe('Bearer ghs_bootstrap_token');
+          expect(headers.get('accept')).toBe('application/vnd.github.raw');
+          return new Response(wrapperJarBytes, { status: 200 });
+        }
+
+        throw new Error(`Unexpected fetch URL: ${url}`);
+      };
+      const verifyWrapperSignature = async (jarBytes: Uint8Array, armoredSignature: string) => {
+        expect(Buffer.from(jarBytes)).toEqual(wrapperJarBytes);
+        expect(armoredSignature).toBe(TEST_SIGNATURE_ARMORED);
+      };
+
       const status = await bootstrapPhase('prepare', {
         env: {
           GITHUB_EVENT_NAME: 'push',
@@ -323,31 +340,6 @@ describe('bootstrap helpers', () => {
         },
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         cacheBackend,
-        fetchImpl: async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-          const url = String(input);
-
-          if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-            expect(init).toBeUndefined();
-            return new Response(`${wrapperJarSha256}\n`, { status: 200 });
-          }
-
-          if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-            expect(init).toBeUndefined();
-            return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-          }
-
-          if (
-            url ===
-            'https://api.github.com/repos/gradle/gradle/contents/gradle/wrapper/gradle-wrapper.jar?ref=v8.14.0'
-          ) {
-            const headers = new Headers(init?.headers);
-            expect(headers.get('authorization')).toBe('Bearer ghs_bootstrap_token');
-            expect(headers.get('accept')).toBe('application/vnd.github.raw');
-            return new Response(wrapperJarBytes, { status: 200 });
-          }
-
-          throw new Error(`Unexpected fetch URL: ${url}`);
-        },
         ...createBootstrapDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
@@ -369,11 +361,8 @@ describe('bootstrap helpers', () => {
             savedState.set(name, value);
           },
           summaryWriter,
+          adapterOptions: { fetchImpl, verifyWrapperSignature },
         }),
-        verifyWrapperSignature: async (jarBytes: Uint8Array, armoredSignature: string) => {
-          expect(Buffer.from(jarBytes)).toEqual(wrapperJarBytes);
-          expect(armoredSignature).toBe(TEST_SIGNATURE_ARMORED);
-        },
       });
 
       expect(status.message).toBe('Prepared prepare phase for push on main in standalone mode.');
@@ -381,8 +370,7 @@ describe('bootstrap helpers', () => {
         /^buildish-mammoth-gradle-cache-2-21-linux-x64-[a-f0-9]{16}-main$/,
       );
       expect(status.baseCacheResult?.status).toBe('exact-hit');
-      expect(status.validatedWrappers).toHaveLength(1);
-      expect(status.provisionedWrappers).toHaveLength(1);
+      expect(status.toolProvisioning.items).toHaveLength(1);
       expect(status.ciDiagnosticsLines).toEqual([
         "GitHub input 'github-token' present: yes.",
         "GitHub environment 'GITHUB_TOKEN' available: no.",
@@ -390,7 +378,7 @@ describe('bootstrap helpers', () => {
       ]);
       expect(status.ciExecutionUrls).toEqual({ jobUrl: null, workflowRunUrl: null });
       expect(summaryLines).toEqual([]);
-      expect(savedState.get('buildish-mammoth-cache-gradle-base-cache-armed')).toBe('true');
+      expect(savedState.get('buildish-mammoth-cache-base-cache-armed')).toBe('true');
       expect(writeCalls).toBe(0);
       await expect(
         readFile(path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar')),
@@ -452,7 +440,7 @@ describe('bootstrap helpers', () => {
             repository: { default_branch: 'main' },
           },
           getState(name: string): string {
-            return name === 'buildish-mammoth-cache-gradle-base-cache-armed' ? 'true' : '';
+            return name === 'buildish-mammoth-cache-base-cache-armed' ? 'true' : '';
           },
           summaryWriter,
         }),

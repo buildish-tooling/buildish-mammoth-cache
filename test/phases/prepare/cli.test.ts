@@ -90,6 +90,7 @@ describe('prepare entrypoint', () => {
       env: process.env,
       cacheBackend: {} as PrepareEntrypointDependencies['cacheBackend'],
       artifactBackend: {} as PrepareEntrypointDependencies['artifactBackend'],
+      buildToolAdapterFactory: {} as PrepareEntrypointDependencies['buildToolAdapterFactory'],
     } satisfies PrepareEntrypointDependencies;
 
     await runPrepareExecution(dependencies);
