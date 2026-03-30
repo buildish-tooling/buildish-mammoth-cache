@@ -34,10 +34,10 @@ import { createCacheModel, type CacheModel } from '../src/cache/model';
 import type { CiJobContext } from '../src/ci/types';
 import type { NormalizedActionConfig } from '../src/config/types';
 import {
-  createMainActionOutputs,
-  createMainActionSummaryLines,
-  executeMainAction,
-} from '../src/main-flow';
+  createPrepareActionOutputs,
+  createPrepareActionSummaryLines,
+  executePrepareAction,
+} from '../src/prepare-flow';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
@@ -50,14 +50,14 @@ import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
-} from '../src/state/post-action';
+} from '../src/state/finalize';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,
   createTestRuntimeHost,
 } from './support/github-test-runtime';
 
-function createMainActionDependencies(options: {
+function createPrepareActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
   readonly eventPayload: Record<string, unknown>;
   readonly summaryWriter: SummaryWriter;
@@ -84,7 +84,7 @@ function createMainActionDependencies(options: {
   };
 }
 
-describe('executeMainAction', () => {
+describe('executePrepareAction', () => {
   it('downloads dependent job deltas, applies them, and persists the pre-build manifest', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
@@ -124,7 +124,7 @@ describe('executeMainAction', () => {
         contents: 'from-worker-delta',
       });
 
-      const status = await executeMainAction({
+      const status = await executePrepareAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi(),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
@@ -153,7 +153,7 @@ describe('executeMainAction', () => {
           }
           throw new Error(`Unexpected fetch URL: ${url}`);
         },
-        ...createMainActionDependencies({
+        ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
@@ -216,7 +216,7 @@ describe('executeMainAction', () => {
           .map((entry) => entry.relativePath),
       ).toContain('caches/modules-2/files-2.1/example/module.bin');
       expect(summary.lines).toEqual([]);
-      const summaryText = createMainActionSummaryLines(status).join('\n');
+      const summaryText = createPrepareActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Apache Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: none');
       expect(summaryText).toContain('- Dependent delta reuse: 1 artifact(s) from 1 job(s)');
@@ -239,7 +239,7 @@ describe('executeMainAction', () => {
           '::endgroup::',
         ]),
       );
-      expect(createMainActionOutputs(status)).toEqual({
+      expect(createPrepareActionOutputs(status)).toEqual({
         'cache-key': expect.stringMatching(
           /^buildish-mammoth-gradle-cache-2-21-linux-x64-[a-f0-9]{16}-main$/,
         ),
@@ -299,7 +299,7 @@ describe('executeMainAction', () => {
       });
 
       await expect(
-        executeMainAction({
+        executePrepareAction({
           artifactBackend: artifactApi,
           cacheBackend: createCacheApi(),
           captureCommandOutput: async (): Promise<string> =>
@@ -329,7 +329,7 @@ describe('executeMainAction', () => {
             }
             throw new Error(`Unexpected fetch URL: ${url}`);
           },
-          ...createMainActionDependencies({
+          ...createPrepareActionDependencies({
             env: {
               GITHUB_EVENT_NAME: 'push',
               GITHUB_REF: 'refs/heads/main',
@@ -390,7 +390,7 @@ describe('executeMainAction', () => {
       );
       const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
 
-      const status = await executeMainAction({
+      const status = await executePrepareAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi(),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
@@ -419,7 +419,7 @@ describe('executeMainAction', () => {
           }
           throw new Error(`Unexpected fetch URL: ${url}`);
         },
-        ...createMainActionDependencies({
+        ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
@@ -449,14 +449,14 @@ describe('executeMainAction', () => {
       expect(status.dependentDeltaResult).toBeNull();
       expect(status.preBuildManifestState).not.toBeNull();
       expect(savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE)).toBeTruthy();
-      const summaryText = createMainActionSummaryLines(status).join('\n');
+      const summaryText = createPrepareActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Apache Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: none');
       expect(summaryText).toContain('- Dependent delta reuse: none');
       expect(summaryText).toContain('<summary>Prepare-phase details</summary>');
       expect(summaryText).toContain('- Downloaded delta artifacts: 0');
       expect(summaryText).toContain('- Pre-build manifest: persisted');
-      expect(createMainActionOutputs(status)).toEqual({
+      expect(createPrepareActionOutputs(status)).toEqual({
         'cache-key': expect.stringMatching(
           /^buildish-mammoth-gradle-cache-2-21-linux-x64-[a-f0-9]{16}-main$/,
         ),
@@ -519,7 +519,7 @@ describe('executeMainAction', () => {
       await writeFile(managedFile, 'stale-local', 'utf8');
       const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
 
-      const status = await executeMainAction({
+      const status = await executePrepareAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({
           matchedKeyMode: 'primary',
@@ -555,7 +555,7 @@ describe('executeMainAction', () => {
           }
           throw new Error(`Unexpected fetch URL: ${url}`);
         },
-        ...createMainActionDependencies({
+        ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
@@ -594,7 +594,7 @@ describe('executeMainAction', () => {
       );
       expect(restoreCalls).toBe(2);
       await expect(readFile(managedFile, 'utf8')).resolves.toBe('from-cache-2');
-      const summaryText = createMainActionSummaryLines(status).join('\n');
+      const summaryText = createPrepareActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Apache Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: prune-managed (1 deleted)');
       expect(summaryText).toContain('- Restore cleanup status: pruned');
@@ -640,7 +640,7 @@ describe('executeMainAction', () => {
       });
 
       await expect(
-        executeMainAction({
+        executePrepareAction({
           artifactBackend: artifactApi,
           cacheBackend: createCacheApi(),
           captureCommandOutput: async (): Promise<string> =>
@@ -670,7 +670,7 @@ describe('executeMainAction', () => {
             }
             throw new Error(`Unexpected fetch URL: ${url}`);
           },
-          ...createMainActionDependencies({
+          ...createPrepareActionDependencies({
             env: {
               GITHUB_EVENT_NAME: 'push',
               GITHUB_REF: 'refs/heads/main',
@@ -748,7 +748,7 @@ describe('executeMainAction', () => {
         accessedAt: new Date('2026-03-25T12:00:05.000Z'),
       });
 
-      const status = await executeMainAction({
+      const status = await executePrepareAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi(),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
@@ -777,7 +777,7 @@ describe('executeMainAction', () => {
           }
           throw new Error(`Unexpected fetch URL: ${url}`);
         },
-        ...createMainActionDependencies({
+        ...createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',

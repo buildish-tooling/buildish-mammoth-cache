@@ -17,39 +17,38 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  runPrepareExecution,
-  type PrepareEntrypointDependencies,
-} from '../src/entrypoints/cli/prepare';
+  runFinalizeExecution,
+  type FinalizeEntrypointDependencies,
+} from '../src/entrypoints/cli/finalize';
 
-const mainFlowMock = vi.hoisted(() => ({
-  createMainActionOutputs: vi.fn(() => ({ 'cache-key': 'cache-key-value' })),
-  executeMainAction: vi.fn(async () => ({
+const finalizeFlowMock = vi.hoisted(() => ({
+  executeFinalizeAction: vi.fn(async () => ({
     bootstrap: { baseCacheResult: null },
-    dependentDeltaResult: null,
-    message: 'Prepare execution completed.',
-    preBuildManifestState: null,
+    consumedDeltaCleanupResult: null,
+    deltaArtifactResult: null,
+    message: 'Finalize execution completed.',
   })),
 }));
 
 const jobSingleRunMock = vi.hoisted(() => ({
-  claimSingleRunPrepareExecution: vi.fn(async () => ({
-    accepted: true,
-    message: 'Claimed ownership.',
+  decideSingleRunFinalizeExecution: vi.fn(() => ({
+    shouldRun: true,
+    message: 'Run post action.',
   })),
 }));
 
-vi.mock('../src/main-flow', () => mainFlowMock);
+vi.mock('../src/finalize-flow', () => finalizeFlowMock);
 vi.mock('../src/guard/job-single-run', () => jobSingleRunMock);
 
-describe('prepare entrypoint', () => {
+describe('finalize entrypoint', () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('persists single-run ownership state for the post action', async () => {
+  it('loads persisted action state when deciding and executing post work', async () => {
     const runtimeHost = {
       getInput: vi.fn(() => ''),
-      getState: vi.fn(() => ''),
+      getState: vi.fn(() => 'persisted-state'),
       saveState: vi.fn(),
       setOutput: vi.fn(),
       info: vi.fn(),
@@ -88,17 +87,16 @@ describe('prepare entrypoint', () => {
       ciProvider,
       reportSink,
       env: process.env,
-      cacheBackend: {} as PrepareEntrypointDependencies['cacheBackend'],
-      artifactBackend: {} as PrepareEntrypointDependencies['artifactBackend'],
-    } satisfies PrepareEntrypointDependencies;
+      cacheBackend: {} as FinalizeEntrypointDependencies['cacheBackend'],
+      artifactBackend: {} as FinalizeEntrypointDependencies['artifactBackend'],
+    } satisfies FinalizeEntrypointDependencies;
 
-    await runPrepareExecution(dependencies);
+    await runFinalizeExecution(dependencies);
 
-    expect(jobSingleRunMock.claimSingleRunPrepareExecution).toHaveBeenCalledWith({
-      ciContext: ciProvider.context,
-      saveState: runtimeHost.saveState,
+    expect(jobSingleRunMock.decideSingleRunFinalizeExecution).toHaveBeenCalledWith({
+      getState: runtimeHost.getState,
     });
-    expect(mainFlowMock.executeMainAction).toHaveBeenCalledWith(dependencies);
-    expect(runtimeHost.setOutput).toHaveBeenCalledWith('cache-key', 'cache-key-value');
+    expect(finalizeFlowMock.executeFinalizeAction).toHaveBeenCalledWith(dependencies);
+    expect(runtimeHost.info).toHaveBeenCalledWith('Finalize execution completed.');
   });
 });

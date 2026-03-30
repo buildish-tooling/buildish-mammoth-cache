@@ -22,8 +22,8 @@ import path from 'node:path';
 
 import type { WorkflowArtifactDescriptor } from '../src/artifacts/service';
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
-import { createMainActionOutputs, executeMainAction } from '../src/main-flow';
-import { executePostAction } from '../src/post-flow';
+import { createPrepareActionOutputs, executePrepareAction } from '../src/prepare-flow';
+import { executeFinalizeAction } from '../src/finalize-flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
 import type { CompositeHost } from '../src/host/types';
 import {
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
       'Expected both worker delta artifacts to be available.',
     );
 
-    const aggregatorMainStatus = await executeActionMain(
+    const aggregatorPrepareStatus = await executePreparePhase(
       jobs.aggregator,
       {
         'base-directory': 'project',
@@ -107,7 +107,7 @@ async function main(): Promise<void> {
       },
       artifactApi,
     );
-    const aggregatorOutputs = createMainActionOutputs(aggregatorMainStatus);
+    const aggregatorOutputs = createPrepareActionOutputs(aggregatorPrepareStatus);
     assert.equal(aggregatorOutputs['downloaded-dependent-artifact-count'], '2');
     printOutputs('aggregator', aggregatorOutputs);
 
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
       'Expected restored worker dependency jars to be reused, but Gradle downloaded them again.',
     );
 
-    const aggregatorPostStatus = await executeActionPost(
+    const aggregatorFinalizeStatus = await executeFinalizePhase(
       jobs.aggregator,
       {
         'base-directory': 'project',
@@ -140,8 +140,11 @@ async function main(): Promise<void> {
       },
       artifactApi,
     );
-    assert.equal(aggregatorPostStatus.consumedDeltaCleanupResult?.deletedArtifactNames.length, 2);
-    assert.equal(aggregatorPostStatus.deltaArtifactResult?.status, 'not-distributed-worker');
+    assert.equal(
+      aggregatorFinalizeStatus.consumedDeltaCleanupResult?.deletedArtifactNames.length,
+      2,
+    );
+    assert.equal(aggregatorFinalizeStatus.deltaArtifactResult?.status, 'not-distributed-worker');
     assert.equal(
       (await artifactApi.listArtifacts()).length,
       0,
@@ -225,7 +228,7 @@ async function runWorkerJob(
   taskName: 'resolveWorkerA' | 'resolveWorkerB',
   artifactApi: WorkflowArtifactBackend,
 ): Promise<void> {
-  const mainStatus = await executeActionMain(
+  const prepareStatus = await executePreparePhase(
     job,
     {
       'base-directory': 'project',
@@ -234,9 +237,9 @@ async function runWorkerJob(
     },
     artifactApi,
   );
-  printOutputs(job.jobName, createMainActionOutputs(mainStatus));
+  printOutputs(job.jobName, createPrepareActionOutputs(prepareStatus));
   await runGradle(job, ['--info', '--no-daemon', taskName], `${job.jobName}-gradle`);
-  const postStatus = await executeActionPost(
+  const finalizeStatus = await executeFinalizePhase(
     job,
     {
       'base-directory': 'project',
@@ -245,15 +248,15 @@ async function runWorkerJob(
     },
     artifactApi,
   );
-  assert.equal(postStatus.deltaArtifactResult?.status, 'uploaded');
+  assert.equal(finalizeStatus.deltaArtifactResult?.status, 'uploaded');
 }
 
-async function executeActionMain(
+async function executePreparePhase(
   job: LocalJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
 ) {
-  return await executeMainAction({
+  return await executePrepareAction({
     env: job.env,
     artifactBackend: artifactApi,
     cacheBackend: UNAVAILABLE_CACHE_API,
@@ -261,16 +264,16 @@ async function executeActionMain(
   });
 }
 
-async function executeActionPost(
+async function executeFinalizePhase(
   job: LocalJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
 ) {
-  return await executePostAction({
+  return await executeFinalizeAction({
     env: job.env,
     artifactBackend: artifactApi,
     cacheBackend: UNAVAILABLE_CACHE_API,
-    ...createGitHubActionDependencies(job, inputs, createSummaryWriter(`${job.jobName} post`)),
+    ...createGitHubActionDependencies(job, inputs, createSummaryWriter(`${job.jobName} finalize`)),
   });
 }
 

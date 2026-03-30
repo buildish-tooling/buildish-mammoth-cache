@@ -38,7 +38,7 @@ import {
   getPersistedDeltaArtifactExecutionIdentity,
   getPersistedConsumedDeltaArtifactNames,
   loadPersistedPreBuildCacheManifest,
-} from './state/post-action';
+} from './state/finalize';
 import type { WorkflowArtifactBackend } from './storage/artifacts';
 
 const DELTA_ARTIFACT_RETENTION_DAYS = 7;
@@ -53,7 +53,7 @@ const DELTA_ARTIFACT_RETENTION_DAYS = 7;
  * - `no-changes` — diff between pre- and post-build manifests was empty
  * - `uploaded` — delta artifact was successfully packaged and uploaded
  */
-export interface PostDeltaArtifactResult {
+export interface FinalizeDeltaArtifactResult {
   readonly status:
     | 'missing-pre-build-manifest'
     | 'not-distributed-worker'
@@ -72,33 +72,33 @@ export interface PostDeltaArtifactResult {
   readonly message: string;
 }
 
-interface PostCacheStatisticCell {
+interface FinalizeCacheStatisticCell {
   fileCount: number;
   totalSizeBytes: number;
 }
 
-interface PostCacheStatisticRow {
+interface FinalizeCacheStatisticRow {
   readonly label: string;
-  readonly total: PostCacheStatisticCell | null;
-  readonly partitions: readonly (PostCacheStatisticCell | null)[];
+  readonly total: FinalizeCacheStatisticCell | null;
+  readonly partitions: readonly (FinalizeCacheStatisticCell | null)[];
 }
 
-interface PostCacheStatistics {
+interface FinalizeCacheStatistics {
   readonly partitionDisplayNames: readonly string[];
-  readonly rows: readonly PostCacheStatisticRow[];
+  readonly rows: readonly FinalizeCacheStatisticRow[];
 }
 
-/** Complete status snapshot produced by {@link executePostAction} at the end of the finalize phase. */
-export interface PostActionStatus {
+/** Complete status snapshot produced by {@link executeFinalizeAction} at the end of the finalize phase. */
+export interface FinalizeActionStatus {
   readonly bootstrap: BootstrapExecution;
   /** Restored base cache result read from persisted prepare-phase state; `null` when cache is disabled. */
   readonly baseCacheRestoreResult: BaseCacheRestoreResult | null;
   /** Cache size statistics computed from the post-build manifest; `null` when cache is disabled. */
-  readonly cacheStatistics: PostCacheStatistics | null;
+  readonly cacheStatistics: FinalizeCacheStatistics | null;
   /** Result of deleting consumed worker delta artifacts; `null` when no artifacts were consumed. */
-  readonly consumedDeltaCleanupResult: PostConsumedDeltaCleanupResult | null;
+  readonly consumedDeltaCleanupResult: FinalizeConsumedDeltaCleanupResult | null;
   /** Result of uploading the worker delta artifact; `null` for non-worker job modes. */
-  readonly deltaArtifactResult: PostDeltaArtifactResult | null;
+  readonly deltaArtifactResult: FinalizeDeltaArtifactResult | null;
   readonly gradleBuildReport: GradleBuildReport;
   readonly jobUrl: string | null;
   readonly workflowRunUrl: string | null;
@@ -106,7 +106,7 @@ export interface PostActionStatus {
 }
 
 /** Outcome of deleting consumed worker delta artifacts at the end of the aggregator finalize phase. */
-export interface PostConsumedDeltaCleanupResult {
+export interface FinalizeConsumedDeltaCleanupResult {
   readonly attemptedArtifactNames: readonly string[];
   readonly deletedArtifactNames: readonly string[];
   /** Non-fatal warnings for artifacts that could not be deleted (e.g. permission errors). */
@@ -120,7 +120,7 @@ export interface PostConsumedDeltaCleanupResult {
  * Extends {@link BootstrapDependencies} with the optional artifact backend used to upload worker
  * deltas or clean up consumed aggregator delta artifacts.
  */
-export interface PostActionDependencies extends BootstrapDependencies {
+export interface FinalizeActionDependencies extends BootstrapDependencies {
   readonly artifactBackend?: WorkflowArtifactBackend;
 }
 
@@ -131,11 +131,11 @@ export interface PostActionDependencies extends BootstrapDependencies {
  * post-build manifest → save base cache (standalone/aggregator) or upload delta artifact
  * (distributed-worker) → publish log group and job summary.
  *
- * @returns A {@link PostActionStatus} snapshot covering all finalize-phase outcomes.
+ * @returns A {@link FinalizeActionStatus} snapshot covering all finalize-phase outcomes.
  */
-export async function executePostAction(
-  dependencies: PostActionDependencies,
-): Promise<PostActionStatus> {
+export async function executeFinalizeAction(
+  dependencies: FinalizeActionDependencies,
+): Promise<FinalizeActionStatus> {
   const logInfo = dependencies.runtimeHost.info;
   const bootstrap = await bootstrapPhase('finalize', dependencies);
   const { workflowRunUrl, jobUrl } = bootstrap.ciExecutionUrls;
@@ -161,8 +161,8 @@ export async function executePostAction(
       jobUrl,
       workflowRunUrl,
       message: 'Finalize execution completed without cache orchestration.',
-    } satisfies PostActionStatus;
-    const logLines1 = createPostActionLogLines(status);
+    } satisfies FinalizeActionStatus;
+    const logLines1 = createFinalizeActionLogLines(status);
     if (logLines1.length > 0) {
       bootstrap.reportSink.publishLogGroup(
         'Apache Buildish Mammoth Cache for Gradle',
@@ -170,7 +170,7 @@ export async function executePostAction(
         logInfo,
       );
     }
-    const summaryLines1 = createPostActionSummaryLines(status);
+    const summaryLines1 = createFinalizeActionSummaryLines(status);
     if (summaryLines1.length > 0) {
       await bootstrap.reportSink.replaceSummary(summaryLines1);
     }
@@ -202,8 +202,8 @@ export async function executePostAction(
       jobUrl,
       workflowRunUrl,
       message: 'Finalize execution completed without a persisted pre-build cache manifest.',
-    } satisfies PostActionStatus;
-    const logLines2 = createPostActionLogLines(status);
+    } satisfies FinalizeActionStatus;
+    const logLines2 = createFinalizeActionLogLines(status);
     if (logLines2.length > 0) {
       bootstrap.reportSink.publishLogGroup(
         'Apache Buildish Mammoth Cache for Gradle',
@@ -211,7 +211,7 @@ export async function executePostAction(
         logInfo,
       );
     }
-    const summaryLines2 = createPostActionSummaryLines(status);
+    const summaryLines2 = createFinalizeActionSummaryLines(status);
     if (summaryLines2.length > 0) {
       await bootstrap.reportSink.replaceSummary(summaryLines2);
     }
@@ -220,12 +220,12 @@ export async function executePostAction(
 
   const currentManifest = await captureCacheManifest(bootstrap.cacheModel);
   const deltaManifest = computeCacheDelta(preBuildManifest, currentManifest);
-  const deltaArtifactResult = await uploadPostDeltaArtifact(deltaManifest, bootstrap, dependencies);
+  const deltaArtifactResult = await uploadFinalizeArtifact(deltaManifest, bootstrap, dependencies);
 
   const status = {
     bootstrap,
     baseCacheRestoreResult,
-    cacheStatistics: createPostCacheStatistics(
+    cacheStatistics: createFinalizeCacheStatistics(
       bootstrap.cacheModel,
       preBuildManifest,
       currentManifest,
@@ -243,9 +243,9 @@ export async function executePostAction(
       deltaArtifactResult.status === 'uploaded'
         ? 'Finalize execution completed and uploaded the distributed worker delta artifact.'
         : 'Finalize execution completed.',
-  } satisfies PostActionStatus;
+  } satisfies FinalizeActionStatus;
 
-  const logLines3 = createPostActionLogLines(status);
+  const logLines3 = createFinalizeActionLogLines(status);
   if (logLines3.length > 0) {
     bootstrap.reportSink.publishLogGroup(
       'Apache Buildish Mammoth Cache for Gradle',
@@ -253,7 +253,7 @@ export async function executePostAction(
       logInfo,
     );
   }
-  const summaryLines3 = createPostActionSummaryLines(status);
+  const summaryLines3 = createFinalizeActionSummaryLines(status);
   if (summaryLines3.length > 0) {
     await bootstrap.reportSink.replaceSummary(summaryLines3);
   }
@@ -261,11 +261,11 @@ export async function executePostAction(
   return status;
 }
 
-async function uploadPostDeltaArtifact(
+async function uploadFinalizeArtifact(
   deltaManifest: Parameters<typeof stageDeltaArtifactPackage>[2],
   bootstrap: BootstrapExecution,
-  dependencies: PostActionDependencies,
-): Promise<PostDeltaArtifactResult> {
+  dependencies: FinalizeActionDependencies,
+): Promise<FinalizeDeltaArtifactResult> {
   const counts = countDeltaEntries(deltaManifest);
 
   if (bootstrap.config.jobMode !== 'distributed-worker') {
@@ -343,8 +343,8 @@ async function uploadPostDeltaArtifact(
 
 async function cleanupConsumedDeltaArtifacts(
   bootstrap: BootstrapExecution,
-  dependencies: PostActionDependencies,
-): Promise<PostConsumedDeltaCleanupResult | null> {
+  dependencies: FinalizeActionDependencies,
+): Promise<FinalizeConsumedDeltaCleanupResult | null> {
   if (bootstrap.config.jobMode !== 'distributed-aggregator') {
     return null;
   }
@@ -417,7 +417,7 @@ async function cleanupConsumedDeltaArtifacts(
 }
 
 function resolveArtifactBackend(
-  dependencies: Pick<PostActionDependencies, 'artifactBackend'>,
+  dependencies: Pick<FinalizeActionDependencies, 'artifactBackend'>,
 ): WorkflowArtifactBackend {
   const { artifactBackend } = dependencies;
   if (!artifactBackend) {
@@ -463,9 +463,9 @@ function countDeltaEntries(deltaManifest: Parameters<typeof stageDeltaArtifactPa
  * (invocation table with outcomes and scan links), and collapsible details covering cache
  * statistics, delta artifact results, and any warnings.
  */
-export function createPostActionSummaryLines(status: PostActionStatus): readonly string[] {
+export function createFinalizeActionSummaryLines(status: FinalizeActionStatus): readonly string[] {
   const buildSummary = summarizeGradleBuildReport(status.gradleBuildReport);
-  const summaryIssues = collectPostActionSummaryIssues(status, buildSummary);
+  const summaryIssues = collectFinalizeActionSummaryIssues(status, buildSummary);
   const overallStatus = determineOverallSummaryStatus(summaryIssues);
   return [
     '## Apache Buildish Mammoth Cache for Gradle',
@@ -476,9 +476,9 @@ export function createPostActionSummaryLines(status: PostActionStatus): readonly
   ];
 }
 
-function createPostActionLogLines(status: PostActionStatus): readonly string[] {
+function createFinalizeActionLogLines(status: FinalizeActionStatus): readonly string[] {
   const buildSummary = summarizeGradleBuildReport(status.gradleBuildReport);
-  const summaryIssues = collectPostActionSummaryIssues(status, buildSummary);
+  const summaryIssues = collectFinalizeActionSummaryIssues(status, buildSummary);
   const overallStatus = determineOverallSummaryStatus(summaryIssues);
   const lines = [
     ...createBootstrapLogLines(status.bootstrap),
@@ -539,7 +539,7 @@ function createPostActionLogLines(status: PostActionStatus): readonly string[] {
   return lines;
 }
 
-function createCacheDetailLogLines(status: PostActionStatus): readonly string[] {
+function createCacheDetailLogLines(status: FinalizeActionStatus): readonly string[] {
   if (!status.bootstrap.cacheModel) {
     return [];
   }
@@ -569,7 +569,7 @@ function createCacheDetailLogLines(status: PostActionStatus): readonly string[] 
   return lines;
 }
 
-function createExecutionContextLogLines(status: PostActionStatus): readonly string[] {
+function createExecutionContextLogLines(status: FinalizeActionStatus): readonly string[] {
   return [
     `Post-action detail: ${status.message}`,
     `Post-action cache context: cache key '${status.bootstrap.cacheModel?.cacheKey ?? 'disabled'}', Java major '${status.bootstrap.cacheModel?.javaMajor ?? 'n/a'}', cache partitions ${status.bootstrap.cacheModel?.partitions.length ?? 0}.`,
@@ -603,8 +603,8 @@ function summarizeGradleBuildReport(report: GradleBuildReport): {
   };
 }
 
-function collectPostActionSummaryIssues(
-  status: PostActionStatus,
+function collectFinalizeActionSummaryIssues(
+  status: FinalizeActionStatus,
   buildSummary: ReturnType<typeof summarizeGradleBuildReport>,
 ): {
   readonly errors: readonly string[];
@@ -681,7 +681,7 @@ function getSummaryStatusLabel(status: 'success' | 'warning' | 'error'): string 
   return 'success';
 }
 
-function createGradleBuildSectionLines(status: PostActionStatus): readonly string[] {
+function createGradleBuildSectionLines(status: FinalizeActionStatus): readonly string[] {
   if (status.gradleBuildReport.builds.length === 0) {
     return ['- No Gradle builds were captured in this job.'];
   }
@@ -704,7 +704,9 @@ function createGradleBuildSectionLines(status: PostActionStatus): readonly strin
   ];
 }
 
-function createCacheStatisticsLogLines(cacheStatistics: PostCacheStatistics): readonly string[] {
+function createCacheStatisticsLogLines(
+  cacheStatistics: FinalizeCacheStatistics,
+): readonly string[] {
   const hasAvailableRow = cacheStatistics.rows.some((row) => row.total !== null);
   if (!hasAvailableRow) {
     return [];
@@ -741,15 +743,15 @@ function formatUploadedArtifactLogMessage(detailParts: readonly string[]): strin
   return details.length > 0 ? `${subject} (${details.join(', ')}).` : `${subject}.`;
 }
 
-function createPostCacheStatistics(
+function createFinalizeCacheStatistics(
   cacheModel: CacheModel,
   preBuildManifest: CacheManifest,
   currentManifest: CacheManifest,
   deltaManifest: CacheDeltaManifest,
   baseCacheRestoreResult: BaseCacheRestoreResult | null,
-  deltaArtifactResult: PostDeltaArtifactResult,
+  deltaArtifactResult: FinalizeDeltaArtifactResult,
   baseCacheSaveResult: BootstrapExecution['baseCacheResult'],
-): PostCacheStatistics {
+): FinalizeCacheStatistics {
   const pulledBaseCache =
     baseCacheRestoreResult?.status === 'exact-hit' ||
     baseCacheRestoreResult?.status === 'partial-hit'
@@ -777,8 +779,8 @@ function createPostCacheStatistics(
 function createCacheStatisticRow(
   label: string,
   cacheModel: CacheModel,
-  statistics: ReadonlyMap<string, PostCacheStatisticCell> | null,
-): PostCacheStatisticRow {
+  statistics: ReadonlyMap<string, FinalizeCacheStatisticCell> | null,
+): FinalizeCacheStatisticRow {
   const total = statistics ? summarizeStatisticCells(Array.from(statistics.values())) : null;
   return {
     label,
@@ -790,7 +792,7 @@ function createCacheStatisticRow(
 function summarizeManifest(
   cacheModel: CacheModel,
   manifest: CacheManifest,
-): ReadonlyMap<string, PostCacheStatisticCell> {
+): ReadonlyMap<string, FinalizeCacheStatisticCell> {
   const statistics = initializeCacheStatistics(cacheModel);
   for (const partition of manifest.partitions) {
     const cell = statistics.get(partition.partitionId);
@@ -808,7 +810,7 @@ function summarizeManifest(
 function summarizeDeltaPayload(
   cacheModel: CacheModel,
   manifest: CacheDeltaManifest,
-): ReadonlyMap<string, PostCacheStatisticCell> {
+): ReadonlyMap<string, FinalizeCacheStatisticCell> {
   const statistics = initializeCacheStatistics(cacheModel);
   for (const partition of manifest.partitions) {
     const cell = statistics.get(partition.partitionId);
@@ -826,17 +828,21 @@ function summarizeDeltaPayload(
   return statistics;
 }
 
-function initializeCacheStatistics(cacheModel: CacheModel): Map<string, PostCacheStatisticCell> {
+function initializeCacheStatistics(
+  cacheModel: CacheModel,
+): Map<string, FinalizeCacheStatisticCell> {
   return new Map(
     cacheModel.partitions.map((partition) => [
       partition.id,
-      { fileCount: 0, totalSizeBytes: 0 } satisfies PostCacheStatisticCell,
+      { fileCount: 0, totalSizeBytes: 0 } satisfies FinalizeCacheStatisticCell,
     ]),
   );
 }
 
-function summarizeStatisticCells(cells: readonly PostCacheStatisticCell[]): PostCacheStatisticCell {
-  return cells.reduce<PostCacheStatisticCell>(
+function summarizeStatisticCells(
+  cells: readonly FinalizeCacheStatisticCell[],
+): FinalizeCacheStatisticCell {
+  return cells.reduce<FinalizeCacheStatisticCell>(
     (summary, cell) => ({
       fileCount: summary.fileCount + cell.fileCount,
       totalSizeBytes: summary.totalSizeBytes + cell.totalSizeBytes,
@@ -845,7 +851,7 @@ function summarizeStatisticCells(cells: readonly PostCacheStatisticCell[]): Post
   );
 }
 
-function formatCacheStatisticCell(cell: PostCacheStatisticCell | null): string {
+function formatCacheStatisticCell(cell: FinalizeCacheStatisticCell | null): string {
   if (!cell) {
     return 'n/a';
   }

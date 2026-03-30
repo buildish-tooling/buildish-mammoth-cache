@@ -28,7 +28,7 @@ import {
 } from '../src/artifacts/service';
 import { captureCacheManifest, computeCacheDelta } from '../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../src/cache/model';
-import { createPostActionSummaryLines, executePostAction } from '../src/post-flow';
+import { createFinalizeActionSummaryLines, executeFinalizeAction } from '../src/finalize-flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
@@ -38,7 +38,7 @@ import {
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
   persistDeltaArtifactExecutionIdentity,
   persistConsumedDeltaArtifactNames,
-} from '../src/state/post-action';
+} from '../src/state/finalize';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
@@ -53,7 +53,7 @@ import {
   createTestRuntimeHost,
 } from './support/github-test-runtime';
 
-function createPostActionDependencies(options: {
+function createFinalizeActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
   readonly eventPayload?: Record<string, unknown>;
   readonly summaryWriter: SummaryWriter;
@@ -82,7 +82,7 @@ function createPostActionDependencies(options: {
   };
 }
 
-describe('executePostAction', () => {
+describe('executeFinalizeAction', () => {
   it('uploads a delta artifact for distributed-worker jobs when cache contents changed', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
@@ -102,12 +102,12 @@ describe('executePostAction', () => {
         'after',
       );
 
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -146,7 +146,7 @@ describe('executePostAction', () => {
         downloaded.deltaManifest.partitions.some((partition) => partition.entries.length > 0),
       ).toBe(true);
       expect(summary.lines).toEqual([]);
-      const summaryText = createPostActionSummaryLines(status).join('\n');
+      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
       expect(summaryText).toContain('Gradle builds');
       expect(summaryText).not.toContain('<summary>Cache details</summary>');
@@ -185,12 +185,12 @@ describe('executePostAction', () => {
         'after',
       );
 
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -265,12 +265,12 @@ describe('executePostAction', () => {
         'after',
       );
 
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -290,7 +290,7 @@ describe('executePostAction', () => {
       });
 
       const publishedSummary = await readFile(path.join(workspace, 'step-summary.md'), 'utf8');
-      const summaryContent = createPostActionSummaryLines(status).join('\n');
+      const summaryContent = createFinalizeActionSummaryLines(status).join('\n');
       expect(publishedSummary).toBe(`${summaryContent}\n`);
       expect(summaryContent).toContain('## Apache Buildish Mammoth Cache for Gradle');
       expect(summaryContent).toContain(
@@ -323,19 +323,19 @@ describe('executePostAction', () => {
   it('falls back to the workflow run URL when the current job URL cannot be resolved', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: createSummaryCapture().writer,
         }),
       });
 
-      const summaryContent = createPostActionSummaryLines(status).join('\n');
+      const summaryContent = createFinalizeActionSummaryLines(status).join('\n');
       expect(summaryContent).toContain('Gradle builds');
       expect(summaryContent).not.toContain('Workflow run:');
     });
@@ -361,7 +361,7 @@ describe('executePostAction', () => {
         'after',
       );
 
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({
           saveCache: async () => {
@@ -371,7 +371,7 @@ describe('executePostAction', () => {
         }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'build'),
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -398,7 +398,7 @@ describe('executePostAction', () => {
           totalChangedCount: 1,
         }),
       );
-      const summaryText = createPostActionSummaryLines(status).join('\n');
+      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
       expect(summaryText).toContain('Gradle builds');
       expect(summaryText).not.toContain('Delta artifact');
@@ -431,7 +431,7 @@ describe('executePostAction', () => {
       const artifactNameToDelete = (await artifactApi.listArtifacts())[0]!.name;
       persistConsumedDeltaArtifactNames([artifactNameToDelete], savedState.set.bind(savedState));
 
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({
           saveCache: async () => {
@@ -441,7 +441,7 @@ describe('executePostAction', () => {
         }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -475,7 +475,7 @@ describe('executePostAction', () => {
           warnings: [],
         }),
       );
-      const summaryText = createPostActionSummaryLines(status).join('\n');
+      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
       expect(summaryText).not.toContain('<summary>Cache details</summary>');
       expect(summaryText).not.toContain('Consumed delta cleanup');
@@ -514,14 +514,14 @@ describe('executePostAction', () => {
       savedState.set('buildish-mammoth-cache-gradle-distributed-aggregate-state', 'true');
       savedState.set(CONSUMED_DELTA_ARTIFACT_NAMES_STATE, JSON.stringify([artifactNameToDelete]));
 
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend,
         cacheBackend: createCacheApi({
           saveCache: async () => 91,
         }),
         env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -567,12 +567,12 @@ describe('executePostAction', () => {
       );
       await persistPreBuildState(gradleUserHome, savedState, workspace);
 
-      const status = await executePostAction({
+      const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createPostActionDependencies({
+        ...createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -597,7 +597,7 @@ describe('executePostAction', () => {
           totalChangedCount: 0,
         }),
       );
-      const summaryText = createPostActionSummaryLines(status).join('\n');
+      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
       expect(summaryText).not.toContain('Delta artifact');
       expect(summaryText).not.toContain('Post-build cache delta');

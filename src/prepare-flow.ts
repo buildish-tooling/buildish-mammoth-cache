@@ -41,7 +41,7 @@ import {
   persistDeltaArtifactExecutionIdentity,
   persistPreBuildCacheManifest,
   type PersistedPreBuildCacheManifestState,
-} from './state/post-action';
+} from './state/finalize';
 import { installGradleBuildResultCapture } from './gradle/build-results';
 import { createDetailsSection, escapeSummaryText } from './util/html';
 import type { WorkflowArtifactBackend } from './storage/artifacts';
@@ -52,20 +52,20 @@ import type { WorkflowArtifactBackend } from './storage/artifacts';
  * Extends {@link DeltaApplyResult} with the job names and artifact names that were requested
  * and actually applied, plus a human-readable summary message for the runtime log.
  */
-export interface MainDependentDeltaResult extends DeltaApplyResult {
+export interface PrepareDependentDeltaResult extends DeltaApplyResult {
   readonly requestedJobs: readonly string[];
   readonly downloadedArtifactNames: readonly string[];
   readonly appliedArtifactCount: number;
   readonly message: string;
 }
 
-/** Complete status snapshot produced by {@link executeMainAction} at the end of the prepare phase. */
-export interface MainActionStatus {
+/** Complete status snapshot produced by {@link executePrepareAction} at the end of the prepare phase. */
+export interface PrepareActionStatus {
   readonly bootstrap: BootstrapExecution;
   /** Result of the optional prune-managed restore cleanup step; `null` when cleanup was not configured. */
   readonly restoreCleanupResult: RestoreCleanupResult | null;
   /** Result of downloading and applying dependent worker deltas; `null` when no dependent jobs were configured. */
-  readonly dependentDeltaResult: MainDependentDeltaResult | null;
+  readonly dependentDeltaResult: PrepareDependentDeltaResult | null;
   /** Path and metadata of the persisted pre-build cache manifest; `null` when the cache is disabled. */
   readonly preBuildManifestState: PersistedPreBuildCacheManifestState | null;
   readonly message: string;
@@ -86,7 +86,7 @@ export interface RestoreCleanupResult {
  * Extends {@link BootstrapDependencies} with the optional artifact backend used to download
  * dependent worker delta artifacts in `distributed-aggregator` mode.
  */
-export interface MainActionDependencies extends BootstrapDependencies {
+export interface PrepareActionDependencies extends BootstrapDependencies {
   readonly artifactBackend?: WorkflowArtifactBackend;
 }
 
@@ -97,11 +97,11 @@ export interface MainActionDependencies extends BootstrapDependencies {
  * prune-managed cleanup → download and apply dependent deltas (aggregator mode) → capture
  * pre-build manifest → persist state for the finalize phase.
  *
- * @returns A {@link MainActionStatus} snapshot covering all prepare-phase outcomes.
+ * @returns A {@link PrepareActionStatus} snapshot covering all prepare-phase outcomes.
  */
-export async function executeMainAction(
-  dependencies: MainActionDependencies,
-): Promise<MainActionStatus> {
+export async function executePrepareAction(
+  dependencies: PrepareActionDependencies,
+): Promise<PrepareActionStatus> {
   const logInfo = dependencies.runtimeHost.info;
   const bootstrap = await bootstrapPhase('prepare', dependencies);
   await installGradleBuildResultCapture(bootstrap.config.gradleUserHome, bootstrap.ciContext).catch(
@@ -119,9 +119,9 @@ export async function executeMainAction(
       dependentDeltaResult: null,
       preBuildManifestState: null,
       message: 'Prepare execution completed without cache orchestration.',
-    } satisfies MainActionStatus;
+    } satisfies PrepareActionStatus;
 
-    const logLines = createMainActionLogLines(status);
+    const logLines = createPrepareActionLogLines(status);
     if (logLines.length > 0) {
       bootstrap.reportSink.publishLogGroup('Apache Buildish prepare execution', logLines, logInfo);
     }
@@ -154,9 +154,9 @@ export async function executeMainAction(
     preBuildManifestState,
     message:
       'Prepare execution completed and captured the pre-build cache manifest for finalize processing.',
-  } satisfies MainActionStatus;
+  } satisfies PrepareActionStatus;
 
-  const logLines = createMainActionLogLines(status);
+  const logLines = createPrepareActionLogLines(status);
   if (logLines.length > 0) {
     bootstrap.reportSink.publishLogGroup('Apache Buildish prepare execution', logLines, logInfo);
   }
@@ -166,8 +166,8 @@ export async function executeMainAction(
 
 async function applyDependentJobDeltas(
   bootstrap: BootstrapExecution,
-  dependencies: MainActionDependencies,
-): Promise<MainDependentDeltaResult | null> {
+  dependencies: PrepareActionDependencies,
+): Promise<PrepareDependentDeltaResult | null> {
   const requestedJobs = bootstrap.config.dependentJobs;
   if (requestedJobs.length === 0) {
     return null;
@@ -192,14 +192,14 @@ async function applyDependentJobDeltas(
       allowDuplicateDependentDeltaPaths: bootstrap.config.allowDuplicateDependentDeltaPaths,
     });
     const applied = await applyMergedDeltaPlan(plan, bootstrap.config.gradleUserHome);
-    return createMainDependentDeltaResult(requestedJobs, downloadedPackages, applied);
+    return createPrepareDependentDeltaResult(requestedJobs, downloadedPackages, applied);
   } finally {
     await cleanupDownloadedPackages(downloadedPackages);
   }
 }
 
 function resolveArtifactBackend(
-  dependencies: Pick<MainActionDependencies, 'artifactBackend'>,
+  dependencies: Pick<PrepareActionDependencies, 'artifactBackend'>,
 ): WorkflowArtifactBackend {
   const { artifactBackend } = dependencies;
   if (!artifactBackend) {
@@ -237,7 +237,7 @@ function assertCompatibleDependentDeltaArtifacts(
 
 async function maybePruneManagedFilesAfterRestore(
   bootstrap: BootstrapExecution,
-  dependencies: MainActionDependencies,
+  dependencies: PrepareActionDependencies,
 ): Promise<RestoreCleanupResult | null> {
   if (bootstrap.config.restoreCleanupMode === 'none' || !bootstrap.cacheModel) {
     return null;
@@ -286,11 +286,11 @@ async function maybePruneManagedFilesAfterRestore(
   };
 }
 
-function createMainDependentDeltaResult(
+function createPrepareDependentDeltaResult(
   requestedJobs: readonly string[],
   downloadedPackages: readonly DownloadedDeltaArtifactPackage[],
   applied: DeltaApplyResult,
-): MainDependentDeltaResult {
+): PrepareDependentDeltaResult {
   return {
     ...applied,
     requestedJobs,
@@ -321,7 +321,7 @@ async function cleanupDownloadedPackages(
  * Includes a top-level status overview and a collapsible details section with per-phase
  * counters for restore cleanup, dependent delta apply, and manifest persistence.
  */
-export function createMainActionSummaryLines(status: MainActionStatus): readonly string[] {
+export function createPrepareActionSummaryLines(status: PrepareActionStatus): readonly string[] {
   const dependentDelta = status.dependentDeltaResult;
 
   return [
@@ -352,7 +352,7 @@ export function createMainActionSummaryLines(status: MainActionStatus): readonly
   ];
 }
 
-function createMainActionLogLines(status: MainActionStatus): readonly string[] {
+function createPrepareActionLogLines(status: PrepareActionStatus): readonly string[] {
   const lines = [
     ...createBootstrapLogLines(status.bootstrap),
     `Restore cleanup: ${describeRestoreCleanupSummary(status.restoreCleanupResult)}.`,
@@ -398,7 +398,7 @@ function describeRestoreCleanupSummary(result: RestoreCleanupResult | null): str
     : `${result.mode} (${result.status})`;
 }
 
-function describeDependentDeltaSummary(result: MainDependentDeltaResult | null): string {
+function describeDependentDeltaSummary(result: PrepareDependentDeltaResult | null): string {
   if (!result) {
     return 'none';
   }
@@ -413,7 +413,7 @@ function describeDependentDeltaSummary(result: MainDependentDeltaResult | null):
  * Outputs include the resolved cache key, restore status, provisioned Gradle versions, and
  * wrapper download counts so downstream steps can branch on cache or wrapper outcomes.
  */
-export function createMainActionOutputs(status: MainActionStatus): Record<string, string> {
+export function createPrepareActionOutputs(status: PrepareActionStatus): Record<string, string> {
   const gradleVersions = [
     ...new Set(status.bootstrap.provisionedWrappers.map((wrapper) => wrapper.wrapperSourceVersion)),
   ]

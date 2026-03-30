@@ -15,8 +15,8 @@
  */
 
 import {
-  armBaseCachePostAction,
-  isBaseCachePostActionArmed,
+  armBaseCacheFinalize,
+  isBaseCacheFinalizeArmed,
   restoreBaseCache,
   saveBaseCache,
   type BaseCacheOperationResult,
@@ -357,14 +357,14 @@ async function runBaseCachePhase(
       cacheBackend: dependencies.cacheBackend,
     });
 
-    armBaseCachePostAction(dependencies.runtimeHost.saveState);
+    armBaseCacheFinalize(dependencies.runtimeHost.saveState);
     return restoreResult;
   }
 
   return await saveBaseCache(
     config,
     cacheModel,
-    isBaseCachePostActionArmed(dependencies.runtimeHost.getState),
+    isBaseCacheFinalizeArmed(dependencies.runtimeHost.getState),
     {
       cacheBackend: dependencies.cacheBackend,
     },

@@ -37,7 +37,7 @@ import {
   persistDeltaArtifactExecutionIdentity,
   persistPreBuildCacheManifest,
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
-} from '../../src/state/post-action';
+} from '../../src/state/finalize';
 
 describe('post-action state helpers', () => {
   it('persists a pre-build manifest under RUNNER_TEMP and loads it back', async () => {

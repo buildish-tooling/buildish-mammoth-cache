@@ -20,8 +20,8 @@ import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/prom
 import path from 'node:path';
 
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
-import { executeMainAction } from '../src/main-flow';
-import { createPostActionSummaryLines, executePostAction } from '../src/post-flow';
+import { executePrepareAction } from '../src/prepare-flow';
+import { createFinalizeActionSummaryLines, executeFinalizeAction } from '../src/finalize-flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
 import type { CompositeHost } from '../src/host/types';
 import {
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
       { args: ['failingVerification'], expectedExitCode: 1, label: 'Fail verification task' },
     ];
 
-    await executeMainAction({
+    await executePrepareAction({
       artifactBackend: unavailableArtifactApi(),
       cacheBackend: unavailableCacheApi(),
       captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
           'read-only': 'true',
         },
         summary.writer,
-        'main',
+        'prepare',
       ),
     });
 
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
       await runGradle(runtime, invocation.args, invocation.label, invocation.expectedExitCode ?? 0);
     }
 
-    const postStatus = await executePostAction({
+    const finalizeStatus = await executeFinalizeAction({
       artifactBackend: unavailableArtifactApi(),
       cacheBackend: unavailableCacheApi(),
       captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
@@ -110,36 +110,38 @@ async function main(): Promise<void> {
           'read-only': 'true',
         },
         summary.writer,
-        'post',
+        'finalize',
       ),
     });
     await writeFile(
       summaryPath,
-      `${createPostActionSummaryLines(postStatus).join('\n')}\n`,
+      `${createFinalizeActionSummaryLines(finalizeStatus).join('\n')}\n`,
       'utf8',
     );
 
-    assert.equal(postStatus.gradleBuildReport.builds.length, 4);
+    assert.equal(finalizeStatus.gradleBuildReport.builds.length, 4);
     assert.equal(
-      postStatus.gradleBuildReport.builds.filter((build) => !build.buildFailed).length,
+      finalizeStatus.gradleBuildReport.builds.filter((build) => !build.buildFailed).length,
       3,
     );
     assert.equal(
-      postStatus.gradleBuildReport.builds.filter((build) => build.buildFailed).length,
+      finalizeStatus.gradleBuildReport.builds.filter((build) => build.buildFailed).length,
       1,
     );
     assert.ok(
-      postStatus.gradleBuildReport.builds.some(
+      finalizeStatus.gradleBuildReport.builds.some(
         (build) => build.buildScanUri === 'https://scans.gradle.com/s/fake-published-scan',
       ),
     );
-    assert.ok(postStatus.gradleBuildReport.builds.some((build) => build.buildScanFailed));
+    assert.ok(finalizeStatus.gradleBuildReport.builds.some((build) => build.buildScanFailed));
     assert.ok(
-      postStatus.gradleBuildReport.builds.some(
+      finalizeStatus.gradleBuildReport.builds.some(
         (build) => build.requestedTasks === 'failingVerification',
       ),
     );
-    assert.ok(postStatus.gradleBuildReport.builds.some((build) => build.requestedTasks === 'help'));
+    assert.ok(
+      finalizeStatus.gradleBuildReport.builds.some((build) => build.requestedTasks === 'help'),
+    );
 
     const summaryText = await readFile(summaryPath, 'utf8');
     assert.match(summaryText, /## Apache Buildish Mammoth Cache for Gradle/u);

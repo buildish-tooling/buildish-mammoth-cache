@@ -19,7 +19,7 @@ import type { BaseCacheBackend } from '../storage/cache';
 
 import { DEFAULT_CACHE_KEY_TEMPLATE, type CacheModel } from './model';
 
-const POST_ACTION_ARMED_STATE = 'buildish-mammoth-cache-gradle-base-cache-armed';
+const FINALIZE_ARMED_STATE = 'buildish-mammoth-cache-gradle-base-cache-armed';
 const REF_NAME_PLACEHOLDER = '${refName}';
 const NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT =
   'Path Validation Error: Path(s) specified in the action for caching do(es) not exist';
@@ -315,15 +315,15 @@ export async function saveBaseCache(
  * Arming happens during the prepare phase after restore/setup work has completed, so the finalize phase can
  * cheaply distinguish a legitimate paired execution from a standalone post-invocation.
  */
-export function armBaseCachePostAction(saveState: (name: string, value: string) => void): void {
-  saveState(POST_ACTION_ARMED_STATE, 'true');
+export function armBaseCacheFinalize(saveState: (name: string, value: string) => void): void {
+  saveState(FINALIZE_ARMED_STATE, 'true');
 }
 
 /**
  * Returns whether the finalize phase was armed by the prepare phase for a later base-cache save.
  */
-export function isBaseCachePostActionArmed(getState: (name: string) => string): boolean {
-  return getState(POST_ACTION_ARMED_STATE) === 'true';
+export function isBaseCacheFinalizeArmed(getState: (name: string) => string): boolean {
+  return getState(FINALIZE_ARMED_STATE) === 'true';
 }
 
 function renderCacheKeyTemplate(

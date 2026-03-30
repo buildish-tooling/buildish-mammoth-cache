@@ -15,10 +15,10 @@
  */
 
 import {
-  createMainActionOutputs,
-  executeMainAction,
-  type MainActionDependencies,
-} from '../../main-flow';
+  createPrepareActionOutputs,
+  executePrepareAction,
+  type PrepareActionDependencies,
+} from '../../prepare-flow';
 import type { HostOutputSink } from '../../host/types';
 import { claimSingleRunPrepareExecution } from '../../guard/job-single-run';
 
@@ -28,22 +28,23 @@ import { claimSingleRunPrepareExecution } from '../../guard/job-single-run';
  * Extends the base main-action runtime host with {@link HostOutputSink} so the entrypoint can
  * emit action outputs (e.g. `cache-key`) after the prepare phase completes.
  */
-export type PrepareEntrypointRuntimeHost = MainActionDependencies['runtimeHost'] & HostOutputSink;
+export type PrepareEntrypointRuntimeHost = PrepareActionDependencies['runtimeHost'] &
+  HostOutputSink;
 
 /**
  * Full dependency bundle for the prepare entrypoint.
  *
- * Same as {@link MainActionDependencies} but with the runtime host narrowed to
+ * Same as {@link PrepareActionDependencies} but with the runtime host narrowed to
  * {@link PrepareEntrypointRuntimeHost} so output emission is available.
  */
-export type PrepareEntrypointDependencies = Omit<MainActionDependencies, 'runtimeHost'> & {
+export type PrepareEntrypointDependencies = Omit<PrepareActionDependencies, 'runtimeHost'> & {
   readonly runtimeHost: PrepareEntrypointRuntimeHost;
 };
 
 /**
  * Entrypoint for the prepare (main) phase of the action.
  *
- * Claims the single-run guard before delegating to {@link executeMainAction}. Emits action
+ * Claims the single-run guard before delegating to {@link executePrepareAction}. Emits action
  * outputs and forwards log/warning messages from the main flow to the runtime reporter.
  * Throws if another action invocation already claimed ownership of this CI job.
  */
@@ -59,8 +60,8 @@ export async function runPrepareExecution(
     throw new Error(singleRunClaim.message);
   }
 
-  const status = await executeMainAction(dependencies);
-  for (const [name, value] of Object.entries(createMainActionOutputs(status))) {
+  const status = await executePrepareAction(dependencies);
+  for (const [name, value] of Object.entries(createPrepareActionOutputs(status))) {
     runtimeHost.setOutput(name, value);
   }
   if (status.bootstrap.baseCacheResult) {

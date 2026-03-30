@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import { executePostAction, type PostActionDependencies } from '../../post-flow';
+import { executeFinalizeAction, type FinalizeActionDependencies } from '../../finalize-flow';
 import { decideSingleRunFinalizeExecution } from '../../guard/job-single-run';
 
-/** Full dependency bundle required by the finalize entrypoint; aliases {@link PostActionDependencies}. */
-export type FinalizeEntrypointDependencies = PostActionDependencies;
+/** Full dependency bundle required by the finalize entrypoint; aliases {@link FinalizeActionDependencies}. */
+export type FinalizeEntrypointDependencies = FinalizeActionDependencies;
 
 /**
  * Entrypoint for the finalize (post) phase of the action.
  *
- * Checks the single-run guard before delegating to {@link executePostAction}. When the guard
+ * Checks the single-run guard before delegating to {@link executeFinalizeAction}. When the guard
  * indicates this invocation should not run (duplicate or missing prepare), the function logs a
  * diagnostic message and returns without performing any cache or artifact operations.
  */
@@ -39,7 +39,7 @@ export async function runFinalizeExecution(
     return;
   }
 
-  const status = await executePostAction(dependencies);
+  const status = await executeFinalizeAction(dependencies);
   if (status.bootstrap.baseCacheResult) {
     runtimeHost.info(status.bootstrap.baseCacheResult.message);
   }

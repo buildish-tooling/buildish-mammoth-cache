@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createBaseCachePaths,
   createBaseCacheRestoreKeys,
-  isBaseCachePostActionArmed,
+  isBaseCacheFinalizeArmed,
   restoreBaseCache,
   saveBaseCache,
 } from '../../src/cache/service';
@@ -291,10 +291,10 @@ describe('saveBaseCache', () => {
   });
 });
 
-describe('isBaseCachePostActionArmed', () => {
+describe('isBaseCacheFinalizeArmed', () => {
   it('detects the saved post-action arm state', () => {
     expect(
-      isBaseCachePostActionArmed((name) =>
+      isBaseCacheFinalizeArmed((name) =>
         name === 'buildish-mammoth-cache-gradle-base-cache-armed' ? 'true' : '',
       ),
     ).toBe(true);
