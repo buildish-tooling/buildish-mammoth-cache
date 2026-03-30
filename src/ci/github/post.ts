@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { runFinalizeExecution } from '../../entrypoints/cli';
+import { runFinalizeExecution } from '../../phases/finalize/cli';
 
 import {
   createGitHubBaseCacheBackend,

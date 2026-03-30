@@ -22,8 +22,8 @@ import path from 'node:path';
 
 import type { WorkflowArtifactDescriptor } from '../src/artifacts/service';
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
-import { createPrepareActionOutputs, executePrepareAction } from '../src/prepare-flow';
-import { executeFinalizeAction } from '../src/finalize-flow';
+import { createPrepareActionOutputs, executePrepareAction } from '../src/phases/prepare/flow';
+import { executeFinalizeAction } from '../src/phases/finalize/flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
 import type { CompositeHost } from '../src/host/types';
 import {

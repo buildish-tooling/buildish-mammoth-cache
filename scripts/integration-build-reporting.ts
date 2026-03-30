@@ -20,8 +20,11 @@ import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/prom
 import path from 'node:path';
 
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
-import { executePrepareAction } from '../src/prepare-flow';
-import { createFinalizeActionSummaryLines, executeFinalizeAction } from '../src/finalize-flow';
+import { executePrepareAction } from '../src/phases/prepare/flow';
+import {
+  createFinalizeActionSummaryLines,
+  executeFinalizeAction,
+} from '../src/phases/finalize/flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
 import type { CompositeHost } from '../src/host/types';
 import {

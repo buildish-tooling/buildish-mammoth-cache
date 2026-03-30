@@ -20,22 +20,25 @@ import {
   restoreBaseCache,
   saveBaseCache,
   type BaseCacheOperationResult,
-} from './cache/service';
-import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from './ci';
-import { createCacheModel, type CacheModel, type CommandOutputCapture } from './cache/model';
+} from '../cache/service';
+import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from '../ci';
+import { createCacheModel, type CacheModel, type CommandOutputCapture } from '../cache/model';
 import {
   normalizeActionConfig,
   readActionInputs,
   resolveActionInputsFromConfigFile,
-} from './config/action-config';
-import type { NormalizedActionConfig } from './config/types';
-import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } from './util/html';
-import type { CoreExecutionPhase } from './config/types';
-import type { HostInputSource, HostReporter, HostStateStore, ReportSink } from './host/types';
-import type { BaseCacheBackend } from './storage/cache';
-import { provisionWrapperJars, type WrapperProvisionOptions } from './gradle/wrapper/download';
-import { validateTargetWrapperProperties } from './gradle/wrapper/static-validation';
-import type { ProvisionedWrapperJar, ValidatedWrapperPropertiesFile } from './gradle/wrapper/types';
+} from '../config/action-config';
+import type { NormalizedActionConfig } from '../config/types';
+import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } from '../util/html';
+import type { CoreExecutionPhase } from '../config/types';
+import type { HostInputSource, HostReporter, HostStateStore, ReportSink } from '../host/types';
+import type { BaseCacheBackend } from '../storage/cache';
+import { provisionWrapperJars, type WrapperProvisionOptions } from '../gradle/wrapper/download';
+import { validateTargetWrapperProperties } from '../gradle/wrapper/static-validation';
+import type {
+  ProvisionedWrapperJar,
+  ValidatedWrapperPropertiesFile,
+} from '../gradle/wrapper/types';
 
 /**
  * Action execution phase.

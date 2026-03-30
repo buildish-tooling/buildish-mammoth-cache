@@ -25,7 +25,7 @@ import {
   createBootstrapLogLines,
   createBootstrapStatus,
   createBootstrapSummaryLines,
-} from '../src/bootstrap';
+} from '../src/phases/bootstrap';
 import type { BaseCacheRestoreResult } from '../src/cache/service';
 import type { CacheModel } from '../src/cache/model';
 import type { SummaryWriter } from '../src/ci/github/report-sink';

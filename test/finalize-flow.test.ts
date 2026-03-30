@@ -28,7 +28,10 @@ import {
 } from '../src/artifacts/service';
 import { captureCacheManifest, computeCacheDelta } from '../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../src/cache/model';
-import { createFinalizeActionSummaryLines, executeFinalizeAction } from '../src/finalize-flow';
+import {
+  createFinalizeActionSummaryLines,
+  executeFinalizeAction,
+} from '../src/phases/finalize/flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
@@ -38,7 +41,7 @@ import {
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
   persistDeltaArtifactExecutionIdentity,
   persistConsumedDeltaArtifactNames,
-} from '../src/state/finalize';
+} from '../src/phases/finalize/state';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,

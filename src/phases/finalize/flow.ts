@@ -16,30 +16,30 @@
 
 import { rm } from 'node:fs/promises';
 
-import { uploadDeltaArtifactPackage, stageDeltaArtifactPackage } from './artifacts/service';
+import { uploadDeltaArtifactPackage, stageDeltaArtifactPackage } from '../../artifacts/service';
 import {
   bootstrapPhase,
   createBootstrapLogLines,
   type BootstrapExecution,
   type BootstrapDependencies,
-} from './bootstrap';
-import type { CacheDeltaManifest, CacheManifest } from './cache/manifest';
-import { captureCacheManifest, computeCacheDelta } from './cache/manifest';
-import type { CacheModel } from './cache/model';
-import type { BaseCacheRestoreResult } from './cache/service';
+} from '../bootstrap';
+import type { CacheDeltaManifest, CacheManifest } from '../../cache/manifest';
+import { captureCacheManifest, computeCacheDelta } from '../../cache/manifest';
+import type { CacheModel } from '../../cache/model';
+import type { BaseCacheRestoreResult } from '../../cache/service';
 import {
   cleanupGradleBuildResultCapture,
   loadGradleBuildReport,
   type GradleBuildReport,
-} from './gradle/build-results';
-import { createHtmlLink, createHtmlTable, escapeHtml } from './util/html';
+} from '../../gradle/build-results';
+import { createHtmlLink, createHtmlTable, escapeHtml } from '../../util/html';
 import {
   getPersistedBaseCacheRestoreResult,
   getPersistedDeltaArtifactExecutionIdentity,
   getPersistedConsumedDeltaArtifactNames,
   loadPersistedPreBuildCacheManifest,
-} from './state/finalize';
-import type { WorkflowArtifactBackend } from './storage/artifacts';
+} from './state';
+import type { WorkflowArtifactBackend } from '../../storage/artifacts';
 
 const DELTA_ARTIFACT_RETENTION_DAYS = 7;
 

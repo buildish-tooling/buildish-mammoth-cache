@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   runFinalizeExecution,
   type FinalizeEntrypointDependencies,
-} from '../src/entrypoints/cli/finalize';
+} from '../src/phases/finalize/cli';
 
 const finalizeFlowMock = vi.hoisted(() => ({
   executeFinalizeAction: vi.fn(async () => ({
@@ -37,7 +37,7 @@ const jobSingleRunMock = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('../src/finalize-flow', () => finalizeFlowMock);
+vi.mock('../src/phases/finalize/flow', () => finalizeFlowMock);
 vi.mock('../src/guard/job-single-run', () => jobSingleRunMock);
 
 describe('finalize entrypoint', () => {

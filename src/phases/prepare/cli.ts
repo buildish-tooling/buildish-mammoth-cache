@@ -18,7 +18,7 @@ import {
   createPrepareActionOutputs,
   executePrepareAction,
   type PrepareActionDependencies,
-} from '../../prepare-flow';
+} from './flow';
 import type { HostOutputSink } from '../../host/types';
 import { claimSingleRunPrepareExecution } from '../../guard/job-single-run';
 

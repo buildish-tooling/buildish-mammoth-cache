@@ -37,7 +37,7 @@ import {
   createPrepareActionOutputs,
   createPrepareActionSummaryLines,
   executePrepareAction,
-} from '../src/prepare-flow';
+} from '../src/phases/prepare/flow';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
@@ -50,7 +50,7 @@ import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
-} from '../src/state/finalize';
+} from '../src/phases/finalize/state';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,

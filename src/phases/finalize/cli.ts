@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { executeFinalizeAction, type FinalizeActionDependencies } from '../../finalize-flow';
+import { executeFinalizeAction, type FinalizeActionDependencies } from './flow';
 import { decideSingleRunFinalizeExecution } from '../../guard/job-single-run';
 
 /** Full dependency bundle required by the finalize entrypoint; aliases {@link FinalizeActionDependencies}. */

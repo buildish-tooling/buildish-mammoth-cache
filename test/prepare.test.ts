@@ -16,10 +16,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  runPrepareExecution,
-  type PrepareEntrypointDependencies,
-} from '../src/entrypoints/cli/prepare';
+import { runPrepareExecution, type PrepareEntrypointDependencies } from '../src/phases/prepare/cli';
 
 const prepareFlowMock = vi.hoisted(() => ({
   createPrepareActionOutputs: vi.fn(() => ({ 'cache-key': 'cache-key-value' })),
@@ -38,7 +35,7 @@ const jobSingleRunMock = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('../src/prepare-flow', () => prepareFlowMock);
+vi.mock('../src/phases/prepare/flow', () => prepareFlowMock);
 vi.mock('../src/guard/job-single-run', () => jobSingleRunMock);
 
 describe('prepare entrypoint', () => {

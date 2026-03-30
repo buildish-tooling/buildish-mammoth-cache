@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { runPrepareExecution } from '../../entrypoints/cli';
+import { runPrepareExecution } from '../../phases/prepare/cli';
 
 import {
   createGitHubBaseCacheBackend,
