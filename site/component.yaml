@@ -14,7 +14,7 @@
 # limitations under the License.
 
 schemaVersion: 1
-project:
+component:
   slug: mammoth-cache-gradle
   displayName: Mammoth Cache for Gradle
   repository: https://github.com/apache/buildish-mammoth-cache-gradle
@@ -24,4 +24,4 @@ content:
 versioning:
   unreleasedLabel: Unreleased
 navigation:
-  section: sub-projects
+  section: components

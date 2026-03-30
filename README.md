@@ -21,7 +21,7 @@ management for GitHub Actions today, prepared for Codeberg/Forgejo and GitLab CI
 
 Project documentation now lives on the Apache Buildish site:
 
-- <https://buildish.apache.org/projects/mammoth-cache-gradle/>
+- <https://buildish.apache.org/components/mammoth-cache-gradle/>
 
 Use the site docs for workflow usage, configuration, cache-partition behavior, security notes, maintenance guidance,
 and current project status.
