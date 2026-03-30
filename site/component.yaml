@@ -15,9 +15,9 @@
 
 schemaVersion: 1
 component:
-  slug: mammoth-cache-gradle
-  displayName: Mammoth Cache for Gradle
-  repository: https://github.com/apache/buildish-mammoth-cache-gradle
+  slug: mammoth-cache
+  displayName: Mammoth Cache for Gradle and Maven
+  repository: https://github.com/apache/buildish-mammoth-cache
   defaultBranch: main
 content:
   docsRoot: docs
