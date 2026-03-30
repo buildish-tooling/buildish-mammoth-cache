@@ -18,20 +18,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   normalizeUserSuppliedRelativePath,
-  parseSerializedJsonObject,
-  validateLowercaseSha256,
+  parseSerializedJson,
   validateNormalizedRelativePosixPath,
 } from '../../src/validation';
 
 describe('validation helpers', () => {
-  it('parses serialized JSON objects and rejects non-object payloads', () => {
-    expect(parseSerializedJsonObject('{"ok":true}', 'fixture')).toEqual({ ok: true });
-    expect(() => parseSerializedJsonObject('[1,2,3]', 'fixture')).toThrow(/JSON object/u);
-  });
-
-  it('validates lowercase SHA-256 digests', () => {
-    expect(validateLowercaseSha256('a'.repeat(64), 'digest')).toBe('a'.repeat(64));
-    expect(() => validateLowercaseSha256('A'.repeat(64), 'digest')).toThrow(/SHA-256/u);
+  it('parses serialized JSON and surfaces the underlying JSON syntax error', () => {
+    expect(parseSerializedJson('{"ok":true}', 'fixture')).toEqual({ ok: true });
+    expect(parseSerializedJson('[1,2,3]', 'fixture')).toEqual([1, 2, 3]);
+    expect(() => parseSerializedJson('not-json', 'fixture')).toThrow(/Could not parse serialized/u);
   });
 
   it('validates normalized relative POSIX paths for caller-defined roots', () => {

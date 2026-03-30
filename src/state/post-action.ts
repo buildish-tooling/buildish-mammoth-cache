@@ -25,12 +25,9 @@ import {
 } from '../cache/manifest';
 import type { BaseCacheRestoreResult } from '../cache/service';
 import type { CiJobContext } from '../ci';
-import {
-  parseSerializedJsonObject,
-  validateArray,
-  validateNonNegativeInteger,
-  validateString,
-} from '../validation';
+import { z } from 'zod';
+
+import { parseSerializedJson, parseWithZod } from '../validation';
 
 /** CI state key holding the absolute path to the persisted pre-build cache manifest file. */
 export const PRE_BUILD_CACHE_MANIFEST_PATH_STATE =
@@ -52,15 +49,37 @@ const BASE_CACHE_RESTORE_STATUSES = [
 ] as const;
 const PRE_BUILD_CACHE_MANIFEST_FILE = 'pre-build-cache-manifest.json';
 
+// ---------------------------------------------------------------------------
+// Zod schemas for persisted CI state shapes
+// ---------------------------------------------------------------------------
+
+const persistedExecutionIdentitySchema = z.object({
+  jobName: z.string().min(1),
+  runId: z.number().int().nonnegative().nullable(),
+  runAttempt: z.number().int().nonnegative().nullable(),
+});
+
+const baseCacheRestoreResultSchema = z.object({
+  operation: z.literal('restore'),
+  status: z.enum(BASE_CACHE_RESTORE_STATUSES),
+  cacheKey: z.string().min(1),
+  matchedKey: z.string().min(1).nullable(),
+  restoreKeys: z.array(z.string().min(1)),
+  paths: z.array(z.string().min(1)),
+  message: z.string().min(1),
+});
+
+const consumedArtifactNamesSchema = z.array(z.string().min(1));
+
+// ---------------------------------------------------------------------------
+
 /**
  * Minimal CI execution identity persisted by the prepare phase so the finalize phase can locate
  * and verify the delta artifact uploaded by the same invocation.
  */
-export interface PersistedDeltaArtifactExecutionIdentity {
-  readonly jobName: string;
-  readonly runId: number | null;
-  readonly runAttempt: number | null;
-}
+export type PersistedDeltaArtifactExecutionIdentity = z.infer<
+  typeof persistedExecutionIdentitySchema
+>;
 
 /** Path metadata returned after writing the pre-build cache manifest to the runner temp directory. */
 export interface PersistedPreBuildCacheManifestState {
@@ -193,21 +212,11 @@ export function getPersistedDeltaArtifactExecutionIdentity(
     return null;
   }
 
-  const parsedIdentity = parseSerializedJsonObject(
-    serializedIdentity,
+  return parseWithZod(
+    persistedExecutionIdentitySchema,
+    parseSerializedJson(serializedIdentity, 'delta artifact execution identity state'),
     'delta artifact execution identity state',
   );
-  return {
-    jobName: validateNonEmptyStateString(
-      parsedIdentity.jobName,
-      'delta artifact execution identity jobName',
-    ),
-    runId: validateNullableInteger(parsedIdentity.runId, 'delta artifact execution identity runId'),
-    runAttempt: validateNullableInteger(
-      parsedIdentity.runAttempt,
-      'delta artifact execution identity runAttempt',
-    ),
-  };
 }
 
 /**
@@ -224,48 +233,11 @@ export function getPersistedBaseCacheRestoreResult(
     return null;
   }
 
-  const parsedResult = parseSerializedJsonObject(
-    serializedResult,
+  return parseWithZod(
+    baseCacheRestoreResultSchema,
+    parseSerializedJson(serializedResult, 'base cache restore result state'),
     'base cache restore result state',
   );
-  const operation = validateNonEmptyStateString(
-    parsedResult.operation,
-    'base cache restore result operation',
-  );
-  if (operation !== 'restore') {
-    throw new Error(
-      `base cache restore result operation must be 'restore', received '${operation}'.`,
-    );
-  }
-
-  const status = validateNonEmptyStateString(
-    parsedResult.status,
-    'base cache restore result status',
-  );
-  if (
-    !BASE_CACHE_RESTORE_STATUSES.includes(status as (typeof BASE_CACHE_RESTORE_STATUSES)[number])
-  ) {
-    throw new Error(`Unsupported base cache restore result status '${status}'.`);
-  }
-
-  return {
-    operation: 'restore',
-    status: status as BaseCacheRestoreResult['status'],
-    cacheKey: validateNonEmptyStateString(
-      parsedResult.cacheKey,
-      'base cache restore result cacheKey',
-    ),
-    matchedKey: validateNullableStateString(
-      parsedResult.matchedKey,
-      'base cache restore result matchedKey',
-    ),
-    restoreKeys: validateStateStringArray(
-      parsedResult.restoreKeys,
-      'base cache restore result restoreKeys',
-    ),
-    paths: validateStateStringArray(parsedResult.paths, 'base cache restore result paths'),
-    message: validateNonEmptyStateString(parsedResult.message, 'base cache restore result message'),
-  } satisfies BaseCacheRestoreResult;
 }
 
 /**
@@ -282,35 +254,13 @@ export function getPersistedConsumedDeltaArtifactNames(
     return [];
   }
 
-  let parsedArtifactNames: unknown;
-  try {
-    parsedArtifactNames = JSON.parse(serializedArtifactNames) as unknown;
-  } catch (error) {
-    throw new Error(
-      `Persisted consumed delta artifact state was not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
+  const names = parseWithZod(
+    consumedArtifactNamesSchema,
+    parseSerializedJson(serializedArtifactNames, 'consumed delta artifact names'),
+    'consumed delta artifact names',
+  );
 
-  const uniqueArtifactNames = new Set<string>();
-  for (const [index, value] of validateArray(
-    parsedArtifactNames,
-    'persisted consumed delta artifact names',
-  ).entries()) {
-    const artifactName = validateString(
-      value,
-      `persisted consumed delta artifact name at index ${index}`,
-    );
-    const trimmedArtifactName = artifactName.trim();
-    if (trimmedArtifactName.length === 0) {
-      throw new Error(
-        `Persisted consumed delta artifact name at index ${index} must not be blank.`,
-      );
-    }
-    uniqueArtifactNames.add(trimmedArtifactName);
-  }
-
-  return [...uniqueArtifactNames];
+  return [...new Set(names)];
 }
 
 function resolveStateParentDirectory(options: PersistPreBuildCacheManifestOptions): string {
@@ -326,32 +276,4 @@ function resolveStateParentDirectory(options: PersistPreBuildCacheManifestOption
 
   const runnerTemp = options.env?.RUNNER_TEMP?.trim();
   return runnerTemp ? path.resolve(runnerTemp) : os.tmpdir();
-}
-
-function validateNonEmptyStateString(value: unknown, label: string): string {
-  const trimmed = validateString(value, label).trim();
-  if (trimmed.length === 0) {
-    throw new Error(`${label} must not be blank.`);
-  }
-  return trimmed;
-}
-
-function validateNullableInteger(value: unknown, label: string): number | null {
-  if (value === null) {
-    return null;
-  }
-  return validateNonNegativeInteger(value, label);
-}
-
-function validateNullableStateString(value: unknown, label: string): string | null {
-  if (value === null) {
-    return null;
-  }
-  return validateNonEmptyStateString(value, label);
-}
-
-function validateStateStringArray(value: unknown, label: string): readonly string[] {
-  return validateArray(value, label).map((entry, index) =>
-    validateNonEmptyStateString(entry, `${label} entry ${index}`),
-  );
 }

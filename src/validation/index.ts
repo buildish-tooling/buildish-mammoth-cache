@@ -16,15 +16,20 @@
 
 import path from 'node:path';
 
-const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const WINDOWS_DRIVE_PREFIX_PATTERN = /^[A-Za-z]:/u;
 
-/**
- * Narrow utility for guarding JSON values before object property access.
- */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
+type ParseResult<T> =
+  | { readonly success: true; readonly data: T }
+  | {
+      readonly success: false;
+      readonly error: {
+        // PropertyKey includes symbol; Zod v4 uses PropertyKey[] for issue paths.
+        readonly issues: ReadonlyArray<{
+          readonly path: ReadonlyArray<PropertyKey>;
+          readonly message: string;
+        }>;
+      };
+    };
 
 /**
  * Parses serialized JSON and preserves the original error as the `cause`.
@@ -41,85 +46,20 @@ export function parseSerializedJson(serializedValue: string, label: string): unk
 }
 
 /**
- * Parses serialized JSON and requires the top-level value to be an object.
+ * Wraps a Zod-compatible `safeParse` result, throwing a readable `Error` on the first issue.
+ *
+ * The schema parameter is typed structurally so this helper has no hard import dependency on Zod.
  */
-export function parseSerializedJsonObject(
-  serializedValue: string,
+export function parseWithZod<T>(
+  schema: { safeParse(data: unknown): ParseResult<T> },
+  data: unknown,
   label: string,
-): Record<string, unknown> {
-  const parsed = parseSerializedJson(serializedValue, label);
-
-  if (!isRecord(parsed)) {
-    throw new Error(`Serialized ${label} must be a JSON object.`);
-  }
-
-  return parsed;
-}
-
-/**
- * Requires a string value.
- */
-export function validateString(value: unknown, label: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`${label} must be a string.`);
-  }
-
-  return value;
-}
-
-/**
- * Requires an array value.
- */
-export function validateArray(value: unknown, label: string): readonly unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be an array.`);
-  }
-
-  return value;
-}
-
-/**
- * Requires a plain object value.
- */
-export function validateRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`${label} must be an object.`);
-  }
-
-  return value;
-}
-
-/**
- * Requires a non-negative integer value.
- */
-export function validateNonNegativeInteger(value: unknown, label: string): number {
-  if (!Number.isInteger(value) || (value as number) < 0) {
-    throw new Error(`${label} must be a non-negative integer.`);
-  }
-
-  return value as number;
-}
-
-/**
- * Requires a non-negative finite number value.
- */
-export function validateNonNegativeNumber(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative finite number.`);
-  }
-
-  return value;
-}
-
-/**
- * Requires a lowercase hexadecimal SHA-256 digest.
- */
-export function validateLowercaseSha256(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !LOWERCASE_SHA256_PATTERN.test(value)) {
-    throw new Error(`${label} must be a lowercase hexadecimal SHA-256 digest.`);
-  }
-
-  return value;
+): T {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data;
+  const issue = result.error.issues[0];
+  const pathStr = issue && issue.path.length > 0 ? ` at ${issue.path.map(String).join('.')}` : '';
+  throw new Error(`Invalid ${label}${pathStr}: ${issue?.message ?? 'Unknown validation error'}`);
 }
 
 /**
@@ -168,7 +108,10 @@ export function validateNormalizedRelativePosixPath(
   label: string,
   locationDescription: string,
 ): string {
-  const relativePath = validateString(value, label);
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string.`);
+  }
+  const relativePath = value;
   const normalizedPath = path.posix.normalize(relativePath);
 
   if (

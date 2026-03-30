@@ -25,9 +25,6 @@ import {
   isAbsolutePosixOrWindowsPath,
   normalizeUserSuppliedRelativePath,
   parseSerializedJson,
-  validateArray,
-  validateRecord,
-  validateString,
 } from '../validation';
 import {
   CACHE_KEY_TEMPLATE_PLACEHOLDERS,
@@ -885,4 +882,29 @@ function normalizeGradleUserHome(input: string, env: NodeJS.ProcessEnv | undefin
   }
 
   return supportedDefault;
+}
+
+// -----------------------------------
+// File-private type-assertion helpers
+// -----------------------------------
+
+function validateString(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string.`);
+  }
+  return value;
+}
+
+function validateArray(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  return value;
+}
+
+function validateRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
 }

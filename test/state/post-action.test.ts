@@ -148,10 +148,10 @@ describe('post-action state helpers', () => {
   });
 
   it('rejects malformed consumed delta artifact state', () => {
-    expect(() => getPersistedConsumedDeltaArtifactNames(() => 'not-json')).toThrow(/valid JSON/u);
-    expect(() => getPersistedConsumedDeltaArtifactNames(() => '[""]')).toThrow(
-      /must not be blank/u,
+    expect(() => getPersistedConsumedDeltaArtifactNames(() => 'not-json')).toThrow(
+      /Could not parse serialized/u,
     );
+    expect(() => getPersistedConsumedDeltaArtifactNames(() => '[""]')).toThrow(/Too small/u);
   });
 
   it('rejects unsupported base cache restore result state', () => {
@@ -160,7 +160,7 @@ describe('post-action state helpers', () => {
         () =>
           '{"operation":"restore","status":"saved","cacheKey":"cache-key","matchedKey":null,"restoreKeys":[],"paths":["/tmp/.gradle"],"message":"bad"}',
       ),
-    ).toThrow(/Unsupported base cache restore result status/u);
+    ).toThrow(/Invalid base cache restore result state/u);
   });
 });
 

@@ -37,15 +37,12 @@ import type {
   WorkflowArtifactBackend,
   WorkflowArtifactDescriptor,
 } from '../storage/artifacts';
+import { z } from 'zod';
+
 import {
-  parseSerializedJsonObject,
-  validateArray,
-  validateLowercaseSha256 as validateSha256,
-  validateNonNegativeInteger,
-  validateNonNegativeNumber,
+  parseSerializedJson,
+  parseWithZod,
   validateNormalizedRelativePosixPath,
-  validateRecord,
-  validateString,
 } from '../validation';
 
 /** Schema version embedded in every delta artifact package metadata file. Increment on breaking format changes. */
@@ -59,26 +56,89 @@ const DELTA_PACKAGE_MANIFEST_FILE = 'delta-manifest.json';
 const DELTA_PACKAGE_PAYLOAD_DIRECTORY = 'payload';
 const DEFAULT_ARTIFACT_COMPRESSION_LEVEL = 1;
 const ARTIFACT_NAME_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
+const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 /**
  * Back-compat alias for the provider-neutral artifact descriptor.
  */
 export type { WorkflowArtifactDescriptor };
 
+// ---------------------------------------------------------------------------
+// Zod schemas — define once, derive both the runtime validator and the TS type
+// ---------------------------------------------------------------------------
+
+const packageRelativePathSchema = z.string().refine((val) => {
+  try {
+    validateNormalizedRelativePosixPath(val, '', 'the artifact package');
+    return true;
+  } catch {
+    return false;
+  }
+}, 'Must be a normalized relative POSIX path inside the artifact package');
+
+const sha256Schema = z
+  .string()
+  .regex(LOWERCASE_SHA256_PATTERN, 'Must be a lowercase hex SHA-256 digest');
+
+const producerSchema = z.object({
+  repository: z.string(),
+  workflowName: z.string(),
+  jobName: z.string(),
+  runId: z.number().int().nonnegative().nullable(),
+  runAttempt: z.number().int().nonnegative().nullable(),
+  runnerOs: z.string(),
+  runnerArch: z.string(),
+  safeRefName: z.string(),
+  cacheKey: z.string(),
+});
+
+const payloadEntrySchema = z.object({
+  relativePath: packageRelativePathSchema,
+  payloadPath: packageRelativePathSchema,
+  contentSha256: sha256Schema,
+  size: z.number().int().nonnegative(),
+  mode: z.number().int().nonnegative(),
+  mtimeMs: z.number().finite().nonnegative(),
+});
+
+const payloadEntriesSchema = z.array(payloadEntrySchema).superRefine((entries, ctx) => {
+  let prev = '';
+  for (const [i, entry] of entries.entries()) {
+    if (prev.localeCompare(entry.relativePath) >= 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [i, 'relativePath'],
+        message: 'Payload entries must be sorted by strictly increasing relativePath',
+      });
+    }
+    prev = entry.relativePath;
+  }
+});
+
+const deltaArtifactPackageMetadataSchema = z.object({
+  schemaVersion: z.literal(DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION),
+  artifactType: z.literal('buildish-mammoth-cache-gradle-delta'),
+  artifactName: z
+    .string()
+    .regex(
+      ARTIFACT_NAME_PATTERN,
+      'Artifact name contains unsupported characters. Allowed: letters, numbers, dot, underscore, dash',
+    ),
+  createdAt: z.string(),
+  producer: producerSchema,
+  deltaManifestPath: packageRelativePathSchema,
+  deltaManifestSha256: sha256Schema,
+  payloadEntries: payloadEntriesSchema,
+});
+
+// ---------------------------------------------------------------------------
+// Exported types (derived from schemas — single source of truth)
+// ---------------------------------------------------------------------------
+
 /**
  * Producer metadata embedded in a delta artifact package.
  */
-export interface DeltaArtifactProducerMetadata {
-  readonly repository: string;
-  readonly workflowName: string;
-  readonly jobName: string;
-  readonly runId: number | null;
-  readonly runAttempt: number | null;
-  readonly runnerOs: string;
-  readonly runnerArch: string;
-  readonly safeRefName: string;
-  readonly cacheKey: string;
-}
+export type DeltaArtifactProducerMetadata = z.infer<typeof producerSchema>;
 
 /**
  * Metadata entry describing one copied payload file inside a staged delta artifact.
@@ -86,28 +146,14 @@ export interface DeltaArtifactProducerMetadata {
  * `payloadPath` is always a generated path beneath `payload/`; it never reuses the original Gradle
  * cache relative path. This prevents path traversal and keeps archive extraction deterministic.
  */
-export interface DeltaArtifactPayloadEntry {
-  readonly relativePath: string;
-  readonly payloadPath: string;
-  readonly contentSha256: string;
-  readonly size: number;
-  readonly mode: number;
-  readonly mtimeMs: number;
-}
+export type DeltaArtifactPayloadEntry = z.infer<typeof payloadEntrySchema>;
 
 /**
  * Top-level metadata file stored alongside each staged delta artifact package.
  */
-export interface DeltaArtifactPackageMetadata {
-  readonly schemaVersion: typeof DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION;
-  readonly artifactType: 'buildish-mammoth-cache-gradle-delta';
-  readonly artifactName: string;
-  readonly createdAt: string;
-  readonly producer: DeltaArtifactProducerMetadata;
-  readonly deltaManifestPath: string;
-  readonly deltaManifestSha256: string;
-  readonly payloadEntries: readonly DeltaArtifactPayloadEntry[];
-}
+export type DeltaArtifactPackageMetadata = z.infer<typeof deltaArtifactPackageMetadataSchema>;
+
+// ---------------------------------------------------------------------------
 
 /**
  * Result of staging a delta artifact package on disk before upload.
@@ -235,7 +281,11 @@ export async function stageDeltaArtifactPackage(
   const metadataPath = path.join(rootDirectory, DELTA_PACKAGE_METADATA_FILE);
   const payloadDirectory = path.join(rootDirectory, DELTA_PACKAGE_PAYLOAD_DIRECTORY);
 
-  validateArtifactName(artifactName);
+  if (!ARTIFACT_NAME_PATTERN.test(artifactName)) {
+    throw new Error(
+      `Artifact name '${artifactName}' contains unsupported characters. Allowed: letters, numbers, dot, underscore, dash.`,
+    );
+  }
   await mkdir(payloadDirectory, { recursive: true });
 
   const payloadEntries = await stagePayloadEntries(deltaManifest, payloadDirectory);
@@ -519,32 +569,17 @@ export async function verifyExtractedDeltaArtifactPackage(
 export function deserializeDeltaArtifactPackageMetadata(
   serializedMetadata: string,
 ): DeltaArtifactPackageMetadata {
-  const parsed = parseSerializedJsonObject(serializedMetadata, 'delta artifact metadata');
-
-  return {
-    schemaVersion: validatePackageSchemaVersion(parsed.schemaVersion),
-    artifactType: validateArtifactType(parsed.artifactType),
-    artifactName: validateArtifactName(
-      validateString(parsed.artifactName, 'delta artifact metadata artifactName'),
-    ),
-    createdAt: validateString(parsed.createdAt, 'delta artifact metadata createdAt'),
-    producer: validateProducerMetadata(parsed.producer),
-    deltaManifestPath: validatePackageRelativePath(
-      validateString(parsed.deltaManifestPath, 'delta artifact metadata deltaManifestPath'),
-      'delta artifact metadata deltaManifestPath',
-    ),
-    deltaManifestSha256: validateSha256(
-      parsed.deltaManifestSha256,
-      'delta artifact metadata deltaManifestSha256',
-    ),
-    payloadEntries: validatePayloadEntries(parsed.payloadEntries),
-  };
+  return parseWithZod(
+    deltaArtifactPackageMetadataSchema,
+    parseSerializedJson(serializedMetadata, 'delta artifact metadata'),
+    'delta artifact metadata',
+  );
 }
 
 async function stagePayloadEntries(
   deltaManifest: CacheDeltaManifest,
   payloadDirectory: string,
-): Promise<readonly DeltaArtifactPayloadEntry[]> {
+): Promise<DeltaArtifactPayloadEntry[]> {
   const payloadEntries: DeltaArtifactPayloadEntry[] = [];
   const changedEntries = collectChangedEntries(deltaManifest);
 
@@ -753,114 +788,6 @@ function resolveArtifactPackagePath(rootDirectory: string, relativePath: string)
   );
 }
 
-function validatePackageSchemaVersion(
-  value: unknown,
-): typeof DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION {
-  if (value !== DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION) {
-    throw new Error(
-      `Delta artifact metadata schemaVersion must be ${DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION}.`,
-    );
-  }
-
-  return DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION;
-}
-
-function validateArtifactType(value: unknown): 'buildish-mammoth-cache-gradle-delta' {
-  if (value !== 'buildish-mammoth-cache-gradle-delta') {
-    throw new Error(`Delta artifact metadata type must be 'buildish-mammoth-cache-gradle-delta'.`);
-  }
-
-  return 'buildish-mammoth-cache-gradle-delta';
-}
-
-function validateProducerMetadata(value: unknown): DeltaArtifactProducerMetadata {
-  const producer = validateRecord(value, 'delta artifact metadata producer');
-
-  return {
-    repository: validateString(producer.repository, 'delta artifact metadata producer.repository'),
-    workflowName: validateString(
-      producer.workflowName,
-      'delta artifact metadata producer.workflowName',
-    ),
-    jobName: validateString(producer.jobName, 'delta artifact metadata producer.jobName'),
-    runId: validateNullableInteger(producer.runId, 'delta artifact metadata producer.runId'),
-    runAttempt: validateNullableInteger(
-      producer.runAttempt,
-      'delta artifact metadata producer.runAttempt',
-    ),
-    runnerOs: validateString(producer.runnerOs, 'delta artifact metadata producer.runnerOs'),
-    runnerArch: validateString(producer.runnerArch, 'delta artifact metadata producer.runnerArch'),
-    safeRefName: validateString(
-      producer.safeRefName,
-      'delta artifact metadata producer.safeRefName',
-    ),
-    cacheKey: validateString(producer.cacheKey, 'delta artifact metadata producer.cacheKey'),
-  };
-}
-
-function validatePayloadEntries(value: unknown): readonly DeltaArtifactPayloadEntry[] {
-  const entries = validateArray(value, 'delta artifact metadata payloadEntries');
-  let previousRelativePath = '';
-
-  return entries.map((entryValue, index) => {
-    const entry = validateRecord(
-      entryValue,
-      `delta artifact metadata payload entry at index ${index}`,
-    );
-    const relativePath = validatePackageRelativePath(
-      validateString(
-        entry.relativePath,
-        `delta artifact metadata payload entry ${index} relativePath`,
-      ),
-      `delta artifact metadata payload entry ${index} relativePath`,
-    );
-
-    if (previousRelativePath.localeCompare(relativePath) >= 0) {
-      throw new Error(
-        'Delta artifact payload entries must be sorted by strictly increasing relativePath.',
-      );
-    }
-    previousRelativePath = relativePath;
-
-    return {
-      relativePath,
-      payloadPath: validatePackageRelativePath(
-        validateString(
-          entry.payloadPath,
-          `delta artifact metadata payload entry ${index} payloadPath`,
-        ),
-        `delta artifact metadata payload entry ${index} payloadPath`,
-      ),
-      contentSha256: validateSha256(
-        entry.contentSha256,
-        `delta artifact metadata payload entry ${index} contentSha256`,
-      ),
-      size: validateNonNegativeInteger(
-        entry.size,
-        `delta artifact metadata payload entry ${index} size`,
-      ),
-      mode: validateNonNegativeInteger(
-        entry.mode,
-        `delta artifact metadata payload entry ${index} mode`,
-      ),
-      mtimeMs: validateNonNegativeNumber(
-        entry.mtimeMs,
-        `delta artifact metadata payload entry ${index} mtimeMs`,
-      ),
-    };
-  });
-}
-
-function validateArtifactName(artifactName: string): string {
-  if (!ARTIFACT_NAME_PATTERN.test(artifactName)) {
-    throw new Error(
-      `Artifact name '${artifactName}' contains unsupported characters. Allowed characters are letters, numbers, dot, underscore, and dash.`,
-    );
-  }
-
-  return artifactName;
-}
-
 function sanitizeArtifactToken(token: string, label: string, maxLength = 64): string {
   const trimmed = token.trim();
   if (trimmed.length === 0) {
@@ -888,12 +815,4 @@ function validatePackageRelativePath(relativePath: string, label: string): strin
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function validateNullableInteger(value: unknown, label: string): number | null {
-  if (value === null) {
-    return null;
-  }
-
-  return validateNonNegativeInteger(value, label);
 }

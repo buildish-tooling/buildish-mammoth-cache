@@ -17,12 +17,10 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { z } from 'zod';
+
 import type { CiJobContext } from '../ci';
-import {
-  parseSerializedJsonObject,
-  validateNonNegativeNumber,
-  validateString,
-} from '../validation';
+import { parseSerializedJson, parseWithZod } from '../validation';
 
 const CAPTURE_DIRECTORY_NAME = '.buildish-mammoth-cache-gradle';
 const BUILD_RESULTS_SUBDIRECTORY = 'build-results';
@@ -64,20 +62,41 @@ export interface GradleBuildReport {
   readonly warnings: readonly string[];
 }
 
-interface CapturedBuildResultFile {
-  readonly capturedAtEpochMillis: number;
-  readonly rootProjectName: string;
-  readonly requestedTasks: string;
-  readonly gradleVersion: string;
-  readonly javaVersion: string;
-  readonly buildFailed: boolean;
-  readonly configCacheHit: boolean;
-}
+const buildScanUriSchema = z.string().transform((val, ctx) => {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(val);
+  } catch {
+    ctx.addIssue({ code: 'custom', message: 'Must be a valid URL' });
+    return z.NEVER;
+  }
+  if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+    ctx.addIssue({
+      code: 'custom',
+      message: `Must use http or https, but was '${parsedUrl.protocol}'`,
+    });
+    return z.NEVER;
+  }
+  return parsedUrl.toString();
+});
 
-interface CapturedBuildScanFile {
-  readonly buildScanUri: string | null;
-  readonly buildScanFailed: boolean;
-}
+const capturedBuildResultFileSchema = z.object({
+  capturedAtEpochMillis: z.number().finite().nonnegative(),
+  rootProjectName: z.string(),
+  requestedTasks: z.string(),
+  gradleVersion: z.string(),
+  javaVersion: z.string().optional().default('unknown'),
+  buildFailed: z.boolean(),
+  configCacheHit: z.boolean(),
+});
+
+const capturedBuildScanFileSchema = z.object({
+  buildScanUri: z.union([buildScanUriSchema, z.null()]),
+  buildScanFailed: z.boolean(),
+});
+
+type CapturedBuildResultFile = z.infer<typeof capturedBuildResultFileSchema>;
+type CapturedBuildScanFile = z.infer<typeof capturedBuildScanFileSchema>;
 
 /**
  * Installs the Gradle build-result capture init script and Groovy service plugin into the
@@ -300,87 +319,19 @@ function validateCapturedBuildResultFile(
   contents: string,
   filePath: string,
 ): CapturedBuildResultFile {
-  const parsed = parseSerializedJsonObject(contents, `Gradle build result file '${filePath}'`);
-  return {
-    capturedAtEpochMillis: validateNonNegativeNumber(
-      parsed.capturedAtEpochMillis,
-      `Gradle build result file '${filePath}' capturedAtEpochMillis`,
-    ),
-    rootProjectName: validateString(
-      parsed.rootProjectName,
-      `Gradle build result file '${filePath}' rootProjectName`,
-    ),
-    requestedTasks: validateString(
-      parsed.requestedTasks,
-      `Gradle build result file '${filePath}' requestedTasks`,
-    ),
-    gradleVersion: validateString(
-      parsed.gradleVersion,
-      `Gradle build result file '${filePath}' gradleVersion`,
-    ),
-    javaVersion: validateOptionalCapturedJavaVersion(
-      parsed.javaVersion,
-      `Gradle build result file '${filePath}' javaVersion`,
-    ),
-    buildFailed: validateBoolean(
-      parsed.buildFailed,
-      `Gradle build result file '${filePath}' buildFailed`,
-    ),
-    configCacheHit: validateBoolean(
-      parsed.configCacheHit,
-      `Gradle build result file '${filePath}' configCacheHit`,
-    ),
-  };
+  return parseWithZod(
+    capturedBuildResultFileSchema,
+    parseSerializedJson(contents, `Gradle build result file '${filePath}'`),
+    `Gradle build result file '${filePath}'`,
+  );
 }
 
 function validateCapturedBuildScanFile(contents: string, filePath: string): CapturedBuildScanFile {
-  const parsed = parseSerializedJsonObject(contents, `Gradle build scan file '${filePath}'`);
-  const buildScanUri = parsed.buildScanUri;
-
-  return {
-    buildScanUri: buildScanUri === null ? null : validateBuildScanUri(buildScanUri, filePath),
-    buildScanFailed: validateBoolean(
-      parsed.buildScanFailed,
-      `Gradle build scan file '${filePath}' buildScanFailed`,
-    ),
-  };
-}
-
-function validateBuildScanUri(value: unknown, filePath: string): string {
-  const uri = validateString(value, `Gradle build scan file '${filePath}' buildScanUri`);
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(uri);
-  } catch (error: unknown) {
-    throw new Error(
-      `Gradle build scan file '${filePath}' buildScanUri must be a valid URL: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-
-  if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
-    throw new Error(
-      `Gradle build scan file '${filePath}' buildScanUri must use http or https, but was '${parsedUrl.protocol}'.`,
-    );
-  }
-
-  return parsedUrl.toString();
-}
-
-function validateBoolean(value: unknown, label: string): boolean {
-  if (typeof value !== 'boolean') {
-    throw new Error(`${label} must be a boolean.`);
-  }
-
-  return value;
-}
-
-function validateOptionalCapturedJavaVersion(value: unknown, label: string): string {
-  if (value === undefined) {
-    return 'unknown';
-  }
-
-  return validateString(value, label);
+  return parseWithZod(
+    capturedBuildScanFileSchema,
+    parseSerializedJson(contents, `Gradle build scan file '${filePath}'`),
+    `Gradle build scan file '${filePath}'`,
+  );
 }
 
 function resolveCaptureRoot(context: BuildCaptureContext): string | null {

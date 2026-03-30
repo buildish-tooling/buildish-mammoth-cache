@@ -17,23 +17,191 @@
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { z } from 'zod';
+
 import { hashFileSha256, isMissingPathError } from '../fs';
 import {
-  parseSerializedJsonObject,
-  validateArray,
-  validateLowercaseSha256 as validateSha256,
-  validateNonNegativeInteger,
-  validateNonNegativeNumber,
+  parseSerializedJson,
+  parseWithZod,
   validateNormalizedRelativePosixPath,
-  validateRecord,
-  validateString,
 } from '../validation';
-import type { CacheModel, CachePartitionDefinition } from './model';
+import type { CacheModel } from './model';
 
 /** Schema version embedded in every captured cache manifest. Increment on breaking format changes. */
 export const CACHE_MANIFEST_SCHEMA_VERSION = 2;
 const STABLE_ENTRY_CAPTURE_ATTEMPTS = 3;
 const CACHE_PARTITION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
+const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+
+// ---------------------------------------------------------------------------
+// Zod schemas — define once, derive both the runtime validator and the TS type
+// ---------------------------------------------------------------------------
+
+const cacheRelativePathSchema = z.string().refine((val) => {
+  try {
+    validateNormalizedRelativePosixPath(val, '', 'Gradle user home');
+    return true;
+  } catch {
+    return false;
+  }
+}, 'Must be a normalized relative POSIX path inside Gradle user home');
+
+const snapshotSchema = z.object({
+  contentSha256: z
+    .string()
+    .regex(LOWERCASE_SHA256_PATTERN, 'Must be a lowercase hex SHA-256 digest'),
+  size: z.number().int().nonnegative(),
+  mode: z.number().int().nonnegative(),
+  atimeMs: z.number().finite().nonnegative(),
+  mtimeMs: z.number().finite().nonnegative(),
+});
+
+const manifestEntrySchema = snapshotSchema.extend({
+  relativePath: cacheRelativePathSchema,
+});
+
+const manifestPartitionSchema = z.object({
+  partitionId: z
+    .string()
+    .regex(CACHE_PARTITION_ID_PATTERN, 'Contains unsupported partition identifier'),
+  entries: z.array(manifestEntrySchema).superRefine((entries, ctx) => {
+    let prev = '';
+    for (const [i, entry] of entries.entries()) {
+      if (prev.localeCompare(entry.relativePath) >= 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [i, 'relativePath'],
+          message: 'Entries must be sorted by strictly increasing relativePath',
+        });
+      }
+      prev = entry.relativePath;
+    }
+  }),
+});
+
+const cacheManifestSchema = z.object({
+  schemaVersion: z.literal(CACHE_MANIFEST_SCHEMA_VERSION),
+  gradleUserHome: z.string(),
+  partitions: z.array(manifestPartitionSchema).superRefine((partitions, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, p] of partitions.entries()) {
+      if (seen.has(p.partitionId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [i, 'partitionId'],
+          message: `Duplicate partition id '${p.partitionId}'`,
+        });
+      }
+      seen.add(p.partitionId);
+    }
+  }),
+});
+
+const deltaEntrySchema = z
+  .object({
+    relativePath: cacheRelativePathSchema,
+    changeType: z.enum(['added', 'modified', 'deleted']),
+    previous: snapshotSchema.nullable(),
+    current: snapshotSchema.nullable(),
+  })
+  .superRefine((entry, ctx) => {
+    const addIssue = (message: string): void => {
+      ctx.addIssue({ code: 'custom', message });
+    };
+    if (entry.changeType === 'added' && (entry.previous !== null || entry.current === null)) {
+      addIssue(`Delta entry '${entry.relativePath}' must only include a current snapshot`);
+    } else if (
+      entry.changeType === 'deleted' &&
+      (entry.previous === null || entry.current !== null)
+    ) {
+      addIssue(`Delta entry '${entry.relativePath}' must only include a previous snapshot`);
+    } else if (
+      entry.changeType === 'modified' &&
+      (entry.previous === null || entry.current === null)
+    ) {
+      addIssue(
+        `Delta entry '${entry.relativePath}' must include both previous and current snapshots`,
+      );
+    }
+  });
+
+const deltaPartitionSchema = z.object({
+  partitionId: z
+    .string()
+    .regex(CACHE_PARTITION_ID_PATTERN, 'Contains unsupported partition identifier'),
+  entries: z.array(deltaEntrySchema).superRefine((entries, ctx) => {
+    let prev = '';
+    for (const [i, entry] of entries.entries()) {
+      if (prev.localeCompare(entry.relativePath) >= 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [i, 'relativePath'],
+          message: 'Entries must be sorted by strictly increasing relativePath',
+        });
+      }
+      prev = entry.relativePath;
+    }
+  }),
+});
+
+const cacheDeltaManifestSchema = z.object({
+  schemaVersion: z.literal(CACHE_MANIFEST_SCHEMA_VERSION),
+  gradleUserHome: z.string(),
+  partitions: z.array(deltaPartitionSchema).superRefine((partitions, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, p] of partitions.entries()) {
+      if (seen.has(p.partitionId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [i, 'partitionId'],
+          message: `Duplicate partition id '${p.partitionId}'`,
+        });
+      }
+      seen.add(p.partitionId);
+    }
+  }),
+});
+
+// ---------------------------------------------------------------------------
+// Exported types (derived from schemas — single source of truth)
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable file metadata captured for one cache file at one point in time.
+ */
+export type CacheFileSnapshot = z.infer<typeof snapshotSchema>;
+
+/**
+ * Captured manifest entry for one regular file rooted under the supported Gradle user home.
+ */
+export type CacheFileManifestEntry = z.infer<typeof manifestEntrySchema>;
+
+/**
+ * Captured manifest entries for one logical cache partition.
+ */
+export type CachePartitionManifest = z.infer<typeof manifestPartitionSchema>;
+
+/**
+ * Full pre- or post-build cache manifest for all configured Gradle cache partitions.
+ */
+export type CacheManifest = z.infer<typeof cacheManifestSchema>;
+
+/**
+ * Captured change for a single path between two manifests.
+ */
+export type CacheDeltaEntry = z.infer<typeof deltaEntrySchema>;
+
+/**
+ * Partition-local delta entries.
+ */
+export type CachePartitionDelta = z.infer<typeof deltaPartitionSchema>;
+
+/**
+ * Full delta manifest between two cache manifests.
+ */
+export type CacheDeltaManifest = z.infer<typeof cacheDeltaManifestSchema>;
+
+// ---------------------------------------------------------------------------
 
 interface CompiledGlobPattern {
   readonly source: string;
@@ -50,92 +218,6 @@ type CompiledGlobSegment =
     };
 
 /**
- * Stable file metadata captured for one cache file at one point in time.
- */
-export interface CacheFileSnapshot {
-  /** SHA-256 digest of the file contents in lowercase hexadecimal form. */
-  readonly contentSha256: string;
-  /** File size in bytes. */
-  readonly size: number;
-  /** POSIX mode bits reported by the filesystem stat result. */
-  readonly mode: number;
-  /** Best-effort file access time in milliseconds since the Unix epoch. */
-  readonly atimeMs: number;
-  /** File modification time in milliseconds since the Unix epoch. */
-  readonly mtimeMs: number;
-}
-
-/**
- * Captured manifest entry for one regular file rooted under the supported Gradle user home.
- */
-export interface CacheFileManifestEntry extends CacheFileSnapshot {
-  /** POSIX-style path relative to `gradleUserHome`. */
-  readonly relativePath: string;
-}
-
-/**
- * Captured manifest entries for one logical cache partition.
- */
-export interface CachePartitionManifest {
-  /** Stable partition identifier from the cache model. */
-  readonly partitionId: CachePartitionDefinition['id'];
-  /** Sorted manifest entries for this partition. */
-  readonly entries: readonly CacheFileManifestEntry[];
-}
-
-/**
- * Full pre- or post-build cache manifest for all configured Gradle cache partitions.
- */
-export interface CacheManifest {
-  /** Schema version for on-disk manifest serialization. */
-  readonly schemaVersion: typeof CACHE_MANIFEST_SCHEMA_VERSION;
-  /** Absolute Gradle user home path the manifest was captured from. */
-  readonly gradleUserHome: string;
-  /** Ordered partition manifests following the resolved cache model partition order. */
-  readonly partitions: readonly CachePartitionManifest[];
-}
-
-/**
- * Captured change for a single path between two manifests.
- */
-export interface CacheDeltaEntry {
-  /** POSIX-style path relative to `gradleUserHome`. */
-  readonly relativePath: string;
-  /**
-   * Change classification.
-   *
-   * Valid values are `added`, `modified`, and `deleted`.
-   */
-  readonly changeType: 'added' | 'modified' | 'deleted';
-  /** Snapshot from the earlier manifest, or `null` for newly added files. */
-  readonly previous: CacheFileSnapshot | null;
-  /** Snapshot from the later manifest, or `null` for deleted files. */
-  readonly current: CacheFileSnapshot | null;
-}
-
-/**
- * Partition-local delta entries.
- */
-export interface CachePartitionDelta {
-  /** Stable partition identifier from the cache model. */
-  readonly partitionId: CachePartitionDefinition['id'];
-  /** Sorted delta entries for this partition. */
-  readonly entries: readonly CacheDeltaEntry[];
-}
-
-/**
- * Full delta manifest between two cache manifests.
- */
-export interface CacheDeltaManifest {
-  /** Schema version for on-disk delta serialization. */
-  readonly schemaVersion: typeof CACHE_MANIFEST_SCHEMA_VERSION;
-  /** Absolute Gradle user home path shared by the compared manifests. */
-  readonly gradleUserHome: string;
-  /** Ordered partition deltas following the resolved cache model partition order. */
-  readonly partitions: readonly CachePartitionDelta[];
-}
-
-/**
  * Scans all configured cache partitions and captures a deterministic manifest of regular files.
  *
  * The scanner retries a small number of times when a file changes while being hashed, so the later delta
@@ -150,7 +232,7 @@ export async function captureCacheManifest(cacheModel: CacheModel): Promise<Cach
     entries: [] as CacheFileManifestEntry[],
     seenRelativePaths: new Set<string>(),
   }));
-  const claimedPaths = new Map<string, CachePartitionDefinition['id']>();
+  const claimedPaths = new Map<string, string>();
 
   for (const compiledPartition of compiledPartitions) {
     for (const includePattern of compiledPartition.includePatterns) {
@@ -293,26 +375,22 @@ export function serializeCacheDeltaManifest(deltaManifest: CacheDeltaManifest): 
  * Parses a serialized cache manifest and validates that it conforms to the current schema.
  */
 export function deserializeCacheManifest(serializedManifest: string): CacheManifest {
-  const parsed = parseSerializedJsonObject(serializedManifest, 'cache manifest');
-
-  return {
-    schemaVersion: validateSchemaVersion(parsed.schemaVersion, 'cache manifest'),
-    gradleUserHome: validateString(parsed.gradleUserHome, 'cache manifest gradleUserHome'),
-    partitions: validateManifestPartitions(parsed.partitions),
-  };
+  return parseWithZod(
+    cacheManifestSchema,
+    parseSerializedJson(serializedManifest, 'cache manifest'),
+    'cache manifest',
+  );
 }
 
 /**
  * Parses a serialized delta manifest and validates that it conforms to the current schema.
  */
 export function deserializeCacheDeltaManifest(serializedDeltaManifest: string): CacheDeltaManifest {
-  const parsed = parseSerializedJsonObject(serializedDeltaManifest, 'cache delta manifest');
-
-  return {
-    schemaVersion: validateSchemaVersion(parsed.schemaVersion, 'cache delta manifest'),
-    gradleUserHome: validateString(parsed.gradleUserHome, 'cache delta manifest gradleUserHome'),
-    partitions: validateDeltaPartitions(parsed.partitions),
-  };
+  return parseWithZod(
+    cacheDeltaManifestSchema,
+    parseSerializedJson(serializedDeltaManifest, 'cache delta manifest'),
+    'cache delta manifest',
+  );
 }
 
 async function captureStableFileEntry(
@@ -678,190 +756,4 @@ function isStableDuringCapture(
 
 function toPosixRelativePath(baseDirectory: string, absolutePath: string): string {
   return path.relative(baseDirectory, absolutePath).split(path.sep).join(path.posix.sep);
-}
-
-function validateManifestPartitions(value: unknown): readonly CachePartitionManifest[] {
-  const partitions = validateArray(value, 'cache manifest partitions');
-  const seenPartitionIds = new Set<string>();
-
-  return partitions.map((partitionValue, index) => {
-    const partition = validateRecord(partitionValue, `cache manifest partition at index ${index}`);
-    const partitionId = validatePartitionId(
-      partition.partitionId,
-      `cache manifest partition ${index}`,
-    );
-
-    if (seenPartitionIds.has(partitionId)) {
-      throw new Error(`Cache manifest partitions contain duplicate partition id '${partitionId}'.`);
-    }
-    seenPartitionIds.add(partitionId);
-
-    return {
-      partitionId,
-      entries: validateManifestEntries(
-        partition.entries,
-        `cache manifest partition '${partitionId}' entries`,
-      ),
-    };
-  });
-}
-
-function validateDeltaPartitions(value: unknown): readonly CachePartitionDelta[] {
-  const partitions = validateArray(value, 'cache delta manifest partitions');
-  const seenPartitionIds = new Set<string>();
-
-  return partitions.map((partitionValue, index) => {
-    const partition = validateRecord(partitionValue, `cache delta partition at index ${index}`);
-    const partitionId = validatePartitionId(
-      partition.partitionId,
-      `cache delta partition ${index}`,
-    );
-
-    if (seenPartitionIds.has(partitionId)) {
-      throw new Error(
-        `Cache delta manifest partitions contain duplicate partition id '${partitionId}'.`,
-      );
-    }
-    seenPartitionIds.add(partitionId);
-
-    return {
-      partitionId,
-      entries: validateDeltaEntries(
-        partition.entries,
-        `cache delta partition '${partitionId}' entries`,
-      ),
-    };
-  });
-}
-
-function validateManifestEntries(value: unknown, label: string): readonly CacheFileManifestEntry[] {
-  const entries = validateArray(value, label);
-  let previousRelativePath = '';
-
-  return entries.map((entryValue, index) => {
-    const entry = validateRecord(entryValue, `${label} entry at index ${index}`);
-    const relativePath = validateCacheRelativePath(
-      entry.relativePath,
-      `${label} entry ${index} relativePath`,
-    );
-
-    if (previousRelativePath.localeCompare(relativePath) >= 0) {
-      throw new Error(`${label} must be sorted by strictly increasing relativePath.`);
-    }
-    previousRelativePath = relativePath;
-
-    return {
-      relativePath,
-      ...validateSnapshot(entry, `${label} entry '${relativePath}'`),
-    };
-  });
-}
-
-function validateDeltaEntries(value: unknown, label: string): readonly CacheDeltaEntry[] {
-  const entries = validateArray(value, label);
-  let previousRelativePath = '';
-
-  return entries.map((entryValue, index) => {
-    const entry = validateRecord(entryValue, `${label} entry at index ${index}`);
-    const relativePath = validateCacheRelativePath(
-      entry.relativePath,
-      `${label} entry ${index} relativePath`,
-    );
-
-    if (previousRelativePath.localeCompare(relativePath) >= 0) {
-      throw new Error(`${label} must be sorted by strictly increasing relativePath.`);
-    }
-    previousRelativePath = relativePath;
-
-    const changeType = validateDeltaChangeType(
-      entry.changeType,
-      `${label} entry '${relativePath}'`,
-    );
-    const previous = validateNullableSnapshot(
-      entry.previous,
-      `${label} entry '${relativePath}' previous`,
-    );
-    const current = validateNullableSnapshot(
-      entry.current,
-      `${label} entry '${relativePath}' current`,
-    );
-    validateDeltaSnapshotCombination(relativePath, changeType, previous, current);
-
-    return {
-      relativePath,
-      changeType,
-      previous,
-      current,
-    };
-  });
-}
-
-function validateDeltaSnapshotCombination(
-  relativePath: string,
-  changeType: CacheDeltaEntry['changeType'],
-  previous: CacheFileSnapshot | null,
-  current: CacheFileSnapshot | null,
-): void {
-  if (changeType === 'added' && (previous || !current)) {
-    throw new Error(`Delta entry '${relativePath}' must only include a current snapshot.`);
-  }
-
-  if (changeType === 'deleted' && (!previous || current)) {
-    throw new Error(`Delta entry '${relativePath}' must only include a previous snapshot.`);
-  }
-
-  if (changeType === 'modified' && (!previous || !current)) {
-    throw new Error(
-      `Delta entry '${relativePath}' must include both previous and current snapshots.`,
-    );
-  }
-}
-
-function validateSnapshot(value: unknown, label: string): CacheFileSnapshot {
-  const snapshot = validateRecord(value, label);
-
-  return {
-    contentSha256: validateSha256(snapshot.contentSha256, `${label} contentSha256`),
-    size: validateNonNegativeInteger(snapshot.size, `${label} size`),
-    mode: validateNonNegativeInteger(snapshot.mode, `${label} mode`),
-    atimeMs: validateNonNegativeNumber(snapshot.atimeMs, `${label} atimeMs`),
-    mtimeMs: validateNonNegativeNumber(snapshot.mtimeMs, `${label} mtimeMs`),
-  };
-}
-
-function validateNullableSnapshot(value: unknown, label: string): CacheFileSnapshot | null {
-  return value === null ? null : validateSnapshot(value, label);
-}
-
-function validateSchemaVersion(
-  value: unknown,
-  label: string,
-): typeof CACHE_MANIFEST_SCHEMA_VERSION {
-  if (value !== CACHE_MANIFEST_SCHEMA_VERSION) {
-    throw new Error(
-      `${label} schemaVersion must be ${CACHE_MANIFEST_SCHEMA_VERSION}, but was '${String(value)}'.`,
-    );
-  }
-
-  return CACHE_MANIFEST_SCHEMA_VERSION;
-}
-
-function validatePartitionId(value: unknown, label: string): CachePartitionDefinition['id'] {
-  if (typeof value !== 'string' || !CACHE_PARTITION_ID_PATTERN.test(value)) {
-    throw new Error(`${label} contains unsupported partition identifier '${String(value)}'.`);
-  }
-
-  return value as CachePartitionDefinition['id'];
-}
-
-function validateDeltaChangeType(value: unknown, label: string): CacheDeltaEntry['changeType'] {
-  if (value !== 'added' && value !== 'modified' && value !== 'deleted') {
-    throw new Error(`${label} contains unsupported change type '${String(value)}'.`);
-  }
-
-  return value;
-}
-
-function validateCacheRelativePath(value: unknown, label: string): string {
-  return validateNormalizedRelativePosixPath(value, label, 'Gradle user home');
 }
