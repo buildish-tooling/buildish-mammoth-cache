@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
-import { runFinalizeExecution } from '../../phases/finalize/cli';
-import { GradleBuildToolAdapter } from '../../build-tool/gradle/adapter';
+import { MavenBuildToolAdapter } from '../../../build-tool/maven/adapter';
+import {
+  readMavenActionInputs,
+  resolveMavenActionInputsFromConfigFile,
+  normalizeMavenActionConfig,
+} from '../../../build-tool/maven/config';
+import { runFinalizeExecution } from '../../../phases/finalize/cli';
+import type { NormalizedMavenConfig } from '../../../config/types';
 
 import {
   createGitHubBaseCacheBackend,
@@ -23,7 +29,7 @@ import {
   createGitHubReportSink,
   createGitHubHost,
   createGitHubWorkflowArtifactBackend,
-} from './index';
+} from '../index';
 
 const runtimeHost = createGitHubHost();
 const ciProvider = createGitHubPlatform({
@@ -35,14 +41,29 @@ const ciProvider = createGitHubPlatform({
 });
 const reportSink = createGitHubReportSink({ env: process.env });
 
-void runFinalizeExecution({
-  runtimeHost,
-  ciProvider,
-  reportSink,
-  env: process.env,
-  cacheBackend: createGitHubBaseCacheBackend(),
-  artifactBackend: createGitHubWorkflowArtifactBackend(),
-  buildToolAdapterFactory: (config) => new GradleBuildToolAdapter(config),
-}).catch((error: unknown) => {
+async function main(): Promise<void> {
+  const directInputs = readMavenActionInputs(runtimeHost);
+  const rawInputs = await resolveMavenActionInputsFromConfigFile(directInputs, {
+    workspace: ciProvider.context.workspace,
+  });
+  const config: NormalizedMavenConfig = normalizeMavenActionConfig(rawInputs, {
+    phase: 'finalize',
+    ciContext: ciProvider.context,
+    env: process.env,
+  });
+
+  await runFinalizeExecution({
+    runtimeHost,
+    ciProvider,
+    reportSink,
+    config,
+    env: process.env,
+    cacheBackend: createGitHubBaseCacheBackend(),
+    artifactBackend: createGitHubWorkflowArtifactBackend(),
+    buildToolAdapterFactory: () => new MavenBuildToolAdapter(config),
+  });
+}
+
+main().catch((error: unknown) => {
   runtimeHost.setFailed(error instanceof Error ? error.message : String(error));
 });

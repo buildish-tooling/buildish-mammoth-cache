@@ -14,8 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Mammoth Cache for Gradle
+# Mammoth Cache for Gradle and Maven
 
-Mammoth Cache for Gradle provides secure Gradle wrapper provisioning plus local and distributed cache management for GitHub Actions.
+Mammoth Cache for Gradle and Maven provides local and distributed build cache management for
+GitHub Actions — with secure Gradle wrapper provisioning for Gradle builds and lightweight
+local-repository caching for Maven builds.
 
-Use the unreleased docs for workflow usage, configuration, cache-partition behavior, security notes, maintenance guidance, and current project status.
+Use the unreleased docs for workflow usage, configuration, cache-partition behavior, security
+notes, maintenance guidance, and current project status.

@@ -39,7 +39,7 @@ describe('Gradle build reporting', () => {
 
   it('merges captured build results with optional build scan metadata', async () => {
     const runnerTemp = await createRunnerTemp(temporaryDirectories);
-    const captureRoot = path.join(runnerTemp, '.buildish-mammoth-cache-gradle');
+    const captureRoot = path.join(runnerTemp, '.buildish-mammoth-cache');
     const buildResultsDirectory = path.join(captureRoot, 'build-results');
     const buildScansDirectory = path.join(captureRoot, 'build-scans');
     await mkdir(buildResultsDirectory, { recursive: true });
@@ -174,7 +174,7 @@ describe('Gradle build reporting', () => {
       path.join(
         gradleUserHome,
         'init.d',
-        'buildish-mammoth-cache-gradle.build-result-capture.init.gradle',
+        'buildish-mammoth-cache.build-result-capture.init.gradle',
       ),
       'utf8',
     );
@@ -182,7 +182,7 @@ describe('Gradle build reporting', () => {
       path.join(
         gradleUserHome,
         'init.d',
-        'buildish-mammoth-cache-gradle.build-result-capture-service.plugin.groovy',
+        'buildish-mammoth-cache.build-result-capture-service.plugin.groovy',
       ),
       'utf8',
     );
@@ -190,14 +190,12 @@ describe('Gradle build reporting', () => {
     expect(initScript).toContain('Gradle build-result capture requires Gradle 7.0+');
     expect(initScript).not.toContain('captureUsingBuildFinished');
     expect(initScript).toContain(
-      `def captureRootDir = ${JSON.stringify(path.join(runnerTemp, '.buildish-mammoth-cache-gradle'))}`,
+      `def captureRootDir = ${JSON.stringify(path.join(runnerTemp, '.buildish-mammoth-cache'))}`,
     );
     expect(servicePlugin).toContain(
-      `def captureRootDir = ${JSON.stringify(path.join(runnerTemp, '.buildish-mammoth-cache-gradle'))}`,
+      `def captureRootDir = ${JSON.stringify(path.join(runnerTemp, '.buildish-mammoth-cache'))}`,
     );
-    expect(servicePlugin).toContain(
-      'def captureInvocationNamespace = "buildish-mammoth-cache-gradle"',
-    );
+    expect(servicePlugin).toContain('def captureInvocationNamespace = "buildish-mammoth-cache"');
   });
 });
 

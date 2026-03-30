@@ -1,7 +1,7 @@
 ---
 title: Configuration Reference
 weight: 30
-description: All action inputs and config-file options for Apache Buildish Mammoth Cache for Gradle.
+description: All action inputs and config-file options for Apache Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
@@ -20,7 +20,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-## `config-file`
+The action is available in two build-tool-specific variants that share most inputs:
+
+- **Gradle** — `apache/buildish-mammoth-cache/actions/github/gradle@<sha>`
+- **Maven** — `apache/buildish-mammoth-cache/actions/github/maven@<sha>`
+
+All inputs described in [Common inputs](#common-inputs) apply to both. Inputs described under
+[Gradle-only inputs](#gradle-only-inputs) or [Maven-only inputs](#maven-only-inputs) are accepted
+only by the corresponding action and ignored (or rejected) by the other.
+
+---
+
+## Common inputs
+
+### `config-file`
 
 - Default: unset
 - Optional workspace-relative `.json`, `.yml`, or `.yaml` file containing a top-level object.
@@ -31,7 +44,7 @@ limitations under the License.
 - `github-token` is intentionally rejected in config files; pass secrets directly via action inputs or environment variables.
 - The resolved file must remain inside the workspace after symlink resolution.
 
-## `base-directory`
+### `base-directory`
 
 - Default: `.`
 - Repository-relative base directory for wrapper discovery and other project-relative paths.
@@ -39,13 +52,13 @@ limitations under the License.
 - Absolute/rooted paths are rejected, including `C:\repo`, `\Windows\System32`, and `\\server\share`.
 - Must remain inside the repository workspace.
 
-## `cache-enabled`
+### `cache-enabled`
 
 - Default: `true`
 - Accepted values: `true`, `false`
 - Enables or disables cache orchestration.
 
-## `read-only`
+### `read-only`
 
 - Default: event-dependent
 - Accepted values: `true`, `false`
@@ -53,7 +66,7 @@ limitations under the License.
 - Defaults to `false` for other events.
 - Use this to prevent cache mutation.
 
-## `job-mode`
+### `job-mode`
 
 - Default: `standalone`
 - Supported values:
@@ -62,19 +75,19 @@ limitations under the License.
   - `distributed-aggregator`
 - Controls cache coordination behavior.
 
-## `dependent-jobs`
+### `dependent-jobs`
 
 - Default: empty
 - Comma- or newline-separated job names.
 - Only valid with distributed job modes.
 
-## `cache-key-prefix`
+### `cache-key-prefix`
 
-- Default: `buildish-mammoth-gradle-cache-`
+- Default: `buildish-mammoth-gradle-cache-` for Gradle, `buildish-mammoth-maven-cache-` for Maven
 - Must start with an alphanumeric character.
 - Remaining characters may only be letters, numbers, `.`, `_`, or `-`.
 
-## `cache-key-template`
+### `cache-key-template`
 
 - Default: unset
 - Optional restricted template for cache key generation.
@@ -88,50 +101,27 @@ limitations under the License.
   - `${refName}`
 - Custom templates must include `${partitionFingerprint}` so different cache partition layouts do not share the same base cache key.
 
-## `cache-partitions`
+### `cache-partitions`
 
 - Default: empty
 - Optional JSON array of cache partition overrides and custom partitions.
 - In `config-file`, this may also be a native YAML/JSON array instead of a serialized string.
 - Each object must contain:
   - `id`: lowercase letters, numbers, and `-` only
-  - `includes`: array of Gradle-user-home-relative include globs
-  - `excludes`: optional array of Gradle-user-home-relative exclude globs
+  - `includes`: array of cache-root-relative include globs
+  - `excludes`: optional array of cache-root-relative exclude globs
 - Overriding a built-in partition replaces its built-in include/exclude lists.
 - Setting `includes: []` disables a built-in partition.
 - Custom partitions must have at least one include glob.
 - Hard safety excludes are always enforced even when a partition is overridden.
 
-## `process-all-wrapper-files`
-
-- Default: `false`
-- Accepted values: `true`, `false`
-- Scans for every matching wrapper properties file under `base-directory`.
-- Cannot be combined with `wrapper-properties-files`.
-
-## `wrapper-properties-glob`
-
-- Default: `**/gradle/wrapper/gradle-wrapper.properties`
-- Repository-relative discovery glob used beneath `base-directory`.
-- Windows-style relative paths using `\` are accepted and normalized before evaluation.
-- Absolute/rooted paths are rejected, including drive-prefixed, rooted, and UNC paths.
-
-## `wrapper-properties-files`
-
-- Default: empty
-- Comma- or newline-separated explicit `gradle-wrapper.properties` files.
-- Paths are relative to `base-directory`.
-- Windows-style relative paths using `\` are accepted and normalized to internal POSIX-style paths.
-- Absolute/rooted paths are rejected, including drive-prefixed, rooted, and UNC paths.
-- Entries must be explicit file paths, not globs.
-
-## `cleanup-enabled`
+### `cleanup-enabled`
 
 - Default: `true`
 - Accepted values: `true`, `false`
 - Enables the later cleanup-trigger flow used by cache management.
 
-## `restore-cleanup-mode`
+### `restore-cleanup-mode`
 
 - Default: `none`
 - Supported values: `none`, `prune-managed`
@@ -140,23 +130,65 @@ limitations under the License.
 - It never deletes files outside the action-managed partition space.
 - It is intentionally an opt-in because it is more destructive and may increase restore time.
 
-## `gradle-user-home`
+### `allow-duplicate-dependent-delta-paths`
+
+- Default: `false`
+- Accepted values: `true`, `false`
+- When `true`, the aggregator tolerates two worker deltas that both modified the same path (last writer wins).
+- When `false`, any path conflict is treated as an error to prevent silent data loss.
+- Only relevant for distributed aggregator jobs.
+
+### `github-token`
+
+- Default: unset
+- **Gradle only** — used for authenticated wrapper JAR downloads (see below). Unused by the Maven action.
+- When omitted, the Gradle action falls back to `GITHUB_TOKEN` from the runner environment if available.
+- Never written to summaries or persisted post-action state.
+
+---
+
+## Gradle-only inputs
+
+### `process-all-wrapper-files`
+
+- Default: `false`
+- Accepted values: `true`, `false`
+- Scans for every matching wrapper properties file under `base-directory`.
+- Cannot be combined with `wrapper-properties-files`.
+
+### `wrapper-properties-glob`
+
+- Default: `**/gradle/wrapper/gradle-wrapper.properties`
+- Repository-relative discovery glob used beneath `base-directory`.
+- Windows-style relative paths using `\` are accepted and normalized before evaluation.
+- Absolute/rooted paths are rejected, including drive-prefixed, rooted, and UNC paths.
+
+### `wrapper-properties-files`
+
+- Default: empty
+- Comma- or newline-separated explicit `gradle-wrapper.properties` files.
+- Paths are relative to `base-directory`.
+- Windows-style relative paths using `\` are accepted and normalized to internal POSIX-style paths.
+- Absolute/rooted paths are rejected, including drive-prefixed, rooted, and UNC paths.
+- Entries must be explicit file paths, not globs.
+
+### `gradle-user-home`
 
 - Default: `$GRADLE_USER_HOME` when set, otherwise `$HOME/.gradle`
 - In v1, only the default Gradle user home is supported. Non-default values fail validation intentionally.
 
-## `setup-java`
+### `setup-java`
 
 - Default: `false`
 - Reserved compatibility flag. In v1, setting `true` fails intentionally.
 - Run `actions/setup-java` before this action instead.
 
-## `github-token`
+---
 
-- Default: unset
-- Optional GitHub token used only for authenticated wrapper JAR downloads against the GitHub API.
-- When omitted, the action uses `GITHUB_TOKEN` from the runner environment if available.
-- Helps reduce throttling when fetching `gradle-wrapper.jar` from the Gradle source repository.
-- Downloaded wrapper JARs are accepted only after detached-signature and SHA-256 verification.
-- Gradle signing keys are pinned in-source as an allowlist so old and new keys can overlap during rotation.
-- Never written to summaries or persisted post-action state.
+## Maven-only inputs
+
+### `maven-local-repository`
+
+- Default: `$MAVEN_USER_HOME` when set, otherwise `$HOME/.m2`
+- Absolute path to the Maven local repository that the action should cache.
+- In v1, the path must resolve to the default Maven local repository location.

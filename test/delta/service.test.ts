@@ -36,7 +36,7 @@ import {
 import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
-import type { NormalizedActionConfig } from '../../src/config/types';
+import type { NormalizedGradleConfig } from '../../src/config/types';
 import type { CiJobContext } from '../../src/ci/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
@@ -58,7 +58,7 @@ describe('artifact exchange service', () => {
   it('creates a deterministic human-readable artifact name', async () => {
     const gradleUserHome = await createTempDirectory(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-artifact-name-',
+      'buildish-mammoth-cache-artifact-name-',
     );
     const cacheModel = createFixtureCacheModel(gradleUserHome);
 
@@ -94,7 +94,7 @@ describe('artifact exchange service', () => {
   it('stages, uploads, locates, downloads, and verifies a portable delta artifact package', async () => {
     const gradleUserHome = await createTempDirectory(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-stage-',
+      'buildish-mammoth-cache-stage-',
     );
     const cacheModel = createFixtureCacheModel(gradleUserHome);
     const ciContext = createFixtureCiContext();
@@ -124,7 +124,7 @@ describe('artifact exchange service', () => {
     const stagedPackage = await stageDeltaArtifactPackage(ciContext, cacheModel, deltaManifest, {
       parentDirectory: await createTempDirectory(
         temporaryDirectories,
-        'buildish-mammoth-cache-gradle-stage-parent-',
+        'buildish-mammoth-cache-stage-parent-',
       ),
     });
 
@@ -160,10 +160,7 @@ describe('artifact exchange service', () => {
     expect(rawMetadata.producer).not.toHaveProperty('provider');
 
     const fakeApi = new FakeArtifactApi(
-      await createTempDirectory(
-        temporaryDirectories,
-        'buildish-mammoth-cache-gradle-artifact-store-',
-      ),
+      await createTempDirectory(temporaryDirectories, 'buildish-mammoth-cache-artifact-store-'),
     );
     const uploadedPackage = await uploadDeltaArtifactPackage(fakeApi, stagedPackage);
     const locatedArtifact = await findDeltaArtifactByProducerJob(
@@ -180,7 +177,7 @@ describe('artifact exchange service', () => {
       {
         parentDirectory: await createTempDirectory(
           temporaryDirectories,
-          'buildish-mammoth-cache-gradle-download-parent-',
+          'buildish-mammoth-cache-download-parent-',
         ),
       },
     );
@@ -287,7 +284,7 @@ describe('artifact exchange service', () => {
   it('fails staging when source files drift after the delta manifest was captured', async () => {
     const gradleUserHome = await createTempDirectory(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-drift-',
+      'buildish-mammoth-cache-drift-',
     );
     const cacheModel = createFixtureCacheModel(gradleUserHome);
 
@@ -316,7 +313,7 @@ describe('artifact exchange service', () => {
       stageDeltaArtifactPackage(createFixtureCiContext(), cacheModel, deltaManifest, {
         parentDirectory: await createTempDirectory(
           temporaryDirectories,
-          'buildish-mammoth-cache-gradle-drift-parent-',
+          'buildish-mammoth-cache-drift-parent-',
         ),
       }),
     ).rejects.toThrow(/captured manifest snapshot|content drift/u);
@@ -404,7 +401,7 @@ class FakeArtifactApi implements WorkflowArtifactBackend {
 async function createStagedDeltaFixture(temporaryDirectories: Set<string>) {
   const gradleUserHome = await createTempDirectory(
     temporaryDirectories,
-    'buildish-mammoth-cache-gradle-fixture-',
+    'buildish-mammoth-cache-fixture-',
   );
   const cacheModel = createFixtureCacheModel(gradleUserHome);
 
@@ -426,13 +423,13 @@ async function createStagedDeltaFixture(temporaryDirectories: Set<string>) {
   return stageDeltaArtifactPackage(createFixtureCiContext(), cacheModel, deltaManifest, {
     parentDirectory: await createTempDirectory(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-fixture-parent-',
+      'buildish-mammoth-cache-fixture-parent-',
     ),
   });
 }
 
 function createFixtureCacheModel(gradleUserHome: string): CacheModel {
-  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedGradleConfig);
   const partitions = createCachePartitions(
     gradleUserHome,
     [],

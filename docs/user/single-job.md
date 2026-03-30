@@ -1,7 +1,7 @@
 ---
 title: Single-Job Builds
 weight: 20
-description: Using Apache Buildish Mammoth Cache for Gradle in a workflow with a single Gradle job.
+description: Using Apache Buildish Mammoth Cache in a workflow with a single build job.
 ---
 
 <!--
@@ -21,8 +21,13 @@ limitations under the License.
 -->
 
 Single-job mode (`job-mode: standalone`, which is the default) is the right choice when your
-workflow runs one Gradle job at a time. The action restores the cache before the build, provisions
-any missing wrapper JARs, and saves an updated cache entry after the build.
+workflow runs one build job at a time. The action restores the cache before the build and saves an
+updated cache entry after — only the changed files are written back, keeping entries lean.
+
+## Gradle
+
+For Gradle, the prepare step additionally provisions any missing wrapper JARs before handing off
+to your build.
 
 ```mermaid
 sequenceDiagram
@@ -38,7 +43,7 @@ sequenceDiagram
     F->>F: save updated cache entry
 ```
 
-## Minimal workflow
+### Minimal workflow
 
 ```yaml
 jobs:
@@ -53,43 +58,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
+      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
       - run: ./gradlew build
 ```
 
-## Pull-request read-only mode
-
-The action automatically switches to read-only on `pull_request` and `pull_request_target`
-events — no configuration needed. In read-only mode the cache is restored as normal but the
-finalize step skips the save, preventing untrusted fork code from poisoning the cache.
-
-```yaml
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
-      - run: ./gradlew build
-```
-
-You can also force read-only mode explicitly with `read-only: true` for any event.
-
-## Centralized configuration with a config file
-
-Use a config file to keep action inputs in one place and share them across jobs without repetition:
+### Config file
 
 ```yaml
 # .github/buildish-mammoth-gradle.yml
@@ -100,17 +73,76 @@ wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
 ```yaml
 steps:
   - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-  - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
+  - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
     with:
       config-file: .github/buildish-mammoth-gradle.yml
   - run: ./gradlew build
 ```
 
-Direct action inputs override config-file values. See [Configuration Reference](./configuration/)
-for all available options.
+## Maven
+
+For Maven the prepare step restores the local repository and the finalize step saves back the
+delta. No wrapper provisioning is performed.
+
+```mermaid
+sequenceDiagram
+    participant P as prepare
+    participant B as mvn verify
+    participant F as finalize
+
+    P->>P: restore cache (or cold start)
+    P-->>B: hand off
+    B-->>F: build complete
+    F->>F: compute delta
+    F->>F: save updated cache entry
+```
+
+### Minimal workflow
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - run: mvn verify
+```
+
+### Config file
+
+```yaml
+# .github/buildish-mammoth-maven.yml
+cache-key-prefix: my-project-maven-
+```
+
+```yaml
+steps:
+  - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+  - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+    with:
+      config-file: .github/buildish-mammoth-maven.yml
+  - run: mvn verify
+```
+
+## Pull-request read-only mode
+
+Both actions automatically switch to read-only on `pull_request` and `pull_request_target`
+events — no configuration needed. In read-only mode the cache is restored as normal but the
+finalize step skips the save, preventing untrusted fork code from poisoning the cache.
+
+You can also force read-only mode explicitly with `read-only: true` for any event, or opt out
+with `read-only: false` when you have controlled-fork trust setups.
 
 ## Next steps
 
 - [Configuration Reference](../configuration/) — all inputs and config-file options
-- [Cache Partitions](../cache-partitions/) — customize which parts of `GRADLE_USER_HOME` are cached
-- [Distributed multi-job builds](../distributed-jobs/) — if you run multiple Gradle jobs in parallel
+- [Cache Partitions](../cache-partitions/) — customize which parts of the build tool cache are saved
+- [Distributed multi-job builds](../distributed-jobs/) — if you run multiple build jobs in parallel

@@ -20,12 +20,12 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  normalizeActionConfig,
-  readActionInputs,
-  resolveActionInputsFromConfigFile,
+  normalizeGradleActionConfig as normalizeActionConfig,
+  readGradleActionInputs as readActionInputs,
+  resolveGradleActionInputsFromConfigFile as resolveActionInputsFromConfigFile,
   type InputProvider,
-} from '../../src/config/action-config';
-import type { CiJobContext } from '../../src/ci/types';
+} from '../../../src/build-tool/gradle/config';
+import type { CiJobContext } from '../../../src/ci/types';
 
 const baseCiContext: CiJobContext = {
   eventName: 'push',
@@ -204,7 +204,7 @@ describe('resolveActionInputsFromConfigFile', () => {
     }
 
     const outsideDirectory = await mkdtemp(
-      path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-config-outside-'),
+      path.join(os.tmpdir(), 'buildish-mammoth-cache-config-outside-'),
     );
 
     try {
@@ -553,9 +553,7 @@ async function withWorkspace(
   files: Record<string, string>,
   testBody: (workspace: string) => Promise<void>,
 ): Promise<void> {
-  const workspace = await mkdtemp(
-    path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-action-config-'),
-  );
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-action-config-'));
 
   try {
     for (const [relativePath, contents] of Object.entries(files)) {

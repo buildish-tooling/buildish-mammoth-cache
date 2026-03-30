@@ -33,7 +33,7 @@ import {
   type CachePartitionDefinition,
 } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
-import type { NormalizedActionConfig } from '../../src/config/types';
+import type { NormalizedGradleConfig } from '../../src/config/types';
 
 describe('captureCacheManifest', () => {
   it('captures regular files by partition and excludes lock/configuration-cache content', async () => {
@@ -238,7 +238,7 @@ describe('computeCacheDelta', () => {
 });
 
 async function withGradleUserHome(run: (gradleUserHome: string) => Promise<void>): Promise<void> {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-manifest-'));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-manifest-'));
   const gradleUserHome = path.join(tempRoot, '.gradle');
   await mkdir(gradleUserHome, { recursive: true });
 
@@ -267,7 +267,7 @@ function createTestCacheModel(
   gradleUserHome: string,
   partitions?: readonly CachePartitionDefinition[],
 ): CacheModel {
-  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedGradleConfig);
   const resolvedPartitions =
     partitions ??
     createCachePartitions(

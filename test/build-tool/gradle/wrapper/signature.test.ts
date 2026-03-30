@@ -86,21 +86,21 @@ describe('normalizePathForGpgCommand', () => {
   it('converts Windows absolute paths for Git-for-Windows usr/bin gpg.exe', () => {
     expect(
       normalizePathForGpgCommand(
-        'D:\\a\\_temp\\buildish-mammoth-cache-gradle-gpg-1234\\payload.asc',
+        'D:\\a\\_temp\\buildish-mammoth-cache-gpg-1234\\payload.asc',
         'C:\\Program Files\\Git\\usr\\bin\\gpg.exe',
         'win32',
       ),
-    ).toBe('/d/a/_temp/buildish-mammoth-cache-gradle-gpg-1234/payload.asc');
+    ).toBe('/d/a/_temp/buildish-mammoth-cache-gpg-1234/payload.asc');
   });
 
   it('leaves paths unchanged for non-MSYS gpg executables', () => {
     expect(
       normalizePathForGpgCommand(
-        'D:\\a\\_temp\\buildish-mammoth-cache-gradle-gpg-1234\\payload.asc',
+        'D:\\a\\_temp\\buildish-mammoth-cache-gpg-1234\\payload.asc',
         'C:\\Program Files\\Git\\mingw64\\bin\\gpg.exe',
         'win32',
       ),
-    ).toBe('D:\\a\\_temp\\buildish-mammoth-cache-gradle-gpg-1234\\payload.asc');
+    ).toBe('D:\\a\\_temp\\buildish-mammoth-cache-gpg-1234\\payload.asc');
   });
 });
 
@@ -182,7 +182,7 @@ async function withTrustedSigningKeys<T>(
 }
 
 async function createTrustedSigningKey(index: number): Promise<TestSigningKey> {
-  const gpgHome = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-test-gpg-'));
+  const gpgHome = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-test-gpg-'));
 
   try {
     await runGpgCommand([

@@ -205,7 +205,7 @@ describe('createGitHubPlatform', () => {
       new Map([
         ['accept', 'application/vnd.github.raw'],
         ['authorization', 'Bearer ghs_test_token'],
-        ['user-agent', 'apache-buildish-mammoth-cache-gradle-action'],
+        ['user-agent', 'apache-buildish-mammoth-cache-action'],
         ['x-github-api-version', '2022-11-28'],
       ]),
     );
@@ -231,7 +231,7 @@ describe('createGitHubPlatform', () => {
       new Map([
         ['accept', 'application/vnd.github.raw'],
         ['authorization', 'Bearer ghs_env_token'],
-        ['user-agent', 'apache-buildish-mammoth-cache-gradle-action'],
+        ['user-agent', 'apache-buildish-mammoth-cache-action'],
         ['x-github-api-version', '2022-11-28'],
       ]),
     );

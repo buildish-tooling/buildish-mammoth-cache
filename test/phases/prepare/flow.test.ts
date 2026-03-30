@@ -32,7 +32,12 @@ import {
 } from '../../../src/cache/manifest';
 import { createCacheModel, type CacheModel } from '../../../src/cache/model';
 import type { CiJobContext } from '../../../src/ci/types';
-import type { NormalizedActionConfig } from '../../../src/config/types';
+import type { NormalizedGradleConfig } from '../../../src/config/types';
+import {
+  normalizeGradleActionConfig,
+  readGradleActionInputs,
+  resolveGradleActionInputsFromConfigFile,
+} from '../../../src/build-tool/gradle/config';
 import {
   createPrepareActionOutputs,
   createPrepareActionSummaryLines,
@@ -59,7 +64,7 @@ import {
 import type { GradleAdapterOptions } from '../../../src/build-tool/gradle/adapter';
 import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
 
-function createPrepareActionDependencies(options: {
+async function createPrepareActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
   readonly eventPayload: Record<string, unknown>;
   readonly summaryWriter: SummaryWriter;
@@ -67,25 +72,37 @@ function createPrepareActionDependencies(options: {
   readonly saveState?: (name: string, value: string) => void;
   readonly info?: (message: string) => void;
   readonly adapterOptions?: GradleAdapterOptions;
+  readonly workspace: string;
 }) {
   const runtimeHost = createTestRuntimeHost({
     inputs: options.inputs,
     saveState: options.saveState,
     info: options.info,
   });
+  const ciProvider = createTestGitHubProvider(runtimeHost, {
+    env: options.env,
+    eventPayload: options.eventPayload,
+  });
+
+  const directInputs = readGradleActionInputs(runtimeHost);
+  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, {
+    workspace: options.workspace,
+  });
+  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
+    phase: 'prepare',
+    ciContext: ciProvider.context,
+    env: options.env,
+  });
 
   return {
     runtimeHost,
-    ciProvider: createTestGitHubProvider(runtimeHost, {
-      env: options.env,
-      eventPayload: options.eventPayload,
-    }),
+    ciProvider,
+    config,
     reportSink: createTestGitHubReportSink(runtimeHost, {
       env: options.env,
       summaryWriter: options.summaryWriter,
     }),
-    buildToolAdapterFactory: (config: NormalizedActionConfig) =>
-      new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
+    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
   };
 }
 
@@ -148,7 +165,7 @@ describe('executePrepareAction', () => {
           RUNNER_ARCH: 'X64',
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        ...createPrepareActionDependencies({
+        ...(await createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
@@ -178,6 +195,7 @@ describe('executePrepareAction', () => {
             savedState.set(name, value);
           },
           summaryWriter: summary.writer,
+          workspace,
           adapterOptions: {
             fetchImpl: async (input: string | URL | Request): Promise<Response> => {
               const url = String(input);
@@ -191,7 +209,7 @@ describe('executePrepareAction', () => {
             },
             verifyWrapperSignature: async () => {},
           },
-        }),
+        })),
       });
 
       expect(status.bootstrap.config.jobMode).toBe('distributed-aggregator');
@@ -248,7 +266,7 @@ describe('executePrepareAction', () => {
       );
       expect(createPrepareActionOutputs(status)).toEqual({
         'cache-key': expect.stringMatching(
-          /^buildish-mammoth-gradle-cache-2-21-linux-x64-[a-f0-9]{16}-main$/,
+          /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-main$/,
         ),
         'base-cache-restore-status': 'miss',
         'java-major': '21',
@@ -326,7 +344,7 @@ describe('executePrepareAction', () => {
             RUNNER_ARCH: 'X64',
             RUNNER_TEMP: path.join(workspace, 'runner-temp'),
           },
-          ...createPrepareActionDependencies({
+          ...(await createPrepareActionDependencies({
             env: {
               GITHUB_EVENT_NAME: 'push',
               GITHUB_REF: 'refs/heads/main',
@@ -351,6 +369,7 @@ describe('executePrepareAction', () => {
             },
             saveState(): void {},
             summaryWriter: createSummaryCapture().writer,
+            workspace,
             adapterOptions: {
               fetchImpl: async (input: string | URL | Request): Promise<Response> => {
                 const url = String(input);
@@ -364,7 +383,7 @@ describe('executePrepareAction', () => {
               },
               verifyWrapperSignature: async () => {},
             },
-          }),
+          })),
         }),
       ).rejects.toThrow(/targets cache key 'mismatched-cache-key'/);
     });
@@ -418,7 +437,7 @@ describe('executePrepareAction', () => {
           RUNNER_ARCH: 'X64',
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        ...createPrepareActionDependencies({
+        ...(await createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
@@ -441,6 +460,7 @@ describe('executePrepareAction', () => {
             savedState.set(name, value);
           },
           summaryWriter: summary.writer,
+          workspace,
           adapterOptions: {
             fetchImpl: async (input: string | URL | Request): Promise<Response> => {
               const url = String(input);
@@ -454,7 +474,7 @@ describe('executePrepareAction', () => {
             },
             verifyWrapperSignature: async () => {},
           },
-        }),
+        })),
       });
 
       expect(status.dependentDeltaResult).toBeNull();
@@ -469,7 +489,7 @@ describe('executePrepareAction', () => {
       expect(summaryText).toContain('- Pre-build manifest: persisted');
       expect(createPrepareActionOutputs(status)).toEqual({
         'cache-key': expect.stringMatching(
-          /^buildish-mammoth-gradle-cache-2-21-linux-x64-[a-f0-9]{16}-main$/,
+          /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-main$/,
         ),
         'base-cache-restore-status': 'miss',
         'java-major': '21',
@@ -556,7 +576,7 @@ describe('executePrepareAction', () => {
           RUNNER_ARCH: 'X64',
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        ...createPrepareActionDependencies({
+        ...(await createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
@@ -582,6 +602,7 @@ describe('executePrepareAction', () => {
             savedState.set(name, value);
           },
           summaryWriter: summary.writer,
+          workspace,
           adapterOptions: {
             fetchImpl: async (input: string | URL | Request): Promise<Response> => {
               const url = String(input);
@@ -595,7 +616,7 @@ describe('executePrepareAction', () => {
             },
             verifyWrapperSignature: async () => {},
           },
-        }),
+        })),
       });
 
       expect(status.restoreCleanupResult).toEqual(
@@ -673,7 +694,7 @@ describe('executePrepareAction', () => {
             RUNNER_ARCH: 'X64',
             RUNNER_TEMP: path.join(workspace, 'runner-temp'),
           },
-          ...createPrepareActionDependencies({
+          ...(await createPrepareActionDependencies({
             env: {
               GITHUB_EVENT_NAME: 'push',
               GITHUB_REF: 'refs/heads/main',
@@ -697,6 +718,7 @@ describe('executePrepareAction', () => {
               'dependent-jobs': 'windows-worker',
             },
             summaryWriter: createSummaryCapture().writer,
+            workspace,
             adapterOptions: {
               fetchImpl: async (input: string | URL | Request): Promise<Response> => {
                 const url = String(input);
@@ -710,7 +732,7 @@ describe('executePrepareAction', () => {
               },
               verifyWrapperSignature: async () => {},
             },
-          }),
+          })),
         }),
       ).rejects.toThrow(/Cross-runner dependent delta reuse is not supported/u);
     });
@@ -782,7 +804,7 @@ describe('executePrepareAction', () => {
           HOME: workspace,
           RUNNER_TEMP: path.join(workspace, 'runner-temp'),
         },
-        ...createPrepareActionDependencies({
+        ...(await createPrepareActionDependencies({
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
@@ -807,6 +829,7 @@ describe('executePrepareAction', () => {
             'allow-duplicate-dependent-delta-paths': 'true',
           },
           summaryWriter: createSummaryCapture().writer,
+          workspace,
           adapterOptions: {
             fetchImpl: async (input: string | URL | Request): Promise<Response> => {
               const url = String(input);
@@ -820,7 +843,7 @@ describe('executePrepareAction', () => {
             },
             verifyWrapperSignature: async () => {},
           },
-        }),
+        })),
       });
 
       expect(status.dependentDeltaResult).toEqual(
@@ -910,7 +933,7 @@ async function createTestCacheModel(
   );
 }
 
-function createTestConfig(gradleUserHome: string): NormalizedActionConfig {
+function createTestConfig(gradleUserHome: string): NormalizedGradleConfig {
   return {
     phase: 'prepare',
     baseDirectory: '.',
@@ -922,7 +945,7 @@ function createTestConfig(gradleUserHome: string): NormalizedActionConfig {
     cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
     cacheKeyTemplate: null,
     cachePartitions: [],
-    cacheSchemaVersion: 2,
+    cacheSchemaVersion: 1,
     wrapperSelectionMode: 'default',
     wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
     defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -1008,9 +1031,7 @@ function createSummaryCapture(): {
 }
 
 async function withWorkspace(testBody: (workspace: string) => Promise<void>): Promise<void> {
-  const workspace = await mkdtemp(
-    path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-main-flow-'),
-  );
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-main-flow-'));
   try {
     await testBody(workspace);
   } finally {

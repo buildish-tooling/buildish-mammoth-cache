@@ -22,14 +22,14 @@ import { z } from 'zod';
 import type { CiJobContext } from '../../ci';
 import { parseSerializedJson, parseWithZod } from '../../util/serialization';
 
-const CAPTURE_DIRECTORY_NAME = '.buildish-mammoth-cache-gradle';
+const CAPTURE_DIRECTORY_NAME = '.buildish-mammoth-cache';
 const BUILD_RESULTS_SUBDIRECTORY = 'build-results';
 const BUILD_SCANS_SUBDIRECTORY = 'build-scans';
-const INIT_SCRIPT_FILE_NAME = 'buildish-mammoth-cache-gradle.build-result-capture.init.gradle';
+const INIT_SCRIPT_FILE_NAME = 'buildish-mammoth-cache.build-result-capture.init.gradle';
 const SERVICE_PLUGIN_FILE_NAME =
-  'buildish-mammoth-cache-gradle.build-result-capture-service.plugin.groovy';
+  'buildish-mammoth-cache.build-result-capture-service.plugin.groovy';
 const SKIP_CAPTURE_ENVIRONMENT_VARIABLE = 'BUILDISH_MAMMOTH_CACHE_GRADLE_SKIP_BUILD_RESULT_CAPTURE';
-const DEFAULT_CAPTURE_INVOCATION_NAMESPACE = 'buildish-mammoth-cache-gradle';
+const DEFAULT_CAPTURE_INVOCATION_NAMESPACE = 'buildish-mammoth-cache';
 
 type BuildCaptureContext = Pick<CiJobContext, 'tempDirectory'>;
 
@@ -496,7 +496,7 @@ import org.slf4j.LoggerFactory
 
 settingsEvaluated { settings ->
     def svc = gradle.sharedServices.registerIfAbsent(
-        "buildish-mammoth-cache-gradle-buildResultsRecorder",
+        "buildish-mammoth-cache-buildResultsRecorder",
         BuildResultsRecorder) { spec ->
         spec.getParameters().getRootProjectName().set(settings.rootProject.name)
         spec.getParameters().getRequestedTasks().set(gradle.startParameter.taskNames.join(" "))

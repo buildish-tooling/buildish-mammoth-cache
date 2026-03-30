@@ -1,0 +1,125 @@
+#
+# Copyright 2026 The Apache Software Foundation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Apache Buildish Mammoth Cache Action for Maven
+description: Local and distributed cache management for Maven builds in GitHub Actions.
+author: Apache Buildish
+inputs:
+  config-file:
+    description: >-
+      Optional workspace-relative `.json`, `.yml`, or `.yaml` configuration file.
+      The file must contain a top-level object whose keys use the same kebab-case
+      names as this action's inputs. Direct action inputs override values loaded
+      from the file. `github-token` is intentionally rejected in config files;
+      pass secrets directly as action inputs or environment variables instead.
+    required: false
+  base-directory:
+    description: >-
+      Repository-relative base directory. Windows-style relative paths using `\`
+      are accepted and normalized internally, but drive-prefixed, rooted, and UNC
+      paths are rejected. Must stay inside the workspace. Default: `.`.
+    required: false
+    default: .
+  cache-enabled:
+    description: >-
+      Enables Maven cache orchestration for this action. Accepted values: `true`
+      or `false`. Default: `true`.
+    required: false
+    default: 'true'
+  read-only:
+    description: >-
+      Prevents persistence of modified cache state. Accepted values: `true` or
+      `false`. Defaults to `true` for pull requests and `false` for other events
+      when omitted.
+    required: false
+  job-mode:
+    description: >-
+      Cache coordination mode. Supported values: `standalone`,
+      `distributed-worker`, or `distributed-aggregator`. Default: `standalone`.
+    required: false
+    default: standalone
+  dependent-jobs:
+    description: >-
+      Comma- or newline-separated dependent job names whose cache deltas should be
+      consumed later. Only valid with distributed job modes.
+    required: false
+  allow-duplicate-dependent-delta-paths:
+    description: >-
+      Only for `distributed-aggregator` jobs. Accepted values: `true` or `false`.
+      Default: `false`. When `true`, overlapping dependent-job delta paths that do
+      not match exactly may be resolved by choosing the entry with the newest
+      modification time instead of failing.
+    required: false
+    default: 'false'
+  cache-key-prefix:
+    description: >-
+      Prefix used for generated cache keys. Must start with an alphanumeric
+      character and then use only letters, numbers, dot, underscore, and dash.
+      Default: `buildish-mammoth-maven-cache-`.
+    required: false
+    default: buildish-mammoth-maven-cache-
+  cache-key-template:
+    description: >-
+      Optional restricted cache key template. Supported placeholders:
+      `${cacheKeyPrefix}`, `${schemaVersion}`, `${partitionFingerprint}`,
+      `${javaMajor}`, `${runnerOs}`, `${runnerArch}`, and `${refName}`.
+      Custom templates must include `${partitionFingerprint}`.
+    required: false
+  cache-partitions:
+    description: >-
+      Optional JSON array of cache partition overrides and custom partitions.
+      Each object must contain `id`, `includes`, and optional `excludes`, all
+      relative to the Maven local repository root (`.m2` directory). Built-in
+      partition IDs are `repository` and `wrapper-dists`. Overriding a built-in
+      partition replaces its include/exclude lists. Giving a built-in partition an
+      empty `includes` array disables it. Custom partitions must have at least one
+      include.
+    required: false
+  maven-local-repository:
+    description: >-
+      Optional absolute path or repository-relative path to the Maven local
+      repository root (the `.m2` directory). Defaults to `$MAVEN_USER_HOME` when
+      set, otherwise `${user.home}/.m2`.
+    required: false
+  cleanup-enabled:
+    description: >-
+      Enables post-build cache cleanup. Accepted values: `true` or `false`.
+      Default: `true`.
+    required: false
+    default: 'true'
+  restore-cleanup-mode:
+    description: >-
+      Cleanup mode applied before the build starts. Supported values: `none`.
+      Default: `none`.
+    required: false
+    default: none
+  github-token:
+    description: >-
+      Optional GitHub token used for GitHub API requests. When omitted, the
+      action falls back to the `GITHUB_TOKEN` environment variable if available.
+    required: false
+  github-job-check-run-id:
+    description: >-
+      Optional internal/testing override for the current GitHub job check-run ID.
+    required: false
+outputs:
+  status:
+    description: One of `hit`, `miss`, or `disabled` describing the main action outcome.
+  restored-key:
+    description: Restored cache key, when a base cache entry was reused.
+runs:
+  using: node24
+  main: ../../../dist/github/maven/main/index.cjs
+  post: ../../../dist/github/maven/post/index.cjs

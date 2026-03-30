@@ -23,11 +23,6 @@ import {
 } from '../cache/service';
 import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from '../ci';
 import { createCacheModel, type CacheModel, type CommandOutputCapture } from '../cache/model';
-import {
-  normalizeActionConfig,
-  readActionInputs,
-  resolveActionInputsFromConfigFile,
-} from '../config/action-config';
 import type { NormalizedActionConfig } from '../config/types';
 import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } from '../util/html';
 import type { CoreExecutionPhase } from '../config/types';
@@ -109,14 +104,20 @@ export interface BootstrapDependencies {
   /** Provider-specific reporting sink used for grouped logs and summaries. */
   readonly reportSink: ReportSink;
   /**
-   * Factory that constructs the active build tool adapter from the normalized config.
+   * Fully normalized action configuration pre-resolved by the tool-specific entrypoint.
    *
-   * Bootstrap calls this factory after reading and normalizing action inputs so the adapter can
-   * access the fully resolved configuration (e.g. `gradleUserHome`, wrapper settings).
-   * Tool-specific test overrides (e.g. `fetchImpl`, `verifyWrapperSignature` for Gradle) are
-   * captured inside the factory closure rather than passed as separate bootstrap dependencies.
+   * Config resolution (input reading, config-file overlay, normalization) lives in the entrypoint
+   * so bootstrap remains agnostic of the active build tool.
    */
-  readonly buildToolAdapterFactory: (config: NormalizedActionConfig) => BuildToolAdapter;
+  readonly config: NormalizedActionConfig;
+  /**
+   * Factory that constructs the active build tool adapter.
+   *
+   * The factory receives no arguments; all tool-specific config (e.g. `gradleUserHome`,
+   * `mavenLocalRepository`, wrapper settings) is captured inside the factory closure together with
+   * any adapter-level test overrides (e.g. `fetchImpl`, `verifyWrapperSignature` for Gradle).
+   */
+  readonly buildToolAdapterFactory: () => BuildToolAdapter;
   /**
    * Optional command-capture override for Java version detection.
    *
@@ -130,25 +131,18 @@ export interface BootstrapDependencies {
 /**
  * Shared startup path for both the "prepare" and "finalize" entrypoints.
  *
- * This is the only place that currently wires the active CI adapter, reads action inputs, and
- * normalizes runtime config.
+ * Config resolution (input reading, config-file overlay, normalization) is performed by the
+ * tool-specific entrypoint before calling this function, so bootstrap remains decoupled from any
+ * particular build tool.
  */
 export async function bootstrapPhase(
   phase: BootstrapPhase,
   dependencies: BootstrapDependencies,
 ): Promise<BootstrapExecution> {
   const runtimeEnv = dependencies.env ?? process.env;
-  const directInputs = readActionInputs(dependencies.runtimeHost);
   const ciProvider = dependencies.ciProvider;
-  const rawInputs = await resolveActionInputsFromConfigFile(directInputs, {
-    workspace: ciProvider.context.workspace,
-  });
-  const config = normalizeActionConfig(rawInputs, {
-    phase,
-    ciContext: ciProvider.context,
-    env: runtimeEnv,
-  });
-  const adapter = dependencies.buildToolAdapterFactory(config);
+  const config = dependencies.config;
+  const adapter = dependencies.buildToolAdapterFactory();
   const cacheModel = config.cacheEnabled
     ? await createCacheModel(config, ciProvider.context, adapter, {
         captureCommandOutput: dependencies.captureCommandOutput,

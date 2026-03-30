@@ -21,7 +21,12 @@ import path from 'node:path';
 
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
 import { GradleBuildToolAdapter } from '../src/build-tool/gradle/adapter';
-import type { NormalizedActionConfig } from '../src/config/types';
+import {
+  normalizeGradleActionConfig,
+  readGradleActionInputs,
+  resolveGradleActionInputsFromConfigFile,
+} from '../src/build-tool/gradle/config';
+import type { NormalizedGradleConfig } from '../src/config/types';
 import { executePrepareAction } from '../src/phases/prepare/flow';
 import {
   createFinalizeActionSummaryLines,
@@ -86,7 +91,7 @@ async function main(): Promise<void> {
       cacheBackend: unavailableCacheApi(),
       captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
       env: runtime.env,
-      ...createGitHubActionDependencies(
+      ...(await createGitHubActionDependencies(
         runtime,
         {
           'base-directory': 'project',
@@ -95,7 +100,8 @@ async function main(): Promise<void> {
         },
         summary.writer,
         'prepare',
-      ),
+        stagedRoot,
+      )),
     });
 
     for (const invocation of gradleInvocations) {
@@ -107,7 +113,7 @@ async function main(): Promise<void> {
       cacheBackend: unavailableCacheApi(),
       captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
       env: runtime.env,
-      ...createGitHubActionDependencies(
+      ...(await createGitHubActionDependencies(
         runtime,
         {
           'base-directory': 'project',
@@ -116,7 +122,8 @@ async function main(): Promise<void> {
         },
         summary.writer,
         'finalize',
-      ),
+        stagedRoot,
+      )),
     });
     await writeFile(
       summaryPath,
@@ -155,7 +162,7 @@ async function main(): Promise<void> {
     const initScriptPath = path.join(
       runtime.gradleUserHome,
       'init.d',
-      'buildish-mammoth-cache-gradle.build-result-capture.init.gradle',
+      'buildish-mammoth-cache.build-result-capture.init.gradle',
     );
     await assert.rejects(readFile(initScriptPath, 'utf8'));
 
@@ -280,12 +287,14 @@ function createInputProvider(values: Record<string, string>): { getInput(name: s
   };
 }
 
-function createGitHubActionDependencies(
+async function createGitHubActionDependencies(
   runtime: { readonly env: NodeJS.ProcessEnv; readonly state: Map<string, string> },
   inputs: Record<string, string>,
   summaryWriter: SummaryWriter,
-  logPrefix: string,
+  phase: 'prepare' | 'finalize',
+  workspace: string,
 ) {
+  const logPrefix = phase;
   const inputProvider = createInputProvider(inputs);
   const runtimeHost: CompositeHost = {
     getInput(name): string {
@@ -309,19 +318,30 @@ function createGitHubActionDependencies(
     },
   };
 
+  const ciProvider = createGitHubPlatform({
+    env: runtime.env,
+    eventPayload: {
+      repository: { default_branch: 'main' },
+    },
+  });
+
+  const directInputs = readGradleActionInputs(runtimeHost);
+  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, { workspace });
+  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
+    phase,
+    ciContext: ciProvider.context,
+    env: runtime.env,
+  });
+
   return {
     runtimeHost,
-    ciProvider: createGitHubPlatform({
-      env: runtime.env,
-      eventPayload: {
-        repository: { default_branch: 'main' },
-      },
-    }),
+    ciProvider,
+    config,
     reportSink: createGitHubReportSink({
       env: runtime.env,
       summaryWriter,
     }),
-    buildToolAdapterFactory: (config: NormalizedActionConfig) => new GradleBuildToolAdapter(config),
+    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
   };
 }
 

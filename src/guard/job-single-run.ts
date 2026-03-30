@@ -22,13 +22,11 @@ import * as path from 'node:path';
 import type { CiJobContext } from '../ci';
 
 /** CI state key used to persist the UUID owner token written by the prepare phase. */
-export const JOB_SINGLE_RUN_OWNER_TOKEN_STATE =
-  'buildish-mammoth-cache-gradle-job-single-run-owner-token';
+export const JOB_SINGLE_RUN_OWNER_TOKEN_STATE = 'buildish-mammoth-cache-job-single-run-owner-token';
 /** CI state key set to `'true'` when the prepare phase was rejected as a duplicate. */
-export const JOB_SINGLE_RUN_DUPLICATE_STATE =
-  'buildish-mammoth-cache-gradle-job-single-run-duplicate';
+export const JOB_SINGLE_RUN_DUPLICATE_STATE = 'buildish-mammoth-cache-job-single-run-duplicate';
 
-const JOB_SINGLE_RUN_DIRECTORY = 'buildish-mammoth-cache-gradle-job-guards';
+const JOB_SINGLE_RUN_DIRECTORY = 'buildish-mammoth-cache-job-guards';
 
 type JobSingleRunCiIdentity = Pick<
   CiJobContext,

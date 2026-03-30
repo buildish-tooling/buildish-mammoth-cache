@@ -24,9 +24,9 @@ import {
 } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { CiJobContext } from '../../src/ci/types';
-import type { NormalizedActionConfig } from '../../src/config/types';
+import type { NormalizedGradleConfig } from '../../src/config/types';
 
-const baseConfig: NormalizedActionConfig = {
+const baseConfig: NormalizedGradleConfig = {
   phase: 'prepare',
   baseDirectory: '.',
   cacheEnabled: true,
@@ -37,7 +37,7 @@ const baseConfig: NormalizedActionConfig = {
   cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
   cacheKeyTemplate: null,
   cachePartitions: [],
-  cacheSchemaVersion: 2,
+  cacheSchemaVersion: 1,
   wrapperSelectionMode: 'default',
   wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
   defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -85,7 +85,7 @@ describe('parseJavaMajor', () => {
 describe('renderCacheKey', () => {
   it('renders the default cache key using the safe ref name', () => {
     expect(renderCacheKey(baseConfig, baseCiContext, 21, 'feedcafe1234abcd')).toBe(
-      'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-feature-cache-model',
+      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-feature-cache-model',
     );
   });
 
@@ -207,7 +207,7 @@ describe('createCacheModel', () => {
     });
 
     expect(cacheModel.cacheKey).toMatch(
-      /^buildish-mammoth-gradle-cache-2-21-linux-x64-[a-f0-9]{16}-feature-cache-model$/,
+      /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-feature-cache-model$/,
     );
     expect(cacheModel.cacheRoot).toBe('/home/runner/.gradle');
     expect(cacheModel.javaMajor).toBe(21);

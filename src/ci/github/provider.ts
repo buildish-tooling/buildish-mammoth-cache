@@ -172,7 +172,7 @@ function createGitHubHttpHeadersByHost(
       new Map([
         ['accept', 'application/vnd.github.raw'],
         ['authorization', `Bearer ${token}`],
-        ['user-agent', 'apache-buildish-mammoth-cache-gradle-action'],
+        ['user-agent', 'apache-buildish-mammoth-cache-action'],
         ['x-github-api-version', '2022-11-28'],
       ]),
     ],

@@ -20,7 +20,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import type { NormalizedActionConfig } from '../../../../src/config/types';
+import type { NormalizedGradleConfig } from '../../../../src/config/types';
 import { validateTargetWrapperProperties } from '../../../../src/build-tool/gradle/wrapper/static-validation';
 
 describe('validateTargetWrapperProperties', () => {
@@ -118,7 +118,7 @@ describe('validateTargetWrapperProperties', () => {
   });
 });
 
-function createConfig(overrides: Partial<NormalizedActionConfig> = {}): NormalizedActionConfig {
+function createConfig(overrides: Partial<NormalizedGradleConfig> = {}): NormalizedGradleConfig {
   return {
     phase: 'prepare',
     baseDirectory: '.',
@@ -130,7 +130,7 @@ function createConfig(overrides: Partial<NormalizedActionConfig> = {}): Normaliz
     cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
     cacheKeyTemplate: null,
     cachePartitions: [],
-    cacheSchemaVersion: 2,
+    cacheSchemaVersion: 1,
     wrapperSelectionMode: 'default',
     wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
     defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -143,7 +143,7 @@ function createConfig(overrides: Partial<NormalizedActionConfig> = {}): Normaliz
 }
 
 async function createWorkspace(files: Record<string, string>): Promise<string> {
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-wrapper-'));
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-wrapper-'));
 
   for (const [relativePath, contents] of Object.entries(files)) {
     const absolutePath = path.join(workspace, relativePath);

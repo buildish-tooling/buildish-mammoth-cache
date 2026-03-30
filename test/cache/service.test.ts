@@ -24,13 +24,13 @@ import {
   saveBaseCache,
 } from '../../src/cache/service';
 import type { CacheModel } from '../../src/cache/model';
-import type { NormalizedActionConfig } from '../../src/config/types';
+import type { NormalizedGradleConfig } from '../../src/config/types';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
 } from '../../src/cache/backend';
 
-const baseConfig: NormalizedActionConfig = {
+const baseConfig: NormalizedGradleConfig = {
   phase: 'prepare',
   baseDirectory: '.',
   cacheEnabled: true,
@@ -41,7 +41,7 @@ const baseConfig: NormalizedActionConfig = {
   cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
   cacheKeyTemplate: null,
   cachePartitions: [],
-  cacheSchemaVersion: 2,
+  cacheSchemaVersion: 1,
   wrapperSelectionMode: 'default',
   wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
   defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -93,7 +93,7 @@ describe('createBaseCachePaths', () => {
 describe('createBaseCacheRestoreKeys', () => {
   it('derives a branch-agnostic restore key for the default template', () => {
     expect(createBaseCacheRestoreKeys(baseConfig, cacheModel)).toEqual([
-      'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-',
+      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-',
     ]);
   });
 
@@ -123,7 +123,7 @@ describe('restoreBaseCache', () => {
 
     expect(result.status).toBe('exact-hit');
     expect(result.restoreKeys).toEqual([
-      'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-',
+      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-',
     ]);
   });
 
@@ -132,14 +132,14 @@ describe('restoreBaseCache', () => {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () =>
-          'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-main',
+          'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
         saveCache: async () => 0,
       }),
     });
 
     expect(result.status).toBe('partial-hit');
     expect(result.matchedKey).toBe(
-      'buildish-mammoth-gradle-cache-2-21-linux-x64-feedcafe1234abcd-main',
+      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
     );
   });
 

@@ -360,7 +360,7 @@ async function readArmoredKeyFingerprint(
 
 async function withTemporaryGpgHome<T>(callback: (gpgHome: string) => Promise<T>): Promise<T> {
   const parentDirectory = process.env.RUNNER_TEMP?.trim() || os.tmpdir();
-  const gpgHome = await mkdtemp(path.join(parentDirectory, 'buildish-mammoth-cache-gradle-gpg-'));
+  const gpgHome = await mkdtemp(path.join(parentDirectory, 'buildish-mammoth-cache-gpg-'));
 
   try {
     return await callback(gpgHome);

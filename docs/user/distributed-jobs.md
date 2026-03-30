@@ -1,7 +1,7 @@
 ---
 title: Distributed Multi-Job Builds
 weight: 30
-description: How to use the distributed worker/aggregator mode to cache Gradle builds that run as multiple parallel jobs.
+description: How to use the distributed worker/aggregator mode to cache builds that run as multiple parallel jobs.
 ---
 
 <!--
@@ -22,15 +22,15 @@ limitations under the License.
 
 ## Why distributed mode exists
 
-When multiple Gradle jobs run in parallel and each one tries to save the cache at the end, only the
-last writer survives. The other jobs' dependency downloads, compiled scripts, and build cache
-entries are overwritten and lost on the next run.
+When multiple build jobs run in parallel and each one tries to save the cache at the end, only the
+last writer survives. The other jobs' dependency downloads and other cached outputs are overwritten
+and lost on the next run.
 
 Distributed mode solves this with **delta exchange**:
 
-- Each **worker job** uploads only the files that _changed_ in `GRADLE_USER_HOME` during its build
-  as a workflow artifact (the delta). It does not write the base cache directly.
-- A **aggregator job**, which waits for all workers to complete, downloads every delta, merges
+- Each **worker job** uploads only the files that _changed_ in the build tool's cache directory
+  during its build as a workflow artifact (the delta). It does not write the base cache directly.
+- An **aggregator job**, which waits for all workers to complete, downloads every delta, merges
   them, and saves the merged result as the new base cache entry.
 
 Every parallel job's changes are captured. On the next run, all workers start from a cache that
@@ -56,18 +56,18 @@ sequenceDiagram
 
 ## How delta exchange works
 
-1. The worker's **prepare** step restores the base cache and captures a snapshot of
-   `GRADLE_USER_HOME` (the pre-build manifest).
+1. The worker's **prepare** step restores the base cache and captures a snapshot of the build
+   tool's cache directory (the pre-build manifest).
 2. The build runs normally.
 3. The worker's **finalize** step captures a second snapshot (the post-build manifest), computes
    the difference, packs only the changed and added files into a compressed artifact, and uploads
    it. The base cache is not written.
 4. The aggregator's **prepare** step restores the base cache.
 5. The aggregator's **finalize** step downloads every worker delta in `dependent-jobs` order,
-   merges them (later jobs win on conflicts), applies the result to `GRADLE_USER_HOME`, and saves
+   merges them (later jobs win on conflicts), applies the result to the cache directory, and saves
    the new base cache entry.
 
-## Workflow example
+## Gradle workflow example
 
 ```yaml
 jobs:
@@ -82,7 +82,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
+      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: ./gradlew :module-a:build
@@ -98,7 +98,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
+      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: ./gradlew :module-b:build
@@ -115,7 +115,61 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
+      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-aggregator
+          dependent-jobs: worker-a, worker-b
+```
+
+## Maven workflow example
+
+```yaml
+jobs:
+  worker-a:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+        with:
+          job-mode: distributed-worker
+      - run: mvn -pl module-a verify
+
+  worker-b:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+        with:
+          job-mode: distributed-worker
+      - run: mvn -pl module-b verify
+
+  aggregator:
+    needs: [worker-a, worker-b]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-aggregator
           dependent-jobs: worker-a, worker-b
@@ -139,23 +193,24 @@ up the fresh artifact automatically.
 
 ## Using a config file
 
-Repeat inputs can be moved to a shared config file:
+Repeat inputs can be moved to a shared config file. The file format is identical for both build
+tools — use the config keys matching your tool's action.
 
 ```yaml
-# .github/buildish-mammoth-gradle.yml
+# .github/buildish-mammoth-gradle.yml  (Gradle example)
 cache-key-prefix: my-project-gradle-
 wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
 ```
 
 ```yaml
 # Each worker job
-- uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
+- uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
   with:
     job-mode: distributed-worker
     config-file: .github/buildish-mammoth-gradle.yml
 
 # Aggregator job
-- uses: apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>
+- uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
   with:
     job-mode: distributed-aggregator
     dependent-jobs: worker-a, worker-b

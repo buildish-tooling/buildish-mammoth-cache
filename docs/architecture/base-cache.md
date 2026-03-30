@@ -36,12 +36,12 @@ sequenceDiagram
     participant F as finalize phase
 
     R->>P: job starts
-    P->>P: bootstrap (config, cache model, wrappers)
+    P->>P: bootstrap (config, cache model, adapter provision)
     P->>P: restoreBaseCache()
     P->>P: armBaseCacheFinalize()
     P->>P: capture pre-build manifest
     P-->>B: hand off to build
-    B->>B: ./gradlew ...
+    B->>B: build runs …
     B->>F: job post step
     F->>F: capture post-build manifest → compute delta
     F->>F: saveBaseCache() [if armed + eligible]
@@ -52,12 +52,12 @@ sequenceDiagram
 State is passed between the two phases using the CI runtime state store (on GitHub Actions this is
 `@actions/core` `saveState` / `getState`). The key state values are:
 
-| State key                                        | Set by                  | Read by    | Purpose                                                   |
-| ------------------------------------------------ | ----------------------- | ---------- | --------------------------------------------------------- |
-| `buildish-mammoth-cache-gradle-base-cache-armed` | `prepare` after restore | `finalize` | Gate on whether a save should be attempted                |
-| pre-build manifest blob                          | `prepare`               | `finalize` | Delta computation between pre- and post-build snapshots   |
-| base cache restore result                        | `prepare`               | `finalize` | Lets `finalize` know whether the restore was an exact-hit |
-| consumed delta artifact names                    | `prepare`               | `finalize` | Used when cleaning up consumed worker delta artifacts     |
+| State key                                 | Set by                  | Read by    | Purpose                                                   |
+| ----------------------------------------- | ----------------------- | ---------- | --------------------------------------------------------- |
+| `buildish-mammoth-cache-base-cache-armed` | `prepare` after restore | `finalize` | Gate on whether a save should be attempted                |
+| pre-build manifest blob                   | `prepare`               | `finalize` | Delta computation between pre- and post-build snapshots   |
+| base cache restore result                 | `prepare`               | `finalize` | Lets `finalize` know whether the restore was an exact-hit |
+| consumed delta artifact names             | `prepare`               | `finalize` | Used when cleaning up consumed worker delta artifacts     |
 
 ## Base cache restore
 
@@ -70,9 +70,9 @@ State is passed between the two phases using the CI runtime state store (on GitH
 | `exact-hit`           | The primary key matched an existing entry exactly                              |
 | `partial-hit`         | A restore-key prefix matched a cache entry from a different ref or earlier run |
 
-Both `exact-hit` and `partial-hit` restore cache content to `GRADLE_USER_HOME`. A `partial-hit`
-restore does not suppress a later save — it is expected that the build will add or modify files
-relative to the older cache snapshot.
+Both `exact-hit` and `partial-hit` restore cache content to the build tool cache root. A
+`partial-hit` restore does not suppress a later save — it is expected that the build will add or
+modify files relative to the older cache snapshot.
 
 ## Base cache save gating
 
@@ -106,7 +106,7 @@ from a clean slice of the cache:
 1. Detect whether the restore was a hit (`exact-hit` or `partial-hit`).
 2. If no hit, skip cleanup and proceed normally.
 3. If a hit, delete every file currently matched by the active partition include globs within
-   `GRADLE_USER_HOME`. Files outside the managed partition space are left untouched.
+   the build tool cache root. Files outside the managed partition space are left untouched.
 4. Re-restore the base cache using the same key and paths.
 5. If the follow-up restore misses, the action fails rather than starting the build with a
    partially pruned managed cache space.
@@ -157,8 +157,8 @@ flowchart TD
 - Restore the base cache.
 - Download all delta artifact packages from the listed `dependent-jobs`.
 - Merge the deltas in dependency order, applying the most recent version of each file.
-- Apply the merged delta to `GRADLE_USER_HOME`.
-- Save the resulting `GRADLE_USER_HOME` as the new base cache entry.
+- Apply the merged delta to the build tool cache root.
+- Save the resulting cache root as the new base cache entry.
 
 Delta packages are identified by a combination of the producing job name, the run number, and the
 run attempt. This identity triple ensures that a re-run of a failed worker does not cause the

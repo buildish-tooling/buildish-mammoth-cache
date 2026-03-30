@@ -115,7 +115,7 @@ const payloadEntriesSchema = z.array(payloadEntrySchema).superRefine((entries, c
 
 const deltaArtifactPackageMetadataSchema = z.object({
   schemaVersion: z.literal(DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION),
-  artifactType: z.literal('buildish-mammoth-cache-gradle-delta'),
+  artifactType: z.literal('buildish-mammoth-cache-delta'),
   artifactName: z
     .string()
     .regex(
@@ -284,7 +284,7 @@ export async function stageDeltaArtifactPackage(
   const payloadEntries = await stagePayloadEntries(deltaManifest, payloadDirectory);
   const metadata: DeltaArtifactPackageMetadata = {
     schemaVersion: DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION,
-    artifactType: 'buildish-mammoth-cache-gradle-delta',
+    artifactType: 'buildish-mammoth-cache-delta',
     artifactName,
     createdAt: new Date().toISOString(),
     producer: {
@@ -389,7 +389,7 @@ export async function downloadAndVerifyDeltaArtifactPackage(
   assertArtifactLookupScopeSupport(artifactBackend, options.scope, 'artifact download');
   const parentDirectory = options.parentDirectory ?? os.tmpdir();
   const downloadDirectory = await mkdtemp(
-    path.join(parentDirectory, 'buildish-mammoth-cache-gradle-delta-download-'),
+    path.join(parentDirectory, 'buildish-mammoth-cache-delta-download-'),
   );
   const downloadResult = await artifactBackend.downloadArtifact(artifact.id, {
     path: downloadDirectory,

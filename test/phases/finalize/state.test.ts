@@ -214,9 +214,7 @@ const SAMPLE_CI_CONTEXT: CiJobContext = {
 };
 
 async function withWorkspace(testBody: (workspace: string) => Promise<void>): Promise<void> {
-  const workspace = await mkdtemp(
-    path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-post-state-'),
-  );
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-post-state-'));
   try {
     await testBody(workspace);
   } finally {

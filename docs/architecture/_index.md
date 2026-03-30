@@ -1,7 +1,7 @@
 ---
 title: Architecture & Background
 weight: 20
-description: Design documents covering the internal architecture of Apache Buildish Mammoth Cache for Gradle.
+description: Design documents covering the internal architecture of Apache Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
@@ -19,3 +19,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
+
+These documents describe the internal design of Mammoth Cache — intended for contributors,
+maintainers, and anyone who wants to understand why the action behaves the way it does.
+
+The core model is shared between Gradle and Maven: the same two-phase lifecycle, cache model,
+key generation, delta exchange protocol, and CI abstraction layer underpin both. Build-tool-specific
+behaviour is isolated behind a `BuildToolAdapter` interface so the shared phase logic never imports
+tool-specific code.

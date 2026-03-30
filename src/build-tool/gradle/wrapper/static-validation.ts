@@ -17,7 +17,7 @@
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { NormalizedActionConfig } from '../../../config/types';
+import type { NormalizedGradleConfig } from '../../../config/types';
 import type { ValidatedWrapperPropertiesFile } from './types';
 
 const WRAPPER_PROPERTIES_SUFFIX = 'gradle/wrapper/gradle-wrapper.properties';
@@ -31,7 +31,7 @@ const SHA256_PATTERN = /^[A-Fa-f0-9]{64}$/;
  * the static validation rules that do not require network access.
  */
 export async function validateTargetWrapperProperties(
-  config: NormalizedActionConfig,
+  config: NormalizedGradleConfig,
   workspace: string,
 ): Promise<readonly ValidatedWrapperPropertiesFile[]> {
   const realWorkspace = await realpath(workspace);
@@ -45,7 +45,7 @@ export async function validateTargetWrapperProperties(
 }
 
 async function discoverTargetWrapperPropertiesFiles(
-  config: NormalizedActionConfig,
+  config: NormalizedGradleConfig,
   workspace: string,
 ): Promise<readonly string[]> {
   switch (config.wrapperSelectionMode) {

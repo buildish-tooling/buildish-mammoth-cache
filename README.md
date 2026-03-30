@@ -14,20 +14,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Apache Buildish Mammoth Cache for Gradle
+# Apache Buildish Mammoth Cache for Gradle and Maven
 
-Apache Buildish Mammoth Cache for Gradle provides secure Gradle wrapper provisioning plus local and distributed cache
-management for GitHub Actions today, prepared for Codeberg/Forgejo and GitLab CI in the future.
+Apache Buildish Mammoth Cache for Gradle and Maven provides local and distributed build cache
+management for GitHub Actions — with secure Gradle wrapper provisioning for Gradle builds and
+lightweight local-repository caching for Maven builds. Support for Codeberg/Forgejo and GitLab CI
+is planned for the future.
 
-Project documentation now lives on the Apache Buildish site:
+The action is split by build tool. Reference the one that matches your project:
+
+```yaml
+# Gradle
+- uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+
+# Maven
+- uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+```
+
+Project documentation lives on the Apache Buildish site:
 
 - <https://buildish.apache.org/components/mammoth-cache-gradle/>
 
-Use the site docs for workflow usage, configuration, cache-partition behavior, security notes, maintenance guidance,
-and current project status.
-
-Until the first public release exists, test the action with a repository ref you control, for example
-`apache/buildish-mammoth-cache-gradle/actions/github/gradle@<commit-sha>`.
+Use the site docs for workflow usage, configuration, cache-partition behavior, security notes,
+maintenance guidance, and current project status.
 
 ## License
 

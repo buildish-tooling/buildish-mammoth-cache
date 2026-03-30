@@ -28,7 +28,7 @@ import {
 } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
-import type { NormalizedActionConfig } from '../../src/config/types';
+import type { NormalizedGradleConfig } from '../../src/config/types';
 
 interface MemoryReading {
   readonly rss: number;
@@ -64,9 +64,7 @@ async function main(): Promise<void> {
 }
 
 async function runScenario(fileCount: number): Promise<void> {
-  const tempRoot = await mkdtemp(
-    path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-manifest-bench-'),
-  );
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-manifest-bench-'));
   const gradleUserHome = path.join(tempRoot, '.gradle');
   const cacheModel = createBenchmarkCacheModel(gradleUserHome);
   const modifyCount = Math.max(1, Math.floor(fileCount * 0.01));
@@ -202,7 +200,7 @@ async function writeSyntheticFile(
 }
 
 function createBenchmarkCacheModel(gradleUserHome: string): CacheModel {
-  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedGradleConfig);
   const partitions = createCachePartitions(
     gradleUserHome,
     [],

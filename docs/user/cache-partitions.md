@@ -1,7 +1,7 @@
 ---
 title: Cache Partitions
 weight: 40
-description: Built-in partitions, customization, glob rules, and restore cleanup for Apache Buildish Mammoth Cache for Gradle.
+description: Built-in partitions, customization, glob rules, and restore cleanup for Apache Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
@@ -20,9 +20,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+The action splits the build tool's cache directory into logical **partitions** — independently
+versioned slices of the cache keyed and saved separately. This keeps entries lean, avoids
+cross-contamination between unrelated file sets, and lets you enable, disable, or replace
+individual partitions without invalidating the rest.
+
 ## Built-in partitions
 
-The action resolves the Gradle user home into ordered logical partitions:
+### Gradle
+
+The Gradle action resolves `GRADLE_USER_HOME` into these ordered partitions:
 
 | Partition             | Contents                                                  | Default  |
 | --------------------- | --------------------------------------------------------- | -------- |
@@ -32,14 +39,29 @@ The action resolves the Gradle user home into ordered logical partitions:
 | `build-cache`         | The local Gradle build cache                              | enabled  |
 | `wrapper-dists`       | Wrapper-downloaded Gradle distributions                   | enabled  |
 
-See [Gradle cache internals](../architecture/gradle-cache-internals/) for details on what each partition covers
-and why certain directories are excluded.
+See [Gradle cache internals](../../architecture/gradle-cache-internals/) for details on what each
+partition covers and why certain directories are excluded.
 
-Built-ins keep a deterministic order. Custom partitions are appended after the active built-ins in the order
-supplied by `cache-partitions`.
+### Maven
 
-The resolved partition order plus each partition's include/exclude set is hashed into `partitionFingerprint`,
-which is part of the base cache key. Changing the active partition layout produces a different cache key lineage.
+The Maven action resolves the local repository (`~/.m2` by default) into these partitions:
+
+| Partition       | Contents                               | Default |
+| --------------- | -------------------------------------- | ------- |
+| `repository`    | Cached Maven artifact repository       | enabled |
+| `wrapper-dists` | Wrapper-downloaded Maven distributions | enabled |
+
+See [Maven cache internals](../../architecture/maven-cache-internals/) for details on what each
+partition covers and why certain files are excluded.
+
+---
+
+Built-in partitions for both tools keep a deterministic order. Custom partitions are appended after
+the active built-ins in the order supplied by `cache-partitions`.
+
+The resolved partition order plus each partition's include/exclude set is hashed into
+`partitionFingerprint`, which is part of the base cache key. Changing the active partition layout
+produces a different cache key lineage.
 
 ## Include and exclude semantics
 
@@ -52,6 +74,8 @@ which is part of the base cache key. Changing the active partition layout produc
 
 Hard safety excludes are always applied to every active partition and cannot be removed:
 
+**Gradle**
+
 | Pattern                     | Reason                                                                  |
 | --------------------------- | ----------------------------------------------------------------------- |
 | `**/configuration-cache/**` | May contain encrypted secrets; volatile by nature                       |
@@ -59,9 +83,19 @@ Hard safety excludes are always applied to every active partition and cannot be 
 | `caches/*/cc-keystore`      | Configuration-cache encryption key material                             |
 | `caches/journal-1/**`       | Gradle's local-only file-access journal; migrating it causes corruption |
 
+**Maven**
+
+| Pattern                         | Reason                                                                                                          |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `**/*.lastUpdated`              | Stale remote-check markers; cause silent re-resolution when shared across runners                               |
+| `**/resolver-status.properties` | Maven Resolver group-level remote-check status; per-runner state and a common distributed-merge conflict source |
+| `**/_remote.repositories`       | Records which remote a file came from; not portable across different CI environments                            |
+| `**/*.lock`                     | PID-bearing resolver lock files that cause hangs if restored on another runner                                  |
+
 ## Supported glob subset
 
-All partition globs are relative to the Gradle user home.
+All partition globs are relative to the build tool's cache root (`GRADLE_USER_HOME` for Gradle,
+the Maven local repository for Maven).
 
 - Absolute paths are rejected.
 - `..` traversal is rejected.
@@ -113,11 +147,11 @@ This example: overrides `modules`, disables `kotlin-dsl`, and adds a custom part
 - It only runs after a base-cache hit.
 - It only deletes files currently matched by the active managed partitions.
 - After pruning, it restores the matched base cache again before the build starts.
-- It does not delete unmanaged files elsewhere in `GRADLE_USER_HOME`.
+- It does not delete unmanaged files elsewhere in the build tool cache directory.
 - If you disable a partition, files from that now-disabled partition are no longer considered
   action-managed and are left untouched.
 - If the follow-up restore misses after pruning, the action fails rather than continuing with a
   partially pruned managed cache space.
 
 This is intentionally narrower than "delete everything outside the include patterns" because the
-action does not own all of `GRADLE_USER_HOME`, especially on long-lived self-hosted runners.
+action does not own the entire build tool cache directory, especially on long-lived self-hosted runners.

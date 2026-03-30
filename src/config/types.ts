@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import type { readFile, realpath } from 'node:fs/promises';
+
+import type { CiJobContext } from '../ci';
+
 /**
  * Execution phase of the action — `prepare` runs at the start of the job, `finalize` at the end.
  */
@@ -70,9 +74,9 @@ export type RestoreCleanupMode = (typeof RESTORE_CLEANUP_MODES)[number];
 export interface ConfiguredCachePartitionInput {
   /** Stable machine-readable partition identifier. */
   readonly id: string;
-  /** Include globs for this partition, relative to the Gradle-user-home. */
+  /** Include globs for this partition, relative to the build tool's cache root. */
   readonly includes: readonly string[];
-  /** Exclude globs for this partition, relative to the Gradle-user-home. */
+  /** Exclude globs for this partition, relative to the build tool's cache root. */
   readonly excludes: readonly string[];
 }
 
@@ -93,12 +97,14 @@ export const CACHE_KEY_TEMPLATE_PLACEHOLDERS = [
 ] as const;
 
 /**
- * Raw string inputs read directly from the GitHub Actions input API.
+ * Shared raw string inputs read directly from the CI platform input API.
  *
  * This shape intentionally preserves the stringly-typed external contract before the
  * normalization layer applies defaults, validation, and derived values.
+ * Tool-specific raw inputs extend this via {@link RawGradleActionInputs} or
+ * {@link RawMavenActionInputs}.
  */
-export interface RawActionInputs {
+export interface RawSharedActionInputs {
   /** Raw optional workspace-relative config file path. Empty string means no file-backed config. */
   readonly configFile: string;
   /** Raw `base-directory` input. Empty string means the repository root and later defaults to `.`. */
@@ -117,12 +123,24 @@ export interface RawActionInputs {
   readonly dependentJobs: string;
   /** Raw `allow-duplicate-dependent-delta-paths` input. Empty string later defaults to `'false'`. */
   readonly allowDuplicateDependentDeltaPaths: string;
-  /** Raw `cache-key-prefix` input. Empty string later defaults to `'buildish-mammoth-gradle-cache-'`. */
+  /** Raw `cache-key-prefix` input. Empty string uses the tool-specific default prefix. */
   readonly cacheKeyPrefix: string;
   /** Raw `cache-key-template` input. Empty string later means “use the built-in template”. */
   readonly cacheKeyTemplate: string;
   /** Raw JSON array of built-in partition overrides and custom partition definitions. */
   readonly cachePartitions: string;
+  /** Raw `cleanup-enabled` input. Empty string later defaults to `'true'`. */
+  readonly cleanupEnabled: string;
+  /** Raw restore cleanup mode. Empty string later defaults to `'none'`. */
+  readonly restoreCleanupMode: string;
+  /** Raw `github-token` input used only for authenticated GitHub-host fetches. */
+  readonly githubToken: string;
+}
+
+/**
+ * Raw Gradle-specific action inputs, extending the shared inputs with Gradle-only fields.
+ */
+export interface RawGradleActionInputs extends RawSharedActionInputs {
   /** Raw `process-all-wrapper-files` input. Empty string later defaults to `'false'`. */
   readonly processAllWrapperFiles: string;
   /**
@@ -133,23 +151,35 @@ export interface RawActionInputs {
   readonly wrapperPropertiesGlob: string;
   /** Raw comma/newline-separated explicit wrapper properties paths. Empty string later defaults to none. */
   readonly wrapperPropertiesFiles: string;
-  /** Raw `cleanup-enabled` input. Empty string later defaults to `'true'`. */
-  readonly cleanupEnabled: string;
-  /** Raw restore cleanup mode. Empty string later defaults to `'none'`. */
-  readonly restoreCleanupMode: string;
   /** Raw `gradle-user-home` input. Empty string later defaults to the supported runner default. */
   readonly gradleUserHome: string;
   /** Raw `setup-java` input. Empty string later defaults to `'false'`; `true` is currently rejected. */
   readonly setupJava: string;
-  /** Raw `github-token` input used only for authenticated GitHub-host fetches. */
-  readonly githubToken: string;
 }
 
 /**
- * Validated action configuration used by the rest of the implementation.
+ * Raw Maven-specific action inputs, extending the shared inputs with Maven-only fields.
+ */
+export interface RawMavenActionInputs extends RawSharedActionInputs {
+  /**
+   * Raw `maven-local-repository` input.
+   *
+   * Empty string later defaults to `${user.home}/.m2`.
+   */
+  readonly mavenLocalRepository: string;
+}
+
+/** @deprecated Use {@link RawGradleActionInputs} instead. */
+export type RawActionInputs = RawGradleActionInputs;
+
+/**
+ * Shared validated action configuration consumed by the phase logic and cache layer.
  *
- * By the time a value reaches this structure, it should already be safe to consume by
- * later modules without repeating GitHub input parsing logic.
+ * Fields here are common to every build-tool adapter.  Tool-specific fields live in the
+ * {@link NormalizedGradleConfig} and {@link NormalizedMavenConfig} subtypes.
+ *
+ * By the time a value reaches this structure it should already be safe to consume by later
+ * modules without repeating CI platform input-parsing logic.
  */
 export interface NormalizedActionConfig {
   /**
@@ -214,6 +244,16 @@ export interface NormalizedActionConfig {
    * Currently fixed by the implementation, not by user input.
    */
   readonly cacheSchemaVersion: number;
+  /** Whether post-build cleanup behavior is enabled. Defaults to `true`. */
+  readonly cleanupEnabled: boolean;
+  /** Restore-time cleanup mode applied before the build starts. Defaults to `none`. */
+  readonly restoreCleanupMode: RestoreCleanupMode;
+}
+
+/**
+ * Gradle-specific validated configuration, extending the shared config with Gradle-only fields.
+ */
+export interface NormalizedGradleConfig extends NormalizedActionConfig {
   /** Wrapper discovery strategy derived from the wrapper-related inputs. */
   readonly wrapperSelectionMode: WrapperSelectionMode;
   /**
@@ -235,15 +275,77 @@ export interface NormalizedActionConfig {
    * Defaults to an empty list and is populated only when the wrapper selection mode is `explicit`.
    */
   readonly wrapperPropertiesFiles: readonly string[];
-  /** Whether post-build cleanup behavior is enabled. Defaults to `true`. */
-  readonly cleanupEnabled: boolean;
-  /** Restore-time cleanup mode applied before the build starts. Defaults to `none`. */
-  readonly restoreCleanupMode: RestoreCleanupMode;
   /**
-   * Absolute path to the supported Gradle user home.
+   * Absolute path to the Gradle user home.
    *
    * Defaults to `$GRADLE_USER_HOME` when set, otherwise `${home}/.gradle`; v1 rejects arbitrary
    * custom locations outside that supported default.
    */
   readonly gradleUserHome: string;
+}
+
+/**
+ * Maven-specific validated configuration, extending the shared config with Maven-only fields.
+ */
+export interface NormalizedMavenConfig extends NormalizedActionConfig {
+  /**
+   * Absolute path to the Maven local repository root (the `.m2` directory).
+   *
+   * Defaults to `${user.home}/.m2`.  May be overridden via the `maven-local-repository` action
+   * input or the `MAVEN_USER_HOME` environment variable.
+   */
+  readonly mavenLocalRepository: string;
+}
+
+// ---------------------------------------------------------------------------
+// Config normalizer contracts
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal abstraction over the GitHub Actions input API.
+ *
+ * Tests use this interface to provide deterministic input values without pulling in the
+ * real `@actions/core` implementation.
+ */
+export interface InputProvider {
+  /**
+   * Reads a named action input.
+   *
+   * @param name GitHub Actions input name such as `cache-enabled` or `job-mode`.
+   * @param options Optional read behavior passed through to the provider.
+   * @param options.required When `true`, the provider may throw if the input is absent.
+   * @param options.trimWhitespace When `true`, surrounding whitespace is removed before returning.
+   * @returns Raw string input value; missing optional inputs are returned as an empty string.
+   */
+  getInput(name: string, options?: { required?: boolean; trimWhitespace?: boolean }): string;
+}
+
+/**
+ * Extra state required to turn raw user inputs into normalized runtime configuration.
+ *
+ * Shared by {@link normalizeGradleActionConfig} and {@link normalizeMavenActionConfig}.
+ */
+export interface NormalizeActionConfigOptions {
+  /** Action phase being normalized (`prepare` or `finalize`). */
+  readonly phase: CoreExecutionPhase;
+  /** Provider-neutral CI context used for event-dependent defaults. */
+  readonly ciContext: CiJobContext;
+  /**
+   * Optional environment override used for build-tool-specific path resolution.
+   *
+   * Defaults to `process.env`-equivalent runtime state when omitted.
+   */
+  readonly env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Options for loading file-backed action configuration.
+ */
+export interface ResolveActionInputsFromConfigFileOptions {
+  /** Repository workspace root used to resolve the optional `config-file` input. */
+  readonly workspace: string;
+  /** Optional file-reader override for focused tests. */
+  readonly readFileImpl?: typeof readFile;
+  /** Optional realpath override for focused tests. */
+  readonly realpathImpl?: typeof realpath;
 }

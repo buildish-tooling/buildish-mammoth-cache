@@ -1,6 +1,6 @@
 ---
-title: Apache Buildish Mammoth Cache for Gradle
-description: Documentation for Apache Buildish Mammoth Cache for Gradle — a CI action that caches the Gradle user home across workflow runs.
+title: Apache Buildish Mammoth Cache for Gradle and Maven
+description: Documentation for Apache Buildish Mammoth Cache for Gradle and Maven — CI actions that cache the build tool's local artifact store across workflow runs.
 ---
 
 <!--
@@ -19,22 +19,28 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-Apache Buildish Mammoth Cache for Gradle is a CI action that caches the Gradle user home
-(`GRADLE_USER_HOME`) across workflow runs and provisions Gradle wrapper JARs securely before
-the build starts.
+Apache Buildish Mammoth Cache for Gradle and Maven is a pair of CI actions that cache the build
+tool's local artifact store across workflow runs:
+
+- **Gradle** — caches `GRADLE_USER_HOME` and provisions Gradle wrapper JARs securely before the
+  build starts.
+- **Maven** — caches the Maven local repository (`~/.m2` by default).
+
+Both actions share the same two-phase prepare/finalize lifecycle and support single-job and
+distributed multi-job topologies.
 
 ## Single-job mode
 
-In the most common setup, the action wraps a single Gradle job: it restores the cache before the
-build and saves an updated cache entry after the build. This avoids re-downloading dependencies and
-re-compiling scripts on every run.
+In the most common setup, the action wraps a single build job: it restores the cache before the
+build and saves an updated cache entry after the build. This avoids re-downloading dependencies on
+every run.
 
 ## Distributed multi-job mode
 
-When a workflow runs multiple Gradle jobs in parallel — for example, one job per subproject or one
+When a workflow runs multiple build jobs in parallel — for example, one job per subproject or one
 job per test suite — a naive shared cache has a fundamental problem: every parallel job writes back
 its own version of the cache at the end, and the last writer wins. Jobs that finish earlier have
-their dependency updates discarded because a later job overwrites the cache with whatever _it_ saw.
+their dependency downloads discarded because a later job overwrites the cache with whatever _it_ saw.
 
 This action solves that with a **delta exchange** model:
 
@@ -43,8 +49,8 @@ This action solves that with a **delta exchange** model:
 - A dedicated **aggregator job**, which runs after all workers complete, downloads every delta,
   merges them, and saves the merged result as the new base cache entry.
 
-The result: every parallel job's dependency downloads and compilation outputs are captured in the
-next cache entry, not just the last job to finish.
+The result: every parallel job's dependency downloads are captured in the next cache entry, not just
+the last job to finish.
 
 ```mermaid
 graph LR

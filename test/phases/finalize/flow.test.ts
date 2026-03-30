@@ -57,9 +57,14 @@ import {
 } from '../../support/github-test-runtime';
 import type { GradleAdapterOptions } from '../../../src/build-tool/gradle/adapter';
 import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
-import type { NormalizedActionConfig } from '../../../src/config/types';
+import type { NormalizedGradleConfig } from '../../../src/config/types';
+import {
+  normalizeGradleActionConfig,
+  readGradleActionInputs,
+  resolveGradleActionInputsFromConfigFile,
+} from '../../../src/build-tool/gradle/config';
 
-function createFinalizeActionDependencies(options: {
+async function createFinalizeActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
   readonly eventPayload?: Record<string, unknown>;
   readonly summaryWriter: SummaryWriter;
@@ -67,6 +72,7 @@ function createFinalizeActionDependencies(options: {
   readonly getState?: (name: string) => string;
   readonly info?: (message: string) => void;
   readonly adapterOptions?: GradleAdapterOptions;
+  readonly workspace: string;
 }) {
   const runtimeHost = createTestRuntimeHost({
     getInput(name: string): string {
@@ -75,19 +81,30 @@ function createFinalizeActionDependencies(options: {
     getState: options.getState,
     info: options.info,
   });
+  const ciProvider = createTestGitHubProvider(runtimeHost, {
+    env: options.env,
+    eventPayload: options.eventPayload,
+  });
+
+  const directInputs = readGradleActionInputs(runtimeHost);
+  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, {
+    workspace: options.workspace,
+  });
+  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
+    phase: 'finalize',
+    ciContext: ciProvider.context,
+    env: options.env,
+  });
 
   return {
     runtimeHost,
-    ciProvider: createTestGitHubProvider(runtimeHost, {
-      env: options.env,
-      eventPayload: options.eventPayload,
-    }),
+    ciProvider,
+    config,
     reportSink: createTestGitHubReportSink(runtimeHost, {
       env: options.env,
       summaryWriter: options.summaryWriter,
     }),
-    buildToolAdapterFactory: (config: NormalizedActionConfig) =>
-      new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
+    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
   };
 }
 
@@ -116,7 +133,7 @@ describe('executeFinalizeAction', () => {
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -129,7 +146,8 @@ describe('executeFinalizeAction', () => {
           },
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
-        }),
+          workspace,
+        })),
       });
 
       expect(status.bootstrap.baseCacheResult).toEqual(
@@ -199,7 +217,7 @@ describe('executeFinalizeAction', () => {
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -212,7 +230,8 @@ describe('executeFinalizeAction', () => {
           },
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
-        }),
+          workspace,
+        })),
       });
 
       expect(status.deltaArtifactResult).toEqual(
@@ -279,7 +298,7 @@ describe('executeFinalizeAction', () => {
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -295,7 +314,8 @@ describe('executeFinalizeAction', () => {
             infoMessages.push(message);
           },
           summaryWriter: createSummaryCapture().writer,
-        }),
+          workspace,
+        })),
       });
 
       const publishedSummary = await readFile(path.join(workspace, 'step-summary.md'), 'utf8');
@@ -337,11 +357,12 @@ describe('executeFinalizeAction', () => {
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: createSummaryCapture().writer,
-        }),
+          workspace,
+        })),
       });
 
       const summaryContent = createFinalizeActionSummaryLines(status).join('\n');
@@ -380,7 +401,7 @@ describe('executeFinalizeAction', () => {
         }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'build'),
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -393,7 +414,8 @@ describe('executeFinalizeAction', () => {
           },
           inputProvider: createInputProvider('standalone'),
           summaryWriter: summary.writer,
-        }),
+          workspace,
+        })),
       });
 
       expect(saveCalls).toBe(1);
@@ -450,7 +472,7 @@ describe('executeFinalizeAction', () => {
         }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -463,7 +485,8 @@ describe('executeFinalizeAction', () => {
           },
           inputProvider: createInputProvider('distributed-aggregator'),
           summaryWriter: summary.writer,
-        }),
+          workspace,
+        })),
       });
 
       expect(saveCalls).toBe(1);
@@ -520,7 +543,7 @@ describe('executeFinalizeAction', () => {
       );
       await stageWorkerArtifactForCleanup(artifactBackend, workspace, 'worker-a');
       const artifactNameToDelete = (await artifactBackend.listArtifacts())[0]!.name;
-      savedState.set('buildish-mammoth-cache-gradle-distributed-aggregate-state', 'true');
+      savedState.set('buildish-mammoth-cache-distributed-aggregate-state', 'true');
       savedState.set(CONSUMED_DELTA_ARTIFACT_NAMES_STATE, JSON.stringify([artifactNameToDelete]));
 
       const status = await executeFinalizeAction({
@@ -530,7 +553,7 @@ describe('executeFinalizeAction', () => {
         }),
         env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -543,7 +566,8 @@ describe('executeFinalizeAction', () => {
           },
           inputProvider: createInputProvider('distributed-aggregator'),
           summaryWriter: summary.writer,
-        }),
+          workspace,
+        })),
       });
 
       expect(status.consumedDeltaCleanupResult).toEqual(
@@ -581,7 +605,7 @@ describe('executeFinalizeAction', () => {
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...createFinalizeActionDependencies({
+        ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: {
             repository: { default_branch: 'main' },
@@ -594,7 +618,8 @@ describe('executeFinalizeAction', () => {
           },
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
-        }),
+          workspace,
+        })),
       });
 
       expect(status.deltaArtifactResult).toEqual(
@@ -718,7 +743,7 @@ function createSummaryCapture(): {
 }
 
 function createTestCacheModel(gradleUserHome: string): CacheModel {
-  const gradleAdapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const gradleAdapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedGradleConfig);
   const partitions = createCachePartitions(
     gradleUserHome,
     [],
@@ -776,16 +801,8 @@ async function writeCapturedBuildResult(
     readonly buildScanUri: string | null;
   },
 ): Promise<void> {
-  const resultsDirectory = path.join(
-    gradleUserHome,
-    '.buildish-mammoth-cache-gradle',
-    'build-results',
-  );
-  const buildScansDirectory = path.join(
-    gradleUserHome,
-    '.buildish-mammoth-cache-gradle',
-    'build-scans',
-  );
+  const resultsDirectory = path.join(gradleUserHome, '.buildish-mammoth-cache', 'build-results');
+  const buildScansDirectory = path.join(gradleUserHome, '.buildish-mammoth-cache', 'build-scans');
   await mkdir(resultsDirectory, { recursive: true });
   await mkdir(buildScansDirectory, { recursive: true });
   await writeFile(
@@ -812,9 +829,7 @@ async function writeCapturedBuildResult(
 }
 
 async function withWorkspace(testBody: (workspace: string) => Promise<void>): Promise<void> {
-  const workspace = await mkdtemp(
-    path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-post-flow-'),
-  );
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-post-flow-'));
   try {
     await testBody(workspace);
   } finally {

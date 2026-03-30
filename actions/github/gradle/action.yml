@@ -163,5 +163,5 @@ outputs:
     description: Restored cache key, when a base cache entry was reused.
 runs:
   using: node24
-  main: ../../../dist/github/main/index.cjs
-  post: ../../../dist/github/post/index.cjs
+  main: ../../../dist/github/gradle/main/index.cjs
+  post: ../../../dist/github/gradle/post/index.cjs

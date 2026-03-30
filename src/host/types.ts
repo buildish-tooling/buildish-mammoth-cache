@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { InputProvider } from '../config/action-config';
+import type { InputProvider } from '../config/types';
 
 /** Host capability for resolving action inputs. */
 export type HostInputSource = InputProvider;

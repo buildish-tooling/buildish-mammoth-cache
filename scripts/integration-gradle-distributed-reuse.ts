@@ -23,7 +23,12 @@ import path from 'node:path';
 import type { WorkflowArtifactDescriptor } from '../src/delta/service';
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
 import { GradleBuildToolAdapter } from '../src/build-tool/gradle/adapter';
-import type { NormalizedActionConfig } from '../src/config/types';
+import {
+  normalizeGradleActionConfig,
+  readGradleActionInputs,
+  resolveGradleActionInputsFromConfigFile,
+} from '../src/build-tool/gradle/config';
+import type { NormalizedGradleConfig } from '../src/config/types';
 import { createPrepareActionOutputs, executePrepareAction } from '../src/phases/prepare/flow';
 import { executeFinalizeAction } from '../src/phases/finalize/flow';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
@@ -82,7 +87,7 @@ async function main(): Promise<void> {
   const buildRoot = path.join(repoRoot, 'build');
   await mkdir(buildRoot, { recursive: true });
 
-  const stagedRoot = await mkdtemp(path.join(buildRoot, 'integration-distributed-reuse-'));
+  const stagedRoot = await mkdtemp(path.join(buildRoot, 'integration-gradle-distributed-reuse-'));
   let keepStagedRoot = process.env.BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT === '1';
 
   try {
@@ -262,7 +267,12 @@ async function executePreparePhase(
     env: job.env,
     artifactBackend: artifactApi,
     cacheBackend: UNAVAILABLE_CACHE_API,
-    ...createGitHubActionDependencies(job, inputs, createSummaryWriter(job.jobName)),
+    ...(await createGitHubActionDependencies(
+      job,
+      inputs,
+      createSummaryWriter(job.jobName),
+      'prepare',
+    )),
   });
 }
 
@@ -275,7 +285,12 @@ async function executeFinalizePhase(
     env: job.env,
     artifactBackend: artifactApi,
     cacheBackend: UNAVAILABLE_CACHE_API,
-    ...createGitHubActionDependencies(job, inputs, createSummaryWriter(`${job.jobName} finalize`)),
+    ...(await createGitHubActionDependencies(
+      job,
+      inputs,
+      createSummaryWriter(`${job.jobName} finalize`),
+      'finalize',
+    )),
   });
 }
 
@@ -287,10 +302,11 @@ function createInputProvider(values: Record<string, string>): { getInput(name: s
   };
 }
 
-function createGitHubActionDependencies(
+async function createGitHubActionDependencies(
   job: LocalJobRuntime,
   inputs: Record<string, string>,
   summaryWriter: SummaryWriter,
+  phase: 'prepare' | 'finalize',
 ) {
   const inputProvider = createInputProvider(inputs);
   const runtimeHost: CompositeHost = {
@@ -315,19 +331,32 @@ function createGitHubActionDependencies(
     },
   };
 
+  const ciProvider = createGitHubPlatform({
+    env: job.env,
+    eventPayload: {
+      repository: { default_branch: 'main' },
+    },
+  });
+
+  const directInputs = readGradleActionInputs(runtimeHost);
+  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, {
+    workspace: job.jobRoot,
+  });
+  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
+    phase,
+    ciContext: ciProvider.context,
+    env: job.env,
+  });
+
   return {
     runtimeHost,
-    ciProvider: createGitHubPlatform({
-      env: job.env,
-      eventPayload: {
-        repository: { default_branch: 'main' },
-      },
-    }),
+    ciProvider,
+    config,
     reportSink: createGitHubReportSink({
       env: job.env,
       summaryWriter,
     }),
-    buildToolAdapterFactory: (config: NormalizedActionConfig) => new GradleBuildToolAdapter(config),
+    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
   };
 }
 

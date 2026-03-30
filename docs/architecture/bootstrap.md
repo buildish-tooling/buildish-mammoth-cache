@@ -1,7 +1,7 @@
 ---
 title: Bootstrap Process
 weight: 40
-description: How the action initializes configuration, the cache model, and wrapper provisioning before handing off to the build.
+description: How the action initializes configuration, the cache model, and the build tool adapter (Gradle or Maven) before handing off to the build.
 ---
 
 <!--
@@ -21,8 +21,9 @@ limitations under the License.
 -->
 
 The bootstrap process runs at the start of every phase (prepare and finalize). It resolves
-configuration, builds the cache model, and provisions Gradle wrappers — all before any
-cache-specific logic runs.
+configuration, builds the cache model, and runs the build tool adapter's bootstrap step — all
+before any cache-specific logic runs. The adapter step is tool-specific: for Gradle it provisions
+wrapper JARs; for Maven it is a no-op in v1.
 
 ## Entrypoints
 
@@ -42,7 +43,7 @@ flowchart TD
     A[runPrepareExecution] --> B[bootstrapPhase]
     B --> C[Read & validate config]
     C --> D[Build CacheModel]
-    D --> E[provisionWrapperJars]
+    D --> E[adapter.provision\ne.g. provisionWrapperJars for Gradle]
     E --> F[executePrepareAction]
     F --> G[restoreBaseCache]
     G --> H[armBaseCacheFinalize]
@@ -59,8 +60,9 @@ flowchart TD
 4. Detects the Java major version by running `java -version`.
 5. Constructs the `CacheModel` (`src/cache/model.ts`): partition definitions, cache keys, path
    calculations.
-6. Calls `provisionWrapperJars()` (`src/gradle/wrapper/download.ts`) to download, verify, and
-   install any missing `gradle-wrapper.jar` files referenced by discovered properties files.
+6. Calls the build tool adapter's `provision()` method. For Gradle this runs
+   `provisionWrapperJars()` (`src/build-tool/gradle/wrapper/download.ts`) to download, verify, and
+   install any missing `gradle-wrapper.jar` files. For Maven this is a no-op in v1.
 
 **`executePrepareAction()`** (`src/phases/prepare/flow.ts`):
 
@@ -79,7 +81,7 @@ flowchart TD
     A[runFinalizeExecution] --> B[bootstrapPhase]
     B --> C[Read & validate config]
     C --> D[Build CacheModel]
-    D --> E[provisionWrapperJars]
+    D --> E[adapter.provision\ne.g. provisionWrapperJars for Gradle]
     E --> F[executeFinalizeAction]
     F --> G{isBaseCacheFinalizeArmed?}
     G -- No --> Z1[skip save]
@@ -112,7 +114,8 @@ Config-file values (workspace-relative .yml / .json / .yaml)
 Built-in defaults
 ```
 
-Validation is performed with Zod schemas (`src/config/action-config.ts`) after merging all layers.
+Validation is performed after merging all layers using the tool-specific normalizer
+(`src/build-tool/gradle/config.ts` or `src/build-tool/maven/config.ts`).
 If any value is invalid, the action fails at bootstrap before touching the cache or wrappers.
 
 ## Cache model
@@ -120,7 +123,7 @@ If any value is invalid, the action fails at bootstrap before touching the cache
 The `CacheModel` (`src/cache/model.ts`) is constructed once during bootstrap and passed through the
 whole phase. It encapsulates:
 
-- The resolved `GRADLE_USER_HOME` path.
+- The resolved build tool cache root path (e.g. `GRADLE_USER_HOME` for Gradle, `~/.m2` for Maven).
 - The active partition list with their computed include/exclude globs.
 - The rendered primary cache key.
 - The ordered restore key sequence.

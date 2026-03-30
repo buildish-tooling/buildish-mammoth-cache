@@ -29,15 +29,15 @@ the rendered `cache-key-template`, which defaults to:
 ${cacheKeyPrefix}-v${schemaVersion}-${partitionFingerprint}-${javaMajor}-${runnerOs}-${runnerArch}-${refName}
 ```
 
-| Placeholder               | Value                                                                    |
-| ------------------------- | ------------------------------------------------------------------------ |
-| `${cacheKeyPrefix}`       | `cache-key-prefix` input (default: `buildish-mammoth-gradle-cache-`)     |
-| `${schemaVersion}`        | Internal cache schema version bump (controlled in `src/config/types.ts`) |
-| `${partitionFingerprint}` | 16-character SHA-256 digest of the full ordered partition layout         |
-| `${javaMajor}`            | Major Java version reported by `java -version`                           |
-| `${runnerOs}`             | OS identifier from the CI environment                                    |
-| `${runnerArch}`           | Architecture identifier from the CI environment                          |
-| `${refName}`              | Git ref name (e.g. `main`, `refs/pull/42/merge`)                         |
+| Placeholder               | Value                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `${cacheKeyPrefix}`       | `cache-key-prefix` input (default: tool-specific — `buildish-mammoth-gradle-cache-` or `buildish-mammoth-maven-cache-`)         |
+| `${schemaVersion}`        | Internal cache schema version bump (per-tool constant in `src/build-tool/gradle/config.ts` or `src/build-tool/maven/config.ts`) |
+| `${partitionFingerprint}` | 16-character SHA-256 digest of the full ordered partition layout                                                                |
+| `${javaMajor}`            | Major Java version reported by `java -version`                                                                                  |
+| `${runnerOs}`             | OS identifier from the CI environment                                                                                           |
+| `${runnerArch}`           | Architecture identifier from the CI environment                                                                                 |
+| `${refName}`              | Git ref name (e.g. `main`, `refs/pull/42/merge`)                                                                                |
 
 A custom `cache-key-template` must include `${partitionFingerprint}`. This is enforced at
 configuration load time so that changing the active partition layout always produces a new cache key.
@@ -99,4 +99,4 @@ ${cacheKeyPrefix}-v${schemaVersion}-${partitionFingerprint}-${javaMajor}-${refNa
 
 This drops the OS and arch components, so a `main` cache entry can be used as a fallback for any
 OS/arch combination, which may or may not be appropriate depending on whether your build produces
-platform-specific artifacts inside `GRADLE_USER_HOME`.
+platform-specific artifacts inside the build tool cache directory.

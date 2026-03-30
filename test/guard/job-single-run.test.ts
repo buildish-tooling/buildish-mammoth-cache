@@ -166,7 +166,7 @@ function createCiContext(
 
 async function withRunnerTemp(testBody: (runnerTemp: string) => Promise<void>): Promise<void> {
   const runnerTemp = await mkdtemp(
-    path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-job-single-run-'),
+    path.join(os.tmpdir(), 'buildish-mammoth-cache-job-single-run-'),
   );
   try {
     await testBody(runnerTemp);

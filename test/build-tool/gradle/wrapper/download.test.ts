@@ -22,7 +22,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HttpHeadersByHost } from '../../../../src/ci/types';
-import type { NormalizedActionConfig } from '../../../../src/config/types';
+import type { NormalizedGradleConfig } from '../../../../src/config/types';
 import {
   deriveWrapperDownloadPlan,
   provisionWrapperJars,
@@ -465,7 +465,7 @@ describe('provisionWrapperJars', () => {
   });
 });
 
-const baseConfig: NormalizedActionConfig = {
+const baseConfig: NormalizedGradleConfig = {
   phase: 'prepare',
   baseDirectory: '.',
   cacheEnabled: true,
@@ -476,7 +476,7 @@ const baseConfig: NormalizedActionConfig = {
   cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
   cacheKeyTemplate: null,
   cachePartitions: [],
-  cacheSchemaVersion: 2,
+  cacheSchemaVersion: 1,
   wrapperSelectionMode: 'default',
   wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
   defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -501,7 +501,7 @@ async function withWorkspace(
   testBody: (workspace: string) => Promise<void>,
 ): Promise<void> {
   const workspace = await mkdtemp(
-    path.join(os.tmpdir(), 'buildish-mammoth-cache-gradle-wrapper-download-'),
+    path.join(os.tmpdir(), 'buildish-mammoth-cache-wrapper-download-'),
   );
 
   try {

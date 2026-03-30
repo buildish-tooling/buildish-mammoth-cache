@@ -1,7 +1,7 @@
 ---
 title: Security
-weight: 50 & Maintenance
-description: Required permissions, wrapper verification, token scoping, and maintenance procedures for Apache Buildish Mammoth Cache for Gradle.
+weight: 50
+description: Required permissions, wrapper verification, token scoping, and hard cache exclusions for Apache Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
@@ -35,13 +35,13 @@ The minimum required token permissions depend on the job mode and read-only sett
 `actions: write` is required to save cache entries and to upload or download workflow artifacts used
 by the distributed delta exchange. `contents: read` is required for workspace checkout.
 
-The `github-token` input (or `GITHUB_TOKEN` environment variable) is used only for authenticated
-wrapper JAR downloads against the GitHub API. It is never written to job summaries or persisted
-in post-action state.
+The `github-token` input (or `GITHUB_TOKEN` environment variable) is used only by the **Gradle**
+action for authenticated wrapper JAR downloads against the GitHub API. The Maven action does not
+use it. It is never written to job summaries or persisted in post-action state.
 
 ## Security
 
-### Gradle wrapper verification
+### Gradle wrapper verification {#gradle-wrapper-verification}
 
 Every `gradle-wrapper.jar` provisioned by this action goes through a three-step verification chain
 before it is written to disk:
@@ -64,14 +64,16 @@ runs.
 
 ### Token scoping
 
-- `github-token` is used exclusively for authenticated requests to `api.github.com` and
-  `raw.githubusercontent.com` when downloading wrapper JARs. It is applied per-host so it is never
-  sent to any other endpoint.
+- `github-token` is used exclusively by the Gradle action for authenticated requests to
+  `api.github.com` and `raw.githubusercontent.com` when downloading wrapper JARs. It is applied
+  per-host so it is never sent to any other endpoint.
 - The token is never written to workflow summaries, log output, or post-action state.
 
 ### Hard cache safety exclusions
 
-The following paths are excluded from every cache partition unconditionally and cannot be overridden:
+The following paths are excluded from every active partition unconditionally and cannot be overridden.
+
+**Gradle**
 
 | Pattern                     | Reason                                                                  |
 | --------------------------- | ----------------------------------------------------------------------- |
@@ -79,3 +81,12 @@ The following paths are excluded from every cache partition unconditionally and 
 | `**/*.lock`                 | PID-bearing files that cause hangs if restored on another runner        |
 | `caches/*/cc-keystore`      | Configuration-cache encryption key material                             |
 | `caches/journal-1/**`       | Gradle's local-only file-access journal; migrating it causes corruption |
+
+**Maven**
+
+| Pattern                         | Reason                                                                                                          |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `**/*.lastUpdated`              | Stale remote-check markers; cause silent re-resolution when shared across runners                               |
+| `**/resolver-status.properties` | Maven Resolver group-level remote-check status; per-runner state and a common distributed-merge conflict source |
+| `**/_remote.repositories`       | Records which remote a file came from; not portable across different CI environments                            |
+| `**/*.lock`                     | PID-bearing resolver lock files that cause hangs if restored on another runner                                  |

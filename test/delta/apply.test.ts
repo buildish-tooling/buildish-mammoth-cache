@@ -38,7 +38,7 @@ import { applyMergedDeltaPlan, mergeDeltaArtifactPackages } from '../../src/delt
 import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
-import type { NormalizedActionConfig } from '../../src/config/types';
+import type { NormalizedGradleConfig } from '../../src/config/types';
 import type { CiJobContext } from '../../src/ci/types';
 
 describe('cache delta merge/apply engine', () => {
@@ -71,7 +71,7 @@ describe('cache delta merge/apply engine', () => {
     );
     const targetGradleUserHome = await createGradleUserHome(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-apply-',
+      'buildish-mammoth-cache-apply-',
     );
     await seedBaseGradleUserHome(targetGradleUserHome);
 
@@ -117,7 +117,7 @@ describe('cache delta merge/apply engine', () => {
     );
 
     expect(() => mergeDeltaArtifactPackages([packageA, packageB])).toThrow(
-      /Conflicting dependent deltas.*example.jar/u,
+      /path conflict[\s\S]*example\.jar/u,
     );
   });
 
@@ -186,7 +186,7 @@ describe('cache delta merge/apply engine', () => {
     );
     const targetGradleUserHome = await createGradleUserHome(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-duplicate-paths-',
+      'buildish-mammoth-cache-duplicate-paths-',
     );
     await seedBaseGradleUserHome(targetGradleUserHome);
 
@@ -217,7 +217,7 @@ describe('cache delta merge/apply engine', () => {
     );
     const targetGradleUserHome = await createGradleUserHome(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-times-',
+      'buildish-mammoth-cache-times-',
     );
     const basePlan = mergeDeltaArtifactPackages([packageA]);
     const plan = {
@@ -269,7 +269,7 @@ describe('cache delta merge/apply engine', () => {
     );
     const targetGradleUserHome = await createGradleUserHome(
       temporaryDirectories,
-      'buildish-mammoth-cache-gradle-symlink-',
+      'buildish-mammoth-cache-symlink-',
     );
     const targetPath = path.join(targetGradleUserHome, 'caches/build-cache-1/output.bin');
     await mkdir(path.dirname(targetPath), { recursive: true });
@@ -288,7 +288,7 @@ async function createDownloadedPackage(
 ): Promise<DownloadedDeltaArtifactPackage> {
   const gradleUserHome = await createGradleUserHome(
     temporaryDirectories,
-    'buildish-mammoth-cache-gradle-worker-',
+    'buildish-mammoth-cache-worker-',
   );
   await seedBaseGradleUserHome(gradleUserHome);
   const cacheModel = createFixtureCacheModel(gradleUserHome);
@@ -305,7 +305,7 @@ async function createDownloadedPackage(
     {
       parentDirectory: await createTempDirectory(
         temporaryDirectories,
-        'buildish-mammoth-cache-gradle-stage-parent-',
+        'buildish-mammoth-cache-stage-parent-',
       ),
     },
   );
@@ -334,7 +334,7 @@ async function createGradleUserHome(
 }
 
 function createFixtureCacheModel(gradleUserHome: string): CacheModel {
-  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedActionConfig);
+  const adapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedGradleConfig);
   const partitions = createCachePartitions(
     gradleUserHome,
     [],

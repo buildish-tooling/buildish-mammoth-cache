@@ -92,8 +92,9 @@ export interface MergeDeltaOptions {
  * Merges an ordered list of downloaded delta artifact packages into a single {@link MergedDeltaPlan}.
  *
  * Overlapping paths (same relative path across multiple packages) are resolved according to
- * `options.allowDuplicateDependentDeltaPaths`. Content conflicts that cannot be resolved throw
- * a hard error so the aggregator never silently drops changes.
+ * `options.allowDuplicateDependentDeltaPaths`. Content conflicts that cannot be resolved are
+ * collected across the full merge pass and reported together in a single thrown error, so the
+ * caller can see all conflicting paths at once rather than discovering them one per run.
  *
  * Returns an empty plan when `packages` is empty.
  */
@@ -122,6 +123,7 @@ export function mergeDeltaArtifactPackages(
     CachePartitionDefinition['id'],
     Map<string, MergedDeltaState>
   >();
+  const conflicts: string[] = [];
 
   for (const artifactPackage of packages) {
     assertPortableDeltaPackage(artifactPackage, expectedPartitionIds, expectedBuildToolId);
@@ -153,12 +155,25 @@ export function mergeDeltaArtifactPackages(
           continue;
         }
 
-        partitionEntries.set(
-          entry.relativePath,
-          mergeOverlappingDeltaStates(existing, candidateState, options),
-        );
+        const result = mergeOverlappingDeltaStates(existing, candidateState, options);
+        if ('conflict' in result) {
+          conflicts.push(result.conflict);
+        } else {
+          partitionEntries.set(entry.relativePath, result.merged);
+        }
       }
     }
+  }
+
+  if (conflicts.length > 0) {
+    const noun = conflicts.length === 1 ? 'conflict' : 'conflicts';
+    const list = conflicts.map((c) => `  - ${c}`).join('\n');
+    throw new Error(
+      `${conflicts.length} path ${noun} found while merging dependent worker delta artifacts:\n${list}\n\n` +
+        `Paths that differ across worker jobs cannot be merged safely. ` +
+        `If these are build-tool-internal state files (such as resolver markers or status files), ` +
+        `add a matching glob pattern to the hard cache excludes for your build tool adapter.`,
+    );
   }
 
   const partitions = expectedPartitionIds.map((partitionId) => ({
@@ -320,28 +335,34 @@ function collectPayloadPaths(
   );
 }
 
+type MergeOverlappingResult = { readonly merged: MergedDeltaState } | { readonly conflict: string };
+
 function mergeOverlappingDeltaStates(
   existing: MergedDeltaState,
   candidate: MergedDeltaState,
   options: MergeDeltaOptions,
-): MergedDeltaState {
+): MergeOverlappingResult {
   if (areEntriesContentCompatible(existing.entry, candidate.entry)) {
     const preferred = selectNewerState(existing, candidate) ?? existing;
     const other = preferred === existing ? candidate : existing;
-    return mergeStateTimestamps(preferred, other);
+    return { merged: mergeStateTimestamps(preferred, other) };
   }
 
   if (options.allowDuplicateDependentDeltaPaths) {
     const preferred = selectNewerState(existing, candidate);
     if (preferred) {
       const other = preferred === existing ? candidate : existing;
-      return mergeStateTimestamps(preferred, other);
+      return { merged: mergeStateTimestamps(preferred, other) };
     }
   }
 
-  throw new Error(
-    `Conflicting dependent deltas for '${candidate.entry.relativePath}': artifact '${existing.artifactName}' from job '${existing.producerJobName}' and artifact '${candidate.artifactName}' from job '${candidate.producerJobName}' produce different content or metadata.`,
-  );
+  return {
+    conflict:
+      `'${candidate.entry.relativePath}': ` +
+      `'${existing.producerJobName}' (artifact '${existing.artifactName}') and ` +
+      `'${candidate.producerJobName}' (artifact '${candidate.artifactName}') ` +
+      `produce different content or metadata`,
+  };
 }
 
 function areEntriesContentCompatible(left: CacheDeltaEntry, right: CacheDeltaEntry): boolean {

@@ -15,7 +15,7 @@
  */
 
 import type { CiJobContext } from '../../ci';
-import type { NormalizedActionConfig } from '../../config/types';
+import type { NormalizedGradleConfig } from '../../config/types';
 import type {
   BuildReport,
   BuildToolAdapter,
@@ -136,10 +136,10 @@ export interface GradleAdapterOptions {
  * per-invocation build-result capture, and post-build report collection.
  */
 export class GradleBuildToolAdapter implements BuildToolAdapter {
-  readonly #config: NormalizedActionConfig;
+  readonly #config: NormalizedGradleConfig;
   readonly #options: GradleAdapterOptions;
 
-  constructor(config: NormalizedActionConfig, options: GradleAdapterOptions = {}) {
+  constructor(config: NormalizedGradleConfig, options: GradleAdapterOptions = {}) {
     this.#config = config;
     this.#options = options;
   }
