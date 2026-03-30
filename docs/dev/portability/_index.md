@@ -30,18 +30,21 @@ graph LR
     subgraph "Planned"
         CB["Codeberg / Forgejo CI"]
         GL["GitLab CI"]
+        BB["Bitbucket Pipelines"]
     end
 
     GH -- seam interfaces --> CORE["Shared core\nsrc/phases/"]
     CB -. seam interfaces .-> CORE
     GL -. seam interfaces .-> CORE
+    BB -. seam interfaces .-> CORE
 ```
 
-| Provider           | Cache backend | Artifact backend | Host adapters | Entrypoints | Status      |
-| ------------------ | ------------- | ---------------- | ------------- | ----------- | ----------- |
-| GitHub Actions     | ✓             | ✓                | ✓             | ✓           | Implemented |
-| Codeberg / Forgejo | —             | —                | —             | —           | Planned     |
-| GitLab CI          | —             | —                | —             | —           | Planned     |
+| Provider             | Cache backend          | Artifact backend | Host adapters | Entrypoints | Status      |
+| -------------------- | ---------------------- | ---------------- | ------------- | ----------- | ----------- |
+| GitHub Actions       | ✓                      | ✓                | ✓             | ✓           | Implemented |
+| Codeberg / Forgejo   | —                      | —                | —             | —           | Planned     |
+| GitLab CI            | —                      | —                | —             | —           | Planned     |
+| Bitbucket Pipelines  | ⚠ no native frontend  | —                | —             | —           | Planned     |
 
 ## Architecture
 
@@ -80,12 +83,15 @@ list and provider boundary rules.
 GitHub Actions has distinct `main` and `post` execution phases, which map to the `prepare` and
 `finalize` concepts in this project. Codeberg/Forgejo CI also supports a post-execution hook.
 GitLab CI does not have a built-in equivalent, so the finalize logic would need to be invoked
-explicitly as a separate pipeline job or an `after_script` step.
+explicitly as a separate pipeline job or an `after_script` step. Bitbucket Pipelines has
+`after-script`, which runs in the same container as the main `script` and maps cleanly onto the
+finalize phase.
 
-The prepare/finalize naming in this codebase is intentionally CI-agnostic to support all three
+The prepare/finalize naming in this codebase is intentionally CI-agnostic to support all of these
 patterns.
 
 ## Per-provider notes
 
 - [Codeberg / Forgejo CI](./codeberg/)
 - [GitLab CI](./gitlab/)
+- [Bitbucket Pipelines](./bitbucket/)
