@@ -20,9 +20,9 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { CACHE_MANIFEST_SCHEMA_VERSION, type CacheManifest } from '../../src/cache/manifest';
-import type { BaseCacheRestoreResult } from '../../src/cache/service';
-import type { CiJobContext } from '../../src/ci/types';
+import { CACHE_MANIFEST_SCHEMA_VERSION, type CacheManifest } from '../../../src/cache/manifest';
+import type { BaseCacheRestoreResult } from '../../../src/cache/service';
+import type { CiJobContext } from '../../../src/ci/types';
 import {
   BASE_CACHE_RESTORE_RESULT_STATE,
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
@@ -37,7 +37,7 @@ import {
   persistDeltaArtifactExecutionIdentity,
   persistPreBuildCacheManifest,
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
-} from '../../src/phases/finalize/state';
+} from '../../../src/phases/finalize/state';
 
 describe('post-action state helpers', () => {
   it('persists a pre-build manifest under RUNNER_TEMP and loads it back', async () => {

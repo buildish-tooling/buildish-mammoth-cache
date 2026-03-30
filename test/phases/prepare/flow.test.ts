@@ -21,38 +21,41 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { stageDeltaArtifactPackage, type WorkflowArtifactDescriptor } from '../src/delta/service';
+import {
+  stageDeltaArtifactPackage,
+  type WorkflowArtifactDescriptor,
+} from '../../../src/delta/service';
 import {
   captureCacheManifest,
   computeCacheDelta,
   deserializeCacheManifest,
-} from '../src/cache/manifest';
-import { createCacheModel, type CacheModel } from '../src/cache/model';
-import type { CiJobContext } from '../src/ci/types';
-import type { NormalizedActionConfig } from '../src/config/types';
+} from '../../../src/cache/manifest';
+import { createCacheModel, type CacheModel } from '../../../src/cache/model';
+import type { CiJobContext } from '../../../src/ci/types';
+import type { NormalizedActionConfig } from '../../../src/config/types';
 import {
   createPrepareActionOutputs,
   createPrepareActionSummaryLines,
   executePrepareAction,
-} from '../src/phases/prepare/flow';
+} from '../../../src/phases/prepare/flow';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/delta/backend';
+} from '../../../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/cache/backend';
-import type { SummaryWriter } from '../src/ci/github/report-sink';
+} from '../../../src/cache/backend';
+import type { SummaryWriter } from '../../../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
-} from '../src/phases/finalize/state';
+} from '../../../src/phases/finalize/state';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,
   createTestRuntimeHost,
-} from './support/github-test-runtime';
+} from '../../support/github-test-runtime';
 
 function createPrepareActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;

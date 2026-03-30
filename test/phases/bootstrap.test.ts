@@ -25,23 +25,23 @@ import {
   createBootstrapLogLines,
   createBootstrapStatus,
   createBootstrapSummaryLines,
-} from '../src/phases/bootstrap';
-import type { BaseCacheRestoreResult } from '../src/cache/service';
-import type { CacheModel } from '../src/cache/model';
-import type { SummaryWriter } from '../src/ci/github/report-sink';
+} from '../../src/phases/bootstrap';
+import type { BaseCacheRestoreResult } from '../../src/cache/service';
+import type { CacheModel } from '../../src/cache/model';
+import type { SummaryWriter } from '../../src/ci/github/report-sink';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/cache/backend';
+} from '../../src/cache/backend';
 import type {
   ProvisionedWrapperJar,
   ValidatedWrapperPropertiesFile,
-} from '../src/gradle/wrapper/types';
+} from '../../src/gradle/wrapper/types';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,
   createTestRuntimeHost,
-} from './support/github-test-runtime';
+} from '../support/github-test-runtime';
 
 const config = {
   phase: 'prepare',

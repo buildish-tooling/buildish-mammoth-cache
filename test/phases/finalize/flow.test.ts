@@ -25,14 +25,14 @@ import {
   downloadAndVerifyDeltaArtifactPackage,
   stageDeltaArtifactPackage,
   type WorkflowArtifactDescriptor,
-} from '../src/delta/service';
-import { captureCacheManifest, computeCacheDelta } from '../src/cache/manifest';
-import { createCachePartitions, type CacheModel } from '../src/cache/model';
+} from '../../../src/delta/service';
+import { captureCacheManifest, computeCacheDelta } from '../../../src/cache/manifest';
+import { createCachePartitions, type CacheModel } from '../../../src/cache/model';
 import {
   createFinalizeActionSummaryLines,
   executeFinalizeAction,
-} from '../src/phases/finalize/flow';
-import type { SummaryWriter } from '../src/ci/github/report-sink';
+} from '../../../src/phases/finalize/flow';
+import type { SummaryWriter } from '../../../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
   DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE,
@@ -41,20 +41,20 @@ import {
   PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
   persistDeltaArtifactExecutionIdentity,
   persistConsumedDeltaArtifactNames,
-} from '../src/phases/finalize/state';
+} from '../../../src/phases/finalize/state';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/delta/backend';
+} from '../../../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/cache/backend';
+} from '../../../src/cache/backend';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,
   createTestRuntimeHost,
-} from './support/github-test-runtime';
+} from '../../support/github-test-runtime';
 
 function createFinalizeActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
