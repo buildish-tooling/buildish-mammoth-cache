@@ -1,6 +1,7 @@
 ---
-title: '[FROM README] GitHub action configuration'
-description: Temporary home for configuration details moved from the project README.
+title: Configuration Reference
+weight: 30
+description: All action inputs and config-file options for Apache Buildish Mammoth Cache for Gradle.
 ---
 
 <!--
@@ -19,8 +20,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-This page currently carries content moved from the project README. It will likely be reorganized later.
-
 ## `config-file`
 
 - Default: unset
@@ -29,8 +28,7 @@ This page currently carries content moved from the project README. It will likel
 - Direct action inputs override values loaded from the file.
 - `dependent-jobs` and `wrapper-properties-files` may be either strings or arrays in the file.
 - `cache-partitions` may be expressed as a native YAML/JSON array in the file instead of a serialized JSON string.
-- `github-token` is intentionally rejected in config files; pass secrets directly via action inputs or environment
-  variables.
+- `github-token` is intentionally rejected in config files; pass secrets directly via action inputs or environment variables.
 - The resolved file must remain inside the workspace after symlink resolution.
 
 ## `base-directory`
@@ -88,8 +86,7 @@ This page currently carries content moved from the project README. It will likel
   - `${runnerOs}`
   - `${runnerArch}`
   - `${refName}`
-- Custom templates must include `${partitionFingerprint}` so different cache partition layouts do not share the same
-  base cache key.
+- Custom templates must include `${partitionFingerprint}` so different cache partition layouts do not share the same base cache key.
 
 ## `cache-partitions`
 
@@ -102,7 +99,7 @@ This page currently carries content moved from the project README. It will likel
   - `excludes`: optional array of Gradle-user-home-relative exclude globs
 - Overriding a built-in partition replaces its built-in include/exclude lists.
 - Setting `includes: []` disables a built-in partition.
-- Custom partitions must have at least include one glob.
+- Custom partitions must have at least one include glob.
 - Hard safety excludes are always enforced even when a partition is overridden.
 
 ## `process-all-wrapper-files`
@@ -137,9 +134,7 @@ This page currently carries content moved from the project README. It will likel
 ## `restore-cleanup-mode`
 
 - Default: `none`
-- Supported values:
-  - `none`
-  - `prune-managed`
+- Supported values: `none`, `prune-managed`
 - `prune-managed` only acts after a base-cache hit.
 - It deletes files currently matched by the active managed partitions, then restores the matched base cache again.
 - It never deletes files outside the action-managed partition space.
@@ -148,15 +143,12 @@ This page currently carries content moved from the project README. It will likel
 ## `gradle-user-home`
 
 - Default: `$GRADLE_USER_HOME` when set, otherwise `$HOME/.gradle`
-- In v1, only the default Gradle user home is supported.
-- Non-default values fail validation intentionally.
+- In v1, only the default Gradle user home is supported. Non-default values fail validation intentionally.
 
 ## `setup-java`
 
 - Default: `false`
-- Accepted values: `true`, `false`
-- Reserved compatibility flag.
-- In v1, setting `true` fails intentionally.
+- Reserved compatibility flag. In v1, setting `true` fails intentionally.
 - Run `actions/setup-java` before this action instead.
 
 ## `github-token`

@@ -1,3 +1,9 @@
+---
+title: Base Cache Design
+weight: 20
+description: Base cache restore/save lifecycle, gating conditions, prune-managed cleanup, and the distributed delta exchange model.
+---
+
 <!--
 Copyright 2026 The Apache Software Foundation
 
@@ -13,8 +19,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-
-# Base Cache Design
 
 This document describes the base cache restore/save lifecycle, the gating conditions that control
 whether a save occurs, the optional `prune-managed` cleanup mode, and the distributed
@@ -34,7 +38,7 @@ sequenceDiagram
     R->>P: job starts
     P->>P: bootstrap (config, cache model, wrappers)
     P->>P: restoreBaseCache()
-    P->>P: armBaseCachePostAction()
+    P->>P: armBaseCacheFinalize()
     P->>P: capture pre-build manifest
     P-->>B: hand off to build
     B->>B: ./gradlew ...
@@ -113,61 +117,63 @@ from previous runs do not accumulate on long-lived runners.
 
 ## Distributed delta exchange
 
-In distributed mode each worker job captures a snapshot of `GRADLE_USER_HOME` before and after the
-build. The _delta_ (new or modified files) is uploaded as a workflow artifact. The aggregator job
-downloads every worker's delta artifact, merges overlapping entries, and applies the merged result
-back to `GRADLE_USER_HOME` before saving the updated base cache.
+The distributed worker/aggregator model separates cache writing from parallel build execution.
 
 ```mermaid
 flowchart TD
-    subgraph worker-a
-        WA1[pre-build snapshot] --> WA2[./gradlew :module-a:build]
-        WA2 --> WA3[post-build snapshot]
-        WA3 --> WA4[compute delta]
-        WA4 --> WA5[upload delta artifact]
+    subgraph Workers
+        W1["worker-a\n(prepare → build → finalize)"]
+        W2["worker-b\n(prepare → build → finalize)"]
     end
-    subgraph worker-b
-        WB1[pre-build snapshot] --> WB2[./gradlew :module-b:build]
-        WB2 --> WB3[post-build snapshot]
-        WB3 --> WB4[compute delta]
-        WB4 --> WB5[upload delta artifact]
+    subgraph Aggregator
+        AG["aggregator job\n(prepare → finalize)"]
     end
-    subgraph aggregator
-        WA5 --> AG1[download + verify artifacts]
-        WB5 --> AG1
-        AG1 --> AG2[merge overlapping deltas]
-        AG2 --> AG3[apply merged delta to GRADLE_USER_HOME]
-        AG3 --> AG4[saveBaseCache]
+    subgraph Storage
+        BC["Base cache entry"]
+        DA1["Delta artifact: worker-a"]
+        DA2["Delta artifact: worker-b"]
     end
+
+    BC -- restore --> W1
+    BC -- restore --> W2
+    W1 -- upload delta --> DA1
+    W2 -- upload delta --> DA2
+    BC -- restore --> AG
+    DA1 -- download + merge --> AG
+    DA2 -- download + merge --> AG
+    AG -- save merged cache --> BC
 ```
 
-### Delta artifact package structure
+**Worker jobs** (`job-mode: distributed-worker`):
 
-Each delta artifact is a zip archive containing:
+- Restore the base cache.
+- Run the build.
+- Compute the delta between the pre- and post-build manifest snapshots.
+- Pack only changed or added files into a delta artifact package and upload it.
+- Skip the base cache save step.
 
-- `delta-package.json` — metadata: producer job name, run/attempt identity, payload entries with
-  relative paths and SHA-256 digests
-- `delta-manifest.json` — ordered list of changed entries per partition, using a portable
-  `<portable-gradle-user-home>` sentinel in place of the actual `GRADLE_USER_HOME` path
-- `payload/<uuid>.bin` — one binary payload file per changed cache file
+**Aggregator jobs** (`job-mode: distributed-aggregator`):
 
-### Merge conflict resolution
+- Restore the base cache.
+- Download all delta artifact packages from the listed `dependent-jobs`.
+- Merge the deltas in dependency order, applying the most recent version of each file.
+- Apply the merged delta to `GRADLE_USER_HOME`.
+- Save the resulting `GRADLE_USER_HOME` as the new base cache entry.
 
-When two workers produce a delta for the same relative path the action attempts to reconcile:
+Delta packages are identified by a combination of the producing job name, the run number, and the
+run attempt. This identity triple ensures that a re-run of a failed worker does not cause the
+aggregator to pick up a stale artifact from the previous attempt.
 
-1. **Content-compatible** — same SHA-256, size, and mode: prefer the entry with the newer
-   modification timestamp; merge access/modification timestamps from both.
-2. **Content-compatible + `allowDuplicateDependentDeltaPaths`** — same rule as above.
-3. **Conflicting content** — hard failure unless `allowDuplicateDependentDeltaPaths` is set and
-   one entry is strictly newer.
+The artifact package includes an integrity manifest (SHA-256 hashes for each file), a schema
+version field, and a metadata section describing the producer job. The schema version is checked at
+download time to detect incompatible format changes.
 
-See `src/cache/delta.ts` → `mergeOverlappingDeltaStates()` for the full resolution logic.
+The delta computation and merge logic lives in `src/delta/apply.ts`. The artifact staging, upload,
+and download logic lives in `src/delta/service.ts`.
 
-### Verification on apply
+### Artifact uniqueness constraint
 
-Before each payload file is written to `GRADLE_USER_HOME` the action:
-
-- Verifies the destination path stays within `GRADLE_USER_HOME` (no traversal).
-- Rejects symbolic links at the destination.
-- Re-hashes the payload bytes and compares them to the manifest digest.
-- Writes the file atomically via a temporary file + rename, the same pattern used for wrapper JARs.
+A delta artifact name is derived from the job name and schema version. Within a workflow run, each
+worker job must have a unique name so that its artifact does not collide with another worker's
+artifact in the same run. The CI backend is responsible for enforcing artifact name uniqueness
+within a run; this action relies on that guarantee.

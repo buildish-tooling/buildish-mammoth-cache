@@ -1,6 +1,6 @@
 ---
 title: Apache Buildish Mammoth Cache for Gradle
-description: Documentation for workflow usage, configuration, cache behavior, security, maintenance, and portability planning.
+description: Documentation for Apache Buildish Mammoth Cache for Gradle — a CI action that caches the Gradle user home across workflow runs.
 ---
 
 <!--
@@ -19,32 +19,38 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-Apache Buildish Mammoth Cache for Gradle provides secure Gradle wrapper provisioning plus local and distributed cache
-management for GitHub Actions today, prepared for Codeberg/Forgejo and GitLab CI in the future.
+Apache Buildish Mammoth Cache for Gradle is a CI action that caches the Gradle user home
+(`GRADLE_USER_HOME`) across workflow runs and provisions Gradle wrapper JARs securely before
+the build starts.
 
-The shared core is structured so future provider integrations can target GitHub, Codeberg/Forgejo, and GitLab without
-rewriting the wrapper, cache, or distributed-delta logic.
+## Single-job mode
 
-## Pages migrated from the README
+In the most common setup, the action wraps a single Gradle job: it restores the cache before the
+build and saves an updated cache entry after the build. This avoids re-downloading dependencies and
+re-compiling scripts on every run.
 
-- [[FROM README] Usage in GitHub workflows and runtime requirements](./from-readme-usage-and-runtime/)
-- [[FROM README] GitHub action configuration](./from-readme-github-action-configuration/)
-- [[FROM README] Cache partitions and restore cleanup](./from-readme-cache-partitions-and-restore-cleanup/)
-- [[FROM README] Usage examples](./from-readme-usage-examples/)
-- [[FROM README] Permissions, security, maintenance, and current status](./from-readme-security-and-maintenance/)
+## Distributed multi-job mode
 
-## Existing design and implementation docs
+When a workflow runs multiple Gradle jobs in parallel — for example, one job per subproject or one
+job per test suite — a naive shared cache has a fundamental problem: every parallel job writes back
+its own version of the cache at the end, and the last writer wins. Jobs that finish earlier have
+their dependency updates discarded because a later job overwrites the cache with whatever _it_ saw.
 
-- [Wrapper provisioning](./wrapper-provisioning/)
-- [Gradle cache contents](./gradle-cache-contents/)
-- [Artifact exchange](./artifact-exchange/)
-- [Bootstrap process](./bootstrap-process/)
-- [Base cache design](./base-cache-design/)
-- [Cache key generation](./cache-key-generation/)
-- [CI abstraction boundary rules](./ci-abstraction-rule/)
-- [CI abstraction](./ci-abstraction/)
-- [Implementation plan](./implementation-plan/)
-- [Provider portability implementation plan](./provider-portability-implementation-plan/)
-- [Codeberg CI support evaluation](./codeberg-ci-support-evaluation/)
-- [GitLab CI support evaluation](./gitlab-ci-support-evaluation/)
-- [Release legal notes](./release-legal/)
+This action solves that with a **delta exchange** model:
+
+- Each **worker job** computes only the _difference_ between what was in the cache when it started
+  and what is in the cache after the build. It uploads that delta as a workflow artifact.
+- A dedicated **aggregator job**, which runs after all workers complete, downloads every delta,
+  merges them, and saves the merged result as the new base cache entry.
+
+The result: every parallel job's dependency downloads and compilation outputs are captured in the
+next cache entry, not just the last job to finish.
+
+```mermaid
+graph LR
+    BC["Base cache\n(previous run)"] --> W1 & W2 & W3
+    W1["Worker A\nbuild + delta"] -- "Δ artifact A" --> AGG
+    W2["Worker B\nbuild + delta"] -- "Δ artifact B" --> AGG
+    W3["Worker C\nbuild + delta"] -- "Δ artifact C" --> AGG
+    AGG["Aggregator\nmerge + save"] --> BC2["Base cache\n(this run)"]
+```
