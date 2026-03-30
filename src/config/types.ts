@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-import type { CoreExecutionPhase } from '../core/lifecycle';
+/**
+ * Execution phase of the action — `prepare` runs at the start of the job, `finalize` at the end.
+ */
+export type CoreExecutionPhase = 'prepare' | 'finalize';
 
 /**
  * Supported execution personalities for the action.

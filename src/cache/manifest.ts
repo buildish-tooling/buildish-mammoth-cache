@@ -19,12 +19,9 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { hashFileSha256, isMissingPathError } from '../fs';
-import {
-  parseSerializedJson,
-  parseWithZod,
-  validateNormalizedRelativePosixPath,
-} from '../validation';
+import { hashFileSha256, isMissingPathError } from '../util/fs';
+import { validateNormalizedRelativePosixPath } from '../util/paths';
+import { parseSerializedJson, parseWithZod } from '../util/serialization';
 import type { CacheModel } from './model';
 
 /** Schema version embedded in every captured cache manifest. Increment on breaking format changes. */

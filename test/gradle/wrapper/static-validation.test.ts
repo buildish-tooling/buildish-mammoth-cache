@@ -20,8 +20,8 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import type { NormalizedActionConfig } from '../../src/config/types';
-import { validateTargetWrapperProperties } from '../../src/wrapper/static-validation';
+import type { NormalizedActionConfig } from '../../../src/config/types';
+import { validateTargetWrapperProperties } from '../../../src/gradle/wrapper/static-validation';
 
 describe('validateTargetWrapperProperties', () => {
   it('validates the default wrapper properties file and normalizes escaped values', async () => {

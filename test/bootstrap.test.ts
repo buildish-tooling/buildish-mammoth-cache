@@ -33,7 +33,10 @@ import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
 } from '../src/storage/cache';
-import type { ProvisionedWrapperJar, ValidatedWrapperPropertiesFile } from '../src/wrapper/types';
+import type {
+  ProvisionedWrapperJar,
+  ValidatedWrapperPropertiesFile,
+} from '../src/gradle/wrapper/types';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,

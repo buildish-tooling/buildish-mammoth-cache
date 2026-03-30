@@ -35,13 +35,13 @@ import {
   escapeHtml,
   escapeSummaryText,
 } from './logging/summary';
-import type { CoreExecutionPhase } from './core/lifecycle';
+import type { CoreExecutionPhase } from './config/types';
 import type { ReportSink } from './reporting/types';
-import type { RuntimeInputSource, RuntimeReporter, RuntimeStateStore } from './runtime-host/types';
+import type { HostInputSource, HostReporter, HostStateStore } from './host/types';
 import type { BaseCacheBackend } from './storage/cache';
-import { provisionWrapperJars, type WrapperProvisionOptions } from './wrapper/download';
-import { validateTargetWrapperProperties } from './wrapper/static-validation';
-import type { ProvisionedWrapperJar, ValidatedWrapperPropertiesFile } from './wrapper/types';
+import { provisionWrapperJars, type WrapperProvisionOptions } from './gradle/wrapper/download';
+import { validateTargetWrapperProperties } from './gradle/wrapper/static-validation';
+import type { ProvisionedWrapperJar, ValidatedWrapperPropertiesFile } from './gradle/wrapper/types';
 
 /**
  * Action execution phase.
@@ -105,7 +105,7 @@ export interface BootstrapExecution extends BootstrapStatus {
  * Combines input reading, state persistence, and log reporting into a single injectable type so
  * callers do not need to pass three separate dependencies.
  */
-export type BootstrapRuntimeHost = RuntimeInputSource & RuntimeStateStore & RuntimeReporter;
+export type BootstrapHost = HostInputSource & HostStateStore & HostReporter;
 
 /**
  * Injectable dependencies for bootstrap-time environment/input discovery.
@@ -114,7 +114,7 @@ export interface BootstrapDependencies {
   /** Optional environment map used by config resolution and persistence helpers. */
   readonly env?: NodeJS.ProcessEnv;
   /** Runtime host implementation used for input discovery, non-fatal reporting, and state. */
-  readonly runtimeHost: BootstrapRuntimeHost;
+  readonly runtimeHost: BootstrapHost;
   /** Provider adapter for the active CI environment. */
   readonly ciProvider: CiPlatformAdapter;
   /** Provider-specific reporting sink used for grouped logs and summaries. */

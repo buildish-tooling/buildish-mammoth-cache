@@ -27,7 +27,7 @@ import type { BaseCacheRestoreResult } from '../cache/service';
 import type { CiJobContext } from '../ci';
 import { z } from 'zod';
 
-import { parseSerializedJson, parseWithZod } from '../validation';
+import { parseSerializedJson, parseWithZod } from '../util/serialization';
 
 /** CI state key holding the absolute path to the persisted pre-build cache manifest file. */
 export const PRE_BUILD_CACHE_MANIFEST_PATH_STATE =

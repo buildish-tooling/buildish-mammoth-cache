@@ -18,50 +18,6 @@ import path from 'node:path';
 
 const WINDOWS_DRIVE_PREFIX_PATTERN = /^[A-Za-z]:/u;
 
-type ParseResult<T> =
-  | { readonly success: true; readonly data: T }
-  | {
-      readonly success: false;
-      readonly error: {
-        // PropertyKey includes symbol; Zod v4 uses PropertyKey[] for issue paths.
-        readonly issues: ReadonlyArray<{
-          readonly path: ReadonlyArray<PropertyKey>;
-          readonly message: string;
-        }>;
-      };
-    };
-
-/**
- * Parses serialized JSON and preserves the original error as the `cause`.
- */
-export function parseSerializedJson(serializedValue: string, label: string): unknown {
-  try {
-    return JSON.parse(serializedValue);
-  } catch (error: unknown) {
-    throw new Error(
-      `Could not parse serialized ${label}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-/**
- * Wraps a Zod-compatible `safeParse` result, throwing a readable `Error` on the first issue.
- *
- * The schema parameter is typed structurally so this helper has no hard import dependency on Zod.
- */
-export function parseWithZod<T>(
-  schema: { safeParse(data: unknown): ParseResult<T> },
-  data: unknown,
-  label: string,
-): T {
-  const result = schema.safeParse(data);
-  if (result.success) return result.data;
-  const issue = result.error.issues[0];
-  const pathStr = issue && issue.path.length > 0 ? ` at ${issue.path.map(String).join('.')}` : '';
-  throw new Error(`Invalid ${label}${pathStr}: ${issue?.message ?? 'Unknown validation error'}`);
-}
-
 /**
  * Treats POSIX-absolute and Windows-rooted inputs as non-relative paths.
  *
@@ -129,4 +85,36 @@ export function validateNormalizedRelativePosixPath(
   }
 
   return relativePath;
+}
+
+/**
+ * Resolves a pre-validated, normalized POSIX-style relative path beneath a root directory and
+ * throws a caller-supplied error message when the resolved path would escape the root.
+ *
+ * This is the shared implementation backing all safe child-path resolution in the codebase.
+ * Callers are responsible for validating and normalizing `normalizedRelativePath` before passing
+ * it here (e.g., via `validateNormalizedRelativePosixPath`).
+ *
+ * @param rootDirectory - Absolute or resolvable root directory path.
+ * @param normalizedRelativePath - A normalized POSIX relative path (no `..` segments, no leading slash).
+ * @param escapeErrorMessage - Error message thrown when the resolved path escapes the root.
+ * @returns The absolute resolved path within the root.
+ * @throws When the resolved path escapes the root directory.
+ */
+export function resolveNormalizedPathWithinRoot(
+  rootDirectory: string,
+  normalizedRelativePath: string,
+  escapeErrorMessage: string,
+): string {
+  const resolvedRoot = path.resolve(rootDirectory);
+  const resolvedPath = path.resolve(resolvedRoot, normalizedRelativePath.split('/').join(path.sep));
+  const rootWithSeparator = resolvedRoot.endsWith(path.sep)
+    ? resolvedRoot
+    : `${resolvedRoot}${path.sep}`;
+
+  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(rootWithSeparator)) {
+    throw new Error(escapeErrorMessage);
+  }
+
+  return resolvedPath;
 }

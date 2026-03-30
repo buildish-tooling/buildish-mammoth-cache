@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { CoreExecutionPhase } from '../core/lifecycle';
+import type { CoreExecutionPhase } from '../config/types';
 
 /**
  * Normalized CI metadata consumed by later cache and coordination code.

@@ -16,15 +16,15 @@
 
 import * as core from '@actions/core';
 
-import type { CompositeRuntimeHost } from '../../runtime-host/types';
+import type { CompositeHost } from '../../host/types';
 
 /**
- * Creates a {@link CompositeRuntimeHost} backed by `@actions/core`.
+ * Creates a {@link CompositeHost} backed by `@actions/core`.
  *
  * Maps provider-neutral input, state, output, and logging APIs to their GitHub Actions
  * toolkit equivalents so shared orchestration code never imports `@actions/core` directly.
  */
-export function createGitHubRuntimeHost(): CompositeRuntimeHost {
+export function createGitHubHost(): CompositeHost {
   return {
     getInput(name, options) {
       return core.getInput(name, options);

@@ -20,11 +20,11 @@ import {
   createGitHubBaseCacheBackend,
   createGitHubPlatform,
   createGitHubReportSink,
-  createGitHubRuntimeHost,
+  createGitHubHost,
   createGitHubWorkflowArtifactBackend,
 } from './index';
 
-const runtimeHost = createGitHubRuntimeHost();
+const runtimeHost = createGitHubHost();
 const ciProvider = createGitHubPlatform({
   env: process.env,
   githubTokenInput: runtimeHost.getInput('github-token', { trimWhitespace: true }),

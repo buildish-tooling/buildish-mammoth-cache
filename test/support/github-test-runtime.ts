@@ -20,7 +20,7 @@ import {
   type GitHubPlatformOptions,
   type GitHubReportSinkOptions,
 } from '../../src/ci/github';
-import type { CompositeRuntimeHost } from '../../src/runtime-host/types';
+import type { CompositeHost } from '../../src/host/types';
 
 export interface TestRuntimeHostOptions {
   readonly inputs?: Readonly<Record<string, string>>;
@@ -36,7 +36,7 @@ export interface TestRuntimeHostOptions {
   readonly setFailed?: (message: string) => void;
 }
 
-export function createTestRuntimeHost(options: TestRuntimeHostOptions = {}): CompositeRuntimeHost {
+export function createTestRuntimeHost(options: TestRuntimeHostOptions = {}): CompositeHost {
   return {
     getInput(name, inputOptions) {
       if (options.getInput) {
@@ -72,7 +72,7 @@ export function createTestRuntimeHost(options: TestRuntimeHostOptions = {}): Com
 }
 
 export function createTestGitHubProvider(
-  runtimeHost: CompositeRuntimeHost,
+  runtimeHost: CompositeHost,
   options: GitHubPlatformOptions = {},
 ) {
   return createGitHubPlatform({
@@ -86,7 +86,7 @@ export function createTestGitHubProvider(
 }
 
 export function createTestGitHubReportSink(
-  _runtimeHost: CompositeRuntimeHost,
+  _runtimeHost: CompositeHost,
   options: GitHubReportSinkOptions = {},
 ) {
   return createGitHubReportSink(options);

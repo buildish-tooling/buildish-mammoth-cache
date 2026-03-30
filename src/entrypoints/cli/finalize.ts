@@ -15,7 +15,7 @@
  */
 
 import { executePostAction, type PostActionDependencies } from '../../post-flow';
-import { decideSingleRunFinalizeExecution } from '../../runtime/job-single-run';
+import { decideSingleRunFinalizeExecution } from '../../guard/job-single-run';
 
 /** Full dependency bundle required by the finalize entrypoint; aliases {@link PostActionDependencies}. */
 export type FinalizeEntrypointDependencies = PostActionDependencies;

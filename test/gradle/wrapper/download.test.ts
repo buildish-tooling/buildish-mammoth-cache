@@ -21,11 +21,14 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { HttpHeadersByHost } from '../../src/ci/types';
-import type { NormalizedActionConfig } from '../../src/config/types';
-import { deriveWrapperDownloadPlan, provisionWrapperJars } from '../../src/wrapper/download';
-import { validateTargetWrapperProperties } from '../../src/wrapper/static-validation';
-import type { ValidatedWrapperPropertiesFile } from '../../src/wrapper/types';
+import type { HttpHeadersByHost } from '../../../src/ci/types';
+import type { NormalizedActionConfig } from '../../../src/config/types';
+import {
+  deriveWrapperDownloadPlan,
+  provisionWrapperJars,
+} from '../../../src/gradle/wrapper/download';
+import { validateTargetWrapperProperties } from '../../../src/gradle/wrapper/static-validation';
+import type { ValidatedWrapperPropertiesFile } from '../../../src/gradle/wrapper/types';
 
 describe('deriveWrapperDownloadPlan', () => {
   it('maps two-segment distribution versions to three-segment Gradle source tags', async () => {

@@ -17,7 +17,7 @@
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { NormalizedActionConfig } from '../config/types';
+import type { NormalizedActionConfig } from '../../config/types';
 import type { ValidatedWrapperPropertiesFile } from './types';
 
 const WRAPPER_PROPERTIES_SUFFIX = 'gradle/wrapper/gradle-wrapper.properties';

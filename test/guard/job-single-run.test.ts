@@ -26,7 +26,7 @@ import {
   JOB_SINGLE_RUN_DUPLICATE_STATE,
   JOB_SINGLE_RUN_OWNER_TOKEN_STATE,
   resolveSingleRunGuardFilePath,
-} from '../../src/runtime/job-single-run';
+} from '../../src/guard/job-single-run';
 
 describe('job single-run guard', () => {
   it('accepts the first invocation, rejects the second, and suppresses duplicate post execution', async () => {

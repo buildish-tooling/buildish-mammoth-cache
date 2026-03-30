@@ -16,34 +16,34 @@
 
 import type { InputProvider } from '../config/action-config';
 
-/** Runtime capability for resolving action inputs. */
-export type RuntimeInputSource = InputProvider;
+/** Host capability for resolving action inputs. */
+export type HostInputSource = InputProvider;
 
-/** Runtime capability for persisting cross-phase action state. */
-export interface RuntimeStateStore {
+/** Host capability for persisting cross-phase action state. */
+export interface HostStateStore {
   getState(name: string): string;
   saveState(name: string, value: string): void;
 }
 
-/** Runtime capability for publishing entrypoint outputs. */
-export interface RuntimeOutputSink {
+/** Host capability for publishing entrypoint outputs. */
+export interface HostOutputSink {
   setOutput(name: string, value: unknown): void;
 }
 
-/** Runtime capability for non-fatal diagnostics. */
-export interface RuntimeReporter {
+/** Host capability for non-fatal diagnostics. */
+export interface HostReporter {
   info(message: string): void;
   warning(message: string): void;
 }
 
-/** Runtime capability for marking the active execution as failed. */
-export interface RuntimeFailureReporter {
+/** Host capability for marking the active execution as failed. */
+export interface HostFailureReporter {
   setFailed(message: string): void;
 }
 
-/** Composite runtime host used by provider runtime implementations that need all capabilities. */
-export type CompositeRuntimeHost = RuntimeInputSource &
-  RuntimeStateStore &
-  RuntimeOutputSink &
-  RuntimeReporter &
-  RuntimeFailureReporter;
+/** Composite host used by provider implementations that need all capabilities. */
+export type CompositeHost = HostInputSource &
+  HostStateStore &
+  HostOutputSink &
+  HostReporter &
+  HostFailureReporter;

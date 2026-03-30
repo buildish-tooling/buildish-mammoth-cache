@@ -39,7 +39,7 @@ const jobSingleRunMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/main-flow', () => mainFlowMock);
-vi.mock('../src/runtime/job-single-run', () => jobSingleRunMock);
+vi.mock('../src/guard/job-single-run', () => jobSingleRunMock);
 
 describe('prepare entrypoint', () => {
   afterEach(() => {

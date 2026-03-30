@@ -19,17 +19,16 @@ import {
   executeMainAction,
   type MainActionDependencies,
 } from '../../main-flow';
-import type { RuntimeOutputSink } from '../../runtime-host/types';
-import { claimSingleRunPrepareExecution } from '../../runtime/job-single-run';
+import type { HostOutputSink } from '../../host/types';
+import { claimSingleRunPrepareExecution } from '../../guard/job-single-run';
 
 /**
  * Runtime host required at the prepare entrypoint boundary.
  *
- * Extends the base main-action runtime host with {@link RuntimeOutputSink} so the entrypoint can
+ * Extends the base main-action runtime host with {@link HostOutputSink} so the entrypoint can
  * emit action outputs (e.g. `cache-key`) after the prepare phase completes.
  */
-export type PrepareEntrypointRuntimeHost = MainActionDependencies['runtimeHost'] &
-  RuntimeOutputSink;
+export type PrepareEntrypointRuntimeHost = MainActionDependencies['runtimeHost'] & HostOutputSink;
 
 /**
  * Full dependency bundle for the prepare entrypoint.

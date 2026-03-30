@@ -20,7 +20,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import type { CiJobContext } from '../ci';
-import { parseSerializedJson, parseWithZod } from '../validation';
+import { parseSerializedJson, parseWithZod } from '../util/serialization';
 
 const CAPTURE_DIRECTORY_NAME = '.buildish-mammoth-cache-gradle';
 const BUILD_RESULTS_SUBDIRECTORY = 'build-results';

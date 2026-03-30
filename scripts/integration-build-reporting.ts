@@ -23,7 +23,7 @@ import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
 import { executeMainAction } from '../src/main-flow';
 import { createPostActionSummaryLines, executePostAction } from '../src/post-flow';
 import type { SummaryWriter } from '../src/reporting/types';
-import type { CompositeRuntimeHost } from '../src/runtime-host/types';
+import type { CompositeHost } from '../src/host/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
@@ -288,7 +288,7 @@ function createGitHubActionDependencies(
   logPrefix: string,
 ) {
   const inputProvider = createInputProvider(inputs);
-  const runtimeHost: CompositeRuntimeHost = {
+  const runtimeHost: CompositeHost = {
     getInput(name): string {
       return inputProvider.getInput(name);
     },

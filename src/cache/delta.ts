@@ -24,8 +24,11 @@ import {
   PORTABLE_GRADLE_USER_HOME,
   type DownloadedDeltaArtifactPackage,
 } from '../artifacts/service';
-import { isMissingPathError, isReplaceTargetError, resolveNormalizedPathWithinRoot } from '../fs';
-import { validateNormalizedRelativePosixPath } from '../validation';
+import { isMissingPathError, isReplaceTargetError } from '../util/fs';
+import {
+  resolveNormalizedPathWithinRoot,
+  validateNormalizedRelativePosixPath,
+} from '../util/paths';
 
 import {
   CACHE_MANIFEST_SCHEMA_VERSION,

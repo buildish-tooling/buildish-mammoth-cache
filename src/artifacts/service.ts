@@ -21,7 +21,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-import { hashFileSha256, resolveNormalizedPathWithinRoot } from '../fs';
+import { hashFileSha256 } from '../util/fs';
+import { resolveNormalizedPathWithinRoot } from '../util/paths';
 
 import {
   type CacheDeltaEntry,
@@ -39,11 +40,8 @@ import type {
 } from '../storage/artifacts';
 import { z } from 'zod';
 
-import {
-  parseSerializedJson,
-  parseWithZod,
-  validateNormalizedRelativePosixPath,
-} from '../validation';
+import { validateNormalizedRelativePosixPath } from '../util/paths';
+import { parseSerializedJson, parseWithZod } from '../util/serialization';
 
 /** Schema version embedded in every delta artifact package metadata file. Increment on breaking format changes. */
 export const DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION = 1;

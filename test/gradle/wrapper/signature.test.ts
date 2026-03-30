@@ -28,7 +28,7 @@ import {
   resolveDefaultGpgCommand,
   verifyDetachedOpenPgpSignature,
   type TrustedOpenPgpPublicKey,
-} from '../../src/wrapper/signature';
+} from '../../../src/gradle/wrapper/signature';
 
 const DEFAULT_GPG_COMMAND = process.platform === 'win32' ? 'gpg.exe' : 'gpg';
 const GPG_AVAILABLE = (() => {

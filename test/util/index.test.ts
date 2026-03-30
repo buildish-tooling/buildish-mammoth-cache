@@ -18,9 +18,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   normalizeUserSuppliedRelativePath,
-  parseSerializedJson,
   validateNormalizedRelativePosixPath,
-} from '../../src/validation';
+} from '../../src/util/paths';
+import { parseSerializedJson } from '../../src/util/serialization';
 
 describe('validation helpers', () => {
   it('parses serialized JSON and surfaces the underlying JSON syntax error', () => {

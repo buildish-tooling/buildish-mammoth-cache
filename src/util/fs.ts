@@ -16,7 +16,6 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 /**
@@ -50,36 +49,4 @@ export async function hashFileSha256(filePath: string): Promise<string> {
   const hash = createHash('sha256');
   await pipeline(createReadStream(filePath), hash);
   return hash.digest('hex');
-}
-
-/**
- * Resolves a pre-validated, normalized POSIX-style relative path beneath a root directory and
- * throws a caller-supplied error message when the resolved path would escape the root.
- *
- * This is the shared implementation backing all safe child-path resolution in the codebase.
- * Callers are responsible for validating and normalizing `normalizedRelativePath` before passing
- * it here (e.g., via `validateNormalizedRelativePosixPath` from `../validation`).
- *
- * @param rootDirectory - Absolute or resolvable root directory path.
- * @param normalizedRelativePath - A normalized POSIX relative path (no `..` segments, no leading slash).
- * @param escapeErrorMessage - Error message thrown when the resolved path escapes the root.
- * @returns The absolute resolved path within the root.
- * @throws When the resolved path escapes the root directory.
- */
-export function resolveNormalizedPathWithinRoot(
-  rootDirectory: string,
-  normalizedRelativePath: string,
-  escapeErrorMessage: string,
-): string {
-  const resolvedRoot = path.resolve(rootDirectory);
-  const resolvedPath = path.resolve(resolvedRoot, normalizedRelativePath.split('/').join(path.sep));
-  const rootWithSeparator = resolvedRoot.endsWith(path.sep)
-    ? resolvedRoot
-    : `${resolvedRoot}${path.sep}`;
-
-  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(rootWithSeparator)) {
-    throw new Error(escapeErrorMessage);
-  }
-
-  return resolvedPath;
 }

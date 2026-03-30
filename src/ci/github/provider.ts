@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { CoreExecutionPhase } from '../../core/lifecycle';
+import type { CoreExecutionPhase } from '../../config/types';
 import type { CiJobContext, CiPlatformAdapter, HttpHeadersByHost } from '../types';
 
 /** Injectable options for {@link createGitHubPlatform}. All fields are optional for testing. */

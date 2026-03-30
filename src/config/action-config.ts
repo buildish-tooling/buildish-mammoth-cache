@@ -20,12 +20,9 @@ import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 import type { CiJobContext } from '../ci';
-import type { CoreExecutionPhase } from '../core/lifecycle';
-import {
-  isAbsolutePosixOrWindowsPath,
-  normalizeUserSuppliedRelativePath,
-  parseSerializedJson,
-} from '../validation';
+import type { CoreExecutionPhase } from './types';
+import { isAbsolutePosixOrWindowsPath, normalizeUserSuppliedRelativePath } from '../util/paths';
+import { parseSerializedJson } from '../util/serialization';
 import {
   CACHE_KEY_TEMPLATE_PLACEHOLDERS,
   JOB_MODES,
