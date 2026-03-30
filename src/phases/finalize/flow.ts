@@ -16,7 +16,7 @@
 
 import { rm } from 'node:fs/promises';
 
-import { uploadDeltaArtifactPackage, stageDeltaArtifactPackage } from '../../artifacts/service';
+import { uploadDeltaArtifactPackage, stageDeltaArtifactPackage } from '../../delta/service';
 import {
   bootstrapPhase,
   createBootstrapLogLines,
@@ -39,7 +39,7 @@ import {
   getPersistedConsumedDeltaArtifactNames,
   loadPersistedPreBuildCacheManifest,
 } from './state';
-import type { WorkflowArtifactBackend } from '../../storage/artifacts';
+import type { WorkflowArtifactBackend } from '../../delta/backend';
 
 const DELTA_ARTIFACT_RETENTION_DAYS = 7;
 

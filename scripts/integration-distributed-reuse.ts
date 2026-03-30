@@ -20,7 +20,7 @@ import { chmod, cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { WorkflowArtifactDescriptor } from '../src/artifacts/service';
+import type { WorkflowArtifactDescriptor } from '../src/delta/service';
 import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
 import { createPrepareActionOutputs, executePrepareAction } from '../src/phases/prepare/flow';
 import { executeFinalizeAction } from '../src/phases/finalize/flow';
@@ -29,11 +29,11 @@ import type { CompositeHost } from '../src/host/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/storage/artifacts';
+} from '../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/storage/cache';
+} from '../src/cache/backend';
 
 const RUN_ID = '92001';
 const RUN_ATTEMPT = '1';

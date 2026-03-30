@@ -33,8 +33,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type DownloadedDeltaArtifactPackage,
   stageDeltaArtifactPackage,
-} from '../../src/artifacts/service';
-import { applyMergedDeltaPlan, mergeDeltaArtifactPackages } from '../../src/cache/delta';
+} from '../../src/delta/service';
+import { applyMergedDeltaPlan, mergeDeltaArtifactPackages } from '../../src/delta/apply';
 import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
 import type { CiJobContext } from '../../src/ci/types';

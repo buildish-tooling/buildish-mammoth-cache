@@ -30,11 +30,11 @@ import type { CompositeHost } from '../src/host/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/storage/artifacts';
+} from '../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/storage/cache';
+} from '../src/cache/backend';
 
 const RUN_ID = '92002';
 const RUN_ATTEMPT = '1';

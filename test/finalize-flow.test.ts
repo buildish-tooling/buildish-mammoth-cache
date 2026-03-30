@@ -25,7 +25,7 @@ import {
   downloadAndVerifyDeltaArtifactPackage,
   stageDeltaArtifactPackage,
   type WorkflowArtifactDescriptor,
-} from '../src/artifacts/service';
+} from '../src/delta/service';
 import { captureCacheManifest, computeCacheDelta } from '../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../src/cache/model';
 import {
@@ -45,11 +45,11 @@ import {
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/storage/artifacts';
+} from '../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/storage/cache';
+} from '../src/cache/backend';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,

@@ -21,7 +21,7 @@ import {
   type ArtifactLookupScope,
   type WorkflowArtifactBackend,
   type WorkflowArtifactDescriptor,
-} from '../../storage/artifacts';
+} from '../../delta/backend';
 
 /**
  * Creates a {@link WorkflowArtifactBackend} backed by the `@actions/artifact` client.

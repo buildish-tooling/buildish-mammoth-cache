@@ -21,7 +21,7 @@ import {
   downloadAndVerifyDeltaArtifactPackage,
   findDeltaArtifactByProducerJob,
   type DownloadedDeltaArtifactPackage,
-} from '../../artifacts/service';
+} from '../../delta/service';
 import {
   bootstrapPhase,
   createBootstrapLogLines,
@@ -32,7 +32,7 @@ import {
   applyMergedDeltaPlan,
   mergeDeltaArtifactPackages,
   type DeltaApplyResult,
-} from '../../cache/delta';
+} from '../../delta/apply';
 import { captureCacheManifest } from '../../cache/manifest';
 import { restoreBaseCache } from '../../cache/service';
 import {
@@ -44,7 +44,7 @@ import {
 } from '../finalize/state';
 import { installGradleBuildResultCapture } from '../../gradle/build-results';
 import { createDetailsSection, escapeSummaryText } from '../../util/html';
-import type { WorkflowArtifactBackend } from '../../storage/artifacts';
+import type { WorkflowArtifactBackend } from '../../delta/backend';
 
 /**
  * Combined result of downloading and applying dependent worker delta artifacts during the prepare phase.

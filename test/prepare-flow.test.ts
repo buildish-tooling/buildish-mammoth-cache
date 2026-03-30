@@ -21,10 +21,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  stageDeltaArtifactPackage,
-  type WorkflowArtifactDescriptor,
-} from '../src/artifacts/service';
+import { stageDeltaArtifactPackage, type WorkflowArtifactDescriptor } from '../src/delta/service';
 import {
   captureCacheManifest,
   computeCacheDelta,
@@ -41,11 +38,11 @@ import {
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/storage/artifacts';
+} from '../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/storage/cache';
+} from '../src/cache/backend';
 import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   CONSUMED_DELTA_ARTIFACT_NAMES_STATE,

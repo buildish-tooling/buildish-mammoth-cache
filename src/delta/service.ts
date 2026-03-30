@@ -37,7 +37,7 @@ import type {
   ArtifactLookupOptions,
   WorkflowArtifactBackend,
   WorkflowArtifactDescriptor,
-} from '../storage/artifacts';
+} from './backend';
 import { z } from 'zod';
 
 import { validateNormalizedRelativePosixPath } from '../util/paths';
@@ -132,11 +132,6 @@ const deltaArtifactPackageMetadataSchema = z.object({
 // ---------------------------------------------------------------------------
 // Exported types (derived from schemas — single source of truth)
 // ---------------------------------------------------------------------------
-
-/**
- * Producer metadata embedded in a delta artifact package.
- */
-export type DeltaArtifactProducerMetadata = z.infer<typeof producerSchema>;
 
 /**
  * Metadata entry describing one copied payload file inside a staged delta artifact.

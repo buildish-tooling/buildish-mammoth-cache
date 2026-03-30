@@ -32,14 +32,14 @@ import {
   type WorkflowArtifactDescriptor,
   uploadDeltaArtifactPackage,
   verifyExtractedDeltaArtifactPackage,
-} from '../../src/artifacts/service';
+} from '../../src/delta/service';
 import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
 import type { CiJobContext } from '../../src/ci/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../../src/storage/artifacts';
+} from '../../src/delta/backend';
 
 describe('artifact exchange service', () => {
   const temporaryDirectories = new Set<string>();

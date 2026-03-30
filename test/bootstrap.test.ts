@@ -32,7 +32,7 @@ import type { SummaryWriter } from '../src/ci/github/report-sink';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/storage/cache';
+} from '../src/cache/backend';
 import type {
   ProvisionedWrapperJar,
   ValidatedWrapperPropertiesFile,

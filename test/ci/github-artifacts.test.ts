@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createGitHubWorkflowArtifactBackend } from '../../src/ci/github';
-import { STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES } from '../../src/storage/artifacts';
+import { STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES } from '../../src/delta/backend';
 
 describe('createGitHubWorkflowArtifactBackend', () => {
   it('maps provider-neutral lookup scope to GitHub artifact findBy coordinates', async () => {

@@ -32,7 +32,7 @@ import type { NormalizedActionConfig } from '../config/types';
 import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } from '../util/html';
 import type { CoreExecutionPhase } from '../config/types';
 import type { HostInputSource, HostReporter, HostStateStore, ReportSink } from '../host/types';
-import type { BaseCacheBackend } from '../storage/cache';
+import type { BaseCacheBackend } from '../cache/backend';
 import { provisionWrapperJars, type WrapperProvisionOptions } from '../gradle/wrapper/download';
 import { validateTargetWrapperProperties } from '../gradle/wrapper/static-validation';
 import type {

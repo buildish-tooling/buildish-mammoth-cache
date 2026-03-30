@@ -19,7 +19,7 @@ import * as toolkitCache from '@actions/cache';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../../storage/cache';
+} from '../../cache/backend';
 
 /**
  * Creates a {@link BaseCacheBackend} backed by the `@actions/cache` toolkit package.

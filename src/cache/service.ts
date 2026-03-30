@@ -15,7 +15,7 @@
  */
 
 import type { NormalizedActionConfig } from '../config/types';
-import type { BaseCacheBackend } from '../storage/cache';
+import type { BaseCacheBackend } from './backend';
 
 import { DEFAULT_CACHE_KEY_TEMPLATE, type CacheModel } from './model';
 

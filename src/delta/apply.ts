@@ -20,10 +20,7 @@ import { chmod, lstat, mkdir, rename, rm, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-import {
-  PORTABLE_GRADLE_USER_HOME,
-  type DownloadedDeltaArtifactPackage,
-} from '../artifacts/service';
+import { PORTABLE_GRADLE_USER_HOME, type DownloadedDeltaArtifactPackage } from './service';
 import { isMissingPathError, isReplaceTargetError } from '../util/fs';
 import {
   resolveNormalizedPathWithinRoot,
@@ -35,8 +32,8 @@ import {
   type CacheDeltaEntry,
   type CacheDeltaManifest,
   type CacheFileSnapshot,
-} from './manifest';
-import type { CachePartitionDefinition } from './model';
+} from '../cache/manifest';
+import type { CachePartitionDefinition } from '../cache/model';
 
 interface MergedDeltaState {
   readonly entry: CacheDeltaEntry;

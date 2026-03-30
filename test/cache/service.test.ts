@@ -28,7 +28,7 @@ import type { NormalizedActionConfig } from '../../src/config/types';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../../src/storage/cache';
+} from '../../src/cache/backend';
 
 const baseConfig: NormalizedActionConfig = {
   phase: 'prepare',
