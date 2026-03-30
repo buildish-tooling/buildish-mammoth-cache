@@ -225,7 +225,10 @@ export async function executePostAction(
     gradleBuildReport: combinedGradleBuildReport,
     jobUrl,
     workflowRunUrl,
-    message: createPostActionMessage(deltaArtifactResult),
+    message:
+      deltaArtifactResult.status === 'uploaded'
+        ? 'Finalize execution completed and uploaded the distributed worker delta artifact.'
+        : 'Finalize execution completed.',
   } satisfies PostActionStatus;
 
   await publishPostActionLogGroup(dependencies, status, logInfo);
@@ -429,14 +432,6 @@ function countDeltaEntries(deltaManifest: Parameters<typeof stageDeltaArtifactPa
   };
 }
 
-function createPostActionMessage(deltaArtifactResult: PostDeltaArtifactResult): string {
-  if (deltaArtifactResult.status === 'uploaded') {
-    return 'Finalize execution completed and uploaded the distributed worker delta artifact.';
-  }
-
-  return 'Finalize execution completed.';
-}
-
 /**
  * Renders the Markdown job-summary lines for the finalize phase.
  *
@@ -452,7 +447,7 @@ export function createPostActionSummaryLines(status: PostActionStatus): readonly
     '## Apache Buildish Mammoth Cache for Gradle',
     `${getSummaryStatusIcon(overallStatus)} Overall status: ${getSummaryStatusLabel(overallStatus)}`,
     '',
-    createGradleBuildSectionHeading(status),
+    status.jobUrl ? `### ${createHtmlLink(status.jobUrl, 'Gradle builds')}` : '### Gradle builds',
     ...createGradleBuildSectionLines(status),
   ];
 }
@@ -473,9 +468,10 @@ async function publishPostActionLogGroup(
 function createPostActionLogLines(status: PostActionStatus): readonly string[] {
   const buildSummary = summarizeGradleBuildReport(status.gradleBuildReport);
   const summaryIssues = collectPostActionSummaryIssues(status, buildSummary);
+  const overallStatus = determineOverallSummaryStatus(summaryIssues);
   const lines = [
     ...createBootstrapLogLines(status.bootstrap),
-    `${getSummaryStatusIcon(determineOverallSummaryStatus(summaryIssues))} Overall status: ${getSummaryStatusLabel(determineOverallSummaryStatus(summaryIssues))}`,
+    `${getSummaryStatusIcon(overallStatus)} Overall status: ${getSummaryStatusLabel(overallStatus)}`,
     `Captured Gradle builds: ${buildSummary.capturedBuildCount} (${buildSummary.successfulBuildCount} succeeded, ${buildSummary.failedBuildCount} failed).`,
     `Build Scans: ${buildSummary.publishedBuildScanCount} published, ${buildSummary.failedBuildScanCount} failed, ${buildSummary.buildScanNotAttemptedCount} not attempted.`,
   ];
@@ -674,12 +670,6 @@ function getSummaryStatusLabel(status: 'success' | 'warning' | 'error'): string 
   return 'success';
 }
 
-function createGradleBuildSectionHeading(status: PostActionStatus): string {
-  return status.jobUrl
-    ? `### ${createHtmlLink(status.jobUrl, 'Gradle builds')}`
-    : '### Gradle builds';
-}
-
 function createGradleBuildSectionLines(status: PostActionStatus): readonly string[] {
   if (status.gradleBuildReport.builds.length === 0) {
     return ['- No Gradle builds were captured in this job.'];
@@ -801,7 +791,7 @@ function summarizeManifest(
       cell.totalSizeBytes += entry.size;
     }
   }
-  return finalizeCacheStatistics(statistics);
+  return statistics;
 }
 
 function summarizeDeltaPayload(
@@ -822,7 +812,7 @@ function summarizeDeltaPayload(
       cell.totalSizeBytes += entry.current.size;
     }
   }
-  return finalizeCacheStatistics(statistics);
+  return statistics;
 }
 
 function initializeCacheStatistics(cacheModel: CacheModel): Map<string, PostCacheStatisticCell> {
@@ -831,14 +821,6 @@ function initializeCacheStatistics(cacheModel: CacheModel): Map<string, PostCach
       partition.id,
       { fileCount: 0, totalSizeBytes: 0 } satisfies PostCacheStatisticCell,
     ]),
-  );
-}
-
-function finalizeCacheStatistics(
-  statistics: Map<string, PostCacheStatisticCell>,
-): ReadonlyMap<string, PostCacheStatisticCell> {
-  return new Map(
-    Array.from(statistics.entries()).map(([partitionId, cell]) => [partitionId, { ...cell }]),
   );
 }
 

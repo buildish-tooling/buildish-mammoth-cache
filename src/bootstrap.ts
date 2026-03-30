@@ -330,7 +330,7 @@ function createWrapperProvisioningSummaryLines(status: BootstrapStatus): readonl
     ['Wrapper properties', 'Action', 'Wrapper JAR', 'Gradle'],
     status.provisionedWrappers.map((wrapper) => [
       escapeHtml(wrapper.relativePath),
-      escapeHtml(capitalize(describeWrapperProvisioningAction(wrapper))),
+      escapeHtml(capitalize(wrapper.wasDownloaded ? 'downloaded' : 'reused')),
       escapeHtml(wrapper.wrapperJarRelativePath),
       escapeHtml(wrapper.wrapperSourceVersion),
     ]),
@@ -339,15 +339,9 @@ function createWrapperProvisioningSummaryLines(status: BootstrapStatus): readonl
 
 function createWrapperProvisioningLogMessage(wrapper: ProvisionedWrapperJar): string {
   return (
-    `${capitalize(describeWrapperProvisioningAction(wrapper))} trusted wrapper JAR for ` +
+    `${capitalize(wrapper.wasDownloaded ? 'downloaded' : 'reused')} trusted wrapper JAR for ` +
     `'${wrapper.relativePath}' at '${wrapper.wrapperJarRelativePath}' using Gradle ${wrapper.wrapperSourceVersion}.`
   );
-}
-
-function describeWrapperProvisioningAction(
-  wrapper: ProvisionedWrapperJar,
-): 'downloaded' | 'reused' {
-  return wrapper.wasDownloaded ? 'downloaded' : 'reused';
 }
 
 function capitalize(value: string): string {

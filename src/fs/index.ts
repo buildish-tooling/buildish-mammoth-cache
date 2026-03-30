@@ -17,6 +17,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 /**
  * Returns `true` when the given error represents a missing-path (`ENOENT`) condition.
@@ -47,13 +48,8 @@ export function isReplaceTargetError(error: unknown): boolean {
  */
 export async function hashFileSha256(filePath: string): Promise<string> {
   const hash = createHash('sha256');
-  const stream = createReadStream(filePath);
-
-  return await new Promise<string>((resolve, reject) => {
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('error', reject);
-    stream.on('close', () => resolve(hash.digest('hex')));
-  });
+  await pipeline(createReadStream(filePath), hash);
+  return hash.digest('hex');
 }
 
 /**

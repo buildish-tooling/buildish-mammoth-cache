@@ -162,7 +162,7 @@ export function mergeDeltaArtifactPackages(
     partitionId,
     entries: [...(mergedByPartition.get(partitionId)?.values() ?? [])]
       .map((state) => state.entry)
-      .sort(compareEntriesByPath),
+      .sort((left, right) => left.relativePath.localeCompare(right.relativePath)),
   }));
   const payloads = [...mergedByPartition.values()]
     .flatMap((partitionEntries) => [...partitionEntries.values()])
@@ -201,7 +201,7 @@ export async function applyMergedDeltaPlan(
   options: DeltaApplyOptions = {},
 ): Promise<DeltaApplyResult> {
   const resolvedGradleUserHome = path.resolve(gradleUserHome);
-  const setTimes = options.setTimes ?? defaultSetTimes;
+  const setTimes = options.setTimes ?? utimes;
   const warnings: string[] = [];
   const payloads = new Map(plan.payloads.map((payload) => [payload.relativePath, payload]));
   let addedCount = 0;
@@ -435,10 +435,6 @@ function mergeSnapshotTimestamps(
   };
 }
 
-function compareEntriesByPath(left: CacheDeltaEntry, right: CacheDeltaEntry): number {
-  return left.relativePath.localeCompare(right.relativePath);
-}
-
 async function writePayloadAtomically(
   payloadPath: string,
   gradleUserHome: string,
@@ -447,7 +443,7 @@ async function writePayloadAtomically(
   expectedSnapshot: CacheFileSnapshot,
 ): Promise<void> {
   await ensureDirectoryPath(gradleUserHome, path.posix.dirname(relativePath));
-  await assertReplaceableFile(targetPath, relativePath);
+  await statReplaceableFile(targetPath, relativePath);
   const temporaryPath = path.join(
     path.dirname(targetPath),
     `.buildish-mammoth-cache-gradle-delta.${randomUUID()}.tmp`,
@@ -524,19 +520,14 @@ async function restoreFileTimestamps(
 ): Promise<string | null> {
   const atime = new Date(snapshot.atimeMs);
   const mtime = new Date(snapshot.mtimeMs);
-
-  if (snapshot.atimeMs === snapshot.mtimeMs) {
-    await setTimes(targetPath, atime, mtime);
-    return null;
-  }
-
   try {
     await setTimes(targetPath, atime, mtime);
-    return null;
-  } catch {
+  } catch (error) {
+    if (snapshot.atimeMs === snapshot.mtimeMs) throw error;
     await setTimes(targetPath, mtime, mtime);
     return `Could not fully restore access time for '${relativePath}'; preserved modification time only.`;
   }
+  return null;
 }
 
 async function deleteTargetPath(
@@ -552,10 +543,6 @@ async function deleteTargetPath(
   }
 
   await rm(targetPath);
-}
-
-async function assertReplaceableFile(targetPath: string, relativePath: string): Promise<void> {
-  await statReplaceableFile(targetPath, relativePath);
 }
 
 async function statReplaceableFile(targetPath: string, relativePath: string) {
@@ -653,8 +640,4 @@ function resolvePathWithinRoot(rootDirectory: string, relativePath: string, labe
     normalizedRelativePath,
     `${label} '${relativePath}' escapes the target directory.`,
   );
-}
-
-async function defaultSetTimes(filePath: string, atime: Date, mtime: Date): Promise<void> {
-  await utimes(filePath, atime, mtime);
 }

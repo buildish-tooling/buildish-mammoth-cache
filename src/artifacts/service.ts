@@ -267,7 +267,9 @@ export async function stageDeltaArtifactPackage(
     artifactName,
     stagingDirectory,
     rootDirectory,
-    files: await listRegularFilesRecursively(rootDirectory),
+    files: (await listRelativeRegularFiles(rootDirectory)).map((relativePath) =>
+      path.join(rootDirectory, relativePath),
+    ),
     metadataPath,
     deltaManifestPath,
     metadata,
@@ -692,12 +694,6 @@ function assertStatMatchesSnapshot(
       `Delta artifact packaging source file '${relativePath}' no longer matches the captured manifest snapshot.`,
     );
   }
-}
-
-async function listRegularFilesRecursively(rootDirectory: string): Promise<readonly string[]> {
-  return (await listRelativeRegularFiles(rootDirectory)).map((relativePath) =>
-    path.join(rootDirectory, relativePath),
-  );
 }
 
 async function listRelativeRegularFiles(rootDirectory: string): Promise<readonly string[]> {

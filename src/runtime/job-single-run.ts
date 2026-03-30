@@ -153,7 +153,8 @@ export function decideSingleRunFinalizeExecution(
  * on the same runner.
  */
 export function resolveSingleRunGuardFilePath(ciContext: JobSingleRunCiIdentity): string {
-  const guardRoot = resolveGuardRoot(ciContext);
+  const tempDir = ciContext.tempDirectory?.trim();
+  const guardRoot = path.resolve(tempDir || os.tmpdir());
   const jobIdentity = [
     normalizeJobIdentityPart(ciContext.repository, 'unknown-repository'),
     normalizeJobIdentityPart(ciContext.workflowName, 'unknown-workflow'),
@@ -187,11 +188,6 @@ function createSingleRunOwnerToken(createOwnerToken: (() => string) | undefined)
     throw new Error('Job single-run owner tokens must not be empty.');
   }
   return ownerToken;
-}
-
-function resolveGuardRoot(ciContext: JobSingleRunCiIdentity): string {
-  const tempDirectory = ciContext.tempDirectory?.trim();
-  return path.resolve(tempDirectory && tempDirectory.length > 0 ? tempDirectory : os.tmpdir());
 }
 
 function normalizeJobIdentityPart(value: string, fallback: string): string {

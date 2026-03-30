@@ -194,7 +194,7 @@ export async function captureCacheManifest(cacheModel: CacheModel): Promise<Cach
       entries: [
         ...(compiledPartitions.find((candidate) => candidate.partition.id === partition.id)
           ?.entries ?? []),
-      ].sort(compareManifestEntries),
+      ].sort((left, right) => left.relativePath.localeCompare(right.relativePath)),
     })),
   };
 }
@@ -601,14 +601,11 @@ function createDeltaEntry(
   };
 }
 
-function toSnapshot(entry: CacheFileManifestEntry): CacheFileSnapshot {
-  return {
-    contentSha256: entry.contentSha256,
-    size: entry.size,
-    mode: entry.mode,
-    atimeMs: entry.atimeMs,
-    mtimeMs: entry.mtimeMs,
-  };
+function toSnapshot({
+  relativePath: _relativePath,
+  ...snapshot
+}: CacheFileManifestEntry): CacheFileSnapshot {
+  return snapshot;
 }
 
 function validateComparableManifests(
@@ -665,13 +662,6 @@ async function readSortedDirectoryEntries(directoryPath: string) {
   }
 
   return [...entries].sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function compareManifestEntries(
-  left: CacheFileManifestEntry,
-  right: CacheFileManifestEntry,
-): number {
-  return left.relativePath.localeCompare(right.relativePath);
 }
 
 function isStableDuringCapture(

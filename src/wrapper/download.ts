@@ -142,7 +142,7 @@ export async function provisionWrapperJars(
   options: WrapperProvisionOptions = {},
 ): Promise<readonly ProvisionedWrapperJar[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const sleep = options.sleep ?? defaultSleep;
+  const sleep = options.sleep ?? sleepTimeout;
   const retryAttempts = validateRetryAttempts(options.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS);
   const retryDelayMs = validateRetryDelay(options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
   const logRetry = options.logRetry;
@@ -603,10 +603,6 @@ async function placeFileAtomically(
 
 function computeSha256(contents: Uint8Array): string {
   return createHash('sha256').update(contents).digest('hex');
-}
-
-async function defaultSleep(milliseconds: number): Promise<void> {
-  await sleepTimeout(milliseconds);
 }
 
 function validateRetryAttempts(value: number): number {

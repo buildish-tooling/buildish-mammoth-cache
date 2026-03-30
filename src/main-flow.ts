@@ -154,7 +154,8 @@ export async function executeMainAction(
     restoreCleanupResult,
     dependentDeltaResult,
     preBuildManifestState,
-    message: createMainActionMessage(dependentDeltaResult),
+    message:
+      'Prepare execution completed and captured the pre-build cache manifest for finalize processing.',
   } satisfies MainActionStatus;
 
   await publishJobLogGroup(
@@ -316,14 +317,6 @@ async function cleanupDownloadedPackages(
       await rm(artifactPackage.downloadDirectory, { recursive: true, force: true });
     }),
   );
-}
-
-function createMainActionMessage(dependentDeltaResult: MainDependentDeltaResult | null): string {
-  if (!dependentDeltaResult) {
-    return 'Prepare execution completed and captured the pre-build cache manifest for finalize processing.';
-  }
-
-  return 'Prepare execution completed and captured the pre-build cache manifest for finalize processing.';
 }
 
 /**
