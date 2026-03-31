@@ -20,6 +20,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+<!--
+SYNC: This page is maintained manually in parallel with the `description:` and `default:` fields
+in actions/github/gradle/action.yml and actions/github/maven/action.yml, and with the enum value
+lists in src/config/types.ts. When adding, removing, or changing any input keep all of those
+files up to date. See docs/dev/maintenance.md § "Action input documentation sync" for the full
+list and rationale. Search for SYNC in the repository to find all sync-obligated locations.
+-->
+
 The action is available in two build-tool-specific variants that share most inputs:
 
 - **Gradle** — `apache/buildish-mammoth-cache/actions/github/gradle@<sha>`

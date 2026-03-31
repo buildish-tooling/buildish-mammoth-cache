@@ -13,6 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# SYNC: When adding, removing, or changing any input description or default here, update these
+# files too. See docs/dev/maintenance.md § "Action input documentation sync" for the full list
+# and rationale. Search for SYNC in the repository to find all sync-obligated locations.
+
 name: Apache Buildish Mammoth Cache Action for Gradle
 description: Secure Gradle wrapper provisioning plus local and distributed cache management for Gradle builds in GitHub Actions.
 author: Apache Buildish
