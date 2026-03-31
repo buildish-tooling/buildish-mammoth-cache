@@ -23,6 +23,13 @@ One action wraps your build step. Before the build it restores a warm cache; aft
 captures only what changed and writes back a precise delta. No manual cache-key juggling, no
 stale entries from unrelated jobs, no wasted re-uploads of files that haven't moved.
 
+---
+
+{{< buildish-component-link kind="docs" label="Get Started" appearance="primary" >}}
+
+_Docs cover workflow usage, configuration, cache-partition behaviour, security notes, and
+maintenance guidance._
+
 ## Highlights
 
 🔁 **Incremental deltas** — only files new or changed since the last build are packaged and
@@ -62,8 +69,3 @@ flowchart LR
     WC([Worker C]) --> AG
     AG([Aggregator\nmerge + apply]) --> C[(Shared\ncache)]
 ```
-
-_Docs cover workflow usage, configuration, cache-partition behaviour, security notes, and
-maintenance guidance._
-
-{{< buildish-component-link kind="docs" label="Open Docs" appearance="primary" >}}
