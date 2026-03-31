@@ -45,6 +45,7 @@ graph LR
 | Codeberg / Forgejo  | —                    | —                | —             | —           | Planned     |
 | GitLab CI           | —                    | —                | —             | —           | Planned     |
 | Bitbucket Pipelines | ⚠ no native frontend | —                | —             | —           | Planned     |
+| Jenkins             | ⚠ external store required | ✓ (Copy Artifact Plugin) | — | — | Assessed    |
 
 ## Architecture
 
@@ -95,3 +96,4 @@ patterns.
 - [Codeberg / Forgejo CI](./codeberg/)
 - [GitLab CI](./gitlab/)
 - [Bitbucket Pipelines](./bitbucket/)
+- [Jenkins](./jenkins/)
