@@ -309,7 +309,7 @@ describe('normalizeActionConfig', () => {
           env: {},
         },
       ),
-    ).toThrow(/must include \$\{partitionFingerprint}/);
+    ).toThrow(/must include \$\{partitionFingerprint\}/);
   });
 
   it('rejects cache partition include globs that do not end in /**', () => {

@@ -73,12 +73,12 @@ export function validateCacheKeyTemplate(input: string): string | null {
     throw new Error(`cache-key-template must be at most ${MAX_TEMPLATE_LENGTH} characters.`);
   }
   const allowedPlaceholders = new Set<string>(CACHE_KEY_TEMPLATE_PLACEHOLDERS);
-  for (const match of trimmed.matchAll(/\$\{([A-Za-z0-9]+)}/g)) {
+  for (const match of trimmed.matchAll(/\$\{([A-Za-z0-9]+)\}/g)) {
     if (!allowedPlaceholders.has(match[1])) {
       throw new Error(`cache-key-template uses unsupported placeholder '${match[1]}'.`);
     }
   }
-  const literalPortion = trimmed.replace(/\$\{([A-Za-z0-9]+)}/g, '');
+  const literalPortion = trimmed.replace(/\$\{([A-Za-z0-9]+)\}/g, '');
   if (!/^[A-Za-z0-9._:-]*$/.test(literalPortion)) {
     throw new Error(
       'cache-key-template may only contain supported placeholders and the literal characters A-Z, a-z, 0-9, dot, underscore, colon, and dash.',

@@ -55,8 +55,8 @@ const ENTRY_POINTS = [
 ];
 const SECTION_SEPARATOR =
   '--------------------------------------------------------------------------------';
-const LICENSE_FILE_PATTERN = /^(license|licence|copying)([._-].*)?$/i;
-const NOTICE_FILE_PATTERN = /^notice([._-].*)?$/i;
+const LICENSE_FILE_PATTERN = /^(?:license|licence|copying)(?:[._-].*)?$/i;
+const NOTICE_FILE_PATTERN = /^notice(?:[._-].*)?$/i;
 const MODES = Object.freeze({
   CHECK: 'check',
   CHECK_CATEGORY_X: 'check-category-x',
@@ -373,7 +373,7 @@ function preferredLicenseText(packageName, licenseExpression, licenseTexts, copy
   if (licenseRequiresAttributionText(licenseExpression) && licenseTexts.length > 0) {
     return trimDocumentText(licenseTexts[0]);
   }
-  if (/^(MIT|MIT\/X11)$/i.test(licenseExpression) && copyrightLine) {
+  if (/^(?:MIT|MIT\/X11)$/i.test(licenseExpression) && copyrightLine) {
     return trimDocumentText(createMitLicenseText(copyrightLine));
   }
   return '';

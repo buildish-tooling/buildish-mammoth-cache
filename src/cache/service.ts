@@ -341,7 +341,7 @@ function renderCacheKeyTemplate(
     refName: cacheModel.safeRefName,
   };
 
-  return template.replaceAll(/\$\{([A-Za-z0-9]+)}/g, (match, placeholderName: string) => {
+  return template.replaceAll(/\$\{([A-Za-z0-9]+)\}/g, (match, placeholderName: string) => {
     return placeholderValues[placeholderName] ?? match;
   });
 }

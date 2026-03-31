@@ -131,7 +131,7 @@ async function main(): Promise<void> {
     assert.match(aggregatorLog, /resolved workerA: guava-33\.4\.8-jre\.jar/);
     assert.match(aggregatorLog, /resolved workerB: commons-io-2\.18\.0\.jar/);
     assert.ok(
-      !/(Downloading|Downloaded).*(guava-33\.4\.8-jre|commons-io-2\.18\.0)\.jar/.test(
+      !/(?:Downloading|Downloaded).*(?:guava-33\.4\.8-jre|commons-io-2\.18\.0)\.jar/.test(
         aggregatorLog,
       ),
       'Expected restored worker dependency jars to be reused, but Gradle downloaded them again.',

@@ -57,6 +57,42 @@ requiring a manual schema version bump. This covers:
 - Adding or removing a custom partition.
 - Changing the `HARD_CACHE_EXCLUDE_GLOBS` list.
 
+## Static analysis and security scanning
+
+### ESLint and eslint-plugin-regexp
+
+`npm run lint` runs ESLint with `@typescript-eslint` and `eslint-plugin-regexp`. The regexp
+plugin enforces correctness rules across all regex literals in the codebase, including
+`regexp/strict` (no unescaped `{`/`}` in patterns) and `regexp/no-unused-capturing-group`
+(change to non-capturing groups when the match result is discarded). Three style rules are
+intentionally disabled in `eslint.config.mjs` — `regexp/prefer-d`, `regexp/prefer-w`, and
+`regexp/use-ignore-case` — because the codebase uses explicit character classes for clarity and
+to avoid unintentional match widening.
+
+### npm audit
+
+`npm run verify` runs `npm audit --audit-level=high` as its first step. This catches known
+high-severity CVEs in the dependency tree (which includes large transitive dependencies such as
+`@azure/storage-blob` via `@actions/cache`). Run `npm audit` manually at any time to see the
+full report at all severity levels.
+
+### CodeQL
+
+CodeQL analysis runs as the `codeql` job in `.github/workflows/ci.yml` on every push to `main`
+or a `release/**` branch and on every pull request. The job uses
+`github/codeql-action` (from the `github.com/github` organisation, which is implicitly approved
+under Apache Infrastructure policy) with `build-mode: none` — CodeQL analyses the TypeScript
+source directly without building, which is appropriate because the compiled bundles in `dist/`
+contain no information the source does not.
+
+The `analyze` job carries `if: github.repository_owner == 'apache'` so it skips cleanly when
+run from a personal fork or from the repository's pre-incubation location. Remove that condition
+once the repository is in the `apache` GitHub organisation.
+
+Results are uploaded to the repository's **Security → Code scanning** tab as SARIF. The job
+requires `security-events: write` permission, which is scoped to the job rather than the
+workflow to follow least-privilege practice.
+
 ## Adding a new CI provider
 
 See [CI Abstraction Layer](../../architecture/ci-abstraction/) for the interfaces a new provider

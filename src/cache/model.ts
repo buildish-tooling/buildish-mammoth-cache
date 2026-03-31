@@ -259,7 +259,7 @@ export function renderCacheKey(
     runnerArch: ciContext.runnerArch,
     refName: ciContext.safeRefName,
   };
-  const cacheKey = template.replaceAll(/\$\{([A-Za-z0-9]+)}/g, (match, placeholderName: string) => {
+  const cacheKey = template.replaceAll(/\$\{([A-Za-z0-9]+)\}/g, (match, placeholderName: string) => {
     return placeholderValues[placeholderName] ?? match;
   });
 

@@ -16,6 +16,7 @@
 
 import js from '@eslint/js';
 import eslintConfigPrettier from 'eslint-config-prettier';
+import regexpPlugin from 'eslint-plugin-regexp';
 import tsEslintPlugin from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
 
@@ -24,6 +25,21 @@ export default [
     ignores: ['build/**', 'coverage/**', 'dist/**', 'lib/**', 'node_modules/**'],
   },
   js.configs.recommended,
+  regexpPlugin.configs['flat/recommended'],
+  {
+    // Disable regexp style rules that conflict with this codebase's conventions.
+    // Explicit character classes ([A-Za-z0-9] rather than \w, [0-9] rather than
+    // \d) are preferred for clarity and to prevent unintentional widening of
+    // matches — \w includes locale-dependent characters in some engines and \d
+    // matches non-ASCII digits with the u flag. The use-ignore-case rule is
+    // disabled because adding an i flag changes the entire pattern's behaviour
+    // and requires careful per-pattern review rather than mechanical auto-fixing.
+    rules: {
+      'regexp/prefer-d': 'off',
+      'regexp/prefer-w': 'off',
+      'regexp/use-ignore-case': 'off',
+    },
+  },
   {
     files: ['**/*.ts'],
     languageOptions: {

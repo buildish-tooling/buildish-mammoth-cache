@@ -194,6 +194,32 @@ jobs:
       run-writable-scenarios: false
       run-cross-platform: false
 
+  codeql:
+    name: CodeQL (JavaScript / TypeScript)
+    # Requires GitHub Advanced Security, available for public repositories in the
+    # apache organisation. Skips cleanly elsewhere — remove this condition once
+    # the repository has been transferred to the apache organisation.
+    if: github.repository_owner == 'apache'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5c8a8a642e79153f5d047b10ec1cba1d1cc65699 # v3.35.1
+        with:
+          languages: javascript-typescript
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@5c8a8a642e79153f5d047b10ec1cba1d1cc65699 # v3.35.1
+        with:
+          category: /language:javascript-typescript
+
   required_checks:
     name: Required Checks
     if: ${{ always() }}
@@ -205,6 +231,7 @@ jobs:
       - integration-pr-gradle
       - integration-trusted-maven
       - integration-pr-maven
+      - codeql
     runs-on: ubuntu-latest
     steps:
       - name: Assert all required jobs succeeded or were intentionally skipped
@@ -216,6 +243,7 @@ jobs:
           INTEGRATION_PR_GRADLE_RESULT: ${{ needs.integration-pr-gradle.result }}
           INTEGRATION_TRUSTED_MAVEN_RESULT: ${{ needs.integration-trusted-maven.result }}
           INTEGRATION_PR_MAVEN_RESULT: ${{ needs.integration-pr-maven.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
         run: |
           for result in \
             "$CHECK_RESULT" \
@@ -224,7 +252,8 @@ jobs:
             "$INTEGRATION_TRUSTED_GRADLE_RESULT" \
             "$INTEGRATION_PR_GRADLE_RESULT" \
             "$INTEGRATION_TRUSTED_MAVEN_RESULT" \
-            "$INTEGRATION_PR_MAVEN_RESULT"; do
+            "$INTEGRATION_PR_MAVEN_RESULT" \
+            "$CODEQL_RESULT"; do
             case "$result" in
               success|skipped) ;;
               *)
