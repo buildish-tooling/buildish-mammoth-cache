@@ -99,6 +99,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up integration test environment
         uses: ./.github/actions/it-setup
@@ -155,7 +157,9 @@ jobs:
         run: mvn -P standalone dependency:resolve --offline -q
 
       - name: Assert exact cache reuse
-        run: test "${{ steps.restore.outputs.cache-hit }}" = 'true'
+        run: test "${STEPS_RESTORE_OUTPUTS_CACHE_HIT}" = 'true'
+        env:
+          STEPS_RESTORE_OUTPUTS_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
 
   # Workers A and B each publish one independent same-run delta artifact for the aggregator.
   # They run in parallel via a matrix; both must complete before the aggregator starts.
@@ -177,6 +181,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up integration test environment
         uses: ./.github/actions/it-setup
@@ -211,6 +217,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up integration test environment
         uses: ./.github/actions/it-setup
@@ -260,6 +268,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up integration test environment
         uses: ./.github/actions/it-setup
@@ -284,7 +294,9 @@ jobs:
           read-only: true
 
       - name: Assert the duplicate invocation failed
-        run: test "${{ steps.duplicate_action.outcome }}" = 'failure'
+        run: test "${STEPS_DUPLICATE_ACTION_OUTCOME}" = 'failure'
+        env:
+          STEPS_DUPLICATE_ACTION_OUTCOME: ${{ steps.duplicate_action.outcome }}
 
   # Validates the PR default remains read-only under minimal permissions.
   maven_pull_request_read_only:
@@ -299,6 +311,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up integration test environment
         uses: ./.github/actions/it-setup
@@ -346,6 +360,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up integration test environment
         uses: ./.github/actions/it-setup
