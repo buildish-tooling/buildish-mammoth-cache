@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Mammoth Cache for Gradle and Maven
+# Mammoth Cache for Gradle® and Apache Maven™
 
 **Transparent, incremental dependency caching for Gradle and Maven builds on GitHub Actions —
 from simple single-job pipelines to large parallel fan-out workflows.**

@@ -100,83 +100,29 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
 
-      - name: Install action dependencies
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm ci
-
-      - name: Bundle the action
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm run bundle
-
-      - name: Set up Java 21
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Stage standalone fixture
-        run: |
-          fixture_dir="${ACTION_DIRECTORY}/build/integration-fixtures/maven-standalone-round-trip"
-          rm -rf "$fixture_dir"
-          mkdir -p "$fixture_dir"
-          cp -R "$FIXTURE_SOURCE_DIRECTORY"/. "$fixture_dir"
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh maven-standalone-round-trip
 
       - name: Prepare Mammoth Cache for Maven
-        id: prepare_standalone_cache
+        id: prepare
         uses: ./actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-standalone-round-trip
           cache-key-prefix: it-maven-standalone-${{ github.run_id }}-${{ github.run_attempt }}-
 
-      - name: Emit standalone prepare outputs
+      - name: Assert prepare outputs
         env:
-          ACTION_CACHE_KEY: ${{ steps.prepare_standalone_cache.outputs.cache-key }}
-          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare_standalone_cache.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare_standalone_cache.outputs.java-major }}
-          ACTION_JOB_MODE: ${{ steps.prepare_standalone_cache.outputs.job-mode }}
-          ACTION_READ_ONLY: ${{ steps.prepare_standalone_cache.outputs.read-only }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare_standalone_cache.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare_standalone_cache.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare_standalone_cache.outputs.dependent-jobs-count }}
-          ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT: ${{ steps.prepare_standalone_cache.outputs.downloaded-dependent-artifact-count }}
-          ACTION_JOB_NAME: ${{ steps.prepare_standalone_cache.outputs.job-name }}
-        run: |
-          printf '%s\n' \
-            "cache-key=$ACTION_CACHE_KEY" \
-            "base-cache-restore-status=$ACTION_BASE_CACHE_RESTORE_STATUS" \
-            "java-major=$ACTION_JAVA_MAJOR" \
-            "job-mode=$ACTION_JOB_MODE" \
-            "read-only=$ACTION_READ_ONLY" \
-            "resolved-ref-name=$ACTION_RESOLVED_REF_NAME" \
-            "safe-ref-name=$ACTION_SAFE_REF_NAME" \
-            "dependent-jobs-count=$ACTION_DEPENDENT_JOBS_COUNT" \
-            "downloaded-dependent-artifact-count=$ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT" \
-            "job-name=$ACTION_JOB_NAME"
-
-      - name: Assert standalone prepare outputs
-        env:
-          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare_standalone_cache.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare_standalone_cache.outputs.java-major }}
-          ACTION_JOB_MODE: ${{ steps.prepare_standalone_cache.outputs.job-mode }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare_standalone_cache.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare_standalone_cache.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare_standalone_cache.outputs.dependent-jobs-count }}
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
+          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
+          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
           CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
-        run: |
-          expected_safe_ref_name="$(printf '%s' "$CALLER_RESOLVED_REF_NAME" | sed -E 's/[ /]+/-/g; s/[^A-Za-z0-9._-]/-/g; s/-+/-/g; s/^-+|-+$//g')"
-          test "$ACTION_BASE_CACHE_RESTORE_STATUS" = 'miss'
-          test "$ACTION_JAVA_MAJOR" = '21'
-          test "$ACTION_JOB_MODE" = 'standalone'
-          test "$ACTION_RESOLVED_REF_NAME" = "$CALLER_RESOLVED_REF_NAME"
-          test "$ACTION_SAFE_REF_NAME" = "$expected_safe_ref_name"
-          test "$ACTION_DEPENDENT_JOBS_COUNT" = '0'
+        run: bash .github/scripts/it-assert-maven-standalone.sh
 
       - name: Resolve standalone dependencies online
         working-directory: build/integration-fixtures/maven-standalone-round-trip
@@ -188,7 +134,7 @@ jobs:
           path: |
             ~/.m2/repository
             ~/.m2/wrapper/dists
-          key: ${{ steps.prepare_standalone_cache.outputs.cache-key }}
+          key: ${{ steps.prepare.outputs.cache-key }}
 
       - name: Wipe Maven local repository to prove restore
         run: |
@@ -196,29 +142,35 @@ jobs:
           mkdir -p "$HOME/.m2/repository"
 
       - name: Restore exact standalone cache snapshot
-        id: restore_standalone_cache
+        id: restore
         uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
             ~/.m2/repository
             ~/.m2/wrapper/dists
-          key: ${{ steps.prepare_standalone_cache.outputs.cache-key }}
+          key: ${{ steps.prepare.outputs.cache-key }}
 
       - name: Verify the saved cache restores offline
         working-directory: build/integration-fixtures/maven-standalone-round-trip
         run: mvn -P standalone dependency:resolve --offline -q
 
       - name: Assert exact cache reuse
-        run: |
-          test "${{ steps.restore_standalone_cache.outputs.cache-hit }}" = 'true'
+        run: test "${{ steps.restore.outputs.cache-hit }}" = 'true'
 
-  # Worker A publishes one same-run delta artifact for the distributed aggregator scenario.
-  maven_worker_a:
-    name: Linux Maven distributed worker A (publish delta artifact)
+  # Workers A and B each publish one independent same-run delta artifact for the aggregator.
+  # They run in parallel via a matrix; both must complete before the aggregator starts.
+  maven_workers:
+    name: Linux Maven distributed ${{ matrix.worker.label }} (publish delta artifact)
     if: inputs.run-writable-scenarios
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker:
+          - { id: maven_worker_a, label: 'worker A', profile: worker-a }
+          - { id: maven_worker_b, label: 'worker B', profile: worker-b }
     env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_worker_a
+      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: ${{ matrix.worker.id }}
     defaults:
       run:
         shell: bash
@@ -226,99 +178,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
 
-      - name: Install action dependencies
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm ci
-
-      - name: Bundle the action
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm run bundle
-
-      - name: Set up Java 21
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Stage worker A fixture
-        run: |
-          fixture_dir="${ACTION_DIRECTORY}/build/integration-fixtures/maven-worker-a"
-          rm -rf "$fixture_dir"
-          mkdir -p "$fixture_dir"
-          cp -R "$FIXTURE_SOURCE_DIRECTORY"/. "$fixture_dir"
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
 
       - name: Prepare Mammoth Cache for Maven
-        id: prepare_worker_a_cache
         uses: ./actions/github/maven
         with:
-          base-directory: build/integration-fixtures/maven-worker-a
+          base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
 
-      - name: Produce worker A cache delta (resolve guava)
-        working-directory: build/integration-fixtures/maven-worker-a
-        run: mvn -P worker-a dependency:resolve -q
-
-  # Worker B publishes an independent same-run delta artifact for the distributed aggregator.
-  maven_worker_b:
-    name: Linux Maven distributed worker B (publish delta artifact)
-    if: inputs.run-writable-scenarios
-    runs-on: ubuntu-latest
-    env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_worker_b
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install action dependencies
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm ci
-
-      - name: Bundle the action
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm run bundle
-
-      - name: Set up Java 21
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Stage worker B fixture
-        run: |
-          fixture_dir="${ACTION_DIRECTORY}/build/integration-fixtures/maven-worker-b"
-          rm -rf "$fixture_dir"
-          mkdir -p "$fixture_dir"
-          cp -R "$FIXTURE_SOURCE_DIRECTORY"/. "$fixture_dir"
-
-      - name: Prepare Mammoth Cache for Maven
-        id: prepare_worker_b_cache
-        uses: ./actions/github/maven
-        with:
-          base-directory: build/integration-fixtures/maven-worker-b
-          job-mode: distributed-worker
-          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
-
-      - name: Produce worker B cache delta (resolve commons-io)
-        working-directory: build/integration-fixtures/maven-worker-b
-        run: mvn -P worker-b dependency:resolve -q
+      - name: Produce worker cache delta
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        run: mvn -P ${{ matrix.worker.profile }} dependency:resolve -q
 
   # Aggregator waits for both workers, downloads their current-run artifacts, applies both deltas,
   # and confirms the merged dependencies resolve offline before post-action cleanup removes consumed
@@ -326,7 +201,7 @@ jobs:
   maven_aggregator:
     name: Linux Maven distributed aggregator (download+merge worker deltas)
     if: inputs.run-writable-scenarios
-    needs: [maven_worker_a, maven_worker_b]
+    needs: [maven_workers]
     runs-on: ubuntu-latest
     env:
       BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_aggregator
@@ -337,67 +212,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
 
-      - name: Install action dependencies
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm ci
-
-      - name: Bundle the action
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm run bundle
-
-      - name: Set up Java 21
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Stage aggregator fixture
-        run: |
-          fixture_dir="${ACTION_DIRECTORY}/build/integration-fixtures/maven-aggregator"
-          rm -rf "$fixture_dir"
-          mkdir -p "$fixture_dir"
-          cp -R "$FIXTURE_SOURCE_DIRECTORY"/. "$fixture_dir"
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh maven-aggregator
 
       - name: Prepare Mammoth Cache for Maven
-        id: prepare_aggregator_cache
+        id: prepare
         uses: ./actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-aggregator
           job-mode: distributed-aggregator
           dependent-jobs: maven_worker_a,maven_worker_b
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
-
-      - name: Emit aggregator prepare outputs
-        env:
-          ACTION_CACHE_KEY: ${{ steps.prepare_aggregator_cache.outputs.cache-key }}
-          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare_aggregator_cache.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare_aggregator_cache.outputs.java-major }}
-          ACTION_JOB_MODE: ${{ steps.prepare_aggregator_cache.outputs.job-mode }}
-          ACTION_READ_ONLY: ${{ steps.prepare_aggregator_cache.outputs.read-only }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare_aggregator_cache.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare_aggregator_cache.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare_aggregator_cache.outputs.dependent-jobs-count }}
-          ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT: ${{ steps.prepare_aggregator_cache.outputs.downloaded-dependent-artifact-count }}
-          ACTION_JOB_NAME: ${{ steps.prepare_aggregator_cache.outputs.job-name }}
-        run: |
-          printf '%s\n' \
-            "cache-key=$ACTION_CACHE_KEY" \
-            "base-cache-restore-status=$ACTION_BASE_CACHE_RESTORE_STATUS" \
-            "java-major=$ACTION_JAVA_MAJOR" \
-            "job-mode=$ACTION_JOB_MODE" \
-            "read-only=$ACTION_READ_ONLY" \
-            "resolved-ref-name=$ACTION_RESOLVED_REF_NAME" \
-            "safe-ref-name=$ACTION_SAFE_REF_NAME" \
-            "dependent-jobs-count=$ACTION_DEPENDENT_JOBS_COUNT" \
-            "downloaded-dependent-artifact-count=$ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT" \
-            "job-name=$ACTION_JOB_NAME"
 
       - name: Verify worker A dependency (guava) resolves offline after delta merge
         working-directory: build/integration-fixtures/maven-aggregator
@@ -409,23 +237,15 @@ jobs:
 
       - name: Assert both worker artifacts were consumed
         env:
-          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare_aggregator_cache.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare_aggregator_cache.outputs.java-major }}
-          ACTION_JOB_MODE: ${{ steps.prepare_aggregator_cache.outputs.job-mode }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare_aggregator_cache.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare_aggregator_cache.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare_aggregator_cache.outputs.dependent-jobs-count }}
-          ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT: ${{ steps.prepare_aggregator_cache.outputs.downloaded-dependent-artifact-count }}
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
+          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
+          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
+          ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT: ${{ steps.prepare.outputs.downloaded-dependent-artifact-count }}
           CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
-        run: |
-          expected_safe_ref_name="$(printf '%s' "$CALLER_RESOLVED_REF_NAME" | sed -E 's/[ /]+/-/g; s/[^A-Za-z0-9._-]/-/g; s/-+/-/g; s/^-+|-+$//g')"
-          test "$ACTION_BASE_CACHE_RESTORE_STATUS" = 'miss'
-          test "$ACTION_JAVA_MAJOR" = '21'
-          test "$ACTION_JOB_MODE" = 'distributed-aggregator'
-          test "$ACTION_RESOLVED_REF_NAME" = "$CALLER_RESOLVED_REF_NAME"
-          test "$ACTION_SAFE_REF_NAME" = "$expected_safe_ref_name"
-          test "$ACTION_DEPENDENT_JOBS_COUNT" = '2'
-          test "$ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT" = '2'
+        run: bash .github/scripts/it-assert-maven-aggregator.sh
 
   # Proves that two action invocations in the same GitHub job cannot race or double-run post-work.
   maven_duplicate_invocation_guard:
@@ -441,33 +261,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
 
-      - name: Install action dependencies
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm ci
-
-      - name: Bundle the action
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm run bundle
-
-      - name: Set up Java 21
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Stage duplicate-guard fixture
-        run: |
-          fixture_dir="${ACTION_DIRECTORY}/build/integration-fixtures/maven-duplicate-guard"
-          rm -rf "$fixture_dir"
-          mkdir -p "$fixture_dir"
-          cp -R "$FIXTURE_SOURCE_DIRECTORY"/. "$fixture_dir"
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh maven-duplicate-guard
 
       - name: First action invocation succeeds
         uses: ./actions/github/maven
@@ -486,8 +284,7 @@ jobs:
           read-only: true
 
       - name: Assert the duplicate invocation failed
-        run: |
-          test "${{ steps.duplicate_action.outcome }}" = 'failure'
+        run: test "${{ steps.duplicate_action.outcome }}" = 'failure'
 
   # Validates the PR default remains read-only under minimal permissions.
   maven_pull_request_read_only:
@@ -503,36 +300,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
 
-      - name: Install action dependencies
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm ci
-
-      - name: Bundle the action
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm run bundle
-
-      - name: Set up Java 21
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Stage pull-request fixture
-        run: |
-          fixture_dir="${ACTION_DIRECTORY}/build/integration-fixtures/maven-pull-request"
-          rm -rf "$fixture_dir"
-          mkdir -p "$fixture_dir"
-          cp -R "$FIXTURE_SOURCE_DIRECTORY"/. "$fixture_dir"
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh maven-pull-request
 
       - name: Prepare Mammoth Cache for Maven
-        id: prepare_pull_request_cache
+        id: prepare
         uses: ./actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-pull-request
@@ -544,23 +319,15 @@ jobs:
 
       - name: Assert the PR default stayed read-only
         env:
-          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare_pull_request_cache.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare_pull_request_cache.outputs.java-major }}
-          ACTION_JOB_MODE: ${{ steps.prepare_pull_request_cache.outputs.job-mode }}
-          ACTION_READ_ONLY: ${{ steps.prepare_pull_request_cache.outputs.read-only }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare_pull_request_cache.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare_pull_request_cache.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare_pull_request_cache.outputs.dependent-jobs-count }}
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
+          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
+          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
           CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
-        run: |
-          expected_safe_ref_name="$(printf '%s' "$CALLER_RESOLVED_REF_NAME" | sed -E 's/[ /]+/-/g; s/[^A-Za-z0-9._-]/-/g; s/-+/-/g; s/^-+|-+$//g')"
-          test "$ACTION_BASE_CACHE_RESTORE_STATUS" = 'miss'
-          test "$ACTION_JAVA_MAJOR" = '21'
-          test "$ACTION_JOB_MODE" = 'standalone'
-          test "$ACTION_READ_ONLY" = 'true'
-          test "$ACTION_RESOLVED_REF_NAME" = "$CALLER_RESOLVED_REF_NAME"
-          test "$ACTION_SAFE_REF_NAME" = "$expected_safe_ref_name"
-          test "$ACTION_DEPENDENT_JOBS_COUNT" = '0'
+        run: bash .github/scripts/it-assert-maven-pr.sh
 
   # Lightweight macOS/Windows smoke coverage. No GnuPG setup required for Maven.
   maven_standalone_cross_platform:
@@ -580,36 +347,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
 
-      - name: Install action dependencies
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm ci
-
-      - name: Bundle the action
-        working-directory: ${{ env.ACTION_DIRECTORY }}
-        run: npm run bundle
-
-      - name: Set up Java 21
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Stage cross-platform fixture
-        run: |
-          fixture_dir="${ACTION_DIRECTORY}/build/integration-fixtures/maven-cross-platform-${{ matrix.os }}"
-          rm -rf "$fixture_dir"
-          mkdir -p "$fixture_dir"
-          cp -R "$FIXTURE_SOURCE_DIRECTORY"/. "$fixture_dir"
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh maven-cross-platform-${{ matrix.os }}
 
       - name: Prepare Mammoth Cache for Maven
-        id: prepare_cross_platform_cache
         uses: ./actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-cross-platform-${{ matrix.os }}
