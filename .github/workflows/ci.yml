@@ -220,6 +220,22 @@ jobs:
         with:
           category: /language:javascript-typescript
 
+  zizmor:
+    name: Zizmor (GitHub Actions security)
+    # Requires GitHub Advanced Security, available for public repositories in the
+    # apache organisation. Skips cleanly elsewhere.
+    if: github.repository_owner == 'apache'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Run Zizmor 🌈
+        uses: zizmorcore/zizmor-action@71321a20a9ded102f6e9ce5718a2fcec2c4f70d8 # v0.5.2
+
   required_checks:
     name: Required Checks
     if: ${{ always() }}
@@ -232,18 +248,20 @@ jobs:
       - integration-trusted-maven
       - integration-pr-maven
       - codeql
+      - zizmor
     runs-on: ubuntu-latest
     steps:
       - name: Assert all required jobs succeeded or were intentionally skipped
         env:
           CHECK_RESULT: ${{ needs.check.result }}
-          SMOKE_TEST_RESULT: ${{ needs.smoke-test.result }}
+          SMOKE_TEST_RESULT: ${{ needs.smoke-test-gradle.result }}
           SMOKE_TEST_MAVEN_RESULT: ${{ needs.smoke-test-maven.result }}
           INTEGRATION_TRUSTED_GRADLE_RESULT: ${{ needs.integration-trusted-gradle.result }}
           INTEGRATION_PR_GRADLE_RESULT: ${{ needs.integration-pr-gradle.result }}
           INTEGRATION_TRUSTED_MAVEN_RESULT: ${{ needs.integration-trusted-maven.result }}
           INTEGRATION_PR_MAVEN_RESULT: ${{ needs.integration-pr-maven.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
+          ZIZMOR_RESULT: ${{ needs.zizmor.result }}
         run: |
           for result in \
             "$CHECK_RESULT" \
@@ -253,7 +271,8 @@ jobs:
             "$INTEGRATION_PR_GRADLE_RESULT" \
             "$INTEGRATION_TRUSTED_MAVEN_RESULT" \
             "$INTEGRATION_PR_MAVEN_RESULT" \
-            "$CODEQL_RESULT"; do
+            "$CODEQL_RESULT" \
+            "$ZIZMOR_RESULT"; do
             case "$result" in
               success|skipped) ;;
               *)

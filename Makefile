@@ -25,7 +25,7 @@ INTEGRATION_GRADLE_DISTRIBUTED_REUSE_BUNDLE := build/integration-gradle-distribu
 INTEGRATION_MAVEN_DISTRIBUTED_REUSE_BUNDLE := build/integration-maven-distributed-reuse.cjs
 HELP_TARGETS := $(MAKEFILE_LIST)
 
-.PHONY: build check clean clean-all help integration-test-build-reporting integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse lint-check lint-fix rat-check rebuild release-legal-category-x-check release-legal-check sanity-check smoke-test test
+.PHONY: build check clean clean-all help integration-test-build-reporting integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse lint-check lint-fix rat-check rebuild release-legal-category-x-check release-legal-check sanity-check smoke-test test zizmor-check
 
 help: ## Show available Make targets.
 	@awk 'BEGIN {FS = ":.*## "; printf "Available targets:\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(HELP_TARGETS)
@@ -85,6 +85,14 @@ lint-fix: sanity-check $(NODE_MODULES_STAMP) ## Automatically fix lint issues an
 
 rat-check: sanity-check ## Run Apache RAT license-header verification (requires Java 21+).
 	$(NPM) run rat-check
+
+zizmor-check: ## Run Zizmor GitHub Actions security analysis (requires zizmor on PATH; install via: cargo install zizmor).
+	@command -v zizmor >/dev/null 2>&1 || { \
+		echo "Error: zizmor is not available on PATH."; \
+		echo "Install it with: cargo install zizmor"; \
+		exit 1; \
+	}
+	zizmor .github/workflows/
 
 release-legal-category-x-check: sanity-check $(NODE_MODULES_STAMP) ## Fail if the bundled GitHub action distribution contains a Category X license.
 	$(NPM) run release-legal:check-category-x
