@@ -27,7 +27,6 @@ on:
       - main
       - release/**
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -47,11 +46,11 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Show available Make targets
         run: make help
@@ -90,11 +89,11 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Build the action bundle
         run: make build
@@ -126,11 +125,11 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Build the action bundle
         run: make build
