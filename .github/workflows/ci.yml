@@ -21,11 +21,16 @@ name: CI
 # - push / workflow_dispatch / schedule -> trusted writable integration scenario suite
 # - pull_request -> fork-safe read-only integration scenario suite
 
+
 on:
   push:
     branches:
       - main
       - release/**
+  # IMPORTANT: Zizmor is a _static_ analzyer. It does not look into the actual `cache`
+  # rules, so it flags _all_ usages of the setup-node action here. The _only_ way out
+  # is to have this global ignore rule.
+  # zizmor: ignore[cache-poisoning]
   pull_request:
 
 permissions:
@@ -46,7 +51,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0 # zizmor: ignore[cache-poisoning]
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
@@ -89,7 +94,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0 # zizmor: ignore[cache-poisoning]
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
@@ -125,7 +130,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0 # zizmor: ignore[cache-poisoning]
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
