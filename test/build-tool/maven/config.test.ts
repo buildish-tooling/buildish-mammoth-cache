@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -194,6 +194,227 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
         ),
       ).rejects.toThrow(/unsupported key/u);
     });
+  });
+
+  // ------------------------------------------------------------------
+  // serializeMavenListLikeValue / serializeMavenStructuredValue paths
+  // ------------------------------------------------------------------
+
+  it('reads dependent-jobs as a YAML array and several previously-uncovered string fields', async () => {
+    const yaml = [
+      'base-directory: src',
+      'job-mode: distributed-worker',
+      'dependent-jobs:',
+      '  - worker-a',
+      '  - worker-b',
+      'cache-key-prefix: my-maven-prefix-',
+      'cache-key-template: "{{hashFiles(\'**/*.xml\')}}"',
+      'cache-partitions: "[]"',
+      'restore-cleanup-mode: prune-managed',
+      '',
+    ].join('\n');
+    await withWorkspace({ 'cfg.yml': yaml }, async (workspace) => {
+      const resolved = await resolveMavenActionInputsFromConfigFile(
+        readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.yml' })),
+        { workspace },
+      );
+      expect(resolved.baseDirectory).toBe('src');
+      expect(resolved.jobMode).toBe('distributed-worker');
+      // YAML array is joined into newline-separated string
+      expect(resolved.dependentJobs).toBe('worker-a\nworker-b');
+      expect(resolved.cacheKeyPrefix).toBe('my-maven-prefix-');
+      expect(resolved.cachePartitions).toBe('[]');
+      expect(resolved.restoreCleanupMode).toBe('prune-managed');
+    });
+  });
+
+  it('reads allow-duplicate-dependent-delta-paths as a quoted-string boolean-like value', async () => {
+    const yaml = 'allow-duplicate-dependent-delta-paths: "false"\n';
+    await withWorkspace({ 'cfg.yml': yaml }, async (workspace) => {
+      const resolved = await resolveMavenActionInputsFromConfigFile(
+        readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.yml' })),
+        { workspace },
+      );
+      expect(resolved.allowDuplicateDependentDeltaPaths).toBe('false');
+    });
+  });
+
+  it('reads cache-partitions as a YAML object (structured value)', async () => {
+    const yaml = JSON.stringify({ 'cache-partitions': { id: 'custom', glob: '**' } }) + '\n';
+    await withWorkspace({ 'cfg.json': yaml }, async (workspace) => {
+      const resolved = await resolveMavenActionInputsFromConfigFile(
+        readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+        { workspace },
+      );
+      expect(resolved.cachePartitions).toContain('"id"');
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // validateMavenRecord throw
+  // ------------------------------------------------------------------
+
+  it('rejects a JSON config file whose top-level value is an array', async () => {
+    await withWorkspace({ 'cfg.json': JSON.stringify([]) }, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+          { workspace },
+        ),
+      ).rejects.toThrow(/must be an object/u);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // parseMavenConfigFileContents — unsupported extension and YAML error
+  // ------------------------------------------------------------------
+
+  it('rejects config files with an unsupported extension', async () => {
+    await withWorkspace({ 'cfg.toml': '[section]\nkey = "value"\n' }, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.toml' })),
+          { workspace },
+        ),
+      ).rejects.toThrow(/\.json, \.yml, or \.yaml extension/u);
+    });
+  });
+
+  it('rejects a config file containing invalid YAML', async () => {
+    await withWorkspace({ 'cfg.yml': ': invalid: yaml: {\n' }, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.yml' })),
+          { workspace },
+        ),
+      ).rejects.toThrow(/Could not parse config-file/u);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // readMavenConfigFileContents — readFileImpl failure
+  // ------------------------------------------------------------------
+
+  it('propagates an error when the config file cannot be read', async () => {
+    await withWorkspace({ 'cfg.json': '{}' }, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+          {
+            workspace,
+            readFileImpl: async (): Promise<string> => {
+              throw new Error('disk error');
+            },
+          },
+        ),
+      ).rejects.toThrow(/Could not read config-file/u);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // config-file = '.' throws before the file system is touched
+  // ------------------------------------------------------------------
+
+  it('rejects config-file value that normalises to the workspace root', async () => {
+    await withWorkspace({}, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': '.' })),
+          { workspace },
+        ),
+      ).rejects.toThrow(/\.json, \.yml, or \.yaml file/u);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // resolveMavenRealPath — realpathImpl failure
+  // ------------------------------------------------------------------
+
+  it('propagates an error when realpath resolution fails', async () => {
+    await withWorkspace({ 'cfg.json': '{}' }, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+          {
+            workspace,
+            realpathImpl: async (): Promise<string> => {
+              throw new Error('realpath failed');
+            },
+          },
+        ),
+      ).rejects.toThrow(/Could not resolve workspace/u);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // isMavenPathInside — config file symlink escaping the workspace
+  // ------------------------------------------------------------------
+
+  it('rejects a config file that resolves outside the workspace through a symlink', async () => {
+    await withWorkspace({ 'cfg.json': '{}' }, async (outsideWorkspace) => {
+      await withWorkspace({}, async (workspace) => {
+        const outsideFile = path.join(outsideWorkspace, 'cfg.json');
+        const linkPath = path.join(workspace, 'link.json');
+        await symlink(outsideFile, linkPath);
+
+        await expect(
+          resolveMavenActionInputsFromConfigFile(
+            readMavenActionInputs(makeInputProvider({ 'config-file': 'link.json' })),
+            { workspace },
+          ),
+        ).rejects.toThrow(/must stay within the repository workspace/u);
+      });
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // serializeMavenListLikeValue — error paths
+  // ------------------------------------------------------------------
+
+  it('rejects dependent-jobs that is neither a string nor an array', async () => {
+    await withWorkspace(
+      { 'cfg.json': JSON.stringify({ 'dependent-jobs': 42 }) },
+      async (workspace) => {
+        await expect(
+          resolveMavenActionInputsFromConfigFile(
+            readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+            { workspace },
+          ),
+        ).rejects.toThrow(/must be an array/u);
+      },
+    );
+  });
+
+  it('rejects a dependent-jobs array that contains a non-string entry', async () => {
+    await withWorkspace(
+      { 'cfg.json': JSON.stringify({ 'dependent-jobs': ['ok', 99] }) },
+      async (workspace) => {
+        await expect(
+          resolveMavenActionInputsFromConfigFile(
+            readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+            { workspace },
+          ),
+        ).rejects.toThrow(/entry 1 must be a string/u);
+      },
+    );
+  });
+
+  // ------------------------------------------------------------------
+  // serializeMavenStringValue — error path
+  // ------------------------------------------------------------------
+
+  it('rejects a non-string value for a string-typed config field', async () => {
+    await withWorkspace(
+      { 'cfg.json': JSON.stringify({ 'job-mode': 42 }) },
+      async (workspace) => {
+        await expect(
+          resolveMavenActionInputsFromConfigFile(
+            readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+            { workspace },
+          ),
+        ).rejects.toThrow(/must be a string/u);
+      },
+    );
   });
 });
 

@@ -14,17 +14,22 @@
  * limitations under the License.
  */
 
-import { chmod, mkdir, mkdtemp, rm, unlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import {
+  CACHE_MANIFEST_SCHEMA_VERSION,
   captureCacheManifest,
   computeCacheDelta,
+  deserializeCacheManifest,
+  deserializeCacheDeltaManifest,
   serializeCacheDeltaManifest,
   serializeCacheManifest,
+  type CacheDeltaManifest,
+  type CacheFileManifestEntry,
   type CacheManifest,
 } from '../../src/cache/manifest';
 import {
@@ -237,6 +242,61 @@ describe('computeCacheDelta', () => {
   });
 });
 
+describe('captureCacheManifest — error handling', () => {
+  it('throws when a symbolic link is encountered inside the scanned cache tree', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      // Create a real file and a symlink pointing at it inside a tracked partition directory.
+      // The 'modules' partition's include glob is 'caches/modules-*/files-*/**', so the files
+      // must live inside a 'files-*' subdirectory to be picked up by captureCacheManifest.
+      const realFile = path.join(gradleUserHome, 'caches', 'modules-2', 'files-2.1', 'real.jar');
+      const linkFile = path.join(gradleUserHome, 'caches', 'modules-2', 'files-2.1', 'link.jar');
+      await mkdir(path.dirname(realFile), { recursive: true });
+      await writeFile(realFile, 'content', 'utf8');
+      await symlink(realFile, linkFile);
+
+      await expect(
+        captureCacheManifest(createTestCacheModel(gradleUserHome)),
+      ).rejects.toThrow(/symbolic links/u);
+    });
+  });
+});
+
+describe('deserializeCacheManifest', () => {
+  it('round-trips a manifest through serialization and deserialization', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      await writeTrackedFile(gradleUserHome, 'caches/modules-2/example.jar', 'content');
+      const manifest = await captureCacheManifest(createTestCacheModel(gradleUserHome));
+
+      const roundTripped = deserializeCacheManifest(serializeCacheManifest(manifest));
+
+      expect(roundTripped).toEqual(manifest);
+    });
+  });
+
+  it('throws for malformed JSON', () => {
+    expect(() => deserializeCacheManifest('not-json')).toThrow(/Could not parse serialized/u);
+  });
+
+  it('throws for data that passes JSON parsing but fails schema validation', () => {
+    expect(() =>
+      deserializeCacheManifest(JSON.stringify({ schemaVersion: 1, buildToolId: '' })),
+    ).toThrow(/Invalid cache manifest/u);
+  });
+
+  it('throws for a manifest with an unsupported schema version', () => {
+    expect(() =>
+      deserializeCacheManifest(
+        JSON.stringify({
+          schemaVersion: 9999,
+          buildToolId: 'gradle',
+          cacheRoot: '/tmp',
+          partitions: [],
+        }),
+      ),
+    ).toThrow(/Invalid cache manifest/u);
+  });
+});
+
 async function withGradleUserHome(run: (gradleUserHome: string) => Promise<void>): Promise<void> {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-manifest-'));
   const gradleUserHome = path.join(tempRoot, '.gradle');
@@ -335,3 +395,217 @@ function flattenManifestPaths(manifest: CacheManifest): readonly string[] {
     .flatMap((partition) => partition.entries.map((entry) => entry.relativePath))
     .sort();
 }
+
+// ---------------------------------------------------------------------------
+// Helper: build a minimal but structurally valid manifest
+// ---------------------------------------------------------------------------
+
+function makeManifest(
+  partitions: Array<{ partitionId: string; entries: CacheFileManifestEntry[] }>,
+  overrides: Partial<CacheManifest> = {},
+): CacheManifest {
+  return {
+    schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
+    buildToolId: 'gradle',
+    cacheRoot: '/tmp/gradle',
+    partitions,
+    ...overrides,
+  } as unknown as CacheManifest;
+}
+
+function makeEntry(relativePath: string, sha = 'a'.repeat(64)): CacheFileManifestEntry {
+  return { relativePath, contentSha256: sha, size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 };
+}
+
+// ---------------------------------------------------------------------------
+// captureCacheManifest — sort comparator (line 279) + unsupported include glob
+// ---------------------------------------------------------------------------
+
+describe('captureCacheManifest — sort comparator and include-glob validation', () => {
+  it('returns entries sorted by relativePath when a partition has multiple files', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      // Write two files in reverse alphabetical order so the sort is observable.
+      await writeTrackedFile(gradleUserHome, 'caches/modules-2/files-2.1/z-last.jar', 'z');
+      await writeTrackedFile(gradleUserHome, 'caches/modules-2/files-2.1/a-first.jar', 'a');
+
+      const manifest = await captureCacheManifest(createTestCacheModel(gradleUserHome));
+      const modulesPartition = manifest.partitions.find((p) => p.partitionId === 'modules');
+      const relPaths = modulesPartition?.entries.map((e) => e.relativePath) ?? [];
+
+      expect(relPaths).toEqual([...relPaths].sort());
+      expect(relPaths.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('throws for a cache include glob that does not end with **', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      await expect(
+        captureCacheManifest(
+          createTestCacheModel(gradleUserHome, [
+            createCustomPartition('bad', gradleUserHome, ['caches/modules-2/*.jar']),
+          ]),
+        ),
+      ).rejects.toThrow(/trailing '\*\*'/u);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeCacheDelta — cross-path deletion / addition branches (lines 330–334, 337–340)
+// ---------------------------------------------------------------------------
+
+describe('computeCacheDelta — cross-path deletion and addition', () => {
+  it('correctly handles a deletion and an addition with interleaved paths', () => {
+    // Previous: [a.jar, z.jar]   Current: [m.jar, z.jar]
+    // a.jar is deleted (pathComparison < 0), m.jar is added (pathComparison > 0), z.jar unchanged.
+    const previous = makeManifest([
+      {
+        partitionId: 'modules',
+        entries: [makeEntry('caches/a.jar'), makeEntry('caches/z.jar')],
+      },
+    ]);
+    const current = makeManifest([
+      {
+        partitionId: 'modules',
+        entries: [makeEntry('caches/m.jar'), makeEntry('caches/z.jar')],
+      },
+    ]);
+
+    const delta = computeCacheDelta(previous, current);
+    const entries = delta.partitions[0]?.entries ?? [];
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ relativePath: 'caches/a.jar', changeType: 'deleted' });
+    expect(entries[1]).toMatchObject({ relativePath: 'caches/m.jar', changeType: 'added' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeCacheDelta — validateComparableManifests errors (lines 679, 693, 698)
+// ---------------------------------------------------------------------------
+
+describe('computeCacheDelta — manifest compatibility validation', () => {
+  it('throws when the manifest schema version does not match the current version', () => {
+    const old = makeManifest([], { schemaVersion: 0 as unknown as typeof CACHE_MANIFEST_SCHEMA_VERSION });
+    const current = makeManifest([]);
+    expect(() => computeCacheDelta(old, current)).toThrow(/manifest schema version/u);
+  });
+
+  it('throws when the manifests have different numbers of partitions', () => {
+    const a = makeManifest([{ partitionId: 'modules', entries: [] }]);
+    const b = makeManifest([
+      { partitionId: 'modules', entries: [] },
+      { partitionId: 'build-cache', entries: [] },
+    ]);
+    expect(() => computeCacheDelta(a, b)).toThrow(/matching partition layouts/u);
+  });
+
+  it('throws when the manifests have the same partition count but different partition IDs', () => {
+    const a = makeManifest([{ partitionId: 'modules', entries: [] }]);
+    const b = makeManifest([{ partitionId: 'build-cache', entries: [] }]);
+    expect(() => computeCacheDelta(a, b)).toThrow(/matching partition identifiers/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deserializeCacheDeltaManifest — schema-level invariant errors (lines 107–120, 153)
+// ---------------------------------------------------------------------------
+
+describe('deserializeCacheDeltaManifest', () => {
+  const snapshot = { contentSha256: 'a'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 };
+
+  function deltaJson(entries: unknown[]): string {
+    return JSON.stringify({
+      schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp',
+      partitions: [{ partitionId: 'modules', entries }],
+    });
+  }
+
+  it("rejects an 'added' entry that has a non-null previous snapshot", () => {
+    const json = deltaJson([
+      { relativePath: 'caches/a.jar', changeType: 'added', previous: snapshot, current: snapshot },
+    ]);
+    expect(() => deserializeCacheDeltaManifest(json)).toThrow(/Invalid cache delta manifest/u);
+  });
+
+  it("rejects a 'deleted' entry that has a non-null current snapshot", () => {
+    const json = deltaJson([
+      { relativePath: 'caches/a.jar', changeType: 'deleted', previous: snapshot, current: snapshot },
+    ]);
+    expect(() => deserializeCacheDeltaManifest(json)).toThrow(/Invalid cache delta manifest/u);
+  });
+
+  it("rejects a 'modified' entry that has a null previous snapshot", () => {
+    const json = deltaJson([
+      { relativePath: 'caches/a.jar', changeType: 'modified', previous: null, current: snapshot },
+    ]);
+    expect(() => deserializeCacheDeltaManifest(json)).toThrow(/Invalid cache delta manifest/u);
+  });
+
+  it('rejects a delta manifest with duplicate partition IDs', () => {
+    const json = JSON.stringify({
+      schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp',
+      partitions: [
+        { partitionId: 'modules', entries: [] },
+        { partitionId: 'modules', entries: [] },
+      ],
+    });
+    expect(() => deserializeCacheDeltaManifest(json)).toThrow(/Invalid cache delta manifest/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deserializeCacheManifest — schema-level invariant errors (lines 42, 68, 87)
+// ---------------------------------------------------------------------------
+
+describe('deserializeCacheManifest — schema validation', () => {
+  it('rejects a manifest entry with an invalid (path-escaping) relative path', () => {
+    const json = JSON.stringify({
+      schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp',
+      partitions: [
+        {
+          partitionId: 'modules',
+          entries: [{ relativePath: '../outside', contentSha256: 'a'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 }],
+        },
+      ],
+    });
+    expect(() => deserializeCacheManifest(json)).toThrow(/Invalid cache manifest/u);
+  });
+
+  it('rejects a manifest with out-of-order entries', () => {
+    const json = JSON.stringify({
+      schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp',
+      partitions: [
+        {
+          partitionId: 'modules',
+          entries: [
+            { relativePath: 'caches/z.jar', contentSha256: 'z'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 },
+            { relativePath: 'caches/a.jar', contentSha256: 'a'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 },
+          ],
+        },
+      ],
+    });
+    expect(() => deserializeCacheManifest(json)).toThrow(/Invalid cache manifest/u);
+  });
+
+  it('rejects a manifest with duplicate partition IDs', () => {
+    const json = JSON.stringify({
+      schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
+      buildToolId: 'gradle',
+      cacheRoot: '/tmp',
+      partitions: [
+        { partitionId: 'modules', entries: [] },
+        { partitionId: 'modules', entries: [] },
+      ],
+    });
+    expect(() => deserializeCacheManifest(json)).toThrow(/Invalid cache manifest/u);
+  });
+});

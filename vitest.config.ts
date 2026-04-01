@@ -20,5 +20,31 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      exclude: [
+        // Interface/type-only files — no executable runtime behaviour.
+        'src/build-tool/types.ts',
+        'src/cache/backend.ts',
+        'src/delta/backend.ts',
+        'src/ci/types.ts',
+        'src/config/types.ts',
+        'src/host/types.ts',
+        'src/build-tool/gradle/wrapper/types.ts',
+        // Re-export barrels — no logic.
+        'src/ci/index.ts',
+        'src/ci/github/index.ts',
+        // Trivial toolkit delegates (direct pass-through to @actions/*).
+        'src/ci/github/cache.ts',
+        'src/ci/github/host.ts',
+        // Entry-point wrappers — thin orchestrators verified by smoke/e2e tests.
+        'src/ci/github/gradle/main.ts',
+        'src/ci/github/gradle/post.ts',
+        'src/ci/github/maven/main.ts',
+        'src/ci/github/maven/post.ts',
+      ],
+      reporter: ['text', 'html'],
+    },
   },
 });

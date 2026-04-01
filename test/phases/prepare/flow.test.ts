@@ -862,6 +862,166 @@ describe('executePrepareAction', () => {
       ).resolves.toBe('from-worker-b');
     });
   });
+
+  it('sets restore cleanup status to skipped-no-hit when prune-managed mode is active but no cache hit occurred', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const wrapperJarBytes = Buffer.from('existing-wrapper-jar');
+      const wrapperJarSha256 = sha256Hex(wrapperJarBytes);
+
+      await mkdir(path.join(workspace, 'gradle', 'wrapper'), { recursive: true });
+      await writeFile(path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'), wrapperJarBytes);
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+        [
+          'distributionBase=GRADLE_USER_HOME',
+          'distributionPath=wrapper/dists',
+          'distributionSha256Sum=61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa',
+          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip',
+          'validateDistributionUrl=true',
+          'zipStoreBase=GRADLE_USER_HOME',
+          'zipStorePath=wrapper/dists',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const env = {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'build',
+        GITHUB_RUN_ID: '101',
+        GITHUB_RUN_ATTEMPT: '2',
+        GITHUB_WORKSPACE: workspace,
+        GRADLE_USER_HOME: gradleUserHome,
+        HOME: workspace,
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+        RUNNER_TEMP: path.join(workspace, 'runner-temp'),
+      };
+
+      const status = await executePrepareAction({
+        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+        cacheBackend: createCacheApi(), // returns undefined → no cache hit
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        env,
+        ...(await createPrepareActionDependencies({
+          env,
+          eventPayload: { repository: { default_branch: 'main' } },
+          inputs: { 'restore-cleanup-mode': 'prune-managed' },
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+          adapterOptions: {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+            verifyWrapperSignature: async () => {},
+          },
+        })),
+      });
+
+      expect(status.restoreCleanupResult).toEqual(
+        expect.objectContaining({
+          mode: 'prune-managed',
+          status: 'skipped-no-hit',
+          deletedFileCount: 0,
+        }),
+      );
+      const summaryText = createPrepareActionSummaryLines(status).join('\n');
+      expect(summaryText).toContain('- Restore cleanup: prune-managed (skipped-no-hit)');
+    });
+  });
+
+  it('logs a message and continues when Gradle build hook installation fails', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const wrapperJarBytes = Buffer.from('existing-wrapper-jar');
+      const wrapperJarSha256 = sha256Hex(wrapperJarBytes);
+
+      await mkdir(path.join(workspace, 'gradle', 'wrapper'), { recursive: true });
+      await writeFile(path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'), wrapperJarBytes);
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+        [
+          'distributionBase=GRADLE_USER_HOME',
+          'distributionPath=wrapper/dists',
+          'distributionSha256Sum=61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa',
+          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip',
+          'validateDistributionUrl=true',
+          'zipStoreBase=GRADLE_USER_HOME',
+          'zipStorePath=wrapper/dists',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      // Create a regular FILE at gradleUserHome/init.d so that mkdir(init.d, {recursive:true})
+      // inside installGradleBuildResultCapture fails with EEXIST — the .catch() in
+      // executePrepareAction should log a message and continue rather than propagating the error.
+      await mkdir(gradleUserHome, { recursive: true });
+      await writeFile(path.join(gradleUserHome, 'init.d'), 'blocked', 'utf8');
+
+      const infoMessages: string[] = [];
+      const env = {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'build',
+        GITHUB_RUN_ID: '101',
+        GITHUB_RUN_ATTEMPT: '2',
+        GITHUB_WORKSPACE: workspace,
+        GRADLE_USER_HOME: gradleUserHome,
+        HOME: workspace,
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+        RUNNER_TEMP: path.join(workspace, 'runner-temp'),
+      };
+
+      const status = await executePrepareAction({
+        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+        cacheBackend: createCacheApi(),
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        env,
+        ...(await createPrepareActionDependencies({
+          env,
+          eventPayload: { repository: { default_branch: 'main' } },
+          info(message: string): void {
+            infoMessages.push(message);
+          },
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+          adapterOptions: {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+            verifyWrapperSignature: async () => {},
+          },
+        })),
+      });
+
+      expect(
+        infoMessages.some((msg) => msg.includes('build reporting could not install capture hooks')),
+      ).toBe(true);
+      // Action still completes successfully despite the hook installation failure.
+      expect(status.bootstrap.cacheModel).not.toBeNull();
+    });
+  });
 });
 
 async function stageWorkerDeltaArtifact(

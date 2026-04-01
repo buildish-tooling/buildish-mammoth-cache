@@ -639,6 +639,154 @@ describe('executeFinalizeAction', () => {
       await expect(artifactApi.listArtifacts()).resolves.toHaveLength(0);
     });
   });
+
+  it('shows error overall status in the finalize summary when a Gradle build has failed', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+
+      await writeGradleFile(gradleUserHome, 'caches/modules-2/files-2.1/module.bin', 'content');
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      // Write the build result directly to RUNNER_TEMP (where loadGradleBuildReport reads from),
+      // with buildFailed: true — the writeCapturedBuildResult helper hardcodes buildFailed: false.
+      const buildResultsDir = path.join(
+        workspace, 'runner-temp', '.buildish-mammoth-cache', 'build-results',
+      );
+      await mkdir(buildResultsDir, { recursive: true });
+      await writeFile(
+        path.join(buildResultsDir, '__run-fail.json'),
+        JSON.stringify({
+          capturedAtEpochMillis: 1_000,
+          rootProjectName: 'demo',
+          requestedTasks: 'build',
+          gradleVersion: '8.14.3',
+          javaVersion: '21.0.4',
+          buildFailed: true,
+          configCacheHit: false,
+        }),
+        'utf8',
+      );
+
+      const status = await executeFinalizeAction({
+        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+          getState(name: string): string {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') return 'true';
+            return savedState.get(name) ?? '';
+          },
+          inputProvider: createInputProvider('distributed-worker'),
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.buildReport.anyBuildFailed).toBe(true);
+      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
+      expect(summaryText).toContain('❌');
+    });
+  });
+
+  it('skips artifact upload when a distributed-worker job runs in read-only mode', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+
+      await writeGradleFile(gradleUserHome, 'caches/modules-2/files-2.1/module.bin', 'before');
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      await writeGradleFile(gradleUserHome, 'caches/modules-2/files-2.1/module.bin', 'after');
+
+      const status = await executeFinalizeAction({
+        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+          getState(name: string): string {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') return 'true';
+            return savedState.get(name) ?? '';
+          },
+          inputProvider: {
+            getInput(name: string): string {
+              if (name === 'job-mode') return 'distributed-worker';
+              if (name === 'read-only') return 'true';
+              return '';
+            },
+          },
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.deltaArtifactResult).toEqual(
+        expect.objectContaining({ status: 'read-only' }),
+      );
+      await expect(
+        new FakeArtifactApi(path.join(workspace, 'artifact-store')).listArtifacts(),
+      ).resolves.toHaveLength(0);
+    });
+  });
+
+  it('reports missing-pre-build-manifest when cacheModel is set but no manifest was persisted', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+
+      // No persistPreBuildState call — the prepare phase manifest is absent.
+      const status = await executeFinalizeAction({
+        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+          getState(name: string): string {
+            if (name === 'buildish-mammoth-cache-base-cache-armed') return 'true';
+            return '';
+          },
+          inputProvider: createInputProvider('distributed-worker'),
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.deltaArtifactResult).toEqual(
+        expect.objectContaining({ status: 'missing-pre-build-manifest' }),
+      );
+    });
+  });
+
+  it('completes without cache orchestration when the cache is disabled', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+
+      const status = await executeFinalizeAction({
+        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        env: createTestEnv(workspace, gradleUserHome, 'build'),
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'build'),
+          getState: () => '',
+          inputProvider: {
+            getInput(name: string): string {
+              if (name === 'cache-enabled') return 'false';
+              return '';
+            },
+          },
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.bootstrap.cacheModel).toBeNull();
+      expect(status.deltaArtifactResult).toBeNull();
+      expect(status.cacheStatistics).toBeNull();
+    });
+  });
 });
 
 function createTestEnv(

@@ -21,6 +21,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  cleanupGradleBuildResultCapture,
   createGradleBuildSummaryLines,
   installGradleBuildResultCapture,
   loadGradleBuildReport,
@@ -196,6 +197,117 @@ describe('Gradle build reporting', () => {
       `def captureRootDir = ${JSON.stringify(path.join(runnerTemp, '.buildish-mammoth-cache'))}`,
     );
     expect(servicePlugin).toContain('def captureInvocationNamespace = "buildish-mammoth-cache"');
+  });
+
+  it('renders "not attempted" scan state, displayText fallbacks, and truncates overlong titles', () => {
+    const longTask = 'x'.repeat(210);
+    const lines = createGradleBuildSummaryLines({
+      builds: [
+        {
+          invocationKey: '__run-1',
+          capturedAtEpochMillis: 1_000,
+          rootProjectName: '',       // triggers displayText fallback → "(unnamed root project)"
+          requestedTasks: '   ',    // triggers displayText fallback → "(default tasks)"
+          gradleVersion: '8.14.3',
+          javaVersion: '21.0.4',
+          buildFailed: false,
+          configCacheHit: false,
+          buildScanUri: null,
+          buildScanFailed: false,    // "not attempted" branch
+        },
+        {
+          invocationKey: '__run-2',
+          capturedAtEpochMillis: 2_000,
+          rootProjectName: 'demo',
+          requestedTasks: longTask,  // title > 200 chars → truncated with …
+          gradleVersion: '8.14.3',
+          javaVersion: '21.0.4',
+          buildFailed: false,
+          configCacheHit: false,
+          buildScanUri: null,
+          buildScanFailed: false,
+        },
+      ],
+      warnings: [],
+    });
+
+    const summaryText = lines.join('\n');
+    // displayText fallbacks — escapeSummaryText escapes '(' and ')' as '\(' / '\)'
+    expect(summaryText).toContain('\\(unnamed root project\\)');
+    expect(summaryText).toContain('\\(default tasks\\)');
+    // "not attempted" scan line (buildScanUri: null, buildScanFailed: false)
+    expect(summaryText).toContain('  - Build Scan: not attempted');
+    // title truncation: "demo — xxx..." exceeds 200 chars, ending with ellipsis
+    const build2Line = lines.find((l) => l.startsWith('- Build 2:')) ?? '';
+    expect(build2Line.endsWith('…')).toBe(true);
+  });
+
+  it('defaults javaVersion to "unknown" when the field is absent from the captured result file', async () => {
+    const runnerTemp = await createRunnerTemp(temporaryDirectories);
+    const buildResultsDir = path.join(runnerTemp, '.buildish-mammoth-cache', 'build-results');
+    await mkdir(buildResultsDir, { recursive: true });
+    await writeFile(
+      path.join(buildResultsDir, '__run-1.json'),
+      JSON.stringify({
+        capturedAtEpochMillis: 1_000,
+        rootProjectName: 'demo',
+        requestedTasks: 'build',
+        gradleVersion: '8.14.3',
+        // javaVersion deliberately omitted — Zod .default('unknown') should fill it in
+        buildFailed: false,
+        configCacheHit: false,
+      }),
+      'utf8',
+    );
+
+    const report = await loadGradleBuildReport({ tempDirectory: runnerTemp });
+
+    expect(report.builds).toHaveLength(1);
+    expect(report.builds[0]?.javaVersion).toBe('unknown');
+  });
+
+  it('records a warning and skips a result file that contains malformed JSON', async () => {
+    const runnerTemp = await createRunnerTemp(temporaryDirectories);
+    const buildResultsDir = path.join(runnerTemp, '.buildish-mammoth-cache', 'build-results');
+    await mkdir(buildResultsDir, { recursive: true });
+    await writeFile(
+      path.join(buildResultsDir, '__run-1.json'),
+      JSON.stringify({
+        capturedAtEpochMillis: 1_000,
+        rootProjectName: 'ok',
+        requestedTasks: 'build',
+        gradleVersion: '8.14.3',
+        buildFailed: false,
+        configCacheHit: false,
+      }),
+      'utf8',
+    );
+    await writeFile(path.join(buildResultsDir, '__run-broken.json'), 'not-valid-json', 'utf8');
+
+    const report = await loadGradleBuildReport({ tempDirectory: runnerTemp });
+
+    expect(report.builds).toHaveLength(1);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings[0]).toMatch(/Could not read Gradle build result file/u);
+    expect(report.warnings[0]).toContain('__run-broken.json');
+  });
+
+  it('returns a warning when a capture init-script file cannot be removed', async () => {
+    const gradleUserHome = await createRunnerTemp(temporaryDirectories);
+    // Place a directory where the init-script file is expected.
+    // rm() without --recursive cannot remove a directory and will produce a warning.
+    const initScriptPath = path.join(
+      gradleUserHome,
+      'init.d',
+      'buildish-mammoth-cache.build-result-capture.init.gradle',
+    );
+    await mkdir(initScriptPath, { recursive: true });
+
+    const warnings = await cleanupGradleBuildResultCapture(gradleUserHome);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/Could not remove Gradle build-result capture file/u);
+    expect(warnings[0]).toContain('buildish-mammoth-cache.build-result-capture.init.gradle');
   });
 });
 

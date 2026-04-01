@@ -62,6 +62,35 @@ describe('post-action state helpers', () => {
     });
   });
 
+  it('uses the tempDirectory option when no explicit parentDirectory is provided', async () => {
+    await withWorkspace(async (workspace) => {
+      const savedState = new Map<string, string>();
+      const tempDirectory = path.join(workspace, 'ci-temp');
+
+      const persisted = await persistPreBuildCacheManifest(
+        SAMPLE_MANIFEST,
+        savedState.set.bind(savedState),
+        { tempDirectory },
+      );
+
+      expect(persisted.manifestPath.startsWith(path.resolve(tempDirectory) + path.sep)).toBe(true);
+    });
+  });
+
+  it('falls back to os.tmpdir() when no parentDirectory, tempDirectory, or RUNNER_TEMP is provided', async () => {
+    const savedState = new Map<string, string>();
+
+    const persisted = await persistPreBuildCacheManifest(
+      SAMPLE_MANIFEST,
+      savedState.set.bind(savedState),
+      {}, // all options absent
+    );
+    // Clean up the file created under the system temp directory.
+    await rm(path.dirname(persisted.manifestPath), { recursive: true, force: true });
+
+    expect(persisted.manifestPath.startsWith(os.tmpdir() + path.sep)).toBe(true);
+  });
+
   it('prefers an explicit parent directory over RUNNER_TEMP', async () => {
     await withWorkspace(async (workspace) => {
       const savedState = new Map<string, string>();
