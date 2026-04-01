@@ -82,5 +82,5 @@ export function escapeHtml(value: string): string {
  * lines that will be interpreted by GitHub's Markdown renderer.
  */
 export function escapeSummaryText(value: string): string {
-  return value.replaceAll(/[\\`*_{}[\]()#+.!|-]/g, '\\$&');
+  return value.replaceAll(/[\\`*_{}[\]()#+.!<>|-]/g, '\\$&');
 }

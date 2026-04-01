@@ -20,6 +20,8 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import type { CiJobContext } from '../../ci';
+import { isMissingPathError } from '../../util/fs';
+import { escapeSummaryText } from '../../util/html';
 import { parseSerializedJson, parseWithZod } from '../../util/serialization';
 
 const CAPTURE_DIRECTORY_NAME = '.buildish-mammoth-cache';
@@ -350,14 +352,6 @@ function truncateSummaryText(value: string, maxLength: number): string {
   }
 
   return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-}
-
-function escapeSummaryText(value: string): string {
-  return value.replace(/[\\`*_{}[\]()#+.!<>|-]/g, '\\$&');
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return !!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
 function createInitScriptContents(captureRoot: string | null): string {
