@@ -119,14 +119,13 @@ and the hard-exclude surface larger.
 
 ## Summary
 
-| Tool       | Cache layout       | Apache ecosystem fit | Adapter complexity | Priority |
-| ---------- | ------------------ | -------------------- | ------------------ | -------- |
-| SBT        | Content-addressed (Coursier) / coordinate (Ivy) | High | Low–medium | **High** |
-| Cargo      | Content-addressed  | Medium and growing   | Low                | Medium   |
-| pnpm       | Content-addressed  | Medium (frontend)    | Low                | Medium   |
-| Go modules | Content-addressed  | Medium               | Low                | Medium   |
-| npm        | Mostly content-addressed | Medium (frontend) | Medium          | Medium   |
-| uv (Python)| Content-addressed  | Low                  | Low                | Low      |
-| pip/Poetry | Coordinate-based   | Low                  | Medium             | Low      |
-| Bazel      | Content-addressed  | Low (has own remote cache) | Low         | Low      |
-
+| Tool        | Cache layout                                    | Apache ecosystem fit       | Adapter complexity | Priority |
+| ----------- | ----------------------------------------------- | -------------------------- | ------------------ | -------- |
+| SBT         | Content-addressed (Coursier) / coordinate (Ivy) | High                       | Low–medium         | **High** |
+| Cargo       | Content-addressed                               | Medium and growing         | Low                | Medium   |
+| pnpm        | Content-addressed                               | Medium (frontend)          | Low                | Medium   |
+| Go modules  | Content-addressed                               | Medium                     | Low                | Medium   |
+| npm         | Mostly content-addressed                        | Medium (frontend)          | Medium             | Medium   |
+| uv (Python) | Content-addressed                               | Low                        | Low                | Low      |
+| pip/Poetry  | Coordinate-based                                | Low                        | Medium             | Low      |
+| Bazel       | Content-addressed                               | Low (has own remote cache) | Low                | Low      |

@@ -23,17 +23,17 @@ limitations under the License.
 This page records the evaluation of Kotlin Multiplatform (KMP) as a way to write the cache
 orchestration logic once in Kotlin and compile it to both JavaScript (for GitHub/Forgejo Actions)
 and JVM bytecode (for a Jenkins plugin or GitLab runner). The conclusion is that KMP is
-*architecturally coherent* with this codebase's design but is not the right tradeoff at this time.
+_architecturally coherent_ with this codebase's design but is not the right tradeoff at this time.
 
 ## What Kotlin Multiplatform can target
 
 KMP compiles a single Kotlin codebase to multiple output targets:
 
-| Target            | Output                                     | Relevant here for              |
-| ----------------- | ------------------------------------------ | ------------------------------ |
-| `jvmMain`         | JVM bytecode (JAR)                         | Jenkins plugin, GitLab runner  |
-| `jsMain`          | JavaScript bundle (Node.js or browser)     | GitHub Actions, Forgejo Actions |
-| `nativeMain`      | Native binary via LLVM                     | Alternative to GraalVM native-image |
+| Target       | Output                                 | Relevant here for                   |
+| ------------ | -------------------------------------- | ----------------------------------- |
+| `jvmMain`    | JVM bytecode (JAR)                     | Jenkins plugin, GitLab runner       |
+| `jsMain`     | JavaScript bundle (Node.js or browser) | GitHub Actions, Forgejo Actions     |
+| `nativeMain` | Native binary via LLVM                 | Alternative to GraalVM native-image |
 
 Platform-specific code lives in source sets named after the target (`jsMain`, `jvmMain`); shared
 code lives in `commonMain` and is compiled for all targets. The `expect`/`actual` mechanism
@@ -67,7 +67,7 @@ requires updating the declarations manually.
 
 ### The platform-specific adapter layer does not shrink
 
-The motivation for KMP is to share code. But the code that *cannot* be shared — the CI adapter
+The motivation for KMP is to share code. But the code that _cannot_ be shared — the CI adapter
 implementations — accounts for a significant fraction of the non-test source. The `commonMain`
 core would be shared, but:
 
@@ -121,4 +121,3 @@ multi-platform support is:
 
 See [Jenkins Support](./portability/jenkins/) for the Jenkins-specific implementation options
 and [Provider Portability](./portability/) for the overall CI platform status.
-

@@ -24,7 +24,7 @@ Jenkins is a natural target for the Mammoth Cache because it is widely used in t
 ecosystem and has no native equivalent of the Gradle/Maven caching features this action provides.
 The architecture's eight seam interfaces can all be implemented, and the distributed
 worker/aggregator pattern maps well to Jenkins parallel stages. The main open question is not
-*whether* Jenkins can be supported but *how* — because Jenkins plugins are JVM-based and this
+_whether_ Jenkins can be supported but _how_ — because Jenkins plugins are JVM-based and this
 codebase is TypeScript/Node.js.
 
 ## Why `using: node24` does not apply
@@ -55,12 +55,12 @@ wrapping the chosen store requires no changes to the shared cache orchestration 
 The [Copy Artifact Plugin](https://plugins.jenkins.io/copyartifact/) maps almost directly to the
 `WorkflowArtifactBackend` interface:
 
-| Operation            | Copy Artifact / Jenkins equivalent                            |
-| -------------------- | ------------------------------------------------------------- |
-| `uploadArtifact`     | `archiveArtifacts` Pipeline step                              |
-| `listArtifacts`      | Jenkins REST API `GET /job/<name>/<build>/api/json?tree=artifacts[*]` |
-| `downloadArtifact`   | `copyArtifacts` Pipeline step or REST artifact download URL   |
-| `deleteArtifact`     | Jenkins REST API `POST /job/<name>/<build>/artifact/<path>/doDelete` |
+| Operation          | Copy Artifact / Jenkins equivalent                                    |
+| ------------------ | --------------------------------------------------------------------- |
+| `uploadArtifact`   | `archiveArtifacts` Pipeline step                                      |
+| `listArtifacts`    | Jenkins REST API `GET /job/<name>/<build>/api/json?tree=artifacts[*]` |
+| `downloadArtifact` | `copyArtifacts` Pipeline step or REST artifact download URL           |
+| `deleteArtifact`   | Jenkins REST API `POST /job/<name>/<build>/artifact/<path>/doDelete`  |
 
 Cross-execution artifact access (required for the distributed worker/aggregator model) is
 supported — artifacts from upstream builds are accessible to downstream builds by build number.
@@ -74,11 +74,11 @@ Since the values are plain strings, a workspace-resident JSON file is entirely s
 
 ### `HostReporter`, `HostInputSource`, `HostOutputSink` (`src/host/types.ts`) — straightforward
 
-| Adapter           | Jenkins equivalent                                                    |
-| ----------------- | --------------------------------------------------------------------- |
+| Adapter           | Jenkins equivalent                                                      |
+| ----------------- | ----------------------------------------------------------------------- |
 | `HostReporter`    | `echo` / `println` in a Pipeline step; ANSI colour via AnsiColor plugin |
-| `HostInputSource` | Pipeline `parameters {}` block or `withCredentials` for secrets       |
-| `HostOutputSink`  | `env.VAR = value` in a Groovy step; no formal output concept needed   |
+| `HostInputSource` | Pipeline `parameters {}` block or `withCredentials` for secrets         |
+| `HostOutputSink`  | `env.VAR = value` in a Groovy step; no formal output concept needed     |
 
 ### `ReportSink` (`src/host/types.ts`) — HTML report via publishHTML
 
@@ -89,16 +89,16 @@ followed by `publishHTML` (or the Blue Ocean summary API) provides a reasonable 
 
 All required `CiJobContext` fields are available from Jenkins built-in environment variables:
 
-| Required value  | Jenkins variable           |
-| --------------- | -------------------------- |
-| Job name        | `JOB_NAME`                 |
-| Run ID          | `BUILD_NUMBER`             |
-| Run attempt     | `BUILD_NUMBER` (always 1 per build; retries are new build numbers) |
-| Execution URL   | `BUILD_URL`                |
-| Branch name     | `GIT_BRANCH` (Git plugin)  |
-| PR detection    | `CHANGE_ID` non-empty (Multibranch Pipeline) |
-| Workspace       | `WORKSPACE`                |
-| Temp directory  | `WORKSPACE_TMP`            |
+| Required value | Jenkins variable                                                   |
+| -------------- | ------------------------------------------------------------------ |
+| Job name       | `JOB_NAME`                                                         |
+| Run ID         | `BUILD_NUMBER`                                                     |
+| Run attempt    | `BUILD_NUMBER` (always 1 per build; retries are new build numbers) |
+| Execution URL  | `BUILD_URL`                                                        |
+| Branch name    | `GIT_BRANCH` (Git plugin)                                          |
+| PR detection   | `CHANGE_ID` non-empty (Multibranch Pipeline)                       |
+| Workspace      | `WORKSPACE`                                                        |
+| Temp directory | `WORKSPACE_TMP`                                                    |
 
 ### Finalize phase — Pipeline `post {}` block
 

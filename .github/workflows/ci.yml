@@ -21,7 +21,6 @@ name: CI
 # - push / workflow_dispatch / schedule -> trusted writable integration scenario suite
 # - pull_request -> fork-safe read-only integration scenario suite
 
-
 on:
   push:
     branches:

@@ -259,9 +259,12 @@ export function renderCacheKey(
     runnerArch: ciContext.runnerArch,
     refName: ciContext.safeRefName,
   };
-  const cacheKey = template.replaceAll(/\$\{([A-Za-z0-9]+)\}/g, (match, placeholderName: string) => {
-    return placeholderValues[placeholderName] ?? match;
-  });
+  const cacheKey = template.replaceAll(
+    /\$\{([A-Za-z0-9]+)\}/g,
+    (match, placeholderName: string) => {
+      return placeholderValues[placeholderName] ?? match;
+    },
+  );
 
   if (!CACHE_KEY_PATTERN.test(cacheKey)) {
     throw new Error(

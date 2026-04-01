@@ -41,4 +41,3 @@ runs:
       with:
         distribution: temurin
         java-version: '21'
-

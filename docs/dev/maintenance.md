@@ -100,12 +100,12 @@ maintained manually across three places, and that is a deliberate tradeoff.
 
 ### What needs to stay in sync
 
-| File | What it carries |
-|---|---|
-| `actions/github/gradle/action.yml` | `description:` and `default:` for every Gradle input |
-| `actions/github/maven/action.yml` | `description:` and `default:` for every Maven input |
-| `docs/user/configuration.md` | User-facing reference page with bulleted constraints, examples, and cross-references |
-| `src/config/types.ts` | Enum value lists (`JOB_MODES`, `RESTORE_CLEANUP_MODES`, `CACHE_KEY_TEMPLATE_PLACEHOLDERS`) |
+| File                               | What it carries                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------------------------ |
+| `actions/github/gradle/action.yml` | `description:` and `default:` for every Gradle input                                       |
+| `actions/github/maven/action.yml`  | `description:` and `default:` for every Maven input                                        |
+| `docs/user/configuration.md`       | User-facing reference page with bulleted constraints, examples, and cross-references       |
+| `src/config/types.ts`              | Enum value lists (`JOB_MODES`, `RESTORE_CLEANUP_MODES`, `CACHE_KEY_TEMPLATE_PLACEHOLDERS`) |
 
 The TypeScript side (`RawSharedActionInputs`, `RawGradleActionInputs`, `RawMavenActionInputs`, and
 the `createEmptyRaw*ActionInputs()` helpers) is largely self-policing: the compiler rejects an
