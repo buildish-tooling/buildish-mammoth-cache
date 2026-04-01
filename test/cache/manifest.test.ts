@@ -28,7 +28,6 @@ import {
   deserializeCacheDeltaManifest,
   serializeCacheDeltaManifest,
   serializeCacheManifest,
-  type CacheDeltaManifest,
   type CacheFileManifestEntry,
   type CacheManifest,
 } from '../../src/cache/manifest';
@@ -254,9 +253,9 @@ describe('captureCacheManifest — error handling', () => {
       await writeFile(realFile, 'content', 'utf8');
       await symlink(realFile, linkFile);
 
-      await expect(
-        captureCacheManifest(createTestCacheModel(gradleUserHome)),
-      ).rejects.toThrow(/symbolic links/u);
+      await expect(captureCacheManifest(createTestCacheModel(gradleUserHome))).rejects.toThrow(
+        /symbolic links/u,
+      );
     });
   });
 });
@@ -486,7 +485,9 @@ describe('computeCacheDelta — cross-path deletion and addition', () => {
 
 describe('computeCacheDelta — manifest compatibility validation', () => {
   it('throws when the manifest schema version does not match the current version', () => {
-    const old = makeManifest([], { schemaVersion: 0 as unknown as typeof CACHE_MANIFEST_SCHEMA_VERSION });
+    const old = makeManifest([], {
+      schemaVersion: 0 as unknown as typeof CACHE_MANIFEST_SCHEMA_VERSION,
+    });
     const current = makeManifest([]);
     expect(() => computeCacheDelta(old, current)).toThrow(/manifest schema version/u);
   });
@@ -512,7 +513,13 @@ describe('computeCacheDelta — manifest compatibility validation', () => {
 // ---------------------------------------------------------------------------
 
 describe('deserializeCacheDeltaManifest', () => {
-  const snapshot = { contentSha256: 'a'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 };
+  const snapshot = {
+    contentSha256: 'a'.repeat(64),
+    size: 10,
+    mode: 0o644,
+    atimeMs: 1000,
+    mtimeMs: 1000,
+  };
 
   function deltaJson(entries: unknown[]): string {
     return JSON.stringify({
@@ -532,7 +539,12 @@ describe('deserializeCacheDeltaManifest', () => {
 
   it("rejects a 'deleted' entry that has a non-null current snapshot", () => {
     const json = deltaJson([
-      { relativePath: 'caches/a.jar', changeType: 'deleted', previous: snapshot, current: snapshot },
+      {
+        relativePath: 'caches/a.jar',
+        changeType: 'deleted',
+        previous: snapshot,
+        current: snapshot,
+      },
     ]);
     expect(() => deserializeCacheDeltaManifest(json)).toThrow(/Invalid cache delta manifest/u);
   });
@@ -571,7 +583,16 @@ describe('deserializeCacheManifest — schema validation', () => {
       partitions: [
         {
           partitionId: 'modules',
-          entries: [{ relativePath: '../outside', contentSha256: 'a'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 }],
+          entries: [
+            {
+              relativePath: '../outside',
+              contentSha256: 'a'.repeat(64),
+              size: 10,
+              mode: 0o644,
+              atimeMs: 1000,
+              mtimeMs: 1000,
+            },
+          ],
         },
       ],
     });
@@ -587,8 +608,22 @@ describe('deserializeCacheManifest — schema validation', () => {
         {
           partitionId: 'modules',
           entries: [
-            { relativePath: 'caches/z.jar', contentSha256: 'z'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 },
-            { relativePath: 'caches/a.jar', contentSha256: 'a'.repeat(64), size: 10, mode: 0o644, atimeMs: 1000, mtimeMs: 1000 },
+            {
+              relativePath: 'caches/z.jar',
+              contentSha256: 'z'.repeat(64),
+              size: 10,
+              mode: 0o644,
+              atimeMs: 1000,
+              mtimeMs: 1000,
+            },
+            {
+              relativePath: 'caches/a.jar',
+              contentSha256: 'a'.repeat(64),
+              size: 10,
+              mode: 0o644,
+              atimeMs: 1000,
+              mtimeMs: 1000,
+            },
           ],
         },
       ],

@@ -26,6 +26,7 @@ import {
   loadTrustedOpenPgpPublicKeys,
   normalizePathForGpgCommand,
   resolveDefaultGpgCommand,
+  resolveValidatedGpgCommand,
   verifyDetachedOpenPgpSignature,
   type TrustedOpenPgpPublicKey,
 } from '../../../../src/build-tool/gradle/wrapper/signature';
@@ -68,7 +69,7 @@ describe('loadTrustedOpenPgpPublicKeys', () => {
 });
 
 describe('resolveDefaultGpgCommand', () => {
-  it('prefers an explicit environment override when provided', () => {
+  it('honours the env-var override on Windows and trims whitespace', () => {
     expect(
       resolveDefaultGpgCommand('win32', {
         BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: ' C:\\tools\\gnupg\\bin\\gpg.exe ',
@@ -76,9 +77,54 @@ describe('resolveDefaultGpgCommand', () => {
     ).toBe('C:\\tools\\gnupg\\bin\\gpg.exe');
   });
 
+  it('ignores the env-var override on non-Windows platforms', () => {
+    const envWithOverride = {
+      BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: '/tmp/evil-gpg',
+    };
+    expect(resolveDefaultGpgCommand('linux', envWithOverride)).toBe('gpg');
+    expect(resolveDefaultGpgCommand('darwin', envWithOverride)).toBe('gpg');
+  });
+
   it('falls back to platform defaults when no override is set', () => {
     expect(resolveDefaultGpgCommand('win32', {})).toBe('gpg.exe');
     expect(resolveDefaultGpgCommand('linux', {})).toBe('gpg');
+    expect(resolveDefaultGpgCommand('darwin', {})).toBe('gpg');
+  });
+});
+
+describe('resolveValidatedGpgCommand', () => {
+  it('returns gpg on non-Windows without any filesystem checks', async () => {
+    // Should resolve immediately without hitting the filesystem.
+    await expect(
+      resolveValidatedGpgCommand('linux', {
+        BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: '/tmp/evil-gpg',
+      }),
+    ).resolves.toBe('gpg');
+    await expect(
+      resolveValidatedGpgCommand('darwin', {
+        BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: '/tmp/evil-gpg',
+      }),
+    ).resolves.toBe('gpg');
+  });
+
+  it('returns gpg.exe on Windows when no override is set, without filesystem checks', async () => {
+    await expect(resolveValidatedGpgCommand('win32', {})).resolves.toBe('gpg.exe');
+  });
+
+  it('rejects a Windows override that is not an absolute path', async () => {
+    await expect(
+      resolveValidatedGpgCommand('win32', {
+        BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: 'gpg.exe',
+      }),
+    ).rejects.toThrow(/must be an absolute path/u);
+  });
+
+  it('rejects a Windows override pointing to a nonexistent path', async () => {
+    await expect(
+      resolveValidatedGpgCommand('win32', {
+        BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: 'C:\\nonexistent\\path\\gpg.exe',
+      }),
+    ).rejects.toThrow(/does not exist or cannot be resolved/u);
   });
 });
 

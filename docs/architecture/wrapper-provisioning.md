@@ -76,8 +76,9 @@ A detached ASCII-armored `.asc` signature is fetched from `services.gradle.org` 
 against a pinned allowlist of known Gradle signing keys in `src/gradle/wrapper/signature.ts`.
 
 Verification uses GnuPG with a fresh ephemeral home directory so no system keyring is modified.
-The GnuPG binary defaults to `gpg`; override with the `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND`
-environment variable when multiple `gpg` variants exist on the runner (common on Windows).
+The GnuPG binary being used is `gpg` on Linux and macOS. For Windows `gpg.exe` is being used;
+override with the `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` environment variable (only evaluated
+on Windows) when multiple `gpg` variants exist on the runner, which is common on Windows.
 
 ### Atomic write
 

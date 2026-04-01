@@ -870,7 +870,10 @@ describe('executePrepareAction', () => {
       const wrapperJarSha256 = sha256Hex(wrapperJarBytes);
 
       await mkdir(path.join(workspace, 'gradle', 'wrapper'), { recursive: true });
-      await writeFile(path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'), wrapperJarBytes);
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'),
+        wrapperJarBytes,
+      );
       await writeFile(
         path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
         [
@@ -948,7 +951,10 @@ describe('executePrepareAction', () => {
       const wrapperJarSha256 = sha256Hex(wrapperJarBytes);
 
       await mkdir(path.join(workspace, 'gradle', 'wrapper'), { recursive: true });
-      await writeFile(path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'), wrapperJarBytes);
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'),
+        wrapperJarBytes,
+      );
       await writeFile(
         path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
         [

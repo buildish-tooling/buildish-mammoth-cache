@@ -239,8 +239,6 @@ async function stageJob(
       MAVEN_USER_HOME: mavenUserHome,
       RUNNER_OS: normalizeRunnerOs(process.platform),
       RUNNER_ARCH: normalizeRunnerArch(process.arch),
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: jobName,
-      BUILDISH_MAMMOTH_CACHE_GITHUB_DEFAULT_BRANCH_OVERRIDE: 'main',
     },
   };
 }
@@ -342,6 +340,7 @@ async function createActionDependencies(
 
   const ciProvider = createGitHubPlatform({
     env: job.env,
+    githubJobNameInput: job.jobName,
     eventPayload: { repository: { default_branch: 'main' } },
   });
 

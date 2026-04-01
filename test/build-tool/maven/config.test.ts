@@ -302,7 +302,7 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
           readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
           {
             workspace,
-            readFileImpl: async (): Promise<string> => {
+            readFileImpl: async () => {
               throw new Error('disk error');
             },
           },
@@ -337,7 +337,7 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
           readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
           {
             workspace,
-            realpathImpl: async (): Promise<string> => {
+            realpathImpl: async () => {
               throw new Error('realpath failed');
             },
           },
@@ -404,17 +404,14 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
   // ------------------------------------------------------------------
 
   it('rejects a non-string value for a string-typed config field', async () => {
-    await withWorkspace(
-      { 'cfg.json': JSON.stringify({ 'job-mode': 42 }) },
-      async (workspace) => {
-        await expect(
-          resolveMavenActionInputsFromConfigFile(
-            readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
-            { workspace },
-          ),
-        ).rejects.toThrow(/must be a string/u);
-      },
-    );
+    await withWorkspace({ 'cfg.json': JSON.stringify({ 'job-mode': 42 }) }, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+          { workspace },
+        ),
+      ).rejects.toThrow(/must be a string/u);
+    });
   });
 });
 

@@ -153,6 +153,51 @@ only by the corresponding action and ignored (or rejected) by the other.
 - When omitted, the Gradle action falls back to `GITHUB_TOKEN` from the runner environment if available.
 - Never written to summaries or persisted post-action state.
 
+### `github-event-name`
+
+- Default: unset (the action reads `GITHUB_EVENT_NAME` from the runner environment)
+- **Reusable workflows only.** When a workflow is triggered via `workflow_call`, GitHub sets
+  `GITHUB_EVENT_NAME` to `workflow_call` rather than the original caller's event name. Pass
+  `${{ github.event_name }}` from the caller workflow to restore the correct value.
+- Affects `isPullRequest` detection and the default read-only behavior on pull-request events.
+- Example:
+  ```yaml
+  github-event-name: ${{ github.event_name }}
+  ```
+
+### `github-job-name`
+
+- Default: unset (the action reads `GITHUB_JOB` from the runner environment)
+- **Reusable workflows and matrix jobs.** Assigns a stable, predictable job name for cache
+  coordination and artifact naming, independent of the GitHub Actions job key or matrix label.
+- Example:
+  ```yaml
+  github-job-name: aggregator
+  ```
+
+### `github-ref-name`
+
+- Default: unset (the action resolves the ref name from `GITHUB_REF_NAME`, `GITHUB_REF`, and
+  the event payload)
+- **Reusable workflows only.** When a workflow is triggered via `workflow_call`, the ref context
+  visible inside the reusable workflow may differ from the caller's. Pass the resolved ref name
+  from the caller workflow to ensure cache keys use the correct branch or tag.
+- Example:
+  ```yaml
+  github-ref-name: ${{ github.ref_name }}
+  ```
+
+### `github-default-branch`
+
+- Default: unset (the action reads the default branch from the event payload or
+  `GITHUB_DEFAULT_BRANCH`)
+- **Reusable workflows only.** Pass the caller's default branch so that cache key fallbacks
+  target the correct base branch.
+- Example:
+  ```yaml
+  github-default-branch: ${{ github.event.repository.default_branch }}
+  ```
+
 ---
 
 ## Gradle-only inputs

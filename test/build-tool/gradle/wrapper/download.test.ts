@@ -24,6 +24,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HttpHeadersByHost } from '../../../../src/ci/types';
 import type { NormalizedGradleConfig } from '../../../../src/config/types';
 import {
+  MAX_CHECKSUM_RESPONSE_BYTES,
+  MAX_JAR_RESPONSE_BYTES,
+  MAX_SIGNATURE_RESPONSE_BYTES,
   deriveWrapperDownloadPlan,
   provisionWrapperJars,
 } from '../../../../src/build-tool/gradle/wrapper/download';
@@ -425,6 +428,151 @@ describe('provisionWrapperJars', () => {
         expect(fetchImpl).toHaveBeenCalledTimes(2);
         expect(logRetry).not.toHaveBeenCalled();
         expect(sleep).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it('rejects a checksum response whose Content-Length header exceeds the limit', async () => {
+    await withValidatedWrappers(
+      { 'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties() },
+      async ([wrapper]) => {
+        await expect(
+          provisionWrapperJars([wrapper], {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response('a'.repeat(64), {
+                  status: 200,
+                  headers: { 'content-length': String(MAX_CHECKSUM_RESPONSE_BYTES + 1) },
+                });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+          }),
+        ).rejects.toThrow(/Content-Length.*exceeds the.*-byte limit/u);
+      },
+    );
+  });
+
+  it('rejects a signature response whose Content-Length header exceeds the limit', async () => {
+    await withValidatedWrappers(
+      { 'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties() },
+      async ([wrapper]) => {
+        const jarBytes = Buffer.from('verified wrapper jar');
+        const jarSha256 = sha256(jarBytes);
+        await expect(
+          provisionWrapperJars([wrapper], {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${jarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, {
+                  status: 200,
+                  headers: { 'content-length': String(MAX_SIGNATURE_RESPONSE_BYTES + 1) },
+                });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+          }),
+        ).rejects.toThrow(/Content-Length.*exceeds the.*-byte limit/u);
+      },
+    );
+  });
+
+  it('rejects a wrapper JAR response whose Content-Length header exceeds the limit', async () => {
+    await withValidatedWrappers(
+      { 'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties() },
+      async ([wrapper]) => {
+        const jarBytes = Buffer.from('verified wrapper jar');
+        const jarSha256 = sha256(jarBytes);
+        await expect(
+          provisionWrapperJars([wrapper], {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${jarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              if (url.endsWith('/v8.14.0/gradle/wrapper/gradle-wrapper.jar')) {
+                return new Response(jarBytes, {
+                  status: 200,
+                  headers: { 'content-length': String(MAX_JAR_RESPONSE_BYTES + 1) },
+                });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+          }),
+        ).rejects.toThrow(/Content-Length.*exceeds the.*-byte limit/u);
+      },
+    );
+  });
+
+  it('rejects a checksum response body that exceeds the limit during streaming when no Content-Length is present', async () => {
+    await withValidatedWrappers(
+      { 'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties() },
+      async ([wrapper]) => {
+        await expect(
+          provisionWrapperJars([wrapper], {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                // Stream MAX_CHECKSUM_RESPONSE_BYTES + 1 bytes with no Content-Length header.
+                const oversizedStream = new ReadableStream<Uint8Array>({
+                  start(controller) {
+                    controller.enqueue(new Uint8Array(MAX_CHECKSUM_RESPONSE_BYTES + 1));
+                    controller.close();
+                  },
+                });
+                return new Response(oversizedStream, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+          }),
+        ).rejects.toThrow(/exceeded the.*-byte limit during streaming/u);
+      },
+    );
+  });
+
+  it('rejects a wrapper JAR response body that exceeds the limit during streaming when no Content-Length is present', async () => {
+    await withValidatedWrappers(
+      { 'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties() },
+      async ([wrapper]) => {
+        const jarSha256 = 'a'.repeat(64);
+        await expect(
+          provisionWrapperJars([wrapper], {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                return new Response(`${jarSha256}\n`, { status: 200 });
+              }
+              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+              }
+              if (url.endsWith('/v8.14.0/gradle/wrapper/gradle-wrapper.jar')) {
+                // Stream MAX_JAR_RESPONSE_BYTES + 1 bytes with no Content-Length header.
+                const chunkSize = 1024 * 1024; // 1 MiB chunks
+                const chunkCount = Math.floor(MAX_JAR_RESPONSE_BYTES / chunkSize) + 1;
+                const oversizedStream = new ReadableStream<Uint8Array>({
+                  start(controller) {
+                    for (let i = 0; i < chunkCount; i++) {
+                      controller.enqueue(new Uint8Array(chunkSize));
+                    }
+                    controller.close();
+                  },
+                });
+                return new Response(oversizedStream, { status: 200 });
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+          }),
+        ).rejects.toThrow(/exceeded the.*-byte limit during streaming/u);
       },
     );
   });

@@ -116,7 +116,34 @@ inputs:
     required: false
   github-job-check-run-id:
     description: >-
-      Optional internal/testing override for the current GitHub job check-run ID.
+      Optional override for the current GitHub job check-run ID.
+      When set, job URLs point at that specific check run instead of the workflow
+      run page.
+    required: false
+  github-event-name:
+    description: >-
+      Optional override for the triggering event name. Required in reusable workflows
+      invoked via `workflow_call`, where GitHub sets `GITHUB_EVENT_NAME` to `workflow_call`
+      instead of the original caller's event name. Pass `${{ github.event_name }}` from
+      the caller workflow. Typical values: `push`, `pull_request`.
+    required: false
+  github-job-name:
+    description: >-
+      Optional override for the job name used in cache coordination and artifact naming.
+      Use in reusable workflows to assign a stable, predictable job name independent of
+      the GitHub Actions job key or matrix label.
+    required: false
+  github-ref-name:
+    description: >-
+      Optional override for the resolved ref name used in cache keys. Required in reusable
+      workflows invoked via `workflow_call` to propagate the caller's ref name. Pass
+      `${{ github.ref_name }}` (or an equivalent resolved value) from the caller workflow.
+    required: false
+  github-default-branch:
+    description: >-
+      Optional override for the repository's default branch name used in cache key fallbacks.
+      Required in reusable workflows invoked via `workflow_call` to propagate the caller's
+      default branch. Pass `${{ github.event.repository.default_branch }}` from the caller.
     required: false
 outputs:
   status:

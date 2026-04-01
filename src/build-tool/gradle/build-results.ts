@@ -21,7 +21,7 @@ import { z } from 'zod';
 
 import type { CiJobContext } from '../../ci';
 import { isMissingPathError } from '../../util/fs';
-import { escapeSummaryText } from '../../util/html';
+import { createHtmlLink, escapeSummaryText } from '../../util/html';
 import { parseSerializedJson, parseWithZod } from '../../util/serialization';
 
 const CAPTURE_DIRECTORY_NAME = '.buildish-mammoth-cache';
@@ -266,7 +266,7 @@ export function createGradleBuildSummaryLines(report: GradleBuildReport): readon
 function createBuildSummaryLines(build: CapturedGradleBuild, index: number): readonly string[] {
   const title = `${displayText(build.rootProjectName, '(unnamed root project)')} — ${displayText(build.requestedTasks, '(default tasks)')}`;
   const buildScanSummaryLine = build.buildScanUri
-    ? `  - Build Scan: published (${build.buildScanUri})`
+    ? `  - Build Scan: ${createHtmlLink(build.buildScanUri, 'published')}`
     : build.buildScanFailed
       ? '  - Build Scan: attempted but failed'
       : '  - Build Scan: not attempted';
@@ -336,9 +336,60 @@ function validateCapturedBuildScanFile(contents: string, filePath: string): Capt
   );
 }
 
+/**
+ * Characters that must never appear in a `captureRoot` path before it is embedded into
+ * generated Groovy source. Their presence is a strong indicator of environment tampering.
+ *
+ * - `$`  — GString interpolation marker; harmless in single-quoted strings but suspicious.
+ * - `` ` `` — Groovy slashy / multiline string marker; harmless here but suspicious.
+ * - `\n`, `\r` — Newlines are invalid in filesystem paths on all supported platforms.
+ * - `\0` — NUL bytes are invalid in filesystem paths everywhere.
+ */
+const SUSPICIOUS_CAPTURE_ROOT_CHARS = /[$`\n\r\0]/u;
+
+/**
+ * Throws if `captureRoot` contains characters that cannot legitimately appear in a
+ * CI temp-directory path. This is a defence-in-depth check; the primary injection
+ * protection comes from {@link toGroovySingleQuotedString}.
+ *
+ * Exported so that it can be exercised directly in unit tests.
+ */
+export function validateCaptureRootPath(captureRoot: string): void {
+  if (SUSPICIOUS_CAPTURE_ROOT_CHARS.test(captureRoot)) {
+    throw new Error(
+      `The build capture root path '${captureRoot}' contains characters that are not ` +
+        `permitted in a CI temp-directory path. ` +
+        `Check that RUNNER_TEMP does not include shell-expansion markers or control characters.`,
+    );
+  }
+}
+
+/**
+ * Encodes a filesystem path as a **single-quoted** Groovy string literal.
+ *
+ * Single-quoted strings in Groovy are plain {@code java.lang.String} values — they do NOT
+ * support `${…}` GString interpolation. This makes them safe to construct from values that
+ * originate in the environment (such as `RUNNER_TEMP`), where an attacker might attempt to
+ * inject Groovy expressions via `${…}` sequences.
+ *
+ * The only characters with special meaning inside a Groovy single-quoted string are the
+ * backslash escape (`\\`) and the closing delimiter (`\'`); both are escaped here.
+ *
+ * Exported so that it can be exercised directly in unit tests.
+ */
+export function toGroovySingleQuotedString(value: string): string {
+  const escaped = value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+  return `'${escaped}'`;
+}
+
 function resolveCaptureRoot(context: BuildCaptureContext): string | null {
   const tempDirectory = context.tempDirectory?.trim();
-  return tempDirectory ? path.join(tempDirectory, CAPTURE_DIRECTORY_NAME) : null;
+  if (!tempDirectory) {
+    return null;
+  }
+  const captureRoot = path.join(tempDirectory, CAPTURE_DIRECTORY_NAME);
+  validateCaptureRootPath(captureRoot);
+  return captureRoot;
 }
 
 function displayText(value: string, fallback: string): string {
@@ -355,7 +406,9 @@ function truncateSummaryText(value: string, maxLength: number): string {
 }
 
 function createInitScriptContents(captureRoot: string | null): string {
-  const captureRootLiteral = captureRoot ? JSON.stringify(captureRoot) : 'null';
+  // Use a single-quoted Groovy string (not a GString) so that ${…} sequences in the path
+  // cannot be interpreted as Groovy expression interpolation.
+  const captureRootLiteral = captureRoot ? toGroovySingleQuotedString(captureRoot) : 'null';
 
   return `/*
  * Apache Buildish Mammoth Cache for Gradle — per-invocation build result capture
@@ -475,7 +528,9 @@ class ScanResultsWriter {
 }
 
 function createServicePluginContents(captureRoot: string | null): string {
-  const captureRootLiteral = captureRoot ? JSON.stringify(captureRoot) : 'null';
+  // Use a single-quoted Groovy string (not a GString) so that ${…} sequences in the path
+  // cannot be interpreted as Groovy expression interpolation.
+  const captureRootLiteral = captureRoot ? toGroovySingleQuotedString(captureRoot) : 'null';
 
   return `import org.gradle.api.provider.Property
 import org.gradle.api.services.BuildService

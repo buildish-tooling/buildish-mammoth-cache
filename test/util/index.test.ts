@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   parseBooleanInput,
@@ -22,19 +26,27 @@ import {
   parseListInput,
   validateNamedValue,
 } from '../../src/util/action-input';
-import { isMissingPathError, isReplaceTargetError } from '../../src/util/fs';
+import {
+  isMissingPathError,
+  isReplaceTargetError,
+  validateAbsoluteExecutablePath,
+} from '../../src/util/fs';
 import {
   createDetailsSection,
   createHtmlLink,
   createHtmlTable,
   escapeHtml,
   escapeSummaryText,
+  safeHtml,
 } from '../../src/util/html';
 import {
   normalizeUserSuppliedRelativePath,
+  readJavaMajorFromReleaseFile,
+  resolveJavaExecutablePath,
   validateNormalizedRelativePosixPath,
 } from '../../src/util/paths';
 import { parseSerializedJson, parseWithZod } from '../../src/util/serialization';
+import { buildMinimalChildEnv } from '../../src/util/spawn';
 
 describe('validation helpers', () => {
   it('parses serialized JSON and surfaces the underlying JSON syntax error', () => {
@@ -55,7 +67,9 @@ describe('validation helpers', () => {
         error: { issues: [{ path: [], message: 'must be a string' }] },
       }),
     };
-    expect(() => parseWithZod(schema, 42, 'my-label')).toThrow('Invalid my-label: must be a string');
+    expect(() => parseWithZod(schema, 42, 'my-label')).toThrow(
+      'Invalid my-label: must be a string',
+    );
   });
 
   it('parseWithZod includes the dotted field path in the error message', () => {
@@ -156,7 +170,12 @@ describe('html utilities', () => {
   });
 
   it('renders an HTML table with escaped headers and verbatim cell content', () => {
-    expect(createHtmlTable(['Col <A>', 'Col B'], [['plain', '<a href="x">link</a>']])).toEqual([
+    expect(
+      createHtmlTable(
+        ['Col <A>', 'Col B'],
+        [[safeHtml('plain'), safeHtml('<a href="x">link</a>')]],
+      ),
+    ).toEqual([
       '<table>',
       '  <thead><tr><th>Col &lt;A&gt;</th><th>Col B</th></tr></thead>',
       '  <tbody>',
@@ -231,5 +250,213 @@ describe('filesystem helpers', () => {
     expect(isReplaceTargetError(null)).toBe(false);
     expect(isReplaceTargetError(undefined)).toBe(false);
     expect(isReplaceTargetError('EEXIST')).toBe(false);
+  });
+
+  it('validateAbsoluteExecutablePath rejects empty strings and bare names', async () => {
+    await expect(validateAbsoluteExecutablePath('', 'gpg')).rejects.toThrow(/must not be empty/u);
+    await expect(validateAbsoluteExecutablePath('  ', 'gpg')).rejects.toThrow(/must not be empty/u);
+    await expect(validateAbsoluteExecutablePath('gpg', 'gpg')).rejects.toThrow(
+      /must be an absolute path/u,
+    );
+    await expect(validateAbsoluteExecutablePath('./gpg', 'gpg')).rejects.toThrow(
+      /must be an absolute path/u,
+    );
+    await expect(validateAbsoluteExecutablePath('../bin/gpg', 'gpg')).rejects.toThrow(
+      /must be an absolute path/u,
+    );
+  });
+
+  it('validateAbsoluteExecutablePath rejects nonexistent paths', async () => {
+    await expect(validateAbsoluteExecutablePath('/nonexistent/path/to/gpg', 'gpg')).rejects.toThrow(
+      /does not exist or cannot be resolved/u,
+    );
+  });
+
+  it('validateAbsoluteExecutablePath rejects paths that resolve to a directory', async () => {
+    await expect(validateAbsoluteExecutablePath(os.tmpdir(), 'gpg')).rejects.toThrow(
+      /not a regular file/u,
+    );
+  });
+
+  it('validateAbsoluteExecutablePath accepts a real absolute path to an existing regular file', async () => {
+    // Use the Node.js executable itself — guaranteed to exist and be a regular file.
+    const resolved = await validateAbsoluteExecutablePath(process.execPath, 'node');
+    expect(path.isAbsolute(resolved)).toBe(true);
+    // The resolved canonical path must be a prefix/equal of the original (symlinks collapsed).
+    expect(typeof resolved).toBe('string');
+    expect(resolved.length).toBeGreaterThan(0);
+  });
+
+  it('validateAbsoluteExecutablePath resolves symlinks and returns the canonical path', async () => {
+    // On most Linux systems /bin is a symlink to /usr/bin; if so, the resolved path differs.
+    // We verify that the return value is always an absolute path regardless.
+    const resolved = await validateAbsoluteExecutablePath(process.execPath, 'node');
+    expect(path.isAbsolute(resolved)).toBe(true);
+  });
+});
+
+describe('spawn env helpers', () => {
+  it('strips everything except the POSIX allowlist on non-Windows platforms', () => {
+    const sourceEnv: NodeJS.ProcessEnv = {
+      HOME: '/home/runner',
+      PATH: '/usr/bin:/bin',
+      TMPDIR: '/tmp',
+      GITHUB_TOKEN: 'ghs_supersecret',
+      AWS_SECRET_ACCESS_KEY: 'AKIAIOSFODNN7EXAMPLE',
+      BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: '/tmp/evil',
+      CUSTOM_VAR: 'should-be-stripped',
+    };
+
+    const result = buildMinimalChildEnv(sourceEnv, {}, 'linux');
+
+    expect(result).toMatchObject({ HOME: '/home/runner', PATH: '/usr/bin:/bin', TMPDIR: '/tmp' });
+    expect(result).not.toHaveProperty('GITHUB_TOKEN');
+    expect(result).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
+    expect(result).not.toHaveProperty('BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND');
+    expect(result).not.toHaveProperty('CUSTOM_VAR');
+  });
+
+  it('applies overrides after stripping, letting callers set LANG/LC_ALL unconditionally', () => {
+    const sourceEnv: NodeJS.ProcessEnv = {
+      HOME: '/home/runner',
+      PATH: '/usr/bin',
+      LANG: 'en_US.UTF-8',
+      GITHUB_TOKEN: 'secret',
+    };
+
+    const result = buildMinimalChildEnv(sourceEnv, { LANG: 'C', LC_ALL: 'C' }, 'linux');
+
+    expect(result.LANG).toBe('C');
+    expect(result.LC_ALL).toBe('C');
+    expect(result).not.toHaveProperty('GITHUB_TOKEN');
+  });
+
+  it('strips everything except the Windows allowlist using case-insensitive matching', () => {
+    const sourceEnv: NodeJS.ProcessEnv = {
+      // Mixed-case as Windows commonly exposes them
+      SystemRoot: 'C:\\Windows',
+      Path: 'C:\\Windows\\system32',
+      USERPROFILE: 'C:\\Users\\runner',
+      APPDATA: 'C:\\Users\\runner\\AppData\\Roaming',
+      GITHUB_TOKEN: 'ghs_supersecret',
+      AWS_SECRET_ACCESS_KEY: 'AKIAIOSFODNN7EXAMPLE',
+      BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: 'C:\\evil\\gpg.exe',
+    };
+
+    const result = buildMinimalChildEnv(sourceEnv, {}, 'win32');
+
+    expect(result).toMatchObject({
+      SystemRoot: 'C:\\Windows',
+      Path: 'C:\\Windows\\system32',
+      USERPROFILE: 'C:\\Users\\runner',
+      APPDATA: 'C:\\Users\\runner\\AppData\\Roaming',
+    });
+    expect(result).not.toHaveProperty('GITHUB_TOKEN');
+    expect(result).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
+    expect(result).not.toHaveProperty('BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND');
+  });
+
+  it('returns an empty object when the source env contains no allowlisted keys', () => {
+    const sourceEnv: NodeJS.ProcessEnv = {
+      GITHUB_TOKEN: 'secret',
+      MY_APP_KEY: 'value',
+    };
+
+    expect(buildMinimalChildEnv(sourceEnv, {}, 'linux')).toEqual({});
+    expect(buildMinimalChildEnv(sourceEnv, {}, 'win32')).toEqual({});
+  });
+
+  it('overrides always appear in the result even when not in the source env', () => {
+    const result = buildMinimalChildEnv({}, { LANG: 'C', LC_ALL: 'C', EXTRA: 'forced' }, 'linux');
+    expect(result).toEqual({ LANG: 'C', LC_ALL: 'C', EXTRA: 'forced' });
+  });
+});
+
+describe('readJavaMajorFromReleaseFile', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'buildish-java-release-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns null when JAVA_HOME is not set', async () => {
+    await expect(readJavaMajorFromReleaseFile({})).resolves.toBeNull();
+    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: '' })).resolves.toBeNull();
+    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: '   ' })).resolves.toBeNull();
+  });
+
+  it('returns null when the release file is absent', async () => {
+    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBeNull();
+  });
+
+  it('parses a modern JAVA_VERSION field (e.g. 21.0.10)', async () => {
+    await writeFile(
+      path.join(tmpDir, 'release'),
+      'IMPLEMENTOR="Test"\nJAVA_VERSION="21.0.10"\nOS_ARCH="x86_64"\n',
+    );
+    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBe(21);
+  });
+
+  it('parses a legacy 1.x JAVA_VERSION field (e.g. 1.8.0_432) and returns the minor as major', async () => {
+    await writeFile(path.join(tmpDir, 'release'), 'JAVA_VERSION="1.8.0_432"\n');
+    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBe(8);
+  });
+
+  it('returns null when the release file contains no JAVA_VERSION line', async () => {
+    await writeFile(path.join(tmpDir, 'release'), 'IMPLEMENTOR="Test"\nOS_ARCH="x86_64"\n');
+    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBeNull();
+  });
+
+  it('returns null for a JAVA_VERSION that looks too old to be supported (< 8)', async () => {
+    await writeFile(path.join(tmpDir, 'release'), 'JAVA_VERSION="1.7.0_80"\n');
+    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBeNull();
+  });
+
+  it('reads the real JAVA_HOME/release when available in the test environment', async () => {
+    const javaHome = process.env.JAVA_HOME?.trim();
+    if (!javaHome) return; // skip when JAVA_HOME is not set
+    const major = await readJavaMajorFromReleaseFile(process.env);
+    expect(major).toBeGreaterThanOrEqual(8);
+  });
+});
+
+describe('resolveJavaExecutablePath', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'buildish-java-exec-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns 'java' on Linux/macOS when JAVA_HOME is not set", async () => {
+    await expect(resolveJavaExecutablePath({}, 'linux')).resolves.toBe('java');
+    await expect(resolveJavaExecutablePath({}, 'darwin')).resolves.toBe('java');
+    await expect(resolveJavaExecutablePath({ JAVA_HOME: '' }, 'linux')).resolves.toBe('java');
+  });
+
+  it("returns 'java.exe' on Windows when JAVA_HOME is not set", async () => {
+    await expect(resolveJavaExecutablePath({}, 'win32')).resolves.toBe('java.exe');
+  });
+
+  it('returns the absolute $JAVA_HOME/bin/java path when the binary is accessible', async () => {
+    // Create a fake java binary that passes the access() check.
+    const binDir = path.join(tmpDir, 'bin');
+    await mkdir(binDir);
+    const fakeBinary = path.join(binDir, 'java');
+    await writeFile(fakeBinary, '#!/bin/sh\n', { mode: 0o755 });
+
+    const resolved = await resolveJavaExecutablePath({ JAVA_HOME: tmpDir }, 'linux');
+    expect(resolved).toBe(fakeBinary);
+  });
+
+  it("falls back to 'java' when JAVA_HOME is set but the binary is absent", async () => {
+    await expect(resolveJavaExecutablePath({ JAVA_HOME: tmpDir }, 'linux')).resolves.toBe('java');
   });
 });

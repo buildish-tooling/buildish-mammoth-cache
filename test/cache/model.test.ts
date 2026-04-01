@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createCacheModel,
@@ -200,10 +200,15 @@ describe('createCachePartitions', () => {
   });
 });
 
+// Env that disables JAVA_HOME-based detection so tests relying on captureCommandOutput
+// injection are not accidentally short-circuited by the local developer's JAVA_HOME.
+const envWithoutJavaHome: NodeJS.ProcessEnv = { ...process.env, JAVA_HOME: '' };
+
 describe('createCacheModel', () => {
   it('derives the cache model from the normalized config and ci context', async () => {
     const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
       captureCommandOutput: async () => 'openjdk version "21.0.4" 2024-07-16\n',
+      env: envWithoutJavaHome,
     });
 
     expect(cacheModel.cacheKey).toMatch(
@@ -222,11 +227,31 @@ describe('createCacheModel', () => {
     );
   });
 
+  it('reads the Java version from $JAVA_HOME/release without spawning a subprocess', async () => {
+    // Use the real JAVA_HOME from the test environment if available.
+    const javaHome = process.env.JAVA_HOME?.trim();
+    if (!javaHome) {
+      return; // skip when JAVA_HOME is not set in the test environment
+    }
+
+    const captureCommandOutput = vi.fn(async () => {
+      throw new Error('captureCommandOutput should not be called when release file is present');
+    });
+
+    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
+      captureCommandOutput,
+    });
+
+    expect(cacheModel.javaMajor).toBeGreaterThanOrEqual(8);
+    expect(captureCommandOutput).not.toHaveBeenCalled();
+  });
+
   it('changes the partition fingerprint and cache key when the partition layout changes', async () => {
     const captureCommandOutput = async () => 'openjdk version "21.0.4" 2024-07-16\n';
 
     const defaultModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
       captureCommandOutput,
+      env: envWithoutJavaHome,
     });
     const customizedConfig = {
       ...baseConfig,
@@ -243,7 +268,7 @@ describe('createCacheModel', () => {
       customizedConfig,
       baseCiContext,
       customizedAdapter,
-      { captureCommandOutput },
+      { captureCommandOutput, env: envWithoutJavaHome },
     );
 
     expect(customizedModel.partitions.map((partition) => partition.id)).toContain(
@@ -253,24 +278,27 @@ describe('createCacheModel', () => {
     expect(customizedModel.cacheKey).not.toBe(defaultModel.cacheKey);
   });
 
-  it('fails hard with an actionable message when no Java runtime is available', async () => {
-    await expect(
-      createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
-        env: {
-          ...process.env,
-          JAVA_BIN: '__cache_gradle_missing_java_binary__',
-        },
-      }),
-    ).rejects.toThrow(/No Java runtime is available for Apache Buildish Mammoth Cache for Gradle/);
+  it('sets javaMajor to null and uses 0 in the cache key when no Java runtime is available', async () => {
+    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
+      captureCommandOutput: async () => {
+        throw new Error('ENOENT: java not found');
+      },
+      env: envWithoutJavaHome,
+    });
+
+    expect(cacheModel.javaMajor).toBeNull();
+    expect(cacheModel.cacheKey).toMatch(/-0-linux-/u);
   });
 
-  it('preserves non-missing Java detection failures as probe errors', async () => {
-    await expect(
-      createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
-        captureCommandOutput: async () => {
-          throw new Error("'java -version' failed with exit code 2.");
-        },
-      }),
-    ).rejects.toThrow(/Failed to detect the Java runtime using 'java -version'/);
+  it('sets javaMajor to null when java -version exits non-zero', async () => {
+    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
+      captureCommandOutput: async () => {
+        throw new Error("'java -version' failed with exit code 2.");
+      },
+      env: envWithoutJavaHome,
+    });
+
+    expect(cacheModel.javaMajor).toBeNull();
+    expect(cacheModel.cacheKey).toMatch(/-0-linux-/u);
   });
 });

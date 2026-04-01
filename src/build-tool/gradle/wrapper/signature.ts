@@ -19,6 +19,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { validateAbsoluteExecutablePath } from '../../../util/fs';
+import { buildMinimalChildEnv } from '../../../util/spawn';
+
 /**
  * A pinned OpenPGP public key used to verify Gradle wrapper detached signatures.
  *
@@ -101,6 +104,8 @@ f7TkwC6aybc=
 
 interface GpgCommandOptions {
   readonly command?: string;
+  /** Environment variable map used for `RUNNER_TEMP` resolution; defaults to `process.env`. */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 interface CompletedCommand {
@@ -112,23 +117,81 @@ interface CompletedCommand {
 const WINDOWS_ABSOLUTE_PATH_PATTERN = /^([A-Za-z]):[\\/](.*)$/u;
 
 let gradleTrustedPublicKeysPromise: Promise<readonly TrustedOpenPgpPublicKey[]> | undefined;
+let validatedGpgCommandPromise: Promise<string> | undefined;
 
 /**
- * Resolves the GnuPG executable used for detached-signature verification.
+ * Resolves the GnuPG executable name used for detached-signature verification.
  *
- * Windows CI may need to force a non-default `gpg.exe` path because Git for
- * Windows can expose multiple binaries with different path semantics.
+ * On Windows, `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` may be set to an
+ * absolute path when the CI runner has multiple GPG installations (e.g. Git for
+ * Windows MSYS `gpg.exe` alongside Gpg4win). The override is **ignored on
+ * non-Windows platforms** where `gpg` is reliably on `PATH` and the env-var
+ * override would only add unnecessary attack surface.
+ *
+ * This function is synchronous and returns the raw string value. Use
+ * {@link resolveValidatedGpgCommand} to also validate that a Windows override
+ * points to an existing regular file before it is passed to `spawn()`.
  */
 export function resolveDefaultGpgCommand(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const override = env.BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND?.trim();
-  if (override) {
-    return override;
+  if (platform === 'win32') {
+    const override = env.BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND?.trim();
+    if (override) {
+      return override;
+    }
   }
 
   return platform === 'win32' ? 'gpg.exe' : 'gpg';
+}
+
+/**
+ * Resolves and validates the GnuPG command for the current process.
+ *
+ * On non-Windows platforms this always returns `'gpg'`. On Windows, when
+ * `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` is set, the value is validated
+ * via {@link validateAbsoluteExecutablePath}: it must be an absolute path that
+ * resolves (through all symlinks) to an existing regular file. The canonical
+ * resolved path is returned and cached for the lifetime of the process so that
+ * filesystem validation is performed at most once per action run.
+ *
+ * @throws When the Windows override is set but fails path validation.
+ */
+export async function resolveValidatedGpgCommand(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  // On non-Windows platforms the override is ignored and 'gpg' is always used;
+  // no filesystem validation is required because 'gpg' is on PATH.
+  if (platform !== 'win32') {
+    return 'gpg';
+  }
+
+  const override = env.BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND?.trim();
+
+  // No override: use the Windows default 'gpg.exe'; PATH resolution at spawn time suffices.
+  if (!override) {
+    return 'gpg.exe';
+  }
+
+  // An override is set: it must be an absolute path to an existing regular file.
+  // Cache the validated result when using the real process environment so that
+  // repeated GPG invocations within one action run do not re-stat the binary.
+  // When a custom env is injected (tests), skip the module-level cache to avoid
+  // cross-test collisions.
+  if (env === process.env) {
+    validatedGpgCommandPromise ??= validateAbsoluteExecutablePath(
+      override,
+      'BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND',
+    );
+    return await validatedGpgCommandPromise;
+  }
+
+  return await validateAbsoluteExecutablePath(
+    override,
+    'BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND',
+  );
 }
 
 /**
@@ -189,6 +252,7 @@ export async function loadTrustedOpenPgpPublicKeys(
       const actualFingerprint = await readArmoredKeyFingerprint(
         trustedKey.armoredKey,
         options.command,
+        options.env,
       );
 
       if (actualFingerprint !== expectedFingerprint) {
@@ -284,7 +348,7 @@ export async function verifyDetachedOpenPgpSignature(
         `Detached signature verification failed for ${resourceDescription}: ${formatCommandDiagnostics(verificationResult, 'signature was not valid.')}`,
       );
     }
-  });
+  }, options.env);
 }
 
 /**
@@ -320,6 +384,7 @@ function normalizeFingerprint(value: string): string {
 async function readArmoredKeyFingerprint(
   armoredKey: string,
   command: string | undefined,
+  env?: NodeJS.ProcessEnv,
 ): Promise<string> {
   return await withTemporaryGpgHome(async (gpgHome) => {
     const keyPath = path.join(gpgHome, 'trusted-key.asc');
@@ -355,11 +420,14 @@ async function readArmoredKeyFingerprint(
       throw new Error('Trusted OpenPGP key material did not expose a valid primary fingerprint.');
     }
     return fingerprint;
-  });
+  }, env);
 }
 
-async function withTemporaryGpgHome<T>(callback: (gpgHome: string) => Promise<T>): Promise<T> {
-  const parentDirectory = process.env.RUNNER_TEMP?.trim() || os.tmpdir();
+async function withTemporaryGpgHome<T>(
+  callback: (gpgHome: string) => Promise<T>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<T> {
+  const parentDirectory = env.RUNNER_TEMP?.trim() || os.tmpdir();
   const gpgHome = await mkdtemp(path.join(parentDirectory, 'buildish-mammoth-cache-gpg-'));
 
   try {
@@ -373,11 +441,11 @@ async function runCommand(
   command: string | undefined,
   args: readonly string[],
 ): Promise<CompletedCommand> {
-  const resolvedCommand = command?.trim() || resolveDefaultGpgCommand();
+  const resolvedCommand = command?.trim() || (await resolveValidatedGpgCommand());
 
   return await new Promise((resolve, reject) => {
     const child = spawn(resolvedCommand, [...args], {
-      env: { ...process.env, LANG: 'C', LC_ALL: 'C' },
+      env: buildMinimalChildEnv(process.env, { LANG: 'C', LC_ALL: 'C' }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

@@ -103,21 +103,23 @@ describe('createGitHubContext', () => {
     expect(context.safeRefName).toBe('release-2026.03');
   });
 
-  it('honors caller-context overrides for reusable workflow runs', () => {
+  it('honors action inputs for reusable workflow runs (workflow_call caller-context propagation)', () => {
+    // Simulate a reusable workflow: GITHUB_EVENT_NAME is 'workflow_call', but the caller
+    // passes its own context as action inputs so the action sees the real triggering event.
     const context = createGitHubContext({
       env: {
         GITHUB_EVENT_NAME: 'workflow_call',
         GITHUB_REPOSITORY: 'apache/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
-        BUILDISH_MAMMOTH_CACHE_GITHUB_EVENT_NAME_OVERRIDE: 'pull_request',
-        BUILDISH_MAMMOTH_CACHE_GITHUB_RESOLVED_REF_NAME_OVERRIDE: 'release/1.1',
-        BUILDISH_MAMMOTH_CACHE_GITHUB_DEFAULT_BRANCH_OVERRIDE: 'main',
-        BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: 'worker_a',
       },
       eventPayload: {
         repository: { default_branch: 'ignored-default' },
       },
+      githubEventNameInput: 'pull_request',
+      githubRefNameInput: 'release/1.1',
+      githubDefaultBranchInput: 'main',
+      githubJobNameInput: 'worker_a',
     });
 
     expect(context.eventName).toBe('pull_request');

@@ -21,6 +21,8 @@ import path from 'node:path';
 import type { CiJobContext } from '../ci';
 import type { BuildToolAdapter, BuiltInCachePartitionPreset } from '../build-tool/types';
 import type { ConfiguredCachePartitionInput, NormalizedActionConfig } from '../config/types';
+import { readJavaMajorFromReleaseFile, resolveJavaExecutablePath } from '../util/paths';
+import { buildMinimalChildEnv } from '../util/spawn';
 
 /**
  * Default cache key template used when the `cache-key-template` input is not set.
@@ -49,11 +51,12 @@ export interface CacheModel {
    */
   readonly cacheKey: string;
   /**
-   * The detected Java major version, derived from `java -version`.
+   * The detected Java major version, derived from `$JAVA_HOME/release` or `java -version`.
    *
-   * Must be an integer >= 8; versions below 8 are rejected during model creation.
+   * `null` when Java cannot be located at all; the cache key template renders this as `'0'`
+   * so that jobs where Java is unavailable do not collide with jobs running a real version.
    */
-  readonly javaMajor: number;
+  readonly javaMajor: number | null;
   /**
    * Normalized runner operating system, lower-cased by the CI adapter.
    *
@@ -245,16 +248,18 @@ export async function createCacheModel(
 export function renderCacheKey(
   config: NormalizedActionConfig,
   ciContext: CiJobContext,
-  javaMajor: number,
+  javaMajor: number | null,
   partitionFingerprint: string,
 ): string {
-  validateJavaMajor(javaMajor);
+  if (javaMajor !== null) {
+    validateJavaMajor(javaMajor);
+  }
   const template = config.cacheKeyTemplate ?? DEFAULT_CACHE_KEY_TEMPLATE;
   const placeholderValues: Record<string, string> = {
     cacheKeyPrefix: config.cacheKeyPrefix,
     schemaVersion: String(config.cacheSchemaVersion),
     partitionFingerprint,
-    javaMajor: String(javaMajor),
+    javaMajor: javaMajor !== null ? String(javaMajor) : '0',
     runnerOs: ciContext.runnerOs,
     runnerArch: ciContext.runnerArch,
     refName: ciContext.safeRefName,
@@ -366,28 +371,28 @@ export function createCachePartitions(
 async function detectJavaMajor(
   captureCommandOutput: CommandOutputCapture,
   env: NodeJS.ProcessEnv | undefined,
-): Promise<number> {
-  const javaCommand = env?.JAVA_BIN?.trim() || 'java';
-  let javaVersionOutput: string;
-
-  try {
-    javaVersionOutput = await captureCommandOutput(javaCommand, ['-version'], env);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-
-    if (!/ENOENT|not found/iu.test(message)) {
-      throw new Error(`Failed to detect the Java runtime using '${javaCommand} -version'.`, {
-        cause: error,
-      });
-    }
-
-    throw new Error(
-      `No Java runtime is available for Apache Buildish Mammoth Cache for Gradle. Install Java 8 or newer and make it available via '${javaCommand}' before running this action.`,
-      { cause: error },
-    );
+): Promise<number | null> {
+  // Prefer reading the $JAVA_HOME/release file: no process spawn, no PATH dependency.
+  const fromRelease = await readJavaMajorFromReleaseFile(env ?? process.env);
+  if (fromRelease !== null) {
+    return fromRelease;
   }
 
-  return parseJavaMajor(javaVersionOutput);
+  // Fall back to running java -version. Resolve via JAVA_HOME first, then PATH.
+  const javaCommand = await resolveJavaExecutablePath(env ?? process.env);
+  let javaVersionOutput: string;
+  try {
+    javaVersionOutput = await captureCommandOutput(javaCommand, ['-version'], env);
+  } catch {
+    // Java is not available at all; return null so callers can degrade gracefully.
+    return null;
+  }
+
+  try {
+    return parseJavaMajor(javaVersionOutput);
+  } catch {
+    return null;
+  }
 }
 
 async function captureCombinedOutput(
@@ -396,7 +401,7 @@ async function captureCombinedOutput(
   env: NodeJS.ProcessEnv | undefined,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env });
+    const child = spawn(command, args, { env: buildMinimalChildEnv(env ?? process.env) });
     let output = '';
 
     child.stdout.on('data', (chunk) => {

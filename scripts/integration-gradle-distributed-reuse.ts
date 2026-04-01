@@ -224,8 +224,6 @@ async function stageJob(
       GRADLE_USER_HOME: gradleUserHome,
       RUNNER_OS: normalizeRunnerOs(process.platform),
       RUNNER_ARCH: normalizeRunnerArch(process.arch),
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: jobName,
-      BUILDISH_MAMMOTH_CACHE_GITHUB_DEFAULT_BRANCH_OVERRIDE: 'main',
     },
   };
 }
@@ -333,6 +331,7 @@ async function createGitHubActionDependencies(
 
   const ciProvider = createGitHubPlatform({
     env: job.env,
+    githubJobNameInput: job.jobName,
     eventPayload: {
       repository: { default_branch: 'main' },
     },

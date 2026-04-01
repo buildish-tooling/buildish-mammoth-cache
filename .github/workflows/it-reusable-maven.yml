@@ -80,9 +80,6 @@ permissions:
 env:
   ACTION_DIRECTORY: .
   FIXTURE_SOURCE_DIRECTORY: test/fixtures/integration/maven-project
-  BUILDISH_MAMMOTH_CACHE_GITHUB_EVENT_NAME_OVERRIDE: ${{ inputs.caller-event-name }}
-  BUILDISH_MAMMOTH_CACHE_GITHUB_RESOLVED_REF_NAME_OVERRIDE: ${{ inputs.caller-resolved-ref-name }}
-  BUILDISH_MAMMOTH_CACHE_GITHUB_DEFAULT_BRANCH_OVERRIDE: ${{ inputs.caller-default-branch }}
 
 jobs:
   # Performs a deterministic same-job save -> wipe -> restore cycle using the action-generated
@@ -91,8 +88,6 @@ jobs:
     name: Linux Maven standalone round-trip (offline exact restore)
     if: inputs.run-writable-scenarios
     runs-on: ubuntu-latest
-    env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_standalone_round_trip
     defaults:
       run:
         shell: bash
@@ -114,6 +109,10 @@ jobs:
         with:
           base-directory: build/integration-fixtures/maven-standalone-round-trip
           cache-key-prefix: it-maven-standalone-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: maven_standalone_round_trip
 
       - name: Assert prepare outputs
         env:
@@ -173,8 +172,6 @@ jobs:
         worker:
           - { id: maven_worker_a, label: 'worker A', profile: worker-a }
           - { id: maven_worker_b, label: 'worker B', profile: worker-b }
-    env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: ${{ matrix.worker.id }}
     defaults:
       run:
         shell: bash
@@ -196,6 +193,10 @@ jobs:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: ${{ matrix.worker.id }}
 
       - name: Produce worker cache delta
         working-directory: build/integration-fixtures/${{ matrix.worker.id }}
@@ -209,8 +210,6 @@ jobs:
     if: inputs.run-writable-scenarios
     needs: [maven_workers]
     runs-on: ubuntu-latest
-    env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_aggregator
     defaults:
       run:
         shell: bash
@@ -234,6 +233,10 @@ jobs:
           job-mode: distributed-aggregator
           dependent-jobs: maven_worker_a,maven_worker_b
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: maven_aggregator
 
       - name: Verify worker A dependency (guava) resolves offline after delta merge
         working-directory: build/integration-fixtures/maven-aggregator
@@ -260,8 +263,6 @@ jobs:
     name: Linux Maven duplicate invocation guard (same-job safety)
     if: inputs.run-writable-scenarios
     runs-on: ubuntu-latest
-    env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_duplicate_invocation_guard
     defaults:
       run:
         shell: bash
@@ -283,6 +284,10 @@ jobs:
           base-directory: build/integration-fixtures/maven-duplicate-guard
           cache-enabled: false
           read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: maven_duplicate_invocation_guard
 
       - name: Duplicate action invocation is rejected
         id: duplicate_action
@@ -292,6 +297,10 @@ jobs:
           base-directory: build/integration-fixtures/maven-duplicate-guard
           cache-enabled: false
           read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: maven_duplicate_invocation_guard
 
       - name: Assert the duplicate invocation failed
         run: test "${STEPS_DUPLICATE_ACTION_OUTCOME}" = 'failure'
@@ -303,8 +312,6 @@ jobs:
     name: Maven pull request standalone (default read-only behavior)
     if: inputs.run-pr-scenarios
     runs-on: ubuntu-latest
-    env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_pull_request_read_only
     defaults:
       run:
         shell: bash
@@ -326,6 +333,10 @@ jobs:
         with:
           base-directory: build/integration-fixtures/maven-pull-request
           cache-key-prefix: it-maven-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: maven_pull_request_read_only
 
       - name: Run a read-only PR build
         working-directory: build/integration-fixtures/maven-pull-request
@@ -348,8 +359,6 @@ jobs:
     name: Maven cross-platform standalone smoke (${{ matrix.os }})
     if: inputs.run-cross-platform
     runs-on: ${{ matrix.os }}
-    env:
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: maven_standalone_cross_platform
     strategy:
       fail-fast: false
       matrix:
@@ -375,6 +384,10 @@ jobs:
           base-directory: build/integration-fixtures/maven-cross-platform-${{ matrix.os }}
           cache-key-prefix: it-maven-cross-platform-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-
           read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: maven_standalone_cross_platform
 
       - name: Verify Maven runs on this runner
         run: mvn --version

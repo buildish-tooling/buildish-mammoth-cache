@@ -650,7 +650,10 @@ describe('executeFinalizeAction', () => {
       // Write the build result directly to RUNNER_TEMP (where loadGradleBuildReport reads from),
       // with buildFailed: true — the writeCapturedBuildResult helper hardcodes buildFailed: false.
       const buildResultsDir = path.join(
-        workspace, 'runner-temp', '.buildish-mammoth-cache', 'build-results',
+        workspace,
+        'runner-temp',
+        '.buildish-mammoth-cache',
+        'build-results',
       );
       await mkdir(buildResultsDir, { recursive: true });
       await writeFile(
@@ -722,9 +725,7 @@ describe('executeFinalizeAction', () => {
         })),
       });
 
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({ status: 'read-only' }),
-      );
+      expect(status.deltaArtifactResult).toEqual(expect.objectContaining({ status: 'read-only' }));
       await expect(
         new FakeArtifactApi(path.join(workspace, 'artifact-store')).listArtifacts(),
       ).resolves.toHaveLength(0);

@@ -207,10 +207,7 @@ describe('validateTargetWrapperProperties', () => {
       },
       async (workspace) => {
         // Create a top-level symlink entry — the discovery must skip it.
-        await symlink(
-          path.join(workspace, 'real'),
-          path.join(workspace, 'link-to-real'),
-        );
+        await symlink(path.join(workspace, 'real'), path.join(workspace, 'link-to-real'));
 
         const wrappers = await validateTargetWrapperProperties(
           createConfig({
@@ -231,9 +228,9 @@ describe('validateTargetWrapperProperties', () => {
 
   it('rejects when the default wrapper properties file does not exist', async () => {
     await withWorkspace({}, async (workspace) => {
-      await expect(
-        validateTargetWrapperProperties(createConfig(), workspace),
-      ).rejects.toThrow(/does not exist inside the workspace/u);
+      await expect(validateTargetWrapperProperties(createConfig(), workspace)).rejects.toThrow(
+        /does not exist inside the workspace/u,
+      );
     });
   });
 
@@ -247,9 +244,9 @@ describe('validateTargetWrapperProperties', () => {
         const link = path.join(workspace, 'gradle/wrapper/gradle-wrapper.properties');
         await symlink(real, link);
 
-        await expect(
-          validateTargetWrapperProperties(createConfig(), workspace),
-        ).rejects.toThrow(/must not be a symbolic link/u);
+        await expect(validateTargetWrapperProperties(createConfig(), workspace)).rejects.toThrow(
+          /must not be a symbolic link/u,
+        );
       },
     );
   });
@@ -262,9 +259,9 @@ describe('validateTargetWrapperProperties', () => {
         'gradle/wrapper/gradle-wrapper.properties/placeholder': '',
       },
       async (workspace) => {
-        await expect(
-          validateTargetWrapperProperties(createConfig(), workspace),
-        ).rejects.toThrow(/must point to a regular file/u);
+        await expect(validateTargetWrapperProperties(createConfig(), workspace)).rejects.toThrow(
+          /must point to a regular file/u,
+        );
       },
     );
   });
@@ -281,9 +278,9 @@ describe('validateTargetWrapperProperties', () => {
         }),
       },
       async (workspace) => {
-        await expect(
-          validateTargetWrapperProperties(createConfig(), workspace),
-        ).rejects.toThrow(/invalid distributionSha256Sum/u);
+        await expect(validateTargetWrapperProperties(createConfig(), workspace)).rejects.toThrow(
+          /invalid distributionSha256Sum/u,
+        );
       },
     );
   });
@@ -297,9 +294,9 @@ describe('validateTargetWrapperProperties', () => {
     await withWorkspace(
       { 'gradle/wrapper/gradle-wrapper.properties': content },
       async (workspace) => {
-        await expect(
-          validateTargetWrapperProperties(createConfig(), workspace),
-        ).rejects.toThrow(/must define 'distributionUrl'/u);
+        await expect(validateTargetWrapperProperties(createConfig(), workspace)).rejects.toThrow(
+          /must define 'distributionUrl'/u,
+        );
       },
     );
   });

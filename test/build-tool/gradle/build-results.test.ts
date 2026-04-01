@@ -25,6 +25,8 @@ import {
   createGradleBuildSummaryLines,
   installGradleBuildResultCapture,
   loadGradleBuildReport,
+  toGroovySingleQuotedString,
+  validateCaptureRootPath,
 } from '../../../src/build-tool/gradle/build-results';
 
 describe('Gradle build reporting', () => {
@@ -156,10 +158,13 @@ describe('Gradle build reporting', () => {
     expect(summaryText).toContain('  - Build Scan: attempted but failed');
     expect(lines.some((line) => line.startsWith('- Build 1: demo'))).toBe(true);
     expect(lines.some((line) => line.includes('build') && line.includes('scan'))).toBe(true);
+    // The build scan URI is rendered as an HTML link so that Markdown-special characters
+    // inside the URL (e.g. '&', '(', ')') cannot break surrounding list-item formatting.
     expect(
       lines.some(
         (line) =>
-          line === '  - Build Scan: published (https://scans.gradle.com/s/local-it-published)',
+          line ===
+          '  - Build Scan: <a href="https://scans.gradle.com/s/local-it-published">published</a>',
       ),
     ).toBe(true);
     expect(lines.some((line) => line.startsWith('- Build 2: demo'))).toBe(true);
@@ -190,12 +195,11 @@ describe('Gradle build reporting', () => {
 
     expect(initScript).toContain('Gradle build-result capture requires Gradle 7.0+');
     expect(initScript).not.toContain('captureUsingBuildFinished');
-    expect(initScript).toContain(
-      `def captureRootDir = ${JSON.stringify(path.join(runnerTemp, '.buildish-mammoth-cache'))}`,
-    );
-    expect(servicePlugin).toContain(
-      `def captureRootDir = ${JSON.stringify(path.join(runnerTemp, '.buildish-mammoth-cache'))}`,
-    );
+    // The path must be embedded as a single-quoted Groovy string (not a GString) so that
+    // ${…} sequences in the value are never evaluated as Groovy expressions.
+    const expectedCaptureRootLiteral = `'${path.join(runnerTemp, '.buildish-mammoth-cache')}'`;
+    expect(initScript).toContain(`def captureRootDir = ${expectedCaptureRootLiteral}`);
+    expect(servicePlugin).toContain(`def captureRootDir = ${expectedCaptureRootLiteral}`);
     expect(servicePlugin).toContain('def captureInvocationNamespace = "buildish-mammoth-cache"');
   });
 
@@ -206,20 +210,20 @@ describe('Gradle build reporting', () => {
         {
           invocationKey: '__run-1',
           capturedAtEpochMillis: 1_000,
-          rootProjectName: '',       // triggers displayText fallback → "(unnamed root project)"
-          requestedTasks: '   ',    // triggers displayText fallback → "(default tasks)"
+          rootProjectName: '', // triggers displayText fallback → "(unnamed root project)"
+          requestedTasks: '   ', // triggers displayText fallback → "(default tasks)"
           gradleVersion: '8.14.3',
           javaVersion: '21.0.4',
           buildFailed: false,
           configCacheHit: false,
           buildScanUri: null,
-          buildScanFailed: false,    // "not attempted" branch
+          buildScanFailed: false, // "not attempted" branch
         },
         {
           invocationKey: '__run-2',
           capturedAtEpochMillis: 2_000,
           rootProjectName: 'demo',
-          requestedTasks: longTask,  // title > 200 chars → truncated with …
+          requestedTasks: longTask, // title > 200 chars → truncated with …
           gradleVersion: '8.14.3',
           javaVersion: '21.0.4',
           buildFailed: false,
@@ -240,6 +244,32 @@ describe('Gradle build reporting', () => {
     // title truncation: "demo — xxx..." exceeds 200 chars, ending with ellipsis
     const build2Line = lines.find((l) => l.startsWith('- Build 2:')) ?? '';
     expect(build2Line.endsWith('…')).toBe(true);
+  });
+
+  it('HTML-escapes Markdown-special characters in the build scan URI', () => {
+    // '&' is valid in URLs (query parameters) and must be escaped as '&amp;' inside href.
+    const lines = createGradleBuildSummaryLines({
+      builds: [
+        {
+          invocationKey: '__run-1',
+          capturedAtEpochMillis: 1_000,
+          rootProjectName: 'demo',
+          requestedTasks: 'build',
+          gradleVersion: '8.14.3',
+          javaVersion: '21.0.4',
+          buildFailed: false,
+          configCacheHit: false,
+          buildScanUri: 'https://scans.gradle.com/s/abc?a=1&b=2',
+          buildScanFailed: false,
+        },
+      ],
+      warnings: [],
+    });
+
+    const scanLine = lines.find((l) => l.includes('Build Scan')) ?? '';
+    expect(scanLine).toBe(
+      '  - Build Scan: <a href="https://scans.gradle.com/s/abc?a=1&amp;b=2">published</a>',
+    );
   });
 
   it('defaults javaVersion to "unknown" when the field is absent from the captured result file', async () => {
@@ -308,6 +338,94 @@ describe('Gradle build reporting', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/Could not remove Gradle build-result capture file/u);
     expect(warnings[0]).toContain('buildish-mammoth-cache.build-result-capture.init.gradle');
+  });
+});
+
+describe('Groovy embedding helpers', () => {
+  describe('toGroovySingleQuotedString', () => {
+    it('wraps a plain path in single quotes', () => {
+      expect(toGroovySingleQuotedString('/home/runner/work/_temp')).toBe(
+        "'/home/runner/work/_temp'",
+      );
+    });
+
+    it('escapes backslashes so Windows paths survive round-trip through Groovy', () => {
+      // Input: D:\a\_temp  →  Groovy literal: 'D:\\a\\_temp'  →  Groovy value: D:\a\_temp
+      expect(toGroovySingleQuotedString('D:\\a\\_temp')).toBe("'D:\\\\a\\\\_temp'");
+    });
+
+    it('escapes embedded single quotes', () => {
+      expect(toGroovySingleQuotedString("/tmp/it's-fine")).toBe("'/tmp/it\\'s-fine'");
+    });
+
+    it('leaves ${…} sequences inert — they are never interpolated in single-quoted strings', () => {
+      const result = toGroovySingleQuotedString('/tmp/${System.exit(1)}');
+      // The output is a single-quoted literal — Groovy will NOT evaluate ${…} inside it.
+      expect(result).toBe("'/tmp/${System.exit(1)}'");
+      // Confirm no double-quote wrapper that would make it a GString.
+      expect(result.startsWith("'")).toBe(true);
+      expect(result.endsWith("'")).toBe(true);
+    });
+  });
+
+  describe('validateCaptureRootPath', () => {
+    it('accepts normal POSIX temp paths', () => {
+      expect(() =>
+        validateCaptureRootPath('/home/runner/work/_temp/.buildish-mammoth-cache'),
+      ).not.toThrow();
+      expect(() => validateCaptureRootPath('/tmp/.buildish-mammoth-cache')).not.toThrow();
+    });
+
+    it('accepts normal Windows temp paths', () => {
+      expect(() => validateCaptureRootPath('D:\\a\\_temp\\.buildish-mammoth-cache')).not.toThrow();
+      expect(() =>
+        validateCaptureRootPath(
+          'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\.buildish-mammoth-cache',
+        ),
+      ).not.toThrow();
+    });
+
+    it('rejects a path containing a $ character', () => {
+      expect(() =>
+        validateCaptureRootPath('/tmp/${System.exit(1)}/.buildish-mammoth-cache'),
+      ).toThrow(/suspicious|not permitted/iu);
+    });
+
+    it('rejects a path containing a backtick', () => {
+      expect(() => validateCaptureRootPath('/tmp/`id`/.buildish-mammoth-cache')).toThrow(
+        /suspicious|not permitted/iu,
+      );
+    });
+
+    it('rejects a path containing a newline', () => {
+      expect(() => validateCaptureRootPath('/tmp/evil\n/path/.buildish-mammoth-cache')).toThrow(
+        /suspicious|not permitted/iu,
+      );
+    });
+
+    it('rejects a path containing a NUL byte', () => {
+      expect(() => validateCaptureRootPath('/tmp/evil\0/path/.buildish-mammoth-cache')).toThrow(
+        /suspicious|not permitted/iu,
+      );
+    });
+  });
+
+  describe('installGradleBuildResultCapture rejects a tampered RUNNER_TEMP', () => {
+    it('throws when the temp directory contains a $ character', async () => {
+      const tmpDirs: string[] = [];
+      const fakeGradleHome = await createRunnerTemp(tmpDirs);
+      try {
+        await expect(
+          installGradleBuildResultCapture(fakeGradleHome, {
+            tempDirectory: '/tmp/${System.exit(1)}',
+          }),
+        ).rejects.toThrow(/not permitted/iu);
+      } finally {
+        for (const d of tmpDirs) {
+          await rm(d, { recursive: true, force: true });
+        }
+      }
+    });
   });
 });
 

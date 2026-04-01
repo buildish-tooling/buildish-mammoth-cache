@@ -226,8 +226,6 @@ async function stageProject(
       RUNNER_OS: normalizeRunnerOs(process.platform),
       RUNNER_ARCH: normalizeRunnerArch(process.arch),
       RUNNER_TEMP: path.join(stagedRoot, 'runner-temp'),
-      BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE: 'build-reporting',
-      BUILDISH_MAMMOTH_CACHE_GITHUB_DEFAULT_BRANCH_OVERRIDE: 'main',
     },
   };
 }

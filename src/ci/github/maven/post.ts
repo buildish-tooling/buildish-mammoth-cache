@@ -35,9 +35,11 @@ const runtimeHost = createGitHubHost();
 const ciProvider = createGitHubPlatform({
   env: process.env,
   githubTokenInput: runtimeHost.getInput('github-token', { trimWhitespace: true }),
-  githubJobCheckRunId: runtimeHost.getInput('github-job-check-run-id', {
-    trimWhitespace: true,
-  }),
+  githubJobCheckRunId: runtimeHost.getInput('github-job-check-run-id', { trimWhitespace: true }),
+  githubEventNameInput: runtimeHost.getInput('github-event-name', { trimWhitespace: true }),
+  githubJobNameInput: runtimeHost.getInput('github-job-name', { trimWhitespace: true }),
+  githubRefNameInput: runtimeHost.getInput('github-ref-name', { trimWhitespace: true }),
+  githubDefaultBranchInput: runtimeHost.getInput('github-default-branch', { trimWhitespace: true }),
 });
 const reportSink = createGitHubReportSink({ env: process.env });
 

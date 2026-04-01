@@ -40,6 +40,31 @@ const DEFAULT_RETRY_DELAY_MS = 1000;
 const MAX_RETRY_AFTER_DELAY_MS = 300_000;
 const EMPTY_HTTP_HEADERS_BY_HOST: HttpHeadersByHost = new Map();
 
+/**
+ * Maximum number of bytes accepted for a wrapper checksum response.
+ *
+ * A SHA-256 hex digest is exactly 64 ASCII characters. Capping at 64 KiB is extremely
+ * generous while preventing memory exhaustion from an unexpectedly large response body.
+ */
+export const MAX_CHECKSUM_RESPONSE_BYTES = 64 * 1024;
+
+/**
+ * Maximum number of bytes accepted for a wrapper PGP signature response.
+ *
+ * An ASCII-armored detached signature for a small file is typically a few hundred bytes.
+ * Capping at 64 KiB is extremely generous while preventing memory exhaustion.
+ */
+export const MAX_SIGNATURE_RESPONSE_BYTES = 64 * 1024;
+
+/**
+ * Maximum number of bytes accepted for the wrapper JAR response.
+ *
+ * The `gradle-wrapper.jar` is typically 60–70 KiB. Capping at 10 MiB is very generous
+ * while preventing memory exhaustion if a compromised or man-in-the-middle server returns
+ * an arbitrarily large response body.
+ */
+export const MAX_JAR_RESPONSE_BYTES = 10 * 1024 * 1024;
+
 interface WrapperRemoteRequest {
   readonly url: string;
   readonly requestInit?: RequestInit;
@@ -303,6 +328,88 @@ function normalizeWrapperSourceVersion(distributionVersion: string, relativePath
   );
 }
 
+/**
+ * Reads a response body into memory while enforcing a hard byte cap.
+ *
+ * Two independent checks are applied:
+ * 1. **`Content-Length` pre-check** — if the server declares a `Content-Length` header that
+ *    already exceeds `maxBytes`, the body is rejected immediately without being read at all.
+ * 2. **Streaming byte counter** — the body is consumed chunk-by-chunk; as soon as the
+ *    running total exceeds `maxBytes` the stream is cancelled and an error is thrown.
+ *    This catches cases where `Content-Length` is absent, inaccurate, or deliberately omitted
+ *    by an adversarial server.
+ *
+ * @param response - The HTTP response whose body should be read.
+ * @param maxBytes - Maximum number of bytes to accept.
+ * @param description - Human-readable resource label used in error messages.
+ * @returns The complete response body as a `Uint8Array`.
+ */
+async function readBodyWithSizeLimit(
+  response: Response,
+  maxBytes: number,
+  description: string,
+): Promise<Uint8Array> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null) {
+    const declared = Number.parseInt(contentLength, 10);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(
+        `${description}: response Content-Length (${declared} bytes) exceeds the ${maxBytes}-byte limit.`,
+      );
+    }
+  }
+
+  const body = response.body;
+  if (!body) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      throw new Error(
+        `${description}: response body (${buffer.byteLength} bytes) exceeds the ${maxBytes}-byte limit.`,
+      );
+    }
+    return new Uint8Array(buffer);
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    let next;
+    try {
+      next = await reader.read();
+    } catch (error) {
+      reader.releaseLock();
+      throw error;
+    }
+
+    if (next.done) {
+      reader.releaseLock();
+      break;
+    }
+
+    if (next.value) {
+      totalBytes += next.value.byteLength;
+      if (totalBytes > maxBytes) {
+        // Cancel the stream to release the underlying network connection, then throw.
+        reader.cancel().catch(() => {});
+        throw new Error(
+          `${description}: response body exceeded the ${maxBytes}-byte limit during streaming (${totalBytes} bytes read so far).`,
+        );
+      }
+      chunks.push(next.value);
+    }
+  }
+
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
 async function downloadExpectedWrapperJarSha256(
   plan: WrapperDownloadPlan,
   fetchImpl: typeof fetch,
@@ -311,6 +418,7 @@ async function downloadExpectedWrapperJarSha256(
   retryDelayMs: number,
   logRetry: ((message: string) => void) | undefined,
 ): Promise<string> {
+  const description = `wrapper checksum for '${plan.relativePath}'`;
   const response = await fetchWithRetries(
     plan.wrapperChecksumUrl,
     undefined,
@@ -318,10 +426,12 @@ async function downloadExpectedWrapperJarSha256(
     sleep,
     retryAttempts,
     retryDelayMs,
-    `wrapper checksum for '${plan.relativePath}'`,
+    description,
     logRetry,
   );
-  const checksum = (await response.text()).trim();
+  const checksum = new TextDecoder()
+    .decode(await readBodyWithSizeLimit(response, MAX_CHECKSUM_RESPONSE_BYTES, description))
+    .trim();
 
   if (!SHA256_PATTERN.test(checksum)) {
     throw new Error(
@@ -340,6 +450,7 @@ async function downloadExpectedWrapperJarSignature(
   retryDelayMs: number,
   logRetry: ((message: string) => void) | undefined,
 ): Promise<string> {
+  const description = `wrapper signature for '${plan.relativePath}'`;
   const response = await fetchWithRetries(
     plan.wrapperSignatureUrl,
     undefined,
@@ -347,10 +458,12 @@ async function downloadExpectedWrapperJarSignature(
     sleep,
     retryAttempts,
     retryDelayMs,
-    `wrapper signature for '${plan.relativePath}'`,
+    description,
     logRetry,
   );
-  const armoredSignature = (await response.text()).trim();
+  const armoredSignature = new TextDecoder()
+    .decode(await readBodyWithSizeLimit(response, MAX_SIGNATURE_RESPONSE_BYTES, description))
+    .trim();
 
   if (!armoredSignature.startsWith('-----BEGIN PGP SIGNATURE-----')) {
     throw new Error(
@@ -370,6 +483,7 @@ async function downloadWrapperJar(
   retryDelayMs: number,
   logRetry: ((message: string) => void) | undefined,
 ): Promise<Uint8Array> {
+  const description = `wrapper JAR for '${plan.relativePath}'`;
   const response = await fetchWithRetries(
     request.url,
     request.requestInit,
@@ -377,10 +491,10 @@ async function downloadWrapperJar(
     sleep,
     retryAttempts,
     retryDelayMs,
-    `wrapper JAR for '${plan.relativePath}'`,
+    description,
     logRetry,
   );
-  return new Uint8Array(await response.arrayBuffer());
+  return await readBodyWithSizeLimit(response, MAX_JAR_RESPONSE_BYTES, description);
 }
 
 async function fetchWithRetries(

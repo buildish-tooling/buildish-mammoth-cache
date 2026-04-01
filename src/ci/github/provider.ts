@@ -29,6 +29,14 @@ export interface GitHubPlatformOptions {
   readonly githubTokenInput?: string;
   /** Value of the `github-job-check-run-id` input used to resolve the current job URL. */
   readonly githubJobCheckRunId?: string;
+  /** Value of the `github-event-name` action input. See {@link GitHubContextOptions.githubEventNameInput}. */
+  readonly githubEventNameInput?: string;
+  /** Value of the `github-job-name` action input. See {@link GitHubContextOptions.githubJobNameInput}. */
+  readonly githubJobNameInput?: string;
+  /** Value of the `github-ref-name` action input. See {@link GitHubContextOptions.githubRefNameInput}. */
+  readonly githubRefNameInput?: string;
+  /** Value of the `github-default-branch` action input. See {@link GitHubContextOptions.githubDefaultBranchInput}. */
+  readonly githubDefaultBranchInput?: string;
 }
 
 /**
@@ -43,6 +51,10 @@ export function createGitHubPlatform(options: GitHubPlatformOptions = {}): CiPla
     env,
     eventPayload: options.eventPayload,
     eventPayloadReader: options.eventPayloadReader,
+    githubEventNameInput: options.githubEventNameInput,
+    githubJobNameInput: options.githubJobNameInput,
+    githubRefNameInput: options.githubRefNameInput,
+    githubDefaultBranchInput: options.githubDefaultBranchInput,
   });
   const executionUrls = createGitHubExecutionUrls(context, env, options.githubJobCheckRunId);
   const httpHeadersByHost = createGitHubHttpHeadersByHost(env, options.githubTokenInput);
@@ -73,13 +85,47 @@ export interface GitHubContextOptions {
   readonly eventPayload?: Record<string, unknown>;
   /** Override for reading the event payload JSON from disk. */
   readonly eventPayloadReader?: (eventPath: string) => string;
+  /**
+   * Value of the `github-event-name` action input.
+   *
+   * Takes priority over `GITHUB_EVENT_NAME`. Intended for reusable workflows invoked via
+   * `workflow_call`, where GitHub sets `GITHUB_EVENT_NAME` to `workflow_call` rather than
+   * the original caller's event name. Pass `${{ github.event_name }}` from the caller.
+   */
+  readonly githubEventNameInput?: string;
+  /**
+   * Value of the `github-job-name` action input.
+   *
+   * Takes priority over `GITHUB_JOB`. Use this in reusable workflows to assign a stable,
+   * predictable job name for cache-key and artifact coordination, independent of the
+   * GitHub Actions job key or matrix label.
+   */
+  readonly githubJobNameInput?: string;
+  /**
+   * Value of the `github-ref-name` action input.
+   *
+   * Takes priority over all automatic ref resolution. Intended for reusable workflows invoked
+   * via `workflow_call` to propagate the caller's resolved ref name. Pass
+   * `${{ github.ref_name }}` (or the equivalent resolved value) from the caller.
+   */
+  readonly githubRefNameInput?: string;
+  /**
+   * Value of the `github-default-branch` action input.
+   *
+   * Takes priority over all automatic default-branch resolution. Intended for reusable
+   * workflows invoked via `workflow_call` to propagate the caller's default branch. Pass
+   * `${{ github.event.repository.default_branch }}` from the caller.
+   */
+  readonly githubDefaultBranchInput?: string;
 }
 
 /**
  * Builds a provider-neutral {@link CiJobContext} from the GitHub Actions runner environment.
  *
  * Normalises refs, pull-request metadata, runner OS/architecture, and the safe branch slug used
- * in cache keys. Supports `BUILDISH_MAMMOTH_CACHE_GITHUB_EVENT_NAME_OVERRIDE` for test injection.
+ * in cache keys. Action inputs passed via {@link GitHubContextOptions} take priority over the
+ * corresponding environment variables, which is the correct propagation mechanism for
+ * reusable workflows invoked via `workflow_call`.
  */
 export function createGitHubContext(options: GitHubContextOptions = {}): CiJobContext {
   const env = options.env ?? process.env;
@@ -89,11 +135,15 @@ export function createGitHubContext(options: GitHubContextOptions = {}): CiJobCo
     options.eventPayloadReader,
   );
   const eventName =
-    env.BUILDISH_MAMMOTH_CACHE_GITHUB_EVENT_NAME_OVERRIDE?.trim() ||
-    env.GITHUB_EVENT_NAME?.trim() ||
-    'unknown';
-  const defaultBranch = resolveDefaultBranch(env, eventPayload);
-  const refName = resolveGitHubRefName(env, eventName, eventPayload);
+    options.githubEventNameInput?.trim() || env.GITHUB_EVENT_NAME?.trim() || 'unknown';
+  const defaultBranch = resolveDefaultBranch(env, eventPayload, options.githubDefaultBranchInput);
+  const refName = resolveGitHubRefName(
+    env,
+    eventName,
+    eventPayload,
+    options.githubRefNameInput,
+    options.githubDefaultBranchInput,
+  );
   const safeRefName = sanitizeRefName(refName);
 
   return {
@@ -106,10 +156,7 @@ export function createGitHubContext(options: GitHubContextOptions = {}): CiJobCo
     isPullRequest: eventName === 'pull_request' || eventName === 'pull_request_target',
     repository: env.GITHUB_REPOSITORY?.trim() || 'unknown/unknown',
     workflowName: env.GITHUB_WORKFLOW?.trim() || 'unknown-workflow',
-    jobName:
-      env.BUILDISH_MAMMOTH_CACHE_GITHUB_JOB_NAME_OVERRIDE?.trim() ||
-      env.GITHUB_JOB?.trim() ||
-      'unknown-job',
+    jobName: options.githubJobNameInput?.trim() || env.GITHUB_JOB?.trim() || 'unknown-job',
     runId: parseOptionalNumber(env.GITHUB_RUN_ID),
     runAttempt: parseOptionalNumber(env.GITHUB_RUN_ATTEMPT),
     tempDirectory: normalizeOptionalPath(env.RUNNER_TEMP),
@@ -126,8 +173,7 @@ function createGitHubExecutionUrls(
   const serverUrl = (env.GITHUB_SERVER_URL?.trim() || 'https://github.com').replace(/\/+$/u, '');
   const repository = context.repository;
   const runId = context.runId;
-  const jobCheckRunId =
-    githubJobCheckRunId?.trim() || env.BUILDISH_GITHUB_JOB_CHECK_RUN_ID?.trim() || '';
+  const jobCheckRunId = githubJobCheckRunId?.trim() || '';
 
   if (!repository || runId === null) {
     return {
@@ -210,10 +256,12 @@ function resolveGitHubRefName(
   env: NodeJS.ProcessEnv,
   eventName: string,
   eventPayload: Record<string, unknown>,
+  githubRefNameInput: string | undefined,
+  githubDefaultBranchInput: string | undefined,
 ): string {
-  const explicitRefOverride = env.BUILDISH_MAMMOTH_CACHE_GITHUB_RESOLVED_REF_NAME_OVERRIDE?.trim();
-  if (explicitRefOverride) {
-    return explicitRefOverride;
+  const explicit = githubRefNameInput?.trim();
+  if (explicit) {
+    return explicit;
   }
 
   if (eventName === 'pull_request' || eventName === 'pull_request_target') {
@@ -232,7 +280,7 @@ function resolveGitHubRefName(
 
   const ref = env.GITHUB_REF?.trim();
   if (!ref) {
-    return resolveDefaultBranch(env, eventPayload);
+    return resolveDefaultBranch(env, eventPayload, githubDefaultBranchInput);
   }
 
   if (ref.startsWith('refs/heads/')) {
@@ -254,10 +302,11 @@ function resolveGitHubRefName(
 function resolveDefaultBranch(
   env: NodeJS.ProcessEnv,
   eventPayload: Record<string, unknown>,
+  githubDefaultBranchInput: string | undefined,
 ): string {
-  const explicitDefaultBranch = env.BUILDISH_MAMMOTH_CACHE_GITHUB_DEFAULT_BRANCH_OVERRIDE?.trim();
-  if (explicitDefaultBranch) {
-    return explicitDefaultBranch;
+  const explicit = githubDefaultBranchInput?.trim();
+  if (explicit) {
+    return explicit;
   }
 
   const repo = isRecord(eventPayload.repository) ? eventPayload.repository : undefined;
