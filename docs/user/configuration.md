@@ -245,3 +245,122 @@ only by the corresponding action and ignored (or rejected) by the other.
 - Default: `$MAVEN_USER_HOME` when set, otherwise `$HOME/.m2`
 - Absolute path to the Maven local repository that the action should cache.
 - In v1, the path must resolve to the default Maven local repository location.
+
+---
+
+## Distributed mode wiring example
+
+The snippets below show the minimum input wiring needed to connect two worker jobs to an
+aggregator. The `github-job-name` input gives each job a stable, human-readable name that is
+independent of matrix labeling; the aggregator's `dependent-jobs` must list exactly those names.
+
+See [Distributed Multi-Job Builds](distributed-jobs.md) for a full explanation of how the
+delta exchange works and for additional configuration options.
+
+### Gradle
+
+```yaml
+jobs:
+  worker-a:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with: { distribution: temurin, java-version: '21' }
+      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-worker
+          github-job-name: worker-a # stable name used by the aggregator
+          cache-key-prefix: my-project-gradle-
+      - run: ./gradlew :module-a:build
+
+  worker-b:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with: { distribution: temurin, java-version: '21' }
+      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-worker
+          github-job-name: worker-b
+          cache-key-prefix: my-project-gradle-
+      - run: ./gradlew :module-b:build
+
+  aggregator:
+    needs: [worker-a, worker-b]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with: { distribution: temurin, java-version: '21' }
+      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-aggregator
+          dependent-jobs: worker-a, worker-b # must match github-job-name on each worker
+          github-job-name: aggregator
+          cache-key-prefix: my-project-gradle-
+```
+
+### Maven
+
+```yaml
+jobs:
+  worker-a:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with: { distribution: temurin, java-version: '21' }
+      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+        with:
+          job-mode: distributed-worker
+          github-job-name: worker-a
+          cache-key-prefix: my-project-maven-
+      - run: mvn -pl module-a verify
+
+  worker-b:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with: { distribution: temurin, java-version: '21' }
+      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+        with:
+          job-mode: distributed-worker
+          github-job-name: worker-b
+          cache-key-prefix: my-project-maven-
+      - run: mvn -pl module-b verify
+
+  aggregator:
+    needs: [worker-a, worker-b]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with: { distribution: temurin, java-version: '21' }
+      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+        with:
+          job-mode: distributed-aggregator
+          dependent-jobs: worker-a, worker-b
+          github-job-name: aggregator
+          cache-key-prefix: my-project-maven-
+```
