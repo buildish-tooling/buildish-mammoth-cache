@@ -157,14 +157,19 @@ async function main(): Promise<void> {
     //   ### Gradle builds
     // Either way the tool name must appear as a level-3 heading.
     assert.match(summaryText, /### (?:<a [^>]+>)?Gradle builds/u);
-    assert.match(summaryText, /<table>/u);
-    assert.match(summaryText, /mammoth-cache-gradle-it — help/u);
+    // createGradleBuildSummaryLines renders a markdown list, not an HTML table.
+    assert.match(summaryText, /### Performed Gradle builds/u);
+    // escapeSummaryText escapes hyphens as \- in Markdown, so project names appear with
+    // literal backslashes in the summary file (GitHub's renderer strips them on display).
+    assert.match(summaryText, /mammoth\\-cache\\-gradle\\-it — help/u);
+    // The build-scan link text is "published" (not an emoji icon).
     assert.match(
       summaryText,
-      /<a href="https:\/\/scans\.gradle\.com\/s\/fake-published-scan">🔗<\/a>/u,
+      /<a href="https:\/\/scans\.gradle\.com\/s\/fake-published-scan">published<\/a>/u,
     );
-    assert.match(summaryText, /<td>❌<\/td>/u);
-    assert.match(summaryText, /mammoth-cache-gradle-it — failingVerification/u);
+    // Failed builds are represented as a markdown list item, not an HTML table cell.
+    assert.match(summaryText, /- Outcome: failed/u);
+    assert.match(summaryText, /mammoth\\-cache\\-gradle\\-it — failingVerification/u);
 
     const initScriptPath = path.join(
       runtime.gradleUserHome,
