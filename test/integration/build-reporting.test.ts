@@ -151,7 +151,12 @@ async function main(): Promise<void> {
 
     const summaryText = await readFile(summaryPath, 'utf8');
     assert.match(summaryText, /## Apache Buildish Mammoth Cache for Gradle/u);
-    assert.match(summaryText, /### Gradle builds/u);
+    // When a jobUrl is available the heading is wrapped in an HTML link:
+    //   ### <a href="…">Gradle builds</a>
+    // When it is absent it is plain text:
+    //   ### Gradle builds
+    // Either way the tool name must appear as a level-3 heading.
+    assert.match(summaryText, /### (?:<a [^>]+>)?Gradle builds/u);
     assert.match(summaryText, /<table>/u);
     assert.match(summaryText, /mammoth-cache-gradle-it — help/u);
     assert.match(
