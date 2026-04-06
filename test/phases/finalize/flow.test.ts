@@ -29,10 +29,13 @@ import {
 import { captureCacheManifest, computeCacheDelta } from '../../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../../src/cache/model';
 import {
+  createFinalizeActionLogLines,
   createFinalizeActionSummaryLines,
   executeFinalizeAction,
   type FinalizeActionStatus,
 } from '../../../src/phases/finalize/flow';
+import type { BootstrapExecution } from '../../../src/phases/bootstrap';
+import type { NormalizedActionConfig } from '../../../src/config/types';
 import type { SummaryWriter } from '../../../src/ci/github/report-sink';
 import {
   DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE,
@@ -63,6 +66,43 @@ import {
   readGradleActionInputs,
   resolveGradleActionInputsFromConfigFile,
 } from '../../../src/build-tool/gradle/config';
+
+// ---------------------------------------------------------------------------
+// Shared fixture helpers shared by the executeFinalizeAction integration tests.
+// ---------------------------------------------------------------------------
+
+/**
+ * Standard GitHub push-event payload used by most integration tests.
+ * Providing it as a named constant avoids repeating the 3-line inline object literal.
+ */
+const DEFAULT_PUSH_EVENT_PAYLOAD = {
+  repository: { default_branch: 'main' },
+} as const;
+
+/**
+ * Stub Java-version command output returned by all finalize integration tests.
+ * The value matches the exact string the real JVM produces so downstream parsing is exercised.
+ */
+const MOCK_CAPTURE_COMMAND_OUTPUT = async (): Promise<string> =>
+  'openjdk version "21.0.4" 2024-07-16\n';
+
+/**
+ * Returns the `getState` callback used by most integration tests.
+ *
+ * The cache-armed sentinel key always returns `'true'` so the finalize phase treats the prepare
+ * phase as having completed. All other keys are looked up in `savedState` (defaults to an empty
+ * map when omitted — useful for tests that arm the cache but have no prior persisted manifest).
+ */
+function createArmedGetState(
+  savedState: Map<string, string> = new Map(),
+): (name: string) => string {
+  return (name: string) => {
+    if (name === 'buildish-mammoth-cache-base-cache-armed') {
+      return 'true';
+    }
+    return savedState.get(name) ?? '';
+  };
+}
 
 async function createFinalizeActionDependencies(options: {
   readonly env: NodeJS.ProcessEnv;
@@ -131,19 +171,12 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          eventPayload: {
-            repository: { default_branch: 'main' },
-          },
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') {
-              return 'true';
-            }
-            return savedState.get(name) ?? '';
-          },
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
           workspace,
@@ -215,19 +248,12 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
-          eventPayload: {
-            repository: { default_branch: 'main' },
-          },
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') {
-              return 'true';
-            }
-            return savedState.get(name) ?? '';
-          },
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
           workspace,
@@ -296,19 +322,12 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          eventPayload: {
-            repository: { default_branch: 'main' },
-          },
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') {
-              return 'true';
-            }
-            return savedState.get(name) ?? '';
-          },
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('distributed-worker', '987654321'),
           info(message: string): void {
             infoMessages.push(message);
@@ -355,7 +374,7 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
@@ -399,19 +418,12 @@ describe('executeFinalizeAction', () => {
             return 77;
           },
         }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'build'),
-          eventPayload: {
-            repository: { default_branch: 'main' },
-          },
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') {
-              return 'true';
-            }
-            return savedState.get(name) ?? '';
-          },
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('standalone'),
           summaryWriter: summary.writer,
           workspace,
@@ -470,19 +482,12 @@ describe('executeFinalizeAction', () => {
             return 91;
           },
         }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-          eventPayload: {
-            repository: { default_branch: 'main' },
-          },
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') {
-              return 'true';
-            }
-            return savedState.get(name) ?? '';
-          },
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('distributed-aggregator'),
           summaryWriter: summary.writer,
           workspace,
@@ -551,18 +556,11 @@ describe('executeFinalizeAction', () => {
           saveCache: async () => 91,
         }),
         env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-          eventPayload: {
-            repository: { default_branch: 'main' },
-          },
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') {
-              return 'true';
-            }
-            return savedState.get(name) ?? '';
-          },
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('distributed-aggregator'),
           summaryWriter: summary.writer,
           workspace,
@@ -602,19 +600,12 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          eventPayload: {
-            repository: { default_branch: 'main' },
-          },
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') {
-              return 'true';
-            }
-            return savedState.get(name) ?? '';
-          },
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
           workspace,
@@ -672,14 +663,11 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') return 'true';
-            return savedState.get(name) ?? '';
-          },
+          getState: createArmedGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: createSummaryCapture().writer,
           workspace,
@@ -704,14 +692,11 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') return 'true';
-            return savedState.get(name) ?? '';
-          },
+          getState: createArmedGetState(savedState),
           inputProvider: {
             getInput(name: string): string {
               if (name === 'job-mode') return 'distributed-worker';
@@ -739,14 +724,12 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState(name: string): string {
-            if (name === 'buildish-mammoth-cache-base-cache-armed') return 'true';
-            return '';
-          },
+          // createArmedGetState with an empty map: cache is armed but no manifest persisted.
+          getState: createArmedGetState(),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: createSummaryCapture().writer,
           workspace,
@@ -766,7 +749,7 @@ describe('executeFinalizeAction', () => {
       const status = await executeFinalizeAction({
         artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'build'),
@@ -1127,18 +1110,64 @@ async function stageWorkerArtifactForCleanup(
 // ---------------------------------------------------------------------------
 
 /**
+ * Builds a fully-typed {@link BootstrapExecution} stub for use in rendering-only unit tests.
+ *
+ * All fields required by {@link createFinalizeActionSummaryLines} and
+ * {@link createFinalizeActionLogLines} are given concrete values. Fields that are never
+ * accessed by those rendering functions (`ciProvider`, `reportSink`) are null-asserted to the
+ * correct type; these assertions are safe because the tested functions do not call any method
+ * on those objects — TypeScript still validates that the overall object satisfies the
+ * {@link BootstrapExecution} interface, so any newly accessed field will surface as a compile
+ * error rather than a silent runtime failure.
+ */
+function createMinimalBootstrapExecution(): BootstrapExecution {
+  return {
+    phase: 'finalize',
+    message: 'Test bootstrap.',
+    config: {
+      jobMode: 'standalone',
+      readOnly: false,
+      cacheEnabled: false,
+    } as NormalizedActionConfig,
+    ciContext: {
+      eventName: 'push',
+      resolvedRefName: 'main',
+      safeRefName: 'main',
+      runnerOs: 'linux',
+      runnerArch: 'x64',
+      defaultBranch: 'main',
+      isPullRequest: false,
+      repository: 'test/repo',
+      workflowName: 'CI',
+      jobName: 'build',
+      runId: 1,
+      runAttempt: 1,
+      tempDirectory: '/tmp',
+      workspace: '/workspace',
+      actionPath: null,
+    },
+    cacheModel: null,
+    baseCacheResult: null,
+    toolProvisioning: { items: [], warnings: [], additionalOutputs: {} },
+    ciDiagnosticsLines: [],
+    ciExecutionUrls: { jobUrl: null, workflowRunUrl: null },
+    buildToolAdapter: { getName: () => 'Gradle' } as BootstrapExecution['buildToolAdapter'],
+    // ciProvider and reportSink are never accessed by the rendering functions under test.
+    ciProvider: null as unknown as BootstrapExecution['ciProvider'],
+    reportSink: null as unknown as BootstrapExecution['reportSink'],
+  };
+}
+
+/**
  * Builds the minimum {@link FinalizeActionStatus} fixture required by
- * {@link createFinalizeActionSummaryLines}. Fields not accessed by the function
- * are omitted via a type cast.
+ * {@link createFinalizeActionSummaryLines} and {@link createFinalizeActionLogLines}.
+ * Apply `overrides` to exercise specific rendering paths.
  */
 function createMinimalFinalizeStatus(
   overrides: Partial<FinalizeActionStatus> = {},
 ): FinalizeActionStatus {
   return {
-    bootstrap: {
-      buildToolAdapter: { getName: () => 'Gradle' },
-      baseCacheResult: null,
-    } as FinalizeActionStatus['bootstrap'],
+    bootstrap: createMinimalBootstrapExecution(),
     baseCacheRestoreResult: null,
     cacheStatistics: null,
     consumedDeltaCleanupResult: null,
@@ -1228,5 +1257,120 @@ describe('createFinalizeActionSummaryLines', () => {
     const lines = createFinalizeActionSummaryLines(status).join('\n');
     expect(lines).toContain('Line one from build report.');
     expect(lines).toContain('Line two from build report.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests for createFinalizeActionLogLines rendering logic.
+//
+// These tests mirror the createFinalizeActionSummaryLines tests above but cover
+// the log-group output path in isolation using the same minimal fixtures.
+// ---------------------------------------------------------------------------
+
+describe('createFinalizeActionLogLines', () => {
+  it('includes the success status icon and label when there are no issues', () => {
+    const lines = createFinalizeActionLogLines(createMinimalFinalizeStatus()).join('\n');
+    expect(lines).toContain('✅ Overall status: success');
+  });
+
+  it('includes the error status icon and label when a build failed', () => {
+    const status = createMinimalFinalizeStatus({
+      buildReport: {
+        anyBuildFailed: true,
+        warnings: [],
+        summaryLines: [],
+        logLines: [],
+        builds: [],
+      },
+    });
+    const lines = createFinalizeActionLogLines(status).join('\n');
+    expect(lines).toContain('❌ Overall status: issues detected');
+    expect(lines).not.toContain('✅');
+  });
+
+  it('includes the warning status icon and label when the cache restore feature is unavailable', () => {
+    const status = createMinimalFinalizeStatus({
+      baseCacheRestoreResult: {
+        operation: 'restore',
+        status: 'feature-unavailable',
+        cacheKey: 'test-key',
+        matchedKey: null,
+        restoreKeys: [],
+        paths: [],
+        message: 'Cache backend unavailable.',
+      },
+    });
+    const lines = createFinalizeActionLogLines(status).join('\n');
+    expect(lines).toContain('⚠️ Overall status: completed with warnings');
+    expect(lines).not.toContain('✅');
+  });
+
+  it('includes an Execution details line from jobUrl when present', () => {
+    const status = createMinimalFinalizeStatus({
+      jobUrl: 'https://github.com/apache/buildish/actions/runs/101/jobs/42',
+    });
+    const lines = createFinalizeActionLogLines(status).join('\n');
+    expect(lines).toContain(
+      'Execution details: https://github.com/apache/buildish/actions/runs/101/jobs/42',
+    );
+  });
+
+  it('falls back to workflowRunUrl for the Execution details line when jobUrl is absent', () => {
+    const status = createMinimalFinalizeStatus({
+      jobUrl: null,
+      workflowRunUrl: 'https://github.com/apache/buildish/actions/runs/101',
+    });
+    const lines = createFinalizeActionLogLines(status).join('\n');
+    expect(lines).toContain(
+      'Execution details: https://github.com/apache/buildish/actions/runs/101',
+    );
+  });
+
+  it('prefixes error messages with "Error:" in the log output', () => {
+    const status = createMinimalFinalizeStatus({
+      deltaArtifactResult: {
+        status: 'missing-pre-build-manifest',
+        addedCount: 0,
+        modifiedCount: 0,
+        deletedCount: 0,
+        totalChangedCount: 0,
+        artifactName: null,
+        artifactId: null,
+        artifactSizeBytes: null,
+        message: 'Delta artifact upload skipped because no persisted pre-build cache manifest.',
+      },
+    });
+    const lines = createFinalizeActionLogLines(status).join('\n');
+    expect(lines).toContain('Error:');
+    expect(lines).toContain('❌ Overall status: issues detected');
+  });
+
+  it('prefixes warning messages with "Warning:" in the log output', () => {
+    const status = createMinimalFinalizeStatus({
+      buildReport: {
+        anyBuildFailed: false,
+        warnings: ['Configuration cache was invalidated.'],
+        summaryLines: [],
+        logLines: [],
+        builds: [],
+      },
+    });
+    const lines = createFinalizeActionLogLines(status).join('\n');
+    expect(lines).toContain('Warning: Configuration cache was invalidated.');
+  });
+
+  it('includes build-report log lines verbatim', () => {
+    const status = createMinimalFinalizeStatus({
+      buildReport: {
+        anyBuildFailed: false,
+        warnings: [],
+        summaryLines: [],
+        logLines: ['Log line one.', 'Log line two.'],
+        builds: [],
+      },
+    });
+    const lines = createFinalizeActionLogLines(status).join('\n');
+    expect(lines).toContain('Log line one.');
+    expect(lines).toContain('Log line two.');
   });
 });

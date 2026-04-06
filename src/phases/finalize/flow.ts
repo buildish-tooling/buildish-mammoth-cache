@@ -460,7 +460,15 @@ export function createFinalizeActionSummaryLines(status: FinalizeActionStatus): 
   ];
 }
 
-function createFinalizeActionLogLines(status: FinalizeActionStatus): readonly string[] {
+/**
+ * Renders the log-group lines for the finalize phase.
+ *
+ * Produces a compact machine-readable list of outcomes: bootstrap message, overall status icon,
+ * build-report log lines, execution details URL, any errors or warnings, delta-artifact and
+ * consumed-delta notes, and the cache key / statistics summary. The output is written to the
+ * CI log group opened by {@link executeFinalizeAction}.
+ */
+export function createFinalizeActionLogLines(status: FinalizeActionStatus): readonly string[] {
   const summaryIssues = collectFinalizeActionSummaryIssues(status);
   const overallStatus = determineOverallSummaryStatus(summaryIssues);
   const lines = [
