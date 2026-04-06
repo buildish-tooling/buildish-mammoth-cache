@@ -19,29 +19,31 @@ import { spawn } from 'node:child_process';
 import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
-import { GradleBuildToolAdapter } from '../src/build-tool/gradle/adapter';
+import { test } from 'vitest';
+
+import { createGitHubPlatform, createGitHubReportSink } from '../../src/ci/github';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import {
   normalizeGradleActionConfig,
   readGradleActionInputs,
   resolveGradleActionInputsFromConfigFile,
-} from '../src/build-tool/gradle/config';
-import type { NormalizedGradleConfig } from '../src/config/types';
-import { executePrepareAction } from '../src/phases/prepare/flow';
+} from '../../src/build-tool/gradle/config';
+import type { NormalizedGradleConfig } from '../../src/config/types';
+import { executePrepareAction } from '../../src/phases/prepare/flow';
 import {
   createFinalizeActionSummaryLines,
   executeFinalizeAction,
-} from '../src/phases/finalize/flow';
-import type { SummaryWriter } from '../src/ci/github/report-sink';
-import type { CompositeHost } from '../src/host/types';
+} from '../../src/phases/finalize/flow';
+import type { SummaryWriter } from '../../src/ci/github/report-sink';
+import type { CompositeHost } from '../../src/host/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/delta/backend';
+} from '../../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/cache/backend';
+} from '../../src/cache/backend';
 
 const RUN_ID = '92002';
 const RUN_ATTEMPT = '1';
@@ -482,4 +484,15 @@ function normalizeRunnerArch(arch: string): string {
   }
 }
 
-void main();
+/**
+ * Vitest entry point for the build-reporting integration test.
+ *
+ * Runs the full Gradle build-reporting flow end-to-end, including prepare, four Gradle
+ * invocations, and finalize. Requires Java 21+ on PATH (Gradle is downloaded automatically via
+ * the wrapper). The test timeout is set to 10 minutes to accommodate Gradle's initial download
+ * and compilation of the buildSrc fixture.
+ *
+ * Set BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT=1 to preserve the staged workspace on disk after
+ * the test (useful for debugging). The staged root path is printed at the end of the test.
+ */
+test('build reporting integration', main, 600_000);

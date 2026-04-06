@@ -14,58 +14,41 @@
  * limitations under the License.
  */
 
-/**
- * Local Maven distributed-reuse integration test.
- *
- * Exercises the full worker-A → worker-B → aggregator delta-exchange flow using
- * {@link MavenBuildToolAdapter} and a staged Maven fixture project.  The GitHub Actions cache
- * is replaced by {@link UNAVAILABLE_CACHE_API}; artifact exchange uses an in-process
- * {@link FakeArtifactApi} that copies artifact directories on disk.
- *
- * Each job gets an isolated Maven user home (`<job-root>/m2`).  The MAVEN_USER_HOME env var
- * is set so the action normalizer picks up the right cache root.  Every `mvn` invocation also
- * receives `-Dmaven.repo.local=<job-root>/m2/repository` so that Maven itself uses the same
- * isolated directory.
- *
- * Assertion strategy: after the aggregator applies both worker deltas, both
- * `mvn -P worker-a dependency:resolve --offline` and
- * `mvn -P worker-b dependency:resolve --offline` must succeed.  Offline mode guarantees the
- * artifacts came from the delta-merged local repository, not from the network.
- */
-
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { WorkflowArtifactDescriptor } from '../src/delta/service';
-import { createGitHubPlatform, createGitHubReportSink } from '../src/ci/github';
-import { MavenBuildToolAdapter } from '../src/build-tool/maven/adapter';
+import { test } from 'vitest';
+
+import type { WorkflowArtifactDescriptor } from '../../src/delta/service';
+import { createGitHubPlatform, createGitHubReportSink } from '../../src/ci/github';
+import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import {
-  normalizeMavenActionConfig,
-  readMavenActionInputs,
-  resolveMavenActionInputsFromConfigFile,
-} from '../src/build-tool/maven/config';
-import type { NormalizedMavenConfig } from '../src/config/types';
-import { createPrepareActionOutputs, executePrepareAction } from '../src/phases/prepare/flow';
-import { executeFinalizeAction } from '../src/phases/finalize/flow';
-import type { SummaryWriter } from '../src/ci/github/report-sink';
-import type { CompositeHost } from '../src/host/types';
+  normalizeGradleActionConfig,
+  readGradleActionInputs,
+  resolveGradleActionInputsFromConfigFile,
+} from '../../src/build-tool/gradle/config';
+import type { NormalizedGradleConfig } from '../../src/config/types';
+import { createPrepareActionOutputs, executePrepareAction } from '../../src/phases/prepare/flow';
+import { executeFinalizeAction } from '../../src/phases/finalize/flow';
+import type { SummaryWriter } from '../../src/ci/github/report-sink';
+import type { CompositeHost } from '../../src/host/types';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
-} from '../src/delta/backend';
+} from '../../src/delta/backend';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
-} from '../src/cache/backend';
+} from '../../src/cache/backend';
 
-const RUN_ID = '92003';
+const RUN_ID = '92001';
 const RUN_ATTEMPT = '1';
-const CACHE_KEY_PREFIX = `local-it-maven-distributed-${RUN_ID}-${RUN_ATTEMPT}-`;
-const INTEGRATION_WORKFLOW_NAME = 'Local Maven Distributed Reuse Integration Test';
-const FIXTURE_JOB_NAMES = ['maven_worker_a', 'maven_worker_b', 'maven_aggregator'] as const;
+const CACHE_KEY_PREFIX = `local-it-distributed-${RUN_ID}-${RUN_ATTEMPT}-`;
+const INTEGRATION_WORKFLOW_NAME = 'Local Distributed Reuse Integration Test';
+const FIXTURE_JOB_NAMES = ['worker_a', 'worker_b', 'aggregator'] as const;
 const UNAVAILABLE_CACHE_API: BaseCacheBackend = {
   capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   isFeatureAvailable(): boolean {
@@ -82,41 +65,42 @@ const UNAVAILABLE_CACHE_API: BaseCacheBackend = {
   },
 };
 
-interface LocalMavenJobRuntime {
+interface LocalJobRuntime {
   readonly jobName: string;
   readonly jobRoot: string;
   readonly projectDirectory: string;
-  /** Isolated Maven user home — set as MAVEN_USER_HOME so the action normalizer uses it. */
-  readonly mavenUserHome: string;
-  /** Path to the local repository inside mavenUserHome — passed to mvn via -Dmaven.repo.local. */
-  readonly localRepository: string;
+  readonly gradleUserHome: string;
   readonly env: NodeJS.ProcessEnv;
   readonly state: Map<string, string>;
 }
 
 async function main(): Promise<void> {
+  if (process.platform === 'win32') {
+    throw new Error(
+      'The local distributed reuse integration test currently requires a POSIX shell because the fixture only ships gradlew.',
+    );
+  }
+
   const repoRoot = process.cwd();
   const fixtureSourceDirectory = path.join(
     repoRoot,
     'test',
     'fixtures',
     'integration',
-    'maven-project',
+    'gradle-project',
   );
   const buildRoot = path.join(repoRoot, 'build');
   await mkdir(buildRoot, { recursive: true });
 
-  const stagedRoot = await mkdtemp(path.join(buildRoot, 'integration-maven-distributed-reuse-'));
+  const stagedRoot = await mkdtemp(path.join(buildRoot, 'integration-gradle-distributed-reuse-'));
   let keepStagedRoot = process.env.BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT === '1';
 
   try {
     const artifactApi = new FakeArtifactApi(path.join(stagedRoot, 'artifacts'));
     const jobs = await stageJobs(stagedRoot, fixtureSourceDirectory);
 
-    // Worker A resolves guava and publishes a delta artifact.
-    await runWorkerJob(jobs.maven_worker_a, 'worker-a', artifactApi);
-    // Worker B resolves commons-io and publishes a separate delta artifact.
-    await runWorkerJob(jobs.maven_worker_b, 'worker-b', artifactApi);
+    await runWorkerJob(jobs.worker_a, 'resolveWorkerA', artifactApi);
+    await runWorkerJob(jobs.worker_b, 'resolveWorkerB', artifactApi);
 
     const uploadedArtifacts = await artifactApi.listArtifacts();
     assert.equal(
@@ -125,37 +109,45 @@ async function main(): Promise<void> {
       'Expected both worker delta artifacts to be available.',
     );
 
-    // Aggregator downloads and merges both worker deltas into its local repository.
     const aggregatorPrepareStatus = await executePreparePhase(
-      jobs.maven_aggregator,
+      jobs.aggregator,
       {
+        'base-directory': 'project',
         'job-mode': 'distributed-aggregator',
-        'dependent-jobs': 'maven_worker_a,maven_worker_b',
+        'dependent-jobs': 'worker_a,worker_b',
         'cache-key-prefix': CACHE_KEY_PREFIX,
       },
       artifactApi,
     );
     const aggregatorOutputs = createPrepareActionOutputs(aggregatorPrepareStatus);
     assert.equal(aggregatorOutputs['downloaded-dependent-artifact-count'], '2');
-    printOutputs('maven_aggregator', aggregatorOutputs);
+    printOutputs('aggregator', aggregatorOutputs);
 
-    // Both profiles must resolve offline — proves the delta merge populated the local repo.
-    await runMaven(
-      jobs.maven_aggregator,
-      ['-P', 'worker-a', 'dependency:resolve', '--offline'],
-      'aggregator-mvn-worker-a-offline',
+    const aggregatorLog = await runGradle(
+      jobs.aggregator,
+      ['--info', '--no-daemon', '--continue', 'resolveWorkerA', 'resolveWorkerB'],
+      'aggregator-gradle',
     );
-    await runMaven(
-      jobs.maven_aggregator,
-      ['-P', 'worker-b', 'dependency:resolve', '--offline'],
-      'aggregator-mvn-worker-b-offline',
+    await writeFile(
+      path.join(jobs.aggregator.jobRoot, 'aggregator-gradle.log'),
+      aggregatorLog,
+      'utf8',
+    );
+    assert.match(aggregatorLog, /resolved workerA: guava-33\.4\.8-jre\.jar/);
+    assert.match(aggregatorLog, /resolved workerB: commons-io-2\.18\.0\.jar/);
+    assert.ok(
+      !/(?:Downloading|Downloaded).*(?:guava-33\.4\.8-jre|commons-io-2\.18\.0)\.jar/.test(
+        aggregatorLog,
+      ),
+      'Expected restored worker dependency jars to be reused, but Gradle downloaded them again.',
     );
 
     const aggregatorFinalizeStatus = await executeFinalizePhase(
-      jobs.maven_aggregator,
+      jobs.aggregator,
       {
+        'base-directory': 'project',
         'job-mode': 'distributed-aggregator',
-        'dependent-jobs': 'maven_worker_a,maven_worker_b',
+        'dependent-jobs': 'worker_a,worker_b',
         'cache-key-prefix': CACHE_KEY_PREFIX,
       },
       artifactApi,
@@ -173,17 +165,17 @@ async function main(): Promise<void> {
 
     if (keepStagedRoot) {
       console.log(
-        `\nOK: Maven distributed reuse integration test passed. Staged root preserved at: ${stagedRoot}`,
+        `\nOK: distributed reuse integration test passed. Staged root preserved at: ${stagedRoot}`,
       );
     } else {
       console.log(
-        '\nOK: Maven distributed reuse integration test passed. Staged root cleaned up; set BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT=1 to preserve it.',
+        '\nOK: distributed reuse integration test passed. Staged root cleaned up; set BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT=1 to preserve it.',
       );
     }
   } catch (error) {
     keepStagedRoot = true;
     console.error(
-      `\nFAIL: Maven distributed reuse integration test failed. Staged root preserved at: ${stagedRoot}`,
+      `\nFAIL: distributed reuse integration test failed. Staged root preserved at: ${stagedRoot}`,
     );
     throw error;
   } finally {
@@ -196,37 +188,32 @@ async function main(): Promise<void> {
 async function stageJobs(
   stagedRoot: string,
   fixtureSourceDirectory: string,
-): Promise<Record<(typeof FIXTURE_JOB_NAMES)[number], LocalMavenJobRuntime>> {
+): Promise<Record<(typeof FIXTURE_JOB_NAMES)[number], LocalJobRuntime>> {
   const entries = await Promise.all(
     FIXTURE_JOB_NAMES.map(async (jobName) => [
       jobName,
       await stageJob(stagedRoot, fixtureSourceDirectory, jobName),
     ]),
   );
-  return Object.fromEntries(entries) as Record<
-    (typeof FIXTURE_JOB_NAMES)[number],
-    LocalMavenJobRuntime
-  >;
+  return Object.fromEntries(entries) as Record<(typeof FIXTURE_JOB_NAMES)[number], LocalJobRuntime>;
 }
 
 async function stageJob(
   stagedRoot: string,
   fixtureSourceDirectory: string,
   jobName: string,
-): Promise<LocalMavenJobRuntime> {
+): Promise<LocalJobRuntime> {
   const jobRoot = path.join(stagedRoot, jobName);
   const projectDirectory = path.join(jobRoot, 'project');
-  const mavenUserHome = path.join(jobRoot, 'm2');
-  const localRepository = path.join(mavenUserHome, 'repository');
+  const gradleUserHome = path.join(jobRoot, 'gradle-home');
   await cp(fixtureSourceDirectory, projectDirectory, { recursive: true });
-  await mkdir(localRepository, { recursive: true });
+  await chmod(path.join(projectDirectory, 'gradlew'), 0o755);
 
   return {
     jobName,
     jobRoot,
     projectDirectory,
-    mavenUserHome,
-    localRepository,
+    gradleUserHome,
     state: new Map<string, string>(),
     env: {
       ...process.env,
@@ -239,7 +226,7 @@ async function stageJob(
       GITHUB_RUN_ID: RUN_ID,
       GITHUB_RUN_ATTEMPT: RUN_ATTEMPT,
       GITHUB_WORKSPACE: jobRoot,
-      MAVEN_USER_HOME: mavenUserHome,
+      GRADLE_USER_HOME: gradleUserHome,
       RUNNER_OS: normalizeRunnerOs(process.platform),
       RUNNER_ARCH: normalizeRunnerArch(process.arch),
     },
@@ -247,24 +234,25 @@ async function stageJob(
 }
 
 async function runWorkerJob(
-  job: LocalMavenJobRuntime,
-  profile: 'worker-a' | 'worker-b',
+  job: LocalJobRuntime,
+  taskName: 'resolveWorkerA' | 'resolveWorkerB',
   artifactApi: WorkflowArtifactBackend,
 ): Promise<void> {
   const prepareStatus = await executePreparePhase(
     job,
     {
+      'base-directory': 'project',
       'job-mode': 'distributed-worker',
       'cache-key-prefix': CACHE_KEY_PREFIX,
     },
     artifactApi,
   );
   printOutputs(job.jobName, createPrepareActionOutputs(prepareStatus));
-  // Resolve the profile dependency online — populates the isolated local repository.
-  await runMaven(job, ['-P', profile, 'dependency:resolve'], `${job.jobName}-mvn`);
+  await runGradle(job, ['--info', '--no-daemon', taskName], `${job.jobName}-gradle`);
   const finalizeStatus = await executeFinalizePhase(
     job,
     {
+      'base-directory': 'project',
       'job-mode': 'distributed-worker',
       'cache-key-prefix': CACHE_KEY_PREFIX,
     },
@@ -274,7 +262,7 @@ async function runWorkerJob(
 }
 
 async function executePreparePhase(
-  job: LocalMavenJobRuntime,
+  job: LocalJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
 ) {
@@ -282,12 +270,17 @@ async function executePreparePhase(
     env: job.env,
     artifactBackend: artifactApi,
     cacheBackend: UNAVAILABLE_CACHE_API,
-    ...(await createActionDependencies(job, inputs, createSummaryWriter(job.jobName), 'prepare')),
+    ...(await createGitHubActionDependencies(
+      job,
+      inputs,
+      createSummaryWriter(job.jobName),
+      'prepare',
+    )),
   });
 }
 
 async function executeFinalizePhase(
-  job: LocalMavenJobRuntime,
+  job: LocalJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
 ) {
@@ -295,7 +288,7 @@ async function executeFinalizePhase(
     env: job.env,
     artifactBackend: artifactApi,
     cacheBackend: UNAVAILABLE_CACHE_API,
-    ...(await createActionDependencies(
+    ...(await createGitHubActionDependencies(
       job,
       inputs,
       createSummaryWriter(`${job.jobName} finalize`),
@@ -312,8 +305,8 @@ function createInputProvider(values: Record<string, string>): { getInput(name: s
   };
 }
 
-async function createActionDependencies(
-  job: LocalMavenJobRuntime,
+async function createGitHubActionDependencies(
+  job: LocalJobRuntime,
   inputs: Record<string, string>,
   summaryWriter: SummaryWriter,
   phase: 'prepare' | 'finalize',
@@ -344,14 +337,16 @@ async function createActionDependencies(
   const ciProvider = createGitHubPlatform({
     env: job.env,
     githubJobNameInput: job.jobName,
-    eventPayload: { repository: { default_branch: 'main' } },
+    eventPayload: {
+      repository: { default_branch: 'main' },
+    },
   });
 
-  const directInputs = readMavenActionInputs(runtimeHost);
-  const rawInputs = await resolveMavenActionInputsFromConfigFile(directInputs, {
+  const directInputs = readGradleActionInputs(runtimeHost);
+  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, {
     workspace: job.jobRoot,
   });
-  const config: NormalizedMavenConfig = normalizeMavenActionConfig(rawInputs, {
+  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
     phase,
     ciContext: ciProvider.context,
     env: job.env,
@@ -361,8 +356,11 @@ async function createActionDependencies(
     runtimeHost,
     ciProvider,
     config,
-    reportSink: createGitHubReportSink({ env: job.env, summaryWriter }),
-    buildToolAdapterFactory: () => new MavenBuildToolAdapter(config),
+    reportSink: createGitHubReportSink({
+      env: job.env,
+      summaryWriter,
+    }),
+    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
   };
 }
 
@@ -374,7 +372,9 @@ function createSummaryWriter(label: string): SummaryWriter {
       return this;
     },
     async write(): Promise<void> {
-      if (lines.length === 0) return;
+      if (lines.length === 0) {
+        return;
+      }
       console.log(`\n--- ${label} summary ---`);
       process.stdout.write(lines.join(''));
       lines.length = 0;
@@ -389,23 +389,22 @@ function printOutputs(label: string, outputs: Record<string, string>): void {
   }
 }
 
-async function runMaven(
-  job: LocalMavenJobRuntime,
+async function runGradle(
+  job: LocalJobRuntime,
   args: readonly string[],
   label: string,
-): Promise<void> {
+): Promise<string> {
   console.log(`\n--- ${label} ---`);
-  // Inject the isolated local repository path so Maven does not fall back to $HOME/.m2.
-  const fullArgs = [...args, `-Dmaven.repo.local=${job.localRepository}`];
-  const result = await runProcess('mvn', fullArgs, {
+  const result = await runProcess('./gradlew', args, {
     cwd: job.projectDirectory,
     env: job.env,
   });
   if (result.exitCode !== 0) {
     throw new Error(
-      `Maven command '${label}' for job '${job.jobName}' failed with exit code ${result.exitCode}.`,
+      `Gradle command for '${job.jobName}' failed with exit code ${result.exitCode}.`,
     );
   }
+  return result.output;
 }
 
 async function runProcess(
@@ -465,6 +464,7 @@ function normalizeRunnerArch(arch: string): string {
 
 class FakeArtifactApi implements WorkflowArtifactBackend {
   readonly capabilities = STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES;
+
   private nextId = 1;
   private readonly artifacts = new Map<
     number,
@@ -488,12 +488,16 @@ class FakeArtifactApi implements WorkflowArtifactBackend {
   }
 
   async listArtifacts(): Promise<readonly WorkflowArtifactDescriptor[]> {
-    return [...this.artifacts.values()].map((a) => a.descriptor);
+    return [...this.artifacts.values()].map((artifact) => artifact.descriptor);
   }
 
   async getArtifact(name: string): Promise<WorkflowArtifactDescriptor> {
-    const artifact = [...this.artifacts.values()].find((a) => a.descriptor.name === name);
-    if (!artifact) throw new Error(`Artifact '${name}' not found.`);
+    const artifact = [...this.artifacts.values()].find(
+      (candidate) => candidate.descriptor.name === name,
+    );
+    if (!artifact) {
+      throw new Error(`Artifact '${name}' not found.`);
+    }
     return artifact.descriptor;
   }
 
@@ -502,7 +506,9 @@ class FakeArtifactApi implements WorkflowArtifactBackend {
     options?: { readonly path?: string },
   ): Promise<{ readonly downloadPath: string; readonly digestMismatch: boolean }> {
     const artifact = this.artifacts.get(artifactId);
-    if (!artifact) throw new Error(`Artifact '${artifactId}' not found.`);
+    if (!artifact) {
+      throw new Error(`Artifact '${artifactId}' not found.`);
+    }
     const parentDirectory = options?.path ?? this.storageRoot;
     const downloadPath = path.join(parentDirectory, `artifact-${artifactId}`);
     await cp(artifact.directory, downloadPath, { recursive: true });
@@ -510,13 +516,25 @@ class FakeArtifactApi implements WorkflowArtifactBackend {
   }
 
   async deleteArtifact(name: string): Promise<void> {
-    const entry = [...this.artifacts.entries()].find(([, a]) => a.descriptor.name === name);
-    if (!entry) throw new Error(`Artifact '${name}' not found.`);
-    this.artifacts.delete(entry[0]);
+    const artifact = [...this.artifacts.entries()].find(
+      ([, candidate]) => candidate.descriptor.name === name,
+    );
+    if (!artifact) {
+      throw new Error(`Artifact '${name}' not found.`);
+    }
+    this.artifacts.delete(artifact[0]);
   }
 }
 
-void main().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+/**
+ * Vitest entry point for the Gradle distributed-reuse integration test.
+ *
+ * Runs the full worker-A → worker-B → aggregator delta-exchange flow end-to-end using a local
+ * {@link FakeArtifactApi} for artifact exchange. Requires Java 21+ and a POSIX shell (the
+ * fixture only ships a `gradlew` script). The test timeout is set to 10 minutes to accommodate
+ * Gradle's initial download and dependency resolution.
+ *
+ * Set BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT=1 to preserve the staged workspace on disk after
+ * the test (useful for debugging). The staged root path is printed at the end of the test.
+ */
+test('Gradle distributed-reuse integration', main, 600_000);

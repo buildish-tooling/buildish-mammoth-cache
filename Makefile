@@ -19,13 +19,9 @@ NPM ?= npm
 NODE_MODULES_STAMP := node_modules/.buildish-mammoth-cache-installed
 BUILD_STAMP := dist/.buildish-mammoth-cache-built
 BUILD_INPUTS := package.json tsconfig.json $(shell find src descriptors -type f 2>/dev/null)
-INTEGRATION_FIXTURE_INPUTS := $(shell find test/fixtures/integration -type f 2>/dev/null)
-INTEGRATION_BUILD_REPORTING_BUNDLE := build/integration-build-reporting.cjs
-INTEGRATION_GRADLE_DISTRIBUTED_REUSE_BUNDLE := build/integration-gradle-distributed-reuse.cjs
-INTEGRATION_MAVEN_DISTRIBUTED_REUSE_BUNDLE := build/integration-maven-distributed-reuse.cjs
 HELP_TARGETS := $(MAKEFILE_LIST)
 
-.PHONY: build check clean clean-all help integration-test-build-reporting integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse lint-check lint-fix rat-check rebuild release-legal-category-x-check release-legal-check sanity-check smoke-test test zizmor-check
+.PHONY: build check clean clean-all help integration-test integration-test-build-reporting integration-test-distributed-reuse integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse lint-check lint-fix rat-check rebuild release-legal-category-x-check release-legal-check sanity-check smoke-test test zizmor-check
 
 help: ## Show available Make targets.
 	@awk 'BEGIN {FS = ":.*## "; printf "Available targets:\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(HELP_TARGETS)
@@ -103,31 +99,19 @@ release-legal-check: sanity-check $(NODE_MODULES_STAMP) ## Verify legal/github/L
 smoke-test: build ## Run the bundled-action smoke test against a staged fixture copy.
 	$(NPM) run smoke-test
 
-$(INTEGRATION_BUILD_REPORTING_BUNDLE): $(NODE_MODULES_STAMP) scripts/integration-build-reporting.ts $(BUILD_INPUTS) $(INTEGRATION_FIXTURE_INPUTS)
-	$(NPM) run compile
-	@mkdir -p $(dir $@)
-	$(NPM) exec -- esbuild scripts/integration-build-reporting.ts --bundle --platform=node --target=node24 --format=cjs --outfile=$@
+integration-test: build ## Run all local integration tests via Vitest (requires Java 21+; mvn also required for the Maven test).
+	INTEGRATION_TESTS=1 $(NPM) exec -- vitest run --reporter=verbose --project integration
 
-$(INTEGRATION_GRADLE_DISTRIBUTED_REUSE_BUNDLE): $(NODE_MODULES_STAMP) scripts/integration-gradle-distributed-reuse.ts $(BUILD_INPUTS) $(INTEGRATION_FIXTURE_INPUTS)
-	$(NPM) run compile
-	@mkdir -p $(dir $@)
-	$(NPM) exec -- esbuild scripts/integration-gradle-distributed-reuse.ts --bundle --platform=node --target=node24 --format=cjs --outfile=$@
+integration-test-build-reporting: build ## Run the local multi-build Gradle build-reporting integration test.
+	INTEGRATION_TESTS=1 $(NPM) exec -- vitest run --reporter=verbose test/integration/build-reporting.test.ts
 
-$(INTEGRATION_MAVEN_DISTRIBUTED_REUSE_BUNDLE): $(NODE_MODULES_STAMP) scripts/integration-maven-distributed-reuse.ts $(BUILD_INPUTS) $(INTEGRATION_FIXTURE_INPUTS)
-	$(NPM) run compile
-	@mkdir -p $(dir $@)
-	$(NPM) exec -- esbuild scripts/integration-maven-distributed-reuse.ts --bundle --platform=node --target=node24 --format=cjs --outfile=$@
+integration-test-gradle-distributed-reuse: build ## Run the local worker/aggregator Gradle distributed-reuse integration test.
+	INTEGRATION_TESTS=1 $(NPM) exec -- vitest run --reporter=verbose test/integration/gradle-distributed-reuse.test.ts
 
-integration-test-build-reporting: sanity-check $(INTEGRATION_BUILD_REPORTING_BUNDLE) ## Run the local multi-build Gradle build-reporting integration test.
-	node $(INTEGRATION_BUILD_REPORTING_BUNDLE)
+integration-test-maven-distributed-reuse: build ## Run the local worker/aggregator Maven distributed-reuse integration test (requires mvn on PATH).
+	INTEGRATION_TESTS=1 $(NPM) exec -- vitest run --reporter=verbose test/integration/maven-distributed-reuse.test.ts
 
-integration-test-gradle-distributed-reuse: sanity-check $(INTEGRATION_GRADLE_DISTRIBUTED_REUSE_BUNDLE) ## Run the local worker/aggregator Gradle distributed reuse integration test.
-	node $(INTEGRATION_GRADLE_DISTRIBUTED_REUSE_BUNDLE)
-
-integration-test-maven-distributed-reuse: sanity-check $(INTEGRATION_MAVEN_DISTRIBUTED_REUSE_BUNDLE) ## Run the local worker/aggregator Maven distributed reuse integration test (requires mvn on PATH).
-	node $(INTEGRATION_MAVEN_DISTRIBUTED_REUSE_BUNDLE)
-
-integration-test-distributed-reuse: ## Run the local worker/aggregator Gradle + Maven distributed reuse integration test (requires mvn on PATH).
+integration-test-distributed-reuse: ## Run the local worker/aggregator Gradle + Maven distributed-reuse integration tests (requires mvn on PATH).
 	$(MAKE) integration-test-gradle-distributed-reuse
 	$(MAKE) integration-test-maven-distributed-reuse
 
