@@ -32,6 +32,7 @@ import {
   createFinalizeActionLogLines,
   createFinalizeActionSummaryLines,
   executeFinalizeAction,
+  formatByteCount,
   type FinalizeActionStatus,
 } from '../../../src/phases/finalize/flow';
 import type { BootstrapExecution } from '../../../src/phases/bootstrap';
@@ -1372,5 +1373,62 @@ describe('createFinalizeActionLogLines', () => {
     const lines = createFinalizeActionLogLines(status).join('\n');
     expect(lines).toContain('Log line one.');
     expect(lines).toContain('Log line two.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests for formatByteCount boundary behaviour.
+//
+// The function has two non-obvious decision points:
+//   1. The size >= 10 threshold that switches between .toFixed(2) and .toFixed(1).
+//   2. The loop that stops at TiB regardless of the input magnitude.
+// These tests pin both so a future refactor (e.g. flipping >= to >) is caught immediately.
+// ---------------------------------------------------------------------------
+
+describe('formatByteCount', () => {
+  it('formats zero bytes as "0 B"', () => {
+    expect(formatByteCount(0)).toBe('0 B');
+  });
+
+  it('formats 1 byte as "1 B"', () => {
+    expect(formatByteCount(1)).toBe('1 B');
+  });
+
+  it('formats 1 023 bytes as "1023 B" (just below the KiB boundary)', () => {
+    expect(formatByteCount(1023)).toBe('1023 B');
+  });
+
+  it('formats exactly 1 024 bytes as "1.00 KiB" (size < 10, two decimal places)', () => {
+    // 1024 / 1024 = 1.0 which is less than the >= 10 threshold, so .toFixed(2) applies.
+    expect(formatByteCount(1024)).toBe('1.00 KiB');
+  });
+
+  it('formats 10 239 bytes as "10.00 KiB" (just below the >= 10 threshold, .toFixed(2) rounds up)', () => {
+    // 10239 / 1024 ≈ 9.999, which is < 10 so .toFixed(2) is used; rounding carries all the
+    // way through the fractional digits and produces "10.00", not "9.99".
+    expect(formatByteCount(10239)).toBe('10.00 KiB');
+  });
+
+  it('formats exactly 10 240 bytes as "10.0 KiB" (at the >= 10 threshold, .toFixed(1) applies)', () => {
+    // 10240 / 1024 = 10.0 which satisfies size >= 10, so .toFixed(1) applies.
+    expect(formatByteCount(10240)).toBe('10.0 KiB');
+  });
+
+  it('formats exactly 1 MiB as "1.00 MiB"', () => {
+    expect(formatByteCount(1024 * 1024)).toBe('1.00 MiB');
+  });
+
+  it('formats exactly 1 GiB as "1.00 GiB"', () => {
+    expect(formatByteCount(1024 * 1024 * 1024)).toBe('1.00 GiB');
+  });
+
+  it('formats exactly 1 TiB as "1.00 TiB"', () => {
+    expect(formatByteCount(1024 * 1024 * 1024 * 1024)).toBe('1.00 TiB');
+  });
+
+  it('formats values above 1 TiB in TiB units (loop caps at TiB)', () => {
+    // The loop terminates at TiB (unitIndex 3) regardless of input magnitude.
+    // 2 TiB → size = 2.0 which is < 10, so .toFixed(2) applies → '2.00 TiB'.
+    expect(formatByteCount(2 * 1024 * 1024 * 1024 * 1024)).toBe('2.00 TiB');
   });
 });

@@ -288,7 +288,7 @@ async function uploadFinalizeArtifact(
     };
   }
 
-  const artifactBackend = resolveArtifactBackend(dependencies);
+  const artifactBackend = dependencies.artifactBackend;
   const persistedExecutionIdentity = getPersistedDeltaArtifactExecutionIdentity(
     dependencies.runtimeHost.getState,
   );
@@ -360,7 +360,7 @@ async function cleanupConsumedDeltaArtifacts(
     };
   }
 
-  const artifactBackend = resolveArtifactBackend(dependencies);
+  const artifactBackend = dependencies.artifactBackend;
   if (!artifactBackend.capabilities.supportsDeletion) {
     return {
       attemptedArtifactNames: artifactNames,
@@ -400,12 +400,6 @@ async function cleanupConsumedDeltaArtifacts(
     warnings,
     message: `Consumed delta artifact cleanup deleted ${deletedArtifactNames.length} of ${artifactNames.length} persisted artifact(s).`,
   };
-}
-
-function resolveArtifactBackend(
-  dependencies: Pick<FinalizeActionDependencies, 'artifactBackend'>,
-): WorkflowArtifactBackend {
-  return dependencies.artifactBackend;
 }
 
 function countDeltaEntries(deltaManifest: Parameters<typeof stageDeltaArtifactPackage>[2]): {
@@ -797,7 +791,16 @@ function getBaseCacheWarning(
   return null;
 }
 
-function formatByteCount(value: number): string {
+/**
+ * Converts a raw byte count into a human-readable string with an appropriate binary unit.
+ *
+ * Values below 1 024 are displayed as bytes (`N B`). Larger values step through KiB → MiB →
+ * GiB → TiB; the loop caps at TiB so arbitrarily large inputs still produce a finite string.
+ * Fractional values below 10 use two decimal places (`1.00 KiB`); values from 10 upward use
+ * one decimal place (`10.0 KiB`). This function is exported so its boundary behaviour can be
+ * pinned by unit tests independently of the finalize rendering pipeline.
+ */
+export function formatByteCount(value: number): string {
   if (value < 1024) {
     return `${value} B`;
   }
