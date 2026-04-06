@@ -124,8 +124,8 @@ export interface BootstrapDependencies {
    * Defaults to the internal child-process implementation when omitted.
    */
   readonly captureCommandOutput?: CommandOutputCapture;
-  /** Preferred provider-neutral base-cache backend for the active CI provider. */
-  readonly cacheBackend?: BaseCacheBackend;
+  /** Provider-neutral base-cache backend for the active CI provider. */
+  readonly cacheBackend: BaseCacheBackend;
 }
 
 /**

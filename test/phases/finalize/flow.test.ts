@@ -1118,7 +1118,6 @@ async function stageWorkerArtifactForCleanup(
   );
 }
 
-
 // ---------------------------------------------------------------------------
 // Unit tests for createFinalizeActionSummaryLines rendering logic.
 //

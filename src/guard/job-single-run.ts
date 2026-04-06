@@ -104,8 +104,7 @@ export async function claimSingleRunPrepareExecution(
   persistSingleRunPostState(dependencies.saveState, ownerToken, false);
   return {
     accepted: true,
-    message:
-      'Claimed Apache Buildish Mammoth Cache single-run ownership for this CI job.',
+    message: 'Claimed Apache Buildish Mammoth Cache single-run ownership for this CI job.',
   };
 }
 

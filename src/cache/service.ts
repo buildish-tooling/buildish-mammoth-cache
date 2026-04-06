@@ -23,11 +23,11 @@ const FINALIZE_ARMED_STATE = 'buildish-mammoth-cache-base-cache-armed';
 const REF_NAME_PLACEHOLDER = '${refName}';
 
 /**
- * Optional test seams for the base cache service.
+ * Injectable dependencies for the base cache service.
  */
 export interface BaseCacheServiceDependencies {
-  /** Preferred provider-neutral cache backend dependency. */
-  readonly cacheBackend?: BaseCacheBackend;
+  /** Provider-neutral cache backend used for restore and save operations. */
+  readonly cacheBackend: BaseCacheBackend;
 }
 
 /**
@@ -145,7 +145,7 @@ export function createBaseCacheRestoreKeys(
 }
 
 /**
- * Restores the base Gradle cache and classifies the outcome for logs and summaries.
+ * Restores the base cache and classifies the outcome for logs and summaries.
  *
  * This function intentionally treats cache availability and cache misses as ordinary outcomes. It
  * only delegates exceptional behavior to the active backend when restore itself fails.
@@ -155,7 +155,7 @@ export async function restoreBaseCache(
   cacheModel: CacheModel,
   dependencies: BaseCacheServiceDependencies,
 ): Promise<BaseCacheRestoreResult> {
-  const cacheBackend = resolveBaseCacheBackend(dependencies);
+  const { cacheBackend } = dependencies;
   const paths = createBaseCachePaths(cacheModel);
   const restoreKeys = cacheBackend.capabilities.supportsRestoreKeys
     ? createBaseCacheRestoreKeys(config, cacheModel)
@@ -213,10 +213,10 @@ export async function restoreBaseCache(
 }
 
 /**
- * Saves the base Gradle cache from the post-action when the current job mode allows it.
+ * Saves the base cache from the post-action when the current job mode allows it.
  *
- * Save is intentionally gated behind post-action arming, read-only mode, and job-mode checks, so we
- * avoid introducing duplicate writers or unexpected state changes in distributed execution.
+ * Save is intentionally gated behind post-action arming, read-only mode, and job-mode checks, so
+ * we avoid introducing duplicate writers or unexpected state changes in distributed execution.
  */
 export async function saveBaseCache(
   config: NormalizedActionConfig,
@@ -253,7 +253,7 @@ export async function saveBaseCache(
     );
   }
 
-  const cacheBackend = resolveBaseCacheBackend(dependencies);
+  const { cacheBackend } = dependencies;
   if (!cacheBackend.isFeatureAvailable()) {
     return createSaveResult(
       'feature-unavailable',
@@ -342,14 +342,6 @@ function renderCacheKeyTemplate(
   return template.replaceAll(/\$\{([A-Za-z0-9]+)\}/g, (match, placeholderName: string) => {
     return placeholderValues[placeholderName] ?? match;
   });
-}
-
-function resolveBaseCacheBackend(dependencies: BaseCacheServiceDependencies): BaseCacheBackend {
-  const { cacheBackend } = dependencies;
-  if (!cacheBackend) {
-    throw new Error('Base cache backend dependency is required.');
-  }
-  return cacheBackend;
 }
 
 function createSaveResult(

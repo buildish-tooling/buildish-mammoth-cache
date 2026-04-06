@@ -45,7 +45,7 @@ import { parseSerializedJson, parseWithZod } from '../util/serialization';
 
 /** Schema version embedded in every delta artifact package metadata file. Increment on breaking format changes. */
 export const DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION = 1;
-/** Sentinel value used in place of the absolute Gradle user home path inside portable delta manifests. */
+/** Sentinel value used in place of the absolute cache root path inside portable delta manifests. */
 export const PORTABLE_CACHE_ROOT = '<portable-cache-root>';
 
 const DELTA_ARTIFACT_NAME_PREFIX = 'buildish-mammoth-cache-delta';
@@ -473,7 +473,7 @@ export async function verifyExtractedDeltaArtifactPackage(
 
   const deltaManifest = deserializeCacheDeltaManifest(serializedDeltaManifest);
   if (deltaManifest.cacheRoot !== PORTABLE_CACHE_ROOT) {
-    throw new Error('Downloaded delta artifact must use the portable Gradle user home sentinel.');
+    throw new Error('Downloaded delta artifact must use the portable cache root sentinel.');
   }
 
   const expectedPayloads = collectExpectedPayloadSnapshots(deltaManifest);
@@ -579,7 +579,7 @@ async function stagePayloadEntries(
   for (const [index, { entry, currentSnapshot }] of changedEntries.entries()) {
     const payloadPath = `${DELTA_PACKAGE_PAYLOAD_DIRECTORY}/${formatPayloadFileName(index)}`;
     const destinationPath = path.join(payloadDirectory, formatPayloadFileName(index));
-    const sourcePath = resolveGradleCachePath(deltaManifest.cacheRoot, entry.relativePath);
+    const sourcePath = resolveCacheRootPath(deltaManifest.cacheRoot, entry.relativePath);
     await copyAndVerifySourceFile(sourcePath, destinationPath, entry.relativePath, currentSnapshot);
     payloadEntries.push({
       relativePath: entry.relativePath,
@@ -765,11 +765,11 @@ function formatPayloadFileName(index: number): string {
   return `${String(index + 1).padStart(6, '0')}.bin`;
 }
 
-function resolveGradleCachePath(gradleUserHome: string, relativePath: string): string {
+function resolveCacheRootPath(cacheRoot: string, relativePath: string): string {
   return resolveNormalizedPathWithinRoot(
-    gradleUserHome,
+    cacheRoot,
     validatePackageRelativePath(relativePath, 'delta relativePath'),
-    `Delta relative path '${relativePath}' escapes the Gradle user home.`,
+    `Delta relative path '${relativePath}' escapes the cache root.`,
   );
 }
 
