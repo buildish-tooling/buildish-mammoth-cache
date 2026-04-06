@@ -21,6 +21,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { createGitHubContext, createGitHubPlatform } from '../../src/ci/github';
+import { createGitHubBaseCacheBackend } from '../../src/ci/github/cache';
 import { createGitHubReportSink, type SummaryWriter } from '../../src/ci/github/report-sink';
 
 describe('createGitHubContext', () => {
@@ -268,6 +269,46 @@ describe('createGitHubPlatform', () => {
     expect(platform.executionUrls).toEqual({
       jobUrl: 'https://github.com/apache/buildish/actions/runs/101/job/987654321',
       workflowRunUrl: 'https://github.com/apache/buildish/actions/runs/101/attempts/2',
+    });
+  });
+});
+
+describe('createGitHubBaseCacheBackend', () => {
+  // Minimal stub satisfying the Pick<BaseCacheBackend, …> constructor parameter. The methods
+  // are never called by isMissingPathsError, so they can safely be no-op stubs.
+  const stubBackend = {
+    isFeatureAvailable: () => false,
+    restoreCache: async () => undefined as string | undefined,
+    saveCache: async () => 0,
+  };
+
+  describe('isMissingPathsError', () => {
+    it('returns true for the known path-validation error message emitted by @actions/cache', () => {
+      const backend = createGitHubBaseCacheBackend(stubBackend);
+      // The exact fragment matched is:
+      // 'Path Validation Error: Path(s) specified in the action for caching do(es) not exist'
+      // This test uses the full message as @actions/cache would produce it.
+      const error = new Error(
+        'Path Validation Error: Path(s) specified in the action for caching do(es) not exist, hence not saving cache.',
+      );
+
+      expect(backend.isMissingPathsError(error)).toBe(true);
+    });
+
+    it('returns false for an unrelated Error', () => {
+      const backend = createGitHubBaseCacheBackend(stubBackend);
+
+      expect(backend.isMissingPathsError(new Error('ENOENT: no such file or directory'))).toBe(
+        false,
+      );
+    });
+
+    it('returns false for non-Error values (string, null, undefined)', () => {
+      const backend = createGitHubBaseCacheBackend(stubBackend);
+
+      expect(backend.isMissingPathsError('string error')).toBe(false);
+      expect(backend.isMissingPathsError(null)).toBe(false);
+      expect(backend.isMissingPathsError(undefined)).toBe(false);
     });
   });
 });

@@ -155,12 +155,13 @@ describe('provisionWrapperJars', () => {
           const url = String(input);
 
           if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-            expect(init).toBeUndefined();
+            // The timeout signal is always present; only verify that no auth headers are sent.
+            expect(init?.headers).toBeUndefined();
             return new Response(`${jarSha256}\n`, { status: 200 });
           }
 
           if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-            expect(init).toBeUndefined();
+            expect(init?.headers).toBeUndefined();
             return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
           }
 
@@ -573,6 +574,38 @@ describe('provisionWrapperJars', () => {
             },
           }),
         ).rejects.toThrow(/exceeded the.*-byte limit during streaming/u);
+      },
+    );
+  });
+
+  it('aborts a stalled fetch and reports a clear timeout error', async () => {
+    // Verify that requestTimeoutMs causes each fetch attempt to be aborted when the server
+    // never responds. The fetchImpl simulates a stalled connection by returning a promise that
+    // only resolves once the AbortSignal fires.
+    // Note: provisionWrapperJars issues multiple concurrent fetch calls (checksum, signature,
+    // JAR), so asserting on total abort counts across concurrent promises is non-deterministic.
+    // The meaningful assertion is that the overall operation rejects with a clear timeout
+    // message that includes the configured timeout value.
+    await withValidatedWrappers(
+      { 'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties() },
+      async ([wrapper]) => {
+        await expect(
+          provisionWrapperJars([wrapper], {
+            fetchImpl: async (_input: string | URL | Request, init?: RequestInit) =>
+              new Promise<Response>((_resolve, reject) => {
+                // Reject as soon as the per-request AbortSignal fires — this simulates a
+                // fetch implementation that honours the signal (as the real globalThis.fetch does).
+                init?.signal?.addEventListener('abort', () => {
+                  const err = new DOMException('The operation timed out.', 'TimeoutError');
+                  reject(err);
+                });
+              }),
+            requestTimeoutMs: 5, // very short — fires almost immediately in the test
+            retryAttempts: 1,
+            retryDelayMs: 0,
+            sleep: async () => {},
+          }),
+        ).rejects.toThrow(/timed out after 5ms/u);
       },
     );
   });

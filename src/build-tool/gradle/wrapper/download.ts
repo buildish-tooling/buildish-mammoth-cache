@@ -37,7 +37,10 @@ const DISTRIBUTION_PATH_PATTERN =
 const SHA256_PATTERN = /^[A-Fa-f0-9]{64}$/;
 const DEFAULT_RETRY_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 1000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRY_AFTER_DELAY_MS = 300_000;
+/** Upper bound accepted for {@link WrapperProvisionOptions.requestTimeoutMs}. */
+const MAX_REQUEST_TIMEOUT_MS = 300_000;
 const EMPTY_HTTP_HEADERS_BY_HOST: HttpHeadersByHost = new Map();
 
 /**
@@ -109,6 +112,15 @@ export interface WrapperProvisionOptions {
    */
   readonly logRetry?: (message: string) => void;
   /**
+   * Per-request wall-clock timeout in milliseconds applied to each individual fetch attempt.
+   *
+   * A fresh {@link AbortSignal} is created per attempt so each retry receives a full timeout
+   * window. An attempt that exceeds the timeout is aborted and treated as a transient failure
+   * eligible for retry. Defaults to `30000` (30 seconds) and must be an integer between `1`
+   * and `300000` inclusive.
+   */
+  readonly requestTimeoutMs?: number;
+  /**
    * Optional exact-host HTTP headers applied only to matching HTTPS requests.
    *
    * This is used for authenticated GitHub API wrapper downloads without sending credentials to
@@ -170,6 +182,9 @@ export async function provisionWrapperJars(
   const sleep = options.sleep ?? sleepTimeout;
   const retryAttempts = validateRetryAttempts(options.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS);
   const retryDelayMs = validateRetryDelay(options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+  const requestTimeoutMs = validateRequestTimeout(
+    options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+  );
   const logRetry = options.logRetry;
   const httpHeadersByHost = options.httpHeadersByHost ?? EMPTY_HTTP_HEADERS_BY_HOST;
   const verifyWrapperSignature = options.verifyWrapperSignature ?? defaultVerifyWrapperSignature;
@@ -190,6 +205,7 @@ export async function provisionWrapperJars(
           sleep,
           retryAttempts,
           retryDelayMs,
+          requestTimeoutMs,
           logRetry,
         ),
     );
@@ -203,6 +219,7 @@ export async function provisionWrapperJars(
           sleep,
           retryAttempts,
           retryDelayMs,
+          requestTimeoutMs,
           logRetry,
         ),
     );
@@ -236,6 +253,7 @@ export async function provisionWrapperJars(
             sleep,
             retryAttempts,
             retryDelayMs,
+            requestTimeoutMs,
             logRetry,
           ),
       );
@@ -416,6 +434,7 @@ async function downloadExpectedWrapperJarSha256(
   sleep: (milliseconds: number) => Promise<unknown>,
   retryAttempts: number,
   retryDelayMs: number,
+  requestTimeoutMs: number,
   logRetry: ((message: string) => void) | undefined,
 ): Promise<string> {
   const description = `wrapper checksum for '${plan.relativePath}'`;
@@ -426,6 +445,7 @@ async function downloadExpectedWrapperJarSha256(
     sleep,
     retryAttempts,
     retryDelayMs,
+    requestTimeoutMs,
     description,
     logRetry,
   );
@@ -448,6 +468,7 @@ async function downloadExpectedWrapperJarSignature(
   sleep: (milliseconds: number) => Promise<unknown>,
   retryAttempts: number,
   retryDelayMs: number,
+  requestTimeoutMs: number,
   logRetry: ((message: string) => void) | undefined,
 ): Promise<string> {
   const description = `wrapper signature for '${plan.relativePath}'`;
@@ -458,6 +479,7 @@ async function downloadExpectedWrapperJarSignature(
     sleep,
     retryAttempts,
     retryDelayMs,
+    requestTimeoutMs,
     description,
     logRetry,
   );
@@ -481,6 +503,7 @@ async function downloadWrapperJar(
   sleep: (milliseconds: number) => Promise<unknown>,
   retryAttempts: number,
   retryDelayMs: number,
+  requestTimeoutMs: number,
   logRetry: ((message: string) => void) | undefined,
 ): Promise<Uint8Array> {
   const description = `wrapper JAR for '${plan.relativePath}'`;
@@ -491,12 +514,25 @@ async function downloadWrapperJar(
     sleep,
     retryAttempts,
     retryDelayMs,
+    requestTimeoutMs,
     description,
     logRetry,
   );
   return await readBodyWithSizeLimit(response, MAX_JAR_RESPONSE_BYTES, description);
 }
 
+/**
+ * Fetches a URL with exponential-backoff retry and a per-request wall-clock timeout.
+ *
+ * A fresh {@link AbortSignal} is created for every individual attempt via
+ * {@link AbortSignal.timeout}, so each retry starts with a full `requestTimeoutMs` window.
+ * When the signal fires the fetch throws a `DOMException` whose `name` is `'TimeoutError'`;
+ * this is detected in the catch branch and wrapped in a descriptive message before being
+ * treated as a retryable transient failure.
+ *
+ * HTTP 404 responses are not retried: they indicate the resource is absent, not a transient
+ * infrastructure issue. All other non-OK responses and network errors are eligible for retry.
+ */
 async function fetchWithRetries(
   url: string,
   requestInit: RequestInit | undefined,
@@ -504,14 +540,22 @@ async function fetchWithRetries(
   sleep: (milliseconds: number) => Promise<unknown>,
   retryAttempts: number,
   retryDelayMs: number,
+  requestTimeoutMs: number,
   resourceDescription: string,
   logRetry: ((message: string) => void) | undefined,
 ): Promise<Response> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    // A fresh AbortSignal is created per attempt so each retry gets a full timeout window.
+    // AbortSignal.timeout() manages its own internal timer and cleans it up automatically.
+    const timedRequestInit: RequestInit = {
+      ...requestInit,
+      signal: AbortSignal.timeout(requestTimeoutMs),
+    };
+
     try {
-      const response = await fetchImpl(url, requestInit);
+      const response = await fetchImpl(url, timedRequestInit);
 
       if (response.ok) {
         return response;
@@ -543,7 +587,16 @@ async function fetchWithRetries(
       }
       continue;
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      // 'TimeoutError' is the DOMException.name produced by AbortSignal.timeout() when the
+      // per-request timeout fires before the server responds.  Wrap it in a clear message so
+      // operators can distinguish stalled connections from other transient failures.
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        lastError = new Error(
+          `Could not download ${resourceDescription}: request to '${url}' timed out after ${requestTimeoutMs}ms.`,
+        );
+      } else {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
 
       if (lastError.message.includes('404 Not Found')) {
         throw lastError;
@@ -730,6 +783,14 @@ function validateRetryAttempts(value: number): number {
 function validateRetryDelay(value: number): number {
   if (!Number.isInteger(value) || value < 0 || value > 60_000) {
     throw new Error('retryDelayMs must be an integer between 0 and 60000.');
+  }
+
+  return value;
+}
+
+function validateRequestTimeout(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_REQUEST_TIMEOUT_MS) {
+    throw new Error(`requestTimeoutMs must be an integer between 1 and ${MAX_REQUEST_TIMEOUT_MS}.`);
   }
 
   return value;

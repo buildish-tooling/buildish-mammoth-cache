@@ -333,12 +333,13 @@ describe('bootstrap helpers', () => {
         const url = String(input);
 
         if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-          expect(init).toBeUndefined();
+          // The timeout signal is always present; only verify that no auth headers are sent.
+          expect(init?.headers).toBeUndefined();
           return new Response(`${wrapperJarSha256}\n`, { status: 200 });
         }
 
         if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-          expect(init).toBeUndefined();
+          expect(init?.headers).toBeUndefined();
           return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
         }
 
