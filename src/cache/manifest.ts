@@ -20,7 +20,10 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { hashFileSha256, isMissingPathError } from '../util/fs';
-import { validateNormalizedRelativePosixPath } from '../util/paths';
+import {
+  resolveNormalizedPathWithinRoot,
+  validateNormalizedRelativePosixPath,
+} from '../util/paths';
 import { parseSerializedJson, parseWithZod } from '../util/serialization';
 import type { CacheModel } from './model';
 
@@ -490,23 +493,30 @@ async function walkIncludedTree(
     return;
   }
 
-  for (const entry of entries) {
-    const absolutePath = path.join(pathToScan, entry.name);
+  // Process all directory entries concurrently. Within a single directory, each entry has a
+  // unique name, so the onFile callbacks for different entries are guaranteed to operate on
+  // distinct absolute paths — there are no shared-state race conditions. The outer loop in
+  // captureCacheManifest still processes include patterns sequentially, so cross-pattern
+  // deduplication via seenRelativePaths continues to work correctly.
+  await Promise.all(
+    entries.map(async (entry) => {
+      const absolutePath = path.join(pathToScan, entry.name);
 
-    if (entry.isSymbolicLink()) {
-      await onFile(absolutePath);
-      continue;
-    }
+      if (entry.isSymbolicLink()) {
+        await onFile(absolutePath);
+        return;
+      }
 
-    if (entry.isDirectory()) {
-      await walkIncludedTree(absolutePath, onFile);
-      continue;
-    }
+      if (entry.isDirectory()) {
+        await walkIncludedTree(absolutePath, onFile);
+        return;
+      }
 
-    if (entry.isFile()) {
-      await onFile(absolutePath);
-    }
-  }
+      if (entry.isFile()) {
+        await onFile(absolutePath);
+      }
+    }),
+  );
 }
 
 async function expandIncludePatternRoots(
@@ -536,7 +546,16 @@ async function expandPatternPrefix(
   }
 
   if (!segment.hasWildcard) {
-    const nextPath = path.join(currentPath, segment.raw);
+    // Path-containment guard: a segment like '..' could escape the scan root. Resolving
+    // via resolveNormalizedPathWithinRoot (using currentPath as the root) rejects any
+    // upward traversal before we ever touch the filesystem. The error is propagated to the
+    // caller rather than silently ignored, consistent with how other invalid glob shapes
+    // (missing trailing '**', non-terminal '**') are treated.
+    const nextPath = resolveNormalizedPathWithinRoot(
+      currentPath,
+      segment.raw,
+      `Cache include glob contains a path-traversal segment ('${segment.raw}') that would escape the scan root.`,
+    );
     const nextStat = await lstat(nextPath).catch((error: unknown) => {
       if (isMissingPathError(error)) {
         return null;

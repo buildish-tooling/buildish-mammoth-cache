@@ -447,6 +447,20 @@ describe('captureCacheManifest — sort comparator and include-glob validation',
       ).rejects.toThrow(/trailing '\*\*'/u);
     });
   });
+
+  it('throws for a cache include glob that contains a .. path-traversal segment', async () => {
+    // A pattern like '../**' or 'caches/../../../etc/**' must not silently escape the cache
+    // root — the containment check in expandPatternPrefix must reject it before any stat call.
+    await withGradleUserHome(async (gradleUserHome) => {
+      await expect(
+        captureCacheManifest(
+          createTestCacheModel(gradleUserHome, [
+            createCustomPartition('bad', gradleUserHome, ['../**']),
+          ]),
+        ),
+      ).rejects.toThrow(/escape the scan root/u);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
