@@ -312,6 +312,9 @@ describe('bootstrap helpers', () => {
       async saveCache(): Promise<number> {
         throw new Error('saveCache should not be called during main bootstrap');
       },
+      isMissingPathsError(): boolean {
+        return false;
+      },
     };
     const summaryWriter: SummaryWriter = {
       addRaw(text: string, _addEol?: boolean): SummaryWriter {
@@ -423,6 +426,9 @@ describe('bootstrap helpers', () => {
       async saveCache(): Promise<number> {
         return 42;
       },
+      isMissingPathsError(): boolean {
+        return false;
+      },
     };
     const summaryWriter: SummaryWriter = {
       addRaw(text: string, _addEol?: boolean): SummaryWriter {
@@ -490,6 +496,9 @@ describe('bootstrap helpers', () => {
       },
       async saveCache(): Promise<number> {
         throw new Error('saveCache should not be called when caching is disabled');
+      },
+      isMissingPathsError(): boolean {
+        return false;
       },
     };
     const summaryWriter: SummaryWriter = {
@@ -605,6 +614,9 @@ describe('bootstrap helpers', () => {
             },
             async saveCache(): Promise<number> {
               throw new Error('saveCache should not be called when caching is disabled');
+            },
+            isMissingPathsError(): boolean {
+              return false;
             },
           },
           ...deps,

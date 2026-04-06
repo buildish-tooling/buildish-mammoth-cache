@@ -69,7 +69,8 @@ const cacheModel: CacheModel = {
 };
 
 function createCacheBackend(
-  backend: Pick<BaseCacheBackend, 'isFeatureAvailable' | 'restoreCache' | 'saveCache'>,
+  backend: Pick<BaseCacheBackend, 'isFeatureAvailable' | 'restoreCache' | 'saveCache'> &
+    Partial<Pick<BaseCacheBackend, 'isMissingPathsError'>>,
   capabilities = STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
 ): BaseCacheBackend {
   return {
@@ -77,6 +78,7 @@ function createCacheBackend(
     isFeatureAvailable: backend.isFeatureAvailable,
     restoreCache: backend.restoreCache,
     saveCache: backend.saveCache,
+    isMissingPathsError: backend.isMissingPathsError ?? (() => false),
   };
 }
 
@@ -250,15 +252,20 @@ describe('saveBaseCache', () => {
   });
 
   it('skips saving when no cache paths currently exist on disk', async () => {
+    const missingPathsError = new Error(
+      'Path Validation Error: Path(s) specified in the action for caching do(es) not exist, hence no cache is being saved.',
+    );
     const result = await saveBaseCache(baseConfig, cacheModel, true, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
         saveCache: async () => {
-          throw new Error(
-            'Path Validation Error: Path(s) specified in the action for caching do(es) not exist, hence no cache is being saved.',
-          );
+          throw missingPathsError;
         },
+        // Simulates the same detection logic as createGitHubBaseCacheBackend so the service
+        // maps the provider-specific error to the generic 'missing-paths' result status.
+        isMissingPathsError: (error) =>
+          error instanceof Error && error.message.includes('Path Validation Error'),
       }),
     });
 

@@ -53,4 +53,12 @@ export interface BaseCacheBackend {
   ): Promise<string | undefined>;
   /** Attempts to create a new cache entry for the given key. */
   saveCache(paths: string[], key: string): Promise<number>;
+  /**
+   * Returns `true` when the given error was thrown by {@link saveCache} because none of the
+   * requested cache paths exist on disk yet.
+   *
+   * Implementations encapsulate provider-specific error detection (e.g. message-string matching
+   * for `@actions/cache`) so shared orchestration never depends on provider error formats.
+   */
+  isMissingPathsError(error: unknown): boolean;
 }

@@ -87,7 +87,7 @@ atomically. This ensures that a partially written JAR is never visible to the Gr
 
 ### Key allowlist design
 
-The key allowlist in `src/gradle/wrapper/signature.ts` is an explicit list of Gradle's published
+The key allowlist in `src/build-tool/gradle/wrapper/signature.ts` is an explicit list of Gradle's published
 signing keys. Old and new keys may overlap during a key rotation period. Once a key is no longer
 used to sign any wrapper version you support, remove it from the allowlist.
 

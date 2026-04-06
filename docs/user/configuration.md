@@ -146,13 +146,6 @@ only by the corresponding action and ignored (or rejected) by the other.
 - When `false`, any path conflict is treated as an error to prevent silent data loss.
 - Only relevant for distributed aggregator jobs.
 
-### `github-token`
-
-- Default: unset
-- **Gradle only** — used for authenticated wrapper JAR downloads (see below). Unused by the Maven action.
-- When omitted, the Gradle action falls back to `GITHUB_TOKEN` from the runner environment if available.
-- Never written to summaries or persisted post-action state.
-
 ### `github-event-name`
 
 - Default: unset (the action reads `GITHUB_EVENT_NAME` from the runner environment)
@@ -201,6 +194,13 @@ only by the corresponding action and ignored (or rejected) by the other.
 ---
 
 ## Gradle-only inputs
+
+### `github-token`
+
+- Default: unset
+- Used for authenticated wrapper JAR downloads against the GitHub API (see below).
+- When omitted, the Gradle action falls back to `GITHUB_TOKEN` from the runner environment if available.
+- Never written to summaries or persisted post-action state.
 
 ### `process-all-wrapper-files`
 

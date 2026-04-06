@@ -26,7 +26,7 @@ When Gradle publishes a new signing key at <https://gradle.org/keys/>:
 
 1. Verify the new key's fingerprint matches the published fingerprint on that page.
 2. Add the new key to the `GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST` array in
-   `src/gradle/wrapper/signature.ts` alongside the current key.
+   `src/build-tool/gradle/wrapper/signature.ts` alongside the current key.
 3. After the old key is no longer used to sign any wrapper version you support, remove it from the
    allowlist.
 

@@ -22,6 +22,14 @@ import {
 } from '../../cache/backend';
 
 /**
+ * Fragment of the error message thrown by `@actions/cache` when none of the supplied paths exist
+ * on disk at save time. Used by {@link createGitHubBaseCacheBackend}'s `isMissingPathsError` to
+ * classify the error without propagating an `@actions/cache` dependency into shared orchestration.
+ */
+const NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT =
+  'Path Validation Error: Path(s) specified in the action for caching do(es) not exist';
+
+/**
  * Creates a {@link BaseCacheBackend} backed by the `@actions/cache` toolkit package.
  *
  * @param cacheBackend - Cache implementation to delegate to; defaults to the toolkit cache client.
@@ -43,6 +51,9 @@ export function createGitHubBaseCacheBackend(
     },
     async saveCache(paths: string[], key: string) {
       return await cacheBackend.saveCache(paths, key);
+    },
+    isMissingPathsError(error: unknown): boolean {
+      return error instanceof Error && error.message.includes(NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT);
     },
   };
 }

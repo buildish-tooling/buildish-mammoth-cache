@@ -21,8 +21,6 @@ import { DEFAULT_CACHE_KEY_TEMPLATE, type CacheModel } from './model';
 
 const FINALIZE_ARMED_STATE = 'buildish-mammoth-cache-base-cache-armed';
 const REF_NAME_PLACEHOLDER = '${refName}';
-const NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT =
-  'Path Validation Error: Path(s) specified in the action for caching do(es) not exist';
 
 /**
  * Optional test seams for the base cache service.
@@ -279,7 +277,7 @@ export async function saveBaseCache(
   try {
     cacheId = await cacheBackend.saveCache([...paths], cacheModel.cacheKey);
   } catch (error) {
-    if (isMissingCachePathsError(error)) {
+    if (cacheBackend.isMissingPathsError(error)) {
       return createSaveResult(
         'missing-paths',
         cacheModel.cacheKey,
@@ -369,8 +367,4 @@ function createSaveResult(
     paths,
     message,
   };
-}
-
-function isMissingCachePathsError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes(NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT);
 }

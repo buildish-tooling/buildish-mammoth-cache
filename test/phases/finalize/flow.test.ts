@@ -31,10 +31,10 @@ import { createCachePartitions, type CacheModel } from '../../../src/cache/model
 import {
   createFinalizeActionSummaryLines,
   executeFinalizeAction,
+  type FinalizeActionStatus,
 } from '../../../src/phases/finalize/flow';
 import type { SummaryWriter } from '../../../src/ci/github/report-sink';
 import {
-  CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
   DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE,
   persistBaseCacheRestoreResult,
   persistPreBuildCacheManifest,
@@ -543,8 +543,7 @@ describe('executeFinalizeAction', () => {
       );
       await stageWorkerArtifactForCleanup(artifactBackend, workspace, 'worker-a');
       const artifactNameToDelete = (await artifactBackend.listArtifacts())[0]!.name;
-      savedState.set('buildish-mammoth-cache-distributed-aggregate-state', 'true');
-      savedState.set(CONSUMED_DELTA_ARTIFACT_NAMES_STATE, JSON.stringify([artifactNameToDelete]));
+      persistConsumedDeltaArtifactNames([artifactNameToDelete], savedState.set.bind(savedState));
 
       const status = await executeFinalizeAction({
         artifactBackend,
@@ -862,6 +861,9 @@ function createCacheApi(options: { readonly saveCache: () => Promise<number> }):
     async saveCache(): Promise<number> {
       return await options.saveCache();
     },
+    isMissingPathsError(): boolean {
+      return false;
+    },
   };
 }
 
@@ -1115,3 +1117,117 @@ async function stageWorkerArtifactForCleanup(
     stagedPackage.rootDirectory,
   );
 }
+
+
+// ---------------------------------------------------------------------------
+// Unit tests for createFinalizeActionSummaryLines rendering logic.
+//
+// These tests exercise the heading, status icon/label, and job-URL link logic
+// in isolation using minimal FinalizeActionStatus fixtures so regressions in
+// formatting are caught without running the full executeFinalizeAction flow.
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the minimum {@link FinalizeActionStatus} fixture required by
+ * {@link createFinalizeActionSummaryLines}. Fields not accessed by the function
+ * are omitted via a type cast.
+ */
+function createMinimalFinalizeStatus(
+  overrides: Partial<FinalizeActionStatus> = {},
+): FinalizeActionStatus {
+  return {
+    bootstrap: {
+      buildToolAdapter: { getName: () => 'Gradle' },
+      baseCacheResult: null,
+    } as FinalizeActionStatus['bootstrap'],
+    baseCacheRestoreResult: null,
+    cacheStatistics: null,
+    consumedDeltaCleanupResult: null,
+    deltaArtifactResult: null,
+    buildReport: {
+      anyBuildFailed: false,
+      warnings: [],
+      summaryLines: ['No builds captured.'],
+      logLines: [],
+      builds: [],
+    },
+    jobUrl: null,
+    workflowRunUrl: null,
+    message: 'Test.',
+    ...overrides,
+  };
+}
+
+describe('createFinalizeActionSummaryLines', () => {
+  it('includes the build-tool name in the top-level heading', () => {
+    const lines = createFinalizeActionSummaryLines(createMinimalFinalizeStatus()).join('\n');
+    expect(lines).toContain('## Apache Buildish Mammoth Cache for Gradle');
+  });
+
+  it('shows success icon and label when there are no issues', () => {
+    const lines = createFinalizeActionSummaryLines(createMinimalFinalizeStatus()).join('\n');
+    expect(lines).toContain('✅ Overall status: success');
+  });
+
+  it('shows error icon and label when a build failed', () => {
+    const status = createMinimalFinalizeStatus({
+      buildReport: {
+        anyBuildFailed: true,
+        warnings: [],
+        summaryLines: [],
+        logLines: [],
+        builds: [],
+      },
+    });
+    const lines = createFinalizeActionSummaryLines(status).join('\n');
+    expect(lines).toContain('❌ Overall status: issues detected');
+    expect(lines).not.toContain('✅');
+  });
+
+  it('shows warning icon and label when the cache restore feature is unavailable', () => {
+    const status = createMinimalFinalizeStatus({
+      baseCacheRestoreResult: {
+        operation: 'restore',
+        status: 'feature-unavailable',
+        cacheKey: 'test-key',
+        matchedKey: null,
+        restoreKeys: [],
+        paths: [],
+        message: 'Cache backend unavailable.',
+      },
+    });
+    const lines = createFinalizeActionSummaryLines(status).join('\n');
+    expect(lines).toContain('⚠️ Overall status: completed with warnings');
+    expect(lines).not.toContain('✅');
+  });
+
+  it('renders the tool builds heading as a plain label when jobUrl is absent', () => {
+    const lines = createFinalizeActionSummaryLines(createMinimalFinalizeStatus()).join('\n');
+    expect(lines).toContain('### Gradle builds');
+    expect(lines).not.toContain('href');
+  });
+
+  it('renders the tool builds heading as an HTML link when jobUrl is present', () => {
+    const status = createMinimalFinalizeStatus({
+      jobUrl: 'https://github.com/apache/buildish/actions/runs/101/jobs/42',
+    });
+    const lines = createFinalizeActionSummaryLines(status).join('\n');
+    expect(lines).toContain('href="https://github.com/apache/buildish/actions/runs/101/jobs/42"');
+    expect(lines).toContain('Gradle builds');
+  });
+
+  it('includes build-report summary lines verbatim', () => {
+    const status = createMinimalFinalizeStatus({
+      buildReport: {
+        anyBuildFailed: false,
+        warnings: [],
+        summaryLines: ['Line one from build report.', 'Line two from build report.'],
+        logLines: [],
+        builds: [],
+      },
+    });
+    const lines = createFinalizeActionSummaryLines(status).join('\n');
+    expect(lines).toContain('Line one from build report.');
+    expect(lines).toContain('Line two from build report.');
+  });
+});

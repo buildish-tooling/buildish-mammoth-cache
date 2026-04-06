@@ -91,7 +91,7 @@ export async function claimSingleRunPrepareExecution(
       return {
         accepted: false,
         message:
-          'This action may run only once per CI job. Another Apache Buildish Mammoth Cache for Gradle invocation already claimed this job, so this duplicate usage is rejected and its finalize execution will be skipped.',
+          'This action may run only once per CI job. Another Apache Buildish Mammoth Cache invocation already claimed this job, so this duplicate usage is rejected and its finalize execution will be skipped.',
       };
     }
 
@@ -105,7 +105,7 @@ export async function claimSingleRunPrepareExecution(
   return {
     accepted: true,
     message:
-      'Claimed Apache Buildish Mammoth Cache for Gradle single-run ownership for this CI job.',
+      'Claimed Apache Buildish Mammoth Cache single-run ownership for this CI job.',
   };
 }
 
@@ -124,7 +124,7 @@ export function decideSingleRunFinalizeExecution(
     return {
       shouldRun: false,
       message:
-        'Skipping finalize execution for this Apache Buildish Mammoth Cache for Gradle invocation because its prepare execution was rejected as a duplicate usage in the same CI job.',
+        'Skipping finalize execution for this Apache Buildish Mammoth Cache invocation because its prepare execution was rejected as a duplicate usage in the same CI job.',
     };
   }
 
@@ -132,14 +132,14 @@ export function decideSingleRunFinalizeExecution(
     return {
       shouldRun: false,
       message:
-        'Skipping finalize execution because this Apache Buildish Mammoth Cache for Gradle invocation did not claim single-run ownership for the current CI job.',
+        'Skipping finalize execution because this Apache Buildish Mammoth Cache invocation did not claim single-run ownership for the current CI job.',
     };
   }
 
   return {
     shouldRun: true,
     message:
-      'Running finalize execution for the owning Apache Buildish Mammoth Cache for Gradle invocation in this CI job.',
+      'Running finalize execution for the owning Apache Buildish Mammoth Cache invocation in this CI job.',
   };
 }
 

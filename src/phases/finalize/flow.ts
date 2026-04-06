@@ -114,11 +114,11 @@ export interface FinalizeConsumedDeltaCleanupResult {
 /**
  * Injectable dependencies for the post (finalize) action flow.
  *
- * Extends {@link BootstrapDependencies} with the optional artifact backend used to upload worker
+ * Extends {@link BootstrapDependencies} with the artifact backend used to upload worker
  * deltas or clean up consumed aggregator delta artifacts.
  */
 export interface FinalizeActionDependencies extends BootstrapDependencies {
-  readonly artifactBackend?: WorkflowArtifactBackend;
+  readonly artifactBackend: WorkflowArtifactBackend;
 }
 
 /**
@@ -405,11 +405,7 @@ async function cleanupConsumedDeltaArtifacts(
 function resolveArtifactBackend(
   dependencies: Pick<FinalizeActionDependencies, 'artifactBackend'>,
 ): WorkflowArtifactBackend {
-  const { artifactBackend } = dependencies;
-  if (!artifactBackend) {
-    throw new Error('Artifact backend dependency is required.');
-  }
-  return artifactBackend;
+  return dependencies.artifactBackend;
 }
 
 function countDeltaEntries(deltaManifest: Parameters<typeof stageDeltaArtifactPackage>[2]): {

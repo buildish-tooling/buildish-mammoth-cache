@@ -50,7 +50,7 @@ before it is written to disk:
    and compared to the downloaded JAR bytes.
 2. **Detached OpenPGP signature** — the ASCII-armored `.asc` signature is downloaded from
    `services.gradle.org` and verified against a pinned Gradle signing-key allowlist using a fresh
-   ephemeral GnuPG home. The pinned keys live in `src/gradle/wrapper/signature.ts`.
+   ephemeral GnuPG home. The pinned keys live in `src/build-tool/gradle/wrapper/signature.ts`.
 3. **Race-condition guard** — the JAR is written atomically via a temporary file so a partially
    written JAR is never exposed to the Gradle invocation.
 

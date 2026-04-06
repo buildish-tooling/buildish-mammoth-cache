@@ -499,10 +499,6 @@ async function walkIncludedTree(
     }
 
     if (entry.isDirectory()) {
-      if (entry.name === 'configuration-cache') {
-        continue;
-      }
-
       await walkIncludedTree(absolutePath, onFile);
       continue;
     }

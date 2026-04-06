@@ -398,6 +398,9 @@ function unavailableCacheApi(): BaseCacheBackend {
     async saveCache(): Promise<number> {
       throw new Error('saveCache must not be called when the cache feature is unavailable.');
     },
+    isMissingPathsError(): boolean {
+      return false;
+    },
   };
 }
 

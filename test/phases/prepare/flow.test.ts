@@ -1167,6 +1167,9 @@ function createCacheApi(
     async saveCache(): Promise<number> {
       throw new Error('saveCache should not be called during main action flow');
     },
+    isMissingPathsError(): boolean {
+      return false;
+    },
   };
 }
 
