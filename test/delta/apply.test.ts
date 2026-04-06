@@ -53,7 +53,7 @@ describe('cache delta merge/apply engine', () => {
     );
   });
 
-  it('merges ordered delta packages and applies them to a Gradle user home', async () => {
+  it('merges ordered delta packages and applies them to a cache root', async () => {
     const packageA = await createDownloadedPackage(
       temporaryDirectories,
       'Worker A',

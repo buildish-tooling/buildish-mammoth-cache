@@ -32,17 +32,20 @@ import {
 } from '../../../src/cache/manifest';
 import { createCacheModel, type CacheModel } from '../../../src/cache/model';
 import type { CiJobContext } from '../../../src/ci/types';
-import type { NormalizedGradleConfig } from '../../../src/config/types';
+import type { NormalizedActionConfig, NormalizedGradleConfig } from '../../../src/config/types';
 import {
   normalizeGradleActionConfig,
   readGradleActionInputs,
   resolveGradleActionInputsFromConfigFile,
 } from '../../../src/build-tool/gradle/config';
 import {
+  createPrepareActionLogLines,
   createPrepareActionOutputs,
   createPrepareActionSummaryLines,
   executePrepareAction,
+  type PrepareActionStatus,
 } from '../../../src/phases/prepare/flow';
+import type { BootstrapExecution } from '../../../src/phases/bootstrap';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
@@ -944,6 +947,105 @@ describe('executePrepareAction', () => {
     });
   });
 
+  it('throws when prune-managed re-restore does not hit after deleting managed files', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const wrapperJarBytes = Buffer.from('existing-wrapper-jar');
+      const wrapperJarSha256 = sha256Hex(wrapperJarBytes);
+
+      await mkdir(path.join(workspace, 'gradle', 'wrapper'), { recursive: true });
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'),
+        wrapperJarBytes,
+      );
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+        [
+          'distributionBase=GRADLE_USER_HOME',
+          'distributionPath=wrapper/dists',
+          'distributionSha256Sum=61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa',
+          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip',
+          'validateDistributionUrl=true',
+          'zipStoreBase=GRADLE_USER_HOME',
+          'zipStorePath=wrapper/dists',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      // The first restoreCache call (bootstrap restore) returns the primary key → exact-hit,
+      // which arms the prune-managed path.  The second call (re-restore after pruning) returns
+      // undefined → miss, which must cause executePrepareAction to reject rather than silently
+      // continue with a partially pruned cache root.
+      let restoreCallCount = 0;
+      const twoPhaseCacheBackend: BaseCacheBackend = {
+        capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
+        isFeatureAvailable(): boolean {
+          return true;
+        },
+        async restoreCache(_paths: string[], primaryKey: string): Promise<string | undefined> {
+          restoreCallCount += 1;
+          return restoreCallCount === 1 ? primaryKey : undefined;
+        },
+        async saveCache(): Promise<number> {
+          throw new Error('saveCache should not be called during main action flow');
+        },
+        isMissingPathsError(): boolean {
+          return false;
+        },
+      };
+
+      const env = {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'build',
+        GITHUB_RUN_ID: '101',
+        GITHUB_RUN_ATTEMPT: '2',
+        GITHUB_WORKSPACE: workspace,
+        GRADLE_USER_HOME: gradleUserHome,
+        HOME: workspace,
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+        RUNNER_TEMP: path.join(workspace, 'runner-temp'),
+      };
+
+      await expect(
+        executePrepareAction({
+          artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+          cacheBackend: twoPhaseCacheBackend,
+          captureCommandOutput: async (): Promise<string> =>
+            'openjdk version "21.0.4" 2024-07-16\n',
+          env,
+          ...(await createPrepareActionDependencies({
+            env,
+            eventPayload: { repository: { default_branch: 'main' } },
+            inputs: { 'restore-cleanup-mode': 'prune-managed' },
+            saveState(): void {},
+            summaryWriter: createSummaryCapture().writer,
+            workspace,
+            adapterOptions: {
+              fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+                const url = String(input);
+                if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                  return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+                }
+                if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                  return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+                }
+                throw new Error(`Unexpected fetch URL: ${url}`);
+              },
+              verifyWrapperSignature: async () => {},
+            },
+          })),
+        }),
+      ).rejects.toThrow(/follow-up base cache restore did not hit again/u);
+
+      expect(restoreCallCount).toBe(2);
+    });
+  });
+
   it('logs a message and continues when Gradle build hook installation fails', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
@@ -1294,3 +1396,204 @@ ZmFrZQ==
 function sha256Hex(value: Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests for createPrepareActionSummaryLines and createPrepareActionLogLines.
+//
+// These tests exercise the formatting logic in isolation using minimal
+// PrepareActionStatus fixtures so regressions in icons, counters, or wording
+// are caught without running the full executePrepareAction integration flow.
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a fully-typed {@link BootstrapExecution} stub for use in rendering-only unit tests.
+ *
+ * All fields required by {@link createPrepareActionLogLines} (via {@link createBootstrapLogLines})
+ * are given concrete values. Fields that are never accessed by the rendering functions under test
+ * (`ciProvider`, `reportSink`) are null-asserted to the correct type with an explanatory comment;
+ * any newly accessed field will surface as a compile error rather than a silent runtime failure.
+ */
+function createMinimalPrepareBootstrapExecution(): BootstrapExecution {
+  return {
+    phase: 'prepare',
+    message: 'Prepared prepare phase for push on main in standalone mode.',
+    config: {
+      jobMode: 'standalone',
+      readOnly: false,
+      cacheEnabled: true,
+    } as NormalizedActionConfig,
+    ciContext: {
+      eventName: 'push',
+      resolvedRefName: 'main',
+      safeRefName: 'main',
+      runnerOs: 'linux',
+      runnerArch: 'x64',
+      defaultBranch: 'main',
+      isPullRequest: false,
+      repository: 'apache/buildish',
+      workflowName: 'CI',
+      jobName: 'build',
+      runId: 1,
+      runAttempt: 1,
+      tempDirectory: '/tmp',
+      workspace: '/workspace',
+      actionPath: null,
+    },
+    cacheModel: null,
+    baseCacheResult: null,
+    toolProvisioning: { items: [], warnings: [], additionalOutputs: {} },
+    ciDiagnosticsLines: [],
+    ciExecutionUrls: { jobUrl: null, workflowRunUrl: null },
+    buildToolAdapter: { getName: () => 'Gradle' } as BootstrapExecution['buildToolAdapter'],
+    // ciProvider and reportSink are never accessed by the rendering functions under test.
+    ciProvider: null as unknown as BootstrapExecution['ciProvider'],
+    reportSink: null as unknown as BootstrapExecution['reportSink'],
+  };
+}
+
+/**
+ * Builds the minimum {@link PrepareActionStatus} fixture required by
+ * {@link createPrepareActionSummaryLines} and {@link createPrepareActionLogLines}.
+ * Apply `overrides` to exercise specific rendering paths.
+ */
+function createMinimalPrepareStatus(
+  overrides: Partial<PrepareActionStatus> = {},
+): PrepareActionStatus {
+  return {
+    bootstrap: createMinimalPrepareBootstrapExecution(),
+    restoreCleanupResult: null,
+    dependentDeltaResult: null,
+    preBuildManifestState: null,
+    message: 'Test.',
+    ...overrides,
+  };
+}
+
+describe('createPrepareActionSummaryLines', () => {
+  it('includes the top-level heading', () => {
+    const text = createPrepareActionSummaryLines(createMinimalPrepareStatus()).join('\n');
+    expect(text).toContain('## Apache Buildish prepare execution');
+  });
+
+  it('shows "none" for restore cleanup when restoreCleanupResult is null', () => {
+    const text = createPrepareActionSummaryLines(createMinimalPrepareStatus()).join('\n');
+    expect(text).toContain('- Restore cleanup: none');
+  });
+
+  it('shows prune-managed status with deleted file count when cleanup was pruned', () => {
+    const text = createPrepareActionSummaryLines(
+      createMinimalPrepareStatus({
+        restoreCleanupResult: {
+          mode: 'prune-managed',
+          status: 'pruned',
+          deletedFileCount: 5,
+          message: 'Pruned 5 managed file(s).',
+        },
+      }),
+    ).join('\n');
+    expect(text).toContain('- Restore cleanup: prune-managed (5 deleted)');
+    // escapeSummaryText escapes the hyphen in 'prune-managed', so the details section renders
+    // 'prune\-managed' (Markdown escape) rather than the raw mode string.
+    expect(text).toContain('- Restore cleanup mode: prune\\-managed');
+    expect(text).toContain('- Restore cleanup status: pruned');
+    expect(text).toContain('- Restore cleanup deleted files: 5');
+  });
+
+  it('shows "none" for dependent delta when dependentDeltaResult is null', () => {
+    const text = createPrepareActionSummaryLines(createMinimalPrepareStatus()).join('\n');
+    expect(text).toContain('- Dependent delta reuse: none');
+  });
+
+  it('shows artifact and job counts in the dependent delta reuse line', () => {
+    const text = createPrepareActionSummaryLines(
+      createMinimalPrepareStatus({
+        dependentDeltaResult: {
+          requestedJobs: ['worker-a', 'worker-b'],
+          downloadedArtifactNames: ['artifact-a', 'artifact-b'],
+          appliedArtifactCount: 2,
+          message: 'Applied 2.',
+          cacheRoot: '/tmp/.gradle',
+          addedCount: 3,
+          modifiedCount: 1,
+          deletedCount: 0,
+          warnings: [],
+        },
+      }),
+    ).join('\n');
+    expect(text).toContain('- Dependent delta reuse: 2 artifact(s) from 2 job(s)');
+    expect(text).toContain('- Applied delta changes: 3 added, 1 modified, 0 deleted.');
+  });
+
+  it('shows "persisted" or "not persisted" for the pre-build manifest line', () => {
+    const withManifest = createPrepareActionSummaryLines(
+      createMinimalPrepareStatus({ preBuildManifestState: { manifestPath: '/tmp/manifest.json' } }),
+    ).join('\n');
+    expect(withManifest).toContain('- Pre-build manifest: persisted');
+
+    const withoutManifest = createPrepareActionSummaryLines(createMinimalPrepareStatus()).join(
+      '\n',
+    );
+    expect(withoutManifest).toContain('- Pre-build manifest: not persisted');
+  });
+});
+
+describe('createPrepareActionLogLines', () => {
+  it('begins with a bootstrap summary line', () => {
+    const lines = createPrepareActionLogLines(createMinimalPrepareStatus());
+    expect(lines[0]).toContain('Bootstrap:');
+  });
+
+  it('contains "Restore cleanup: none." when restoreCleanupResult is null', () => {
+    const text = createPrepareActionLogLines(createMinimalPrepareStatus()).join('\n');
+    expect(text).toContain('Restore cleanup: none.');
+  });
+
+  it('appends the restoreCleanupResult message when cleanup was performed', () => {
+    const text = createPrepareActionLogLines(
+      createMinimalPrepareStatus({
+        restoreCleanupResult: {
+          mode: 'prune-managed',
+          status: 'pruned',
+          deletedFileCount: 2,
+          message: 'Pruned 2 managed file(s) and re-restored.',
+        },
+      }),
+    ).join('\n');
+    expect(text).toContain('Pruned 2 managed file(s) and re-restored.');
+  });
+
+  it('lists configured dependent job names when dependentDeltaResult is present', () => {
+    const text = createPrepareActionLogLines(
+      createMinimalPrepareStatus({
+        dependentDeltaResult: {
+          requestedJobs: ['worker-a', 'worker-b'],
+          downloadedArtifactNames: ['artifact-a'],
+          appliedArtifactCount: 1,
+          message: 'Applied 1.',
+          cacheRoot: '/tmp/.gradle',
+          addedCount: 1,
+          modifiedCount: 0,
+          deletedCount: 0,
+          warnings: [],
+        },
+      }),
+    ).join('\n');
+    expect(text).toContain('Configured dependent jobs: worker-a, worker-b.');
+    expect(text).toContain('Downloaded dependent delta artifacts: artifact-a.');
+  });
+
+  it('omits dependent-job and artifact lines when dependentDeltaResult is null', () => {
+    const text = createPrepareActionLogLines(createMinimalPrepareStatus()).join('\n');
+    expect(text).not.toContain('Configured dependent jobs');
+    expect(text).not.toContain('Downloaded dependent delta artifacts');
+  });
+
+  it('includes the persisted manifest path when preBuildManifestState is set', () => {
+    const text = createPrepareActionLogLines(
+      createMinimalPrepareStatus({
+        preBuildManifestState: { manifestPath: '/tmp/runner/manifest.json' },
+      }),
+    ).join('\n');
+    expect(text).toContain("Persisted pre-build cache manifest to '/tmp/runner/manifest.json'.");
+  });
+});

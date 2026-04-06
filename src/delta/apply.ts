@@ -53,7 +53,7 @@ export interface MergedDeltaPayload {
 /**
  * The result of merging one or more downloaded delta artifact packages into a single apply plan.
  *
- * Contains a portable delta manifest (using the sentinel Gradle user home) and the resolved
+ * Contains a portable delta manifest (using the portable cache root sentinel) and the resolved
  * payload file paths that back each changed entry.
  */
 export interface MergedDeltaPlan {
@@ -61,7 +61,7 @@ export interface MergedDeltaPlan {
   readonly payloads: readonly MergedDeltaPayload[];
 }
 
-/** Options that control how a merged delta plan is applied to a Gradle user home directory. */
+/** Options that control how a merged delta plan is applied to a cache root directory. */
 export interface DeltaApplyOptions {
   /** Override the filesystem `utimes` call for testing; defaults to `node:fs/promises` `utimes`. */
   readonly setTimes?: (filePath: string, atime: Date, mtime: Date) => Promise<unknown>;
@@ -82,7 +82,7 @@ export interface MergeDeltaOptions {
    * When `true`, overlapping paths with different content are resolved by taking the entry with
    * the newer modification timestamp rather than throwing a hard error.
    *
-   * Use only when multiple workers are known to produce compatible Gradle cache entries for the
+   * Use only when multiple workers are known to produce compatible build-tool cache entries for the
    * same path (e.g. identical downloaded dependency JARs with differing timestamps).
    */
   readonly allowDuplicateDependentDeltaPaths?: boolean;

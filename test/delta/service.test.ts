@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { cp } from 'node:fs/promises';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -279,6 +279,105 @@ describe('artifact exchange service', () => {
     await expect(
       verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, stagedPackage.artifactName),
     ).rejects.toThrow(/normalized relative POSIX path/u);
+  });
+
+  it('rejects a delta artifact whose manifest does not use the portable cache root sentinel', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+
+    // Tamper with the delta manifest by replacing the portable sentinel with a real path, then
+    // update the metadata digest so the hash check passes and the sentinel check is reached.
+    const originalManifest = await readFile(stagedPackage.deltaManifestPath, 'utf8');
+    const tamperedManifest = originalManifest.replace(PORTABLE_CACHE_ROOT, '/home/runner/.gradle');
+    await writeFile(stagedPackage.deltaManifestPath, tamperedManifest, 'utf8');
+
+    const tamperedSha256 = createHash('sha256').update(tamperedManifest).digest('hex');
+    const metadata = deserializeDeltaArtifactPackageMetadata(
+      await readFile(stagedPackage.metadataPath, 'utf8'),
+    );
+    await writeFile(
+      stagedPackage.metadataPath,
+      `${JSON.stringify({ ...metadata, deltaManifestSha256: tamperedSha256 })}\n`,
+    );
+
+    await expect(
+      verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, stagedPackage.artifactName),
+    ).rejects.toThrow(/portable cache root sentinel/u);
+  });
+
+  it('rejects a delta artifact that contains unexpected files outside the documented layout', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+
+    // Add a file that is not declared in the package metadata.
+    await writeFile(path.join(stagedPackage.rootDirectory, 'unexpected.bin'), 'extra-file');
+
+    await expect(
+      verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, stagedPackage.artifactName),
+    ).rejects.toThrow(/unexpected files outside the documented package layout/u);
+  });
+
+  it('rejects a delta artifact with duplicate payload metadata entries', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+    const metadata = deserializeDeltaArtifactPackageMetadata(
+      await readFile(stagedPackage.metadataPath, 'utf8'),
+    );
+
+    // Write the first payload entry twice; the second iteration should hit the duplicate check.
+    await writeFile(
+      stagedPackage.metadataPath,
+      `${JSON.stringify({
+        ...metadata,
+        payloadEntries: [metadata.payloadEntries[0], metadata.payloadEntries[0]],
+      })}\n`,
+    );
+
+    // The Zod schema requires strictly increasing relativePath, so it catches the duplicate
+    // before the runtime guard in verifyExtractedDeltaArtifactPackage can fire.  Both layers
+    // protect against duplicate entries; this test verifies the combined rejection behaviour.
+    await expect(
+      verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, stagedPackage.artifactName),
+    ).rejects.toThrow(/strictly increasing relativePath/u);
+  });
+
+  it('rejects a delta artifact whose payload is not stored beneath the payload directory', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+    const metadata = deserializeDeltaArtifactPackageMetadata(
+      await readFile(stagedPackage.metadataPath, 'utf8'),
+    );
+
+    // Override payloadPath to a valid relative path that does not start with "payload/".
+    await writeFile(
+      stagedPackage.metadataPath,
+      `${JSON.stringify({
+        ...metadata,
+        payloadEntries: [{ ...metadata.payloadEntries[0], payloadPath: 'elsewhere/file.bin' }],
+      })}\n`,
+    );
+
+    await expect(
+      verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, stagedPackage.artifactName),
+    ).rejects.toThrow(/must be stored beneath/u);
+  });
+
+  it('rejects a delta artifact whose payload file is a symbolic link', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+    const metadata = deserializeDeltaArtifactPackageMetadata(
+      await readFile(stagedPackage.metadataPath, 'utf8'),
+    );
+
+    // Replace the real payload file with a symlink; the symlink check must fire before any
+    // content-hash or size comparison.
+    const payloadAbsolutePath = path.join(
+      stagedPackage.rootDirectory,
+      metadata.payloadEntries[0].payloadPath,
+    );
+    await rm(payloadAbsolutePath);
+    await symlink('/dev/null', payloadAbsolutePath);
+
+    // Symlinks are detected during the initial directory walk (listRelativeRegularFiles) before
+    // any per-payload verification, so the error comes from the walk rather than the payload check.
+    await expect(
+      verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, stagedPackage.artifactName),
+    ).rejects.toThrow(/Artifact packages must not contain symbolic links/u);
   });
 
   it('fails staging when source files drift after the delta manifest was captured', async () => {

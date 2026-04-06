@@ -352,7 +352,14 @@ export function createPrepareActionSummaryLines(status: PrepareActionStatus): re
   ];
 }
 
-function createPrepareActionLogLines(status: PrepareActionStatus): readonly string[] {
+/**
+ * Renders the runtime log lines for the prepare phase.
+ *
+ * Emitted inside a named log group so operators can quickly assess the prepare outcome without
+ * opening the full job summary. Each nullable result field contributes additional lines only when
+ * that phase step was actually executed.
+ */
+export function createPrepareActionLogLines(status: PrepareActionStatus): readonly string[] {
   const lines = [
     ...createBootstrapLogLines(status.bootstrap),
     `Restore cleanup: ${describeRestoreCleanupSummary(status.restoreCleanupResult)}.`,
