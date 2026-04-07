@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { z } from 'zod';
@@ -32,6 +32,16 @@ const SERVICE_PLUGIN_FILE_NAME =
   'buildish-mammoth-cache.build-result-capture-service.plugin.groovy';
 const SKIP_CAPTURE_ENVIRONMENT_VARIABLE = 'BUILDISH_MAMMOTH_CACHE_GRADLE_SKIP_BUILD_RESULT_CAPTURE';
 const DEFAULT_CAPTURE_INVOCATION_NAMESPACE = 'buildish-mammoth-cache';
+
+/**
+ * Maximum byte size of a single Gradle build-result or build-scan capture file.
+ *
+ * Legitimate capture files are small JSON blobs (a few hundred bytes). The cap prevents a
+ * malicious Gradle plugin that writes oversized `.json` files into the capture directory from
+ * exhausting runner memory. Exported so tests can assert the boundary without hard-coding the
+ * value.
+ */
+export const MAX_CAPTURE_FILE_BYTES = 1 * 1024 * 1024; // 1 MiB
 
 type BuildCaptureContext = Pick<CiJobContext, 'tempDirectory'>;
 
@@ -305,6 +315,22 @@ async function loadFilesByInvocationKey<T>(
   for (const fileName of files) {
     const absolutePath = path.join(directoryPath, fileName);
     try {
+      // F-2: reject symlinks before following them, consistent with the rest of the codebase.
+      // A malicious Gradle plugin that creates a symlink in the capture directory could
+      // otherwise cause the action to read an arbitrary file on the runner filesystem.
+      // F-3: reject files above MAX_CAPTURE_FILE_BYTES before reading to prevent a runaway
+      // Gradle plugin from exhausting runner memory with an oversized capture file.
+      const fileStat = await lstat(absolutePath);
+      if (fileStat.isSymbolicLink()) {
+        warnings.push(`Gradle ${label} file '${absolutePath}' is a symbolic link and was skipped.`);
+        continue;
+      }
+      if (fileStat.size > MAX_CAPTURE_FILE_BYTES) {
+        warnings.push(
+          `Gradle ${label} file '${absolutePath}' exceeds the ${MAX_CAPTURE_FILE_BYTES}-byte read limit and was skipped.`,
+        );
+        continue;
+      }
       const contents = await readFile(absolutePath, 'utf8');
       results.set(fileName.slice(0, -'.json'.length), validate(contents, absolutePath));
     } catch (error: unknown) {

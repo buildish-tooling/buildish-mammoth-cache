@@ -19,6 +19,7 @@ import { writeFile } from 'node:fs/promises';
 import * as core from '@actions/core';
 
 import type { ReportSink } from '../../host/types';
+import { isAbsolutePosixOrWindowsPath } from '../../util/paths';
 
 /**
  * Minimal interface for job summary writers.
@@ -64,8 +65,13 @@ export function createGitHubReportSink(options: GitHubReportSinkOptions = {}): R
       await summaryWriter.write();
     },
     async replaceSummary(lines: readonly string[]): Promise<void> {
-      if (env.GITHUB_STEP_SUMMARY && env.GITHUB_STEP_SUMMARY.trim().length > 0) {
-        await writeFile(env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`, 'utf8');
+      const summaryPath = env.GITHUB_STEP_SUMMARY?.trim() ?? '';
+      // Only write directly to the path when it is absolute. A compromised step earlier in
+      // the same workflow job could redirect GITHUB_STEP_SUMMARY to an arbitrary path via
+      // $GITHUB_ENV; requiring an absolute path prevents writes to relative or traversal paths
+      // while still rejecting a missing or empty variable.
+      if (summaryPath && isAbsolutePosixOrWindowsPath(summaryPath)) {
+        await writeFile(summaryPath, `${lines.join('\n')}\n`, 'utf8');
         return;
       }
 

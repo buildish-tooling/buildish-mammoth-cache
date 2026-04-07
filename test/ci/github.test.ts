@@ -271,6 +271,27 @@ describe('createGitHubPlatform', () => {
       workflowRunUrl: 'https://github.com/apache/buildish/actions/runs/101/attempts/2',
     });
   });
+
+  it('falls back to https://github.com when GITHUB_SERVER_URL is not HTTPS', () => {
+    // F-4: a non-HTTPS GITHUB_SERVER_URL must not appear in job-summary link hrefs because
+    // createHtmlLink does not strip URL schemes. safeHttpsHost rejects non-HTTPS values and
+    // the code falls back to the canonical public GitHub URL.
+    const platform = createGitHubPlatform({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_RUN_ID: '101',
+        GITHUB_RUN_ATTEMPT: '1',
+        GITHUB_SERVER_URL: 'http://insecure.example.com',
+      },
+    });
+
+    expect(platform.executionUrls).toEqual({
+      jobUrl: 'https://github.com/apache/buildish/actions/runs/101/attempts/1',
+      workflowRunUrl: 'https://github.com/apache/buildish/actions/runs/101/attempts/1',
+    });
+  });
 });
 
 describe('createGitHubBaseCacheBackend', () => {
@@ -400,5 +421,33 @@ describe('createGitHubReportSink', () => {
     expect(await readFile(summaryPath, 'utf8')).toBe('summary line\n');
     expect(summaryLines).toEqual([]);
     expect(writeCalls).toBe(0);
+  });
+
+  it('falls back to publishSummary when GITHUB_STEP_SUMMARY is not an absolute path', async () => {
+    // F-1: a relative GITHUB_STEP_SUMMARY value (which a compromised earlier step could inject
+    // via $GITHUB_ENV) must not be used as a write target. The action must fall back to the
+    // @actions/core summary writer instead.
+    const summaryLines: Array<{ text: string; addEol: boolean | undefined }> = [];
+    let writeCalls = 0;
+    const writer: SummaryWriter = {
+      addRaw(text: string, addEol?: boolean): SummaryWriter {
+        summaryLines.push({ text, addEol });
+        return this;
+      },
+      async write(): Promise<void> {
+        writeCalls += 1;
+      },
+    };
+
+    const reportSink = createGitHubReportSink({
+      env: { GITHUB_STEP_SUMMARY: '../../../etc/cron.d/evil' },
+      summaryWriter: writer,
+    });
+
+    await reportSink.replaceSummary(['summary line']);
+
+    // Must NOT have written to the relative path; must have fallen back to the summary writer.
+    expect(summaryLines).toEqual([{ text: 'summary line', addEol: true }]);
+    expect(writeCalls).toBe(1);
   });
 });

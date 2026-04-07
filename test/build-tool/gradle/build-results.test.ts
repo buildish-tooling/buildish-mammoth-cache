@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  MAX_CAPTURE_FILE_BYTES,
   cleanupGradleBuildResultCapture,
   createGradleBuildSummaryLines,
   installGradleBuildResultCapture,
@@ -320,6 +321,48 @@ describe('Gradle build reporting', () => {
     expect(report.warnings).toHaveLength(1);
     expect(report.warnings[0]).toMatch(/Could not read Gradle build result file/u);
     expect(report.warnings[0]).toContain('__run-broken.json');
+  });
+
+  it('records a warning and skips a build result file that is a symbolic link', async () => {
+    // F-2: a symlink in the capture directory must not be followed. A malicious Gradle plugin
+    // could place a symlink pointing to a sensitive file on the runner filesystem.
+    const runnerTemp = await createRunnerTemp(temporaryDirectories);
+    const buildResultsDir = path.join(runnerTemp, '.buildish-mammoth-cache', 'build-results');
+    await mkdir(buildResultsDir, { recursive: true });
+
+    // Create a target file outside the capture directory, then symlink it in.
+    const targetFile = path.join(runnerTemp, 'sensitive-target.txt');
+    await writeFile(targetFile, 'sensitive content', 'utf8');
+    await symlink(targetFile, path.join(buildResultsDir, '__run-symlink.json'));
+
+    const report = await loadGradleBuildReport({ tempDirectory: runnerTemp });
+
+    expect(report.builds).toHaveLength(0);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings[0]).toMatch(/symbolic link/u);
+    expect(report.warnings[0]).toContain('__run-symlink.json');
+  });
+
+  it('records a warning and skips a build result file that exceeds the size limit', async () => {
+    // F-3: an oversized capture file (e.g. written by a malicious Gradle plugin) must not be
+    // read into memory. MAX_CAPTURE_FILE_BYTES is the per-file cap.
+    const runnerTemp = await createRunnerTemp(temporaryDirectories);
+    const buildResultsDir = path.join(runnerTemp, '.buildish-mammoth-cache', 'build-results');
+    await mkdir(buildResultsDir, { recursive: true });
+
+    // Write a file that is one byte over the limit.
+    await writeFile(
+      path.join(buildResultsDir, '__run-huge.json'),
+      'x'.repeat(MAX_CAPTURE_FILE_BYTES + 1),
+      'utf8',
+    );
+
+    const report = await loadGradleBuildReport({ tempDirectory: runnerTemp });
+
+    expect(report.builds).toHaveLength(0);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings[0]).toMatch(/exceeds the .* read limit/u);
+    expect(report.warnings[0]).toContain('__run-huge.json');
   });
 
   it('returns a warning when a capture init-script file cannot be removed', async () => {

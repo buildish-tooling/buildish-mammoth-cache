@@ -170,7 +170,13 @@ function createGitHubExecutionUrls(
   env: NodeJS.ProcessEnv,
   githubJobCheckRunId: string | undefined,
 ) {
-  const serverUrl = (env.GITHUB_SERVER_URL?.trim() || 'https://github.com').replace(/\/+$/u, '');
+  const rawServerUrl = env.GITHUB_SERVER_URL?.trim() ?? '';
+  // Validate that GITHUB_SERVER_URL uses HTTPS so a non-HTTPS or javascript: scheme value
+  // cannot be injected into job-summary link hrefs. safeHttpsHost() is reused here for
+  // consistency with how GITHUB_API_URL is already guarded for auth-header scoping.
+  const serverUrl = (
+    rawServerUrl && safeHttpsHost(rawServerUrl) !== null ? rawServerUrl : 'https://github.com'
+  ).replace(/\/+$/u, '');
   const repository = context.repository;
   const runId = context.runId;
   const jobCheckRunId = githubJobCheckRunId?.trim() || '';
