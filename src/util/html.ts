@@ -41,8 +41,15 @@ export function safeHtml(value: string): SafeHtml {
 /**
  * Wraps `bodyLines` in an HTML `<details>/<summary>` block for use inside GitHub job summaries.
  *
- * The title text is HTML-escaped automatically. Returns the complete block as an array of strings,
- * each representing one rendered line.
+ * The `title` is HTML-escaped automatically and rendered as the `<summary>` label.
+ *
+ * `bodyLines` are embedded verbatim inside the `<details>` element. GitHub's job-summary renderer
+ * treats this content as **Markdown**, not as HTML, so callers must sanitize any user-supplied
+ * values with {@link escapeSummaryText} before including them in `bodyLines`. Do **not** pass raw
+ * HTML strings here — unlike {@link createHtmlTable}, which enforces {@link SafeHtml} for every
+ * cell at compile time, this function cannot enforce that constraint because the body is Markdown.
+ *
+ * Returns the complete block as an array of strings, each representing one rendered line.
  */
 export function createDetailsSection(
   title: string,
