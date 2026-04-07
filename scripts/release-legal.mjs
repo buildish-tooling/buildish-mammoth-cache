@@ -39,12 +39,11 @@ import { build } from 'esbuild';
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const projectRoot = path.resolve(scriptDir, '..');
-const repoRoot = path.resolve(projectRoot, '..', '..', '..');
 const distributionLegalDir = path.join(projectRoot, 'legal', 'github');
 const distributionLicensePath = path.join(distributionLegalDir, 'LICENSE');
 const distributionNoticePath = path.join(distributionLegalDir, 'NOTICE');
-const rootLicensePath = path.join(repoRoot, 'LICENSE');
-const rootNoticePath = path.join(repoRoot, 'NOTICE');
+const rootLicensePath = path.join(projectRoot, 'LICENSE');
+const rootNoticePath = path.join(projectRoot, 'NOTICE');
 const packageLockPath = path.join(projectRoot, 'package-lock.json');
 
 const ENTRY_POINTS = [

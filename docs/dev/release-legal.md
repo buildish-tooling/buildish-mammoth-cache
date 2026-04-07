@@ -52,29 +52,36 @@ The compiled action output (`dist/`) is a self-contained bundle produced by a bu
 similar). The bundle includes code from npm dependencies. The `licenses/` directory must contain the
 license files for all npm packages whose code appears in the bundle.
 
-The `scripts/generate-licenses.ts` script produces the `licenses/` directory by:
+The `scripts/release-legal.mjs` script produces `legal/github/LICENSE` and `legal/github/NOTICE`
+by:
 
-1. Running `npm ls` to enumerate all production dependencies.
-2. Fetching the `LICENSE` (or equivalent) file for each package from `node_modules/`.
-3. Writing one file per package into `licenses/<package-name>.txt`.
+1. Building the action entry points with esbuild metafile output to determine exactly which npm
+   packages are bundled.
+2. Reading each bundled package's metadata and any `LICENSE` / `NOTICE` files from `node_modules/`.
+3. Appending grouped per-dependency sections to the repository-root `LICENSE` and `NOTICE` and
+   writing the combined result to `legal/github/`.
 
-Run this script whenever `package.json` production dependencies change:
+Run the script in write mode whenever bundled dependencies change:
 
 ```sh
-npm run generate-licenses
+make release-legal-write
+```
+
+Verify that the generated files are up to date with:
+
+```sh
+make release-legal-check
 ```
 
 ## NOTICE file
 
-The `NOTICE` file must credit the original authors of any bundled third-party code that requires
-attribution. Check each dependency's license for attribution requirements:
+`legal/github/NOTICE` is generated automatically by `scripts/release-legal.mjs`. The repository-root
+`NOTICE` file requires human review before each release; it must credit the original authors of any
+bundled third-party code that requires attribution:
 
 - MIT and BSD-2-Clause licenses generally require reproduction of the copyright notice.
 - Apache 2.0 dependencies require reproduction of any `NOTICE` file they ship with.
 - ISC licenses generally require only the copyright notice.
-
-The `scripts/generate-licenses.ts` output can be used as a basis for updating `NOTICE`, but the
-`NOTICE` file itself requires human review before each release.
 
 ## Compatibility constraints
 
@@ -93,10 +100,10 @@ Before adding a new npm dependency, verify its license is on the
 
 ## Release checklist
 
-1. Run `npm run generate-licenses` to refresh `licenses/`.
-2. Review `NOTICE` for any new dependencies requiring attribution.
-3. Confirm no new dependency introduces a license incompatibility.
-4. Commit the updated `licenses/` and `NOTICE` to the distribution branch.
+1. Run `make release-legal-write` to regenerate `legal/github/LICENSE` and `legal/github/NOTICE`.
+2. Review the repository-root `NOTICE` for any new dependencies requiring attribution.
+3. Confirm no new dependency introduces a license incompatibility (`make release-legal-check`).
+4. Commit the updated `legal/github/` files and root `NOTICE` to the distribution branch.
 5. Tag the release commit with a version tag.
 6. Publish the release following the
    [Apache release process](https://www.apache.org/dev/release-publishing.html).

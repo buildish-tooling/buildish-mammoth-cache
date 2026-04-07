@@ -71,9 +71,6 @@ jobs:
       - name: Build the project
         run: make build
 
-      - name: Run bundled Category X license gate
-        run: make release-legal-category-x-check
-
       - name: Run unit tests
         run: make test
 
@@ -82,6 +79,17 @@ jobs:
 
       - name: Run Apache RAT
         run: npm run rat-check
+
+      - name: Run legal check
+        run: make release-legal-check
+
+      - name: Run bundled Category X license gate
+        run: make release-legal-category-x-check
+
+      - name: Fail when checks leave Git changes behind
+        run: |
+          modified="$(git status --short)"
+          test -z "$modified" || { printf 'Checks left Git changes behind:\n%s\n' "$modified"; exit 1; }
 
   smoke-test-gradle:
     name: Run local Gradle action
