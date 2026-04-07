@@ -39,7 +39,7 @@ The Gradle action resolves `GRADLE_USER_HOME` into these ordered partitions:
 | `build-cache`         | The local Gradle build cache                              | enabled  |
 | `wrapper-dists`       | Wrapper-downloaded Gradle distributions                   | enabled  |
 
-See [Gradle cache internals](../architecture/gradle-cache-internals/) for details on what each
+See [Gradle cache internals](../../architecture/gradle-cache-internals/) for details on what each
 partition covers and why certain directories are excluded.
 
 ### Maven
@@ -51,7 +51,7 @@ The Maven action resolves the local repository (`~/.m2` by default) into these p
 | `repository`    | Cached Maven artifact repository       | enabled |
 | `wrapper-dists` | Wrapper-downloaded Maven distributions | enabled |
 
-See [Maven cache internals](../architecture/maven-cache-internals/) for details on what each
+See [Maven cache internals](../../architecture/maven-cache-internals/) for details on what each
 partition covers and why certain files are excluded.
 
 ---

@@ -119,5 +119,5 @@ multi-platform support is:
 - **GitLab**: the same Node.js scripts invoked from `script:` blocks, with a purpose-built
   GitLab adapter layer in TypeScript.
 
-See [Jenkins Support](./portability/jenkins/) for the Jenkins-specific implementation options
-and [Provider Portability](./portability/) for the overall CI platform status.
+See [Jenkins Support](../portability/jenkins/) for the Jenkins-specific implementation options
+and [Provider Portability](../portability/) for the overall CI platform status.
