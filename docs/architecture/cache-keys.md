@@ -171,7 +171,7 @@ entry that in turn warms the next PR.
 **Re-runs and attempt number** — the primary cache key does not include the run ID or attempt
 number. This means a re-run on the same branch with the same partition layout gets the same
 primary key and hits the same cache entry. The delta-exchange protocol (see
-[Delta Exchange Protocol](delta-protocol.md)) does include the attempt number in artifact
+[Delta Exchange Protocol](delta-protocol/)) does include the attempt number in artifact
 names, which prevents a re-run from colliding with a previous run's artifacts.
 
 **Cold starts** — a cold start (no entry at any restore key depth) means the build downloads

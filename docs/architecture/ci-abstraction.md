@@ -130,4 +130,4 @@ shapes, never the concrete implementations.
 4. No changes to `src/phases/`, `src/cache/`, `src/delta/`, or `src/config/` should be needed
    unless the new provider reveals a missing abstraction.
 
-See [Provider portability](../../dev/portability/) for the current status of planned provider support.
+See [Provider portability](../dev/portability/) for the current status of planned provider support.

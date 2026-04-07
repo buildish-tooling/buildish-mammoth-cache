@@ -143,6 +143,6 @@ with `read-only: false` when you have controlled-fork trust setups.
 
 ## Next steps
 
-- [Configuration Reference](../configuration/) — all inputs and config-file options
-- [Cache Partitions](../cache-partitions/) — customize which parts of the build tool cache are saved
-- [Distributed multi-job builds](../distributed-jobs/) — if you run multiple build jobs in parallel
+- [Configuration Reference](configuration/) — all inputs and config-file options
+- [Cache Partitions](cache-partitions/) — customize which parts of the build tool cache are saved
+- [Distributed multi-job builds](distributed-jobs/) — if you run multiple build jobs in parallel

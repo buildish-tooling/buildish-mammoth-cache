@@ -254,7 +254,7 @@ The snippets below show the minimum input wiring needed to connect two worker jo
 aggregator. The `github-job-name` input gives each job a stable, human-readable name that is
 independent of matrix labeling; the aggregator's `dependent-jobs` must list exactly those names.
 
-See [Distributed Multi-Job Builds](distributed-jobs.md) for a full explanation of how the
+See [Distributed Multi-Job Builds](distributed-jobs/) for a full explanation of how the
 delta exchange works and for additional configuration options.
 
 ### Gradle

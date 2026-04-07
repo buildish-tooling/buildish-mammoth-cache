@@ -32,9 +32,9 @@ runs. On each run it:
 
 Two job modes are available for both build tools:
 
-- **[Single-job](../single-job/)** — one build job per workflow run. The action wraps that job and
+- **[Single-job](single-job/)** — one build job per workflow run. The action wraps that job and
   handles everything automatically.
-- **[Distributed multi-job](../distributed-jobs/)** — multiple parallel build jobs. Each job
+- **[Distributed multi-job](distributed-jobs/)** — multiple parallel build jobs. Each job
   uploads only the delta it produced; a dedicated aggregator job merges all deltas into the next
   cache entry so no job's work is lost.
 
@@ -44,7 +44,7 @@ For Gradle the action caches `GRADLE_USER_HOME` and additionally:
 
 - **Provisions** any missing `gradle-wrapper.jar` files, verifying each one with a SHA-256
   checksum and a PGP signature before writing it to disk. See
-  [Security](../security/#gradle-wrapper-verification) for details.
+  [Security](security/#gradle-wrapper-verification) for details.
 
 ### Maven
 
@@ -65,7 +65,7 @@ commit SHA:
 > installation only, as the examples above show.
 
 `actions: write` is required so the action can save cache entries and exchange delta artifacts.
-See [Security](../security/) for the full permissions breakdown.
+See [Security](security/) for the full permissions breakdown.
 
 The action defaults to **read-only** on `pull_request` and `pull_request_target` events, so
 cache writes from untrusted forks are automatically suppressed.
@@ -134,4 +134,4 @@ sequenceDiagram
 
 For distributed multi-job builds, worker jobs upload their delta as a workflow artifact instead of
 saving the cache directly. An aggregator job then merges all worker deltas into a single cache
-entry. See [Distributed multi-job](../distributed-jobs/) for details.
+entry. See [Distributed multi-job](distributed-jobs/) for details.

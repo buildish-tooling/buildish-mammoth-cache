@@ -152,5 +152,5 @@ etc.) is then written as a standard Jenkins plugin using the Jenkins Java API.
 
 **Tradeoffs:** The highest investment but the only path to a true zero-dependency Jenkins plugin.
 The existing interface boundaries are clean enough that the port is largely mechanical rather than
-creative. See [Kotlin Multiplatform](../../kotlin-multiplatform/) for why a single Kotlin codebase
+creative. See [Kotlin Multiplatform](../kotlin-multiplatform/) for why a single Kotlin codebase
 targeting both JS (GitHub/Forgejo) and JVM (Jenkins) was evaluated and not recommended.

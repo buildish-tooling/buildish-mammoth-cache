@@ -98,7 +98,7 @@ flowchart TD
 1. Checks that the finalize arm flag is set (written by the prepare phase).
 2. Captures the post-build file snapshot.
 3. Calls `computeCacheDelta()` (`src/cache/manifest.ts`) to diff pre- and post-build manifests.
-4. Calls `saveBaseCache()` (skipped for `distributed-worker`; see [Base Cache Design](../base-cache/)).
+4. Calls `saveBaseCache()` (skipped for `distributed-worker`; see [Base Cache Design](base-cache/)).
 5. For `distributed-worker`: stages the delta artifact locally, then uploads it.
 6. For `distributed-aggregator`: downloads worker deltas, merges them, applies the merged delta.
 
