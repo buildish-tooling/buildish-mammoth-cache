@@ -19,9 +19,9 @@ limitations under the License.
 **Transparent, incremental dependency caching for Gradle and Maven builds on GitHub Actions —
 from simple single-job pipelines to large parallel fan-out workflows.**
 
-One action wraps your build step. Before the build it restores a warm cache; after it, it
-captures only what changed and writes back a precise delta. No manual cache-key juggling, no
-stale entries from unrelated jobs, no wasted re-uploads of files that haven't moved.
+One action wraps your build step. Before the build, restore a warm cache; capture only
+what changed during a build and writes back a precise delta. No manual cache-key juggling, no
+stale entries from unrelated jobs, no wasted re-uploads of files that haven't changed.
 
 ---
 
