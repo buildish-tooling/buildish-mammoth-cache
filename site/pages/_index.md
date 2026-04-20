@@ -16,8 +16,8 @@ limitations under the License.
 
 # Mammoth Cache for Gradle® and Apache Maven™
 
-**Transparent, incremental dependency caching for Gradle and Maven builds on GitHub Actions —
-from simple single-job pipelines to large parallel fan-out workflows.**
+Transparent, incremental dependency caching for Gradle and Maven builds on GitHub Actions —
+from simple single-job pipelines to large parallel fan-out workflows.
 
 One action wraps your build step. Before the build, restore a warm cache; capture only
 what changed during a build and writes back a precise delta. No manual cache-key juggling, no
