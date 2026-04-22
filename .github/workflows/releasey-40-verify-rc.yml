@@ -1,0 +1,58 @@
+# Copyright 2026 The Apache Software Foundation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Releasey Verify RC
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version such as 1.2.3
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  BUILDISH_RELEASE_TOOLING_REF: f37e09cc223d1e58d3095ad875db989fd8d5defe # renovate: datasource=github-releases depName=apache/buildish-release-tooling currentValue=v0.0.0
+  BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH: .buildish-internal/buildish-release-tooling
+
+jobs:
+  verify-rc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: apache/buildish-release-tooling
+          ref: ${{ env.BUILDISH_RELEASE_TOOLING_REF }}
+          path: ${{ env.BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - name: Install Python 3.13 for uv-managed commands
+        run: uv python install 3.13
+      - name: Fetch remote heads and tags
+        run: |
+          git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+      - name: Draft RC verification
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          bash buildish-release-tooling/release-tooling.sh verify-rc \
+            "$RELEASE_VERSION"
