@@ -171,10 +171,58 @@ jobs:
   publish-github-action-release:
     needs: create-final-tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Draft GitHub Action publication
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: apache/buildish-release-tooling
+          ref: ${{ env.BUILDISH_RELEASE_TOOLING_REF }}
+          path: ${{ env.BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - name: Install Python 3.13 for uv-managed commands
+        run: uv python install 3.13
+      - name: Fetch remote heads and tags
         run: |
-          echo "TODO: publish immutable GitHub Release and action runtime assets from the final exact tag."
+          git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+      - name: Attach immutable GitHub Action convenience archive to the draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_PATH: ${{ runner.temp }}/attach-github-release-assets.json
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          final_tag="v${RELEASE_VERSION}"
+          asset_dir="$RUNNER_TEMP/release-assets"
+          archive_name="apache-buildish-mammoth-cache-${RELEASE_VERSION}-incubating-github-action.zip"
+          archive_root="${archive_name%.zip}/"
+          archive_path="${asset_dir}/${archive_name}"
+          mkdir -p "$asset_dir"
+          git archive \
+            --format=zip \
+            --prefix "${archive_root}" \
+            --output "$archive_path" \
+            "$final_tag"
+          bash buildish-release-tooling/release-tooling.sh attach-github-release-assets \
+            --checksum sha256 \
+            --checksum sha512 \
+            "$RELEASE_VERSION" \
+            "$archive_path"
+      - name: Summarize final GitHub Action references
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          {
+            echo "### Final GitHub Action references"
+            echo
+            echo "- \`apache/buildish-mammoth-cache/actions/github/gradle@v${RELEASE_VERSION}\`"
+            echo "- \`apache/buildish-mammoth-cache/actions/github/maven@v${RELEASE_VERSION}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   update-moving-tags:
     needs: publish-github-action-release

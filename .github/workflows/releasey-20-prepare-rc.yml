@@ -76,6 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rc_tag: ${{ steps.prepare-rc.outputs.rc_tag }}
+      resolved_source_ref: ${{ steps.prepare-rc.outputs.resolved_source_ref }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
@@ -107,14 +108,6 @@ jobs:
           fi
           bash buildish-release-tooling/release-tooling.sh prepare-rc \
             "${args[@]}"
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import os
-          from pathlib import Path
-
-          manifest = json.loads(Path(os.environ["MANIFEST_PATH"]).read_text(encoding="utf-8"))
-          print(f"rc_tag={manifest['rc_tag']}")
-          PY
 
   cleanup-dev-svn-rcs:
     needs: resolve-state
@@ -187,8 +180,15 @@ jobs:
             "${args[@]}"
 
   materialize-rc-dist-payload:
-    needs: build-source-rc
+    needs:
+      - resolve-state
+      - build-source-rc
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      materialized_commit_sha: ${{ steps.materialize.outputs.materialized_commit_sha }}
+      materialized_ref_name: ${{ steps.materialize.outputs.materialized_ref_name }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
@@ -201,19 +201,42 @@ jobs:
           path: ${{ env.BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH }}
           fetch-depth: 1
           persist-credentials: false
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
-      - name: Install Python 3.13 for uv-managed commands
-        run: uv python install 3.13
       - name: Fetch remote heads and tags
         run: |
           git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
-      - name: Draft detached RC dist materialization
+      - id: source-node-version
+        name: Resolve source Node.js version
         env:
+          RESOLVED_SOURCE_REF: ${{ needs.resolve-state.outputs.resolved_source_ref }}
+        run: |
+          node_version="$(git show "${RESOLVED_SOURCE_REF}:.nvmrc" | tr -d '[:space:]')"
+          echo "node_version=${node_version}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ steps.source-node-version.outputs.node_version }}
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - name: Install Python 3.13 for uv-managed commands
+        run: uv python install 3.13
+      - id: materialize
+        name: Materialize detached RC dist payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_PATH: ${{ runner.temp }}/materialize-rc-git-content.json
+          RC_TAG: ${{ needs.resolve-state.outputs.rc_tag }}
           RELEASE_VERSION: ${{ inputs.version }}
           INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          echo "TODO: build the normally git-ignored dist/ payload from the resolved RC source commit, git add it on a detached worktree only, and keep it out of release/<line> history."
-          echo "TODO: this is the Mammoth Cache-specific convenience-artifact materialization step that the RC-tag and final exact tag flows must later reuse."
+          args=(
+            --rc-tag "$RC_TAG"
+            --materialized-path dist
+            --run-command 'npm ci && npm run build'
+            "$RELEASE_VERSION"
+          )
+          if [[ -n "$INPUT_SOURCE_SHA" ]]; then
+            args+=("$INPUT_SOURCE_SHA")
+          fi
+          bash buildish-release-tooling/release-tooling.sh materialize-rc-git-content \
+            "${args[@]}"
 
   create-rc-materialization-tag:
     needs:
@@ -246,11 +269,15 @@ jobs:
           RC_TAG: ${{ needs.resolve-state.outputs.rc_tag }}
           RELEASE_VERSION: ${{ inputs.version }}
           INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
-          MATERIALIZED_COMMIT_SHA: __TODO_MATERIALIZED_COMMIT_SHA__
+          MATERIALIZED_COMMIT_SHA: ${{ needs.materialize-rc-dist-payload.outputs.materialized_commit_sha }}
+          MATERIALIZED_REF_NAME: ${{ needs.materialize-rc-dist-payload.outputs.materialized_ref_name }}
         run: |
-          echo "TODO: replace MATERIALIZED_COMMIT_SHA with the detached commit emitted by materialize-rc-dist-payload."
-          echo "TODO: the detached commit must add the generated dist/ payload and stay out of release/<line> history."
-          args=(--rc-tag "$RC_TAG" --target-commit "$MATERIALIZED_COMMIT_SHA" "$RELEASE_VERSION")
+          args=(
+            --rc-tag "$RC_TAG"
+            --target-commit "$MATERIALIZED_COMMIT_SHA"
+            --cleanup-materialized-ref-name "$MATERIALIZED_REF_NAME"
+            "$RELEASE_VERSION"
+          )
           if [[ -n "$INPUT_SOURCE_SHA" ]]; then
             args+=("$INPUT_SOURCE_SHA")
           fi
