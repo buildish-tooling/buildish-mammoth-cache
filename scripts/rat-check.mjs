@@ -58,7 +58,15 @@ async function main() {
 
     await writeFile(inputSourceFile, `${filesToScan.join('\n')}\n`, 'utf8');
 
-    await runProcess(JAVA_BIN, ['-jar', ratJar, '--input-source', inputSourceFile, '--']);
+    await runProcess(JAVA_BIN, [
+      '-jar',
+      ratJar,
+      '--input-source',
+      inputSourceFile,
+      '--output-style',
+      'unapproved-licenses',
+      '--',
+    ]);
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
