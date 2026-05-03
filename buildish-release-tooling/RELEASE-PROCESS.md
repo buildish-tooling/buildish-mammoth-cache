@@ -111,8 +111,7 @@ This draft does not use a `latest` alias for GitHub Actions.
 - `buildish-release-tooling/release-config.yaml`: component policy consumed by
   `buildish-release-tooling`
 - `buildish-release-tooling/release-tooling.sh`: a thin bash dispatcher that locates the component
-  policy and runs `uv run --project <resolved-tooling-checkout> --frozen buildish-release-tooling
-  <command> ...`
+  policy and runs `uv run --project <resolved-tooling-checkout> --frozen buildish-release-tooling <command> ...`
 - `workflows/`: draft workflow YAML showing job boundaries and retries; the jobs install `uv`,
   fetch full Git state, and invoke the component wrappers
 - `../buildish-release-tooling/tests/`: shared Python unit and integration tests that load this
