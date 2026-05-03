@@ -1341,8 +1341,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/juliangruber/brace-expansion.
 
 * npm package IDs:
-  * brace-expansion@1.1.12
-  * brace-expansion@2.0.2
+  * brace-expansion@1.1.14
+  * brace-expansion@2.1.0
 
 Copyright: Copyright (c) 2013 Julian Gruber <julian@juliangruber.com>
 Home page: https://github.com/juliangruber/brace-expansion
@@ -1438,7 +1438,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/lodash/lodash.
 
 * npm package IDs:
-  * lodash@4.17.23
+  * lodash@4.18.1
 
 Copyright: Copyright OpenJS Foundation and other contributors <https://openjsf.org/>; Based on Underscore.js, copyright Jeremy Ashkenas,; Copyright and related rights for sample code are waived via CC0. Sample
 Home page: https://github.com/lodash/lodash
