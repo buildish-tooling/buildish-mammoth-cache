@@ -206,8 +206,8 @@ This product bundles packages from the source project at https://github.com/acti
 
 * npm package IDs:
   * @actions/artifact@6.2.1
-  * @actions/cache@6.0.0
-  * @actions/core@3.0.0
+  * @actions/cache@6.0.1
+  * @actions/core@3.0.1
   * @actions/exec@3.0.0
   * @actions/github@9.0.0
   * @actions/glob@0.6.1
@@ -232,7 +232,7 @@ This product bundles packages from the source project at https://github.com/acti
 
 * npm package IDs:
   * @actions/http-client@3.0.2
-  * @actions/http-client@4.0.0
+  * @actions/http-client@4.0.1
 
 Copyright: Copyright (c) GitHub, Inc.
 Home page: https://github.com/actions/toolkit
@@ -677,7 +677,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/colinhacks/zod.
 
 * npm package IDs:
-  * zod@4.3.6
+  * zod@4.4.3
 
 Copyright: Copyright (c) 2025 Colin McDonnell
 Home page: https://github.com/colinhacks/zod
@@ -739,7 +739,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/eemeli/yaml.
 
 * npm package IDs:
-  * yaml@2.8.3
+  * yaml@2.9.0
 
 Copyright: Copyright Eemeli Aro <eemeli@gmail.com>
 Home page: https://github.com/eemeli/yaml
@@ -1688,7 +1688,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/fast-xml-builder.
 
 * npm package IDs:
-  * fast-xml-builder@1.1.4
+  * fast-xml-builder@1.2.0
 
 Copyright: Copyright (c) 2026 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/fast-xml-builder
@@ -1720,7 +1720,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/fast-xml-parser.
 
 * npm package IDs:
-  * fast-xml-parser@5.5.9
+  * fast-xml-parser@5.8.0
 
 Copyright: Copyright (c) 2017 Amit Kumar Gupta
 Home page: https://github.com/NaturalIntelligence/fast-xml-parser
@@ -1752,7 +1752,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/path-expression-matcher.
 
 * npm package IDs:
-  * path-expression-matcher@1.2.0
+  * path-expression-matcher@1.5.0
 
 Copyright: Copyright (c) 2024
 Home page: https://github.com/NaturalIntelligence/path-expression-matcher
@@ -1784,7 +1784,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/strnum.
 
 * npm package IDs:
-  * strnum@2.2.2
+  * strnum@2.3.0
 
 Copyright: Copyright (c) 2021 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/strnum
@@ -1792,6 +1792,70 @@ License: MIT - https://spdx.org/licenses/MIT.html
 | MIT License
 |
 | Copyright (c) 2021 Natural Intelligence
+|
+| Permission is hereby granted, free of charge, to any person obtaining a copy
+| of this software and associated documentation files (the "Software"), to deal
+| in the Software without restriction, including without limitation the rights
+| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+| copies of the Software, and to permit persons to whom the Software is
+| furnished to do so, subject to the following conditions:
+|
+| The above copyright notice and this permission notice shall be included in all
+| copies or substantial portions of the Software.
+|
+| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+| SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+This product bundles packages from the source project at https://github.com/NaturalIntelligence/xml-naming.
+
+* npm package IDs:
+  * xml-naming@0.1.0
+
+Copyright: Copyright (c) Amit Gupta (https://solothought.com)
+Home page: https://github.com/NaturalIntelligence/xml-naming
+License: MIT - https://spdx.org/licenses/MIT.html
+| MIT License
+|
+| Copyright (c) Amit Gupta (https://solothought.com)
+|
+| Permission is hereby granted, free of charge, to any person obtaining a copy
+| of this software and associated documentation files (the "Software"), to deal
+| in the Software without restriction, including without limitation the rights
+| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+| copies of the Software, and to permit persons to whom the Software is
+| furnished to do so, subject to the following conditions:
+|
+| The above copyright notice and this permission notice shall be included in all
+| copies or substantial portions of the Software.
+|
+| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+| SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+This product bundles packages from the source project at https://github.com/nodable/val-parsers.
+
+* npm package IDs:
+  * @nodable/entities@2.1.1
+
+Copyright: Copyright (c) Amit Gupta (https://solothought.com)
+Home page: https://github.com/nodable/val-parsers
+License: MIT - https://spdx.org/licenses/MIT.html
+| MIT License
+|
+| Copyright (c) Amit Gupta (https://solothought.com)
 |
 | Permission is hereby granted, free of charge, to any person obtaining a copy
 | of this software and associated documentation files (the "Software"), to deal
