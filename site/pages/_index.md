@@ -25,7 +25,11 @@ stale entries from unrelated jobs, no wasted re-uploads of files that haven't ch
 
 ---
 
-{{< buildish-component-link kind="docs" label="Get Started" appearance="primary" >}}
+{{< buildish-button appearance="primary" >}}
+[Get started](development/user/getting-started/)
+{{< /buildish-button >}}
+
+{{< buildish-component-link kind="development" label="Docs" appearance="primary" >}}
 
 _Docs cover workflow usage, configuration, cache-partition behaviour, security notes, and
 maintenance guidance._
