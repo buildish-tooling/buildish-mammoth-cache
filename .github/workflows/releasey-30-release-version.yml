@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: buildish-release-${{ github.repository }}-${{ inputs.version }}
+  cancel-in-progress: false
+
 env:
   BUILDISH_RELEASE_TOOLING_REF: f37e09cc223d1e58d3095ad875db989fd8d5defe # renovate: datasource=github-releases depName=apache/buildish-release-tooling currentValue=v0.0.0
   BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH: .buildish-internal/buildish-release-tooling
