@@ -39,11 +39,11 @@ sequenceDiagram
     P->>P: bootstrap (config, cache model, adapter provision)
     P->>P: restoreBaseCache()
     P->>P: armBaseCacheFinalize()
-    P->>P: timestamp cache GC [default]
     P->>P: capture pre-build manifest
     P-->>B: hand off to build
     B->>B: build runs …
     B->>F: job post step
+    F->>F: timestamp cache GC [default, cache writers only]
     F->>F: capture post-build manifest → compute delta
     F->>F: saveBaseCache() [if armed + eligible]
     F->>F: upload delta artifact [distributed-worker]
