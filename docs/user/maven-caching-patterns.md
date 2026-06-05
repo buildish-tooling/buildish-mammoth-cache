@@ -31,6 +31,26 @@ artifact ID, and version, and the file content is identical regardless of which 
 it. This makes it straightforwardly portable across runners, operating systems, and
 architectures — a cache entry saved on one runner is fully usable on another.
 
+## Default timestamp garbage collection
+
+Maven local repositories tend to grow monotonically because old dependency versions remain valid
+even after the project stops using them. The action therefore enables `cache-gc-mode: timestamp` by
+default for both Maven and Gradle.
+
+For Maven this means managed local-repository files are pruned before the build when both their
+modification time and effective access time are older than `cache-gc-older-than-days` (`14` by
+default). This keeps GitHub Actions cache entries from growing indefinitely while still allowing
+Maven to redownload an old artifact if the build needs it again.
+
+If a workflow intentionally relies on a large offline-style local repository, either increase the
+cutoff or disable GC:
+
+```yaml
+cache-gc-older-than-days: '30'
+# or:
+cache-gc-mode: off
+```
+
 ## Why certain files are always excluded
 
 Four categories of file are unconditionally excluded from every cache partition because they carry

@@ -91,6 +91,22 @@ inputs:
       empty `includes` array disables it. Custom partitions must have at least one
       include.
     required: false
+  cache-gc-mode:
+    description: >-
+      Best-effort managed cache garbage-collection mode applied before the
+      pre-build manifest is captured. Supported values: `off` and `timestamp`.
+      `timestamp` deletes managed files only when both access and modification
+      timestamps are older than `cache-gc-older-than-days`. Default:
+      `timestamp`.
+    required: false
+    default: timestamp
+  cache-gc-older-than-days:
+    description: >-
+      Age threshold in days for `cache-gc-mode=timestamp`. Must be at least `2`
+      days so Linux `relatime` and similarly deferred access-time updates are not
+      treated as precise same-day usage data. Default: `14`.
+    required: false
+    default: '14'
   maven-local-repository:
     description: >-
       Optional absolute path or repository-relative path to the Maven local

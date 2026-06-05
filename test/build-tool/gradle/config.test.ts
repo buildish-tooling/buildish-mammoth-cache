@@ -249,6 +249,8 @@ describe('normalizeActionConfig', () => {
       cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
       cachePartitions: [],
       restoreCleanupMode: 'none',
+      cacheGcMode: 'timestamp',
+      cacheGcOlderThanDays: 14,
       wrapperSelectionMode: 'default',
       defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
     });
@@ -293,6 +295,38 @@ describe('normalizeActionConfig', () => {
       },
     ]);
     expect(config.restoreCleanupMode).toBe('prune-managed');
+  });
+
+  it('parses timestamp cache GC settings', () => {
+    const config = normalizeActionConfig(
+      readActionInputs(
+        createInputProvider({
+          'cache-gc-mode': 'timestamp',
+          'cache-gc-older-than-days': '7',
+        }),
+      ),
+      {
+        phase: 'prepare',
+        ciContext: baseCiContext,
+        env: {},
+      },
+    );
+
+    expect(config.cacheGcMode).toBe('timestamp');
+    expect(config.cacheGcOlderThanDays).toBe(7);
+  });
+
+  it('rejects timestamp cache GC cutoffs below two days', () => {
+    expect(() =>
+      normalizeActionConfig(
+        readActionInputs(createInputProvider({ 'cache-gc-older-than-days': '1' })),
+        {
+          phase: 'prepare',
+          ciContext: baseCiContext,
+          env: {},
+        },
+      ),
+    ).toThrow(/cache-gc-older-than-days/u);
   });
 
   it('rejects custom cache-key templates without partitionFingerprint', () => {

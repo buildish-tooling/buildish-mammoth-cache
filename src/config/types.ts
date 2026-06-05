@@ -66,6 +66,17 @@ export const RESTORE_CLEANUP_MODES = ['none', 'prune-managed'] as const;
 export type RestoreCleanupMode = (typeof RESTORE_CLEANUP_MODES)[number];
 
 /**
+ * Supported best-effort cache garbage-collection policies.
+ *
+ * - `off`: never delete managed cache content based on timestamps
+ * - `timestamp`: delete managed files whose access and modification timestamps are both older than
+ *   the configured cutoff
+ */
+export const CACHE_GC_MODES = ['off', 'timestamp'] as const;
+/** Union of valid cache garbage-collection policy strings derived from {@link CACHE_GC_MODES}. */
+export type CacheGcMode = (typeof CACHE_GC_MODES)[number];
+
+/**
  * Normalized user-supplied cache partition override or custom partition definition.
  *
  * Partition IDs that match a built-in partition override that built-in's include/exclude lists.
@@ -133,6 +144,10 @@ export interface RawSharedActionInputs {
   readonly cleanupEnabled: string;
   /** Raw restore cleanup mode. Empty string later defaults to `'none'`. */
   readonly restoreCleanupMode: string;
+  /** Raw cache GC mode. Empty string later defaults to `'timestamp'`. */
+  readonly cacheGcMode: string;
+  /** Raw cache GC age threshold in days. Empty string later defaults to `'14'`. */
+  readonly cacheGcOlderThanDays: string;
   /** Raw `github-token` input used only for authenticated GitHub-host fetches. */
   readonly githubToken: string;
 }
@@ -248,6 +263,10 @@ export interface NormalizedActionConfig {
   readonly cleanupEnabled: boolean;
   /** Restore-time cleanup mode applied before the build starts. Defaults to `none`. */
   readonly restoreCleanupMode: RestoreCleanupMode;
+  /** Best-effort cache garbage-collection mode applied before pre-build manifest capture. */
+  readonly cacheGcMode: CacheGcMode;
+  /** Age threshold in days for timestamp-based cache garbage collection. */
+  readonly cacheGcOlderThanDays: number;
 }
 
 /**

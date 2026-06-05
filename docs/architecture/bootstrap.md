@@ -70,9 +70,10 @@ flowchart TD
 2. If restore-cleanup mode is `prune-managed`, deletes managed files and re-restores.
 3. Arms the finalize phase via `armBaseCacheFinalize()` (writes a state flag so the finalize phase
    knows a restore was attempted).
-4. Captures the pre-build file snapshot (`captureCacheManifest()`).
-5. For `distributed-worker` or `distributed-aggregator` modes, downloads and applies applicable
-   delta artifact packages.
+4. For `distributed-aggregator` jobs with configured `dependent-jobs`, downloads and applies
+   applicable delta artifact packages.
+5. Runs timestamp cache garbage collection when `cache-gc-mode` is `timestamp` (the default).
+6. Captures the pre-build file snapshot (`captureCacheManifest()`).
 
 ## Finalize phase
 

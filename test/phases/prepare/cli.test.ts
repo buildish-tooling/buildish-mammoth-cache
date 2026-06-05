@@ -25,7 +25,9 @@ const prepareFlowMock = vi.hoisted(() => ({
   createPrepareActionOutputs: vi.fn(() => ({ 'cache-key': 'cache-key-value' })),
   executePrepareAction: vi.fn(async () => ({
     bootstrap: { baseCacheResult: null },
+    restoreCleanupResult: null,
     dependentDeltaResult: null,
+    cacheGcResult: null,
     message: 'Prepare execution completed.',
     preBuildManifestState: null,
   })),

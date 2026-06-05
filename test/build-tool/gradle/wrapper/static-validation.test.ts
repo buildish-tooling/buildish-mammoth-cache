@@ -374,6 +374,8 @@ function createConfig(overrides: Partial<NormalizedGradleConfig> = {}): Normaliz
     wrapperPropertiesFiles: [],
     cleanupEnabled: true,
     restoreCleanupMode: 'none',
+    cacheGcMode: 'off',
+    cacheGcOlderThanDays: 14,
     gradleUserHome: '/home/runner/.gradle',
     ...overrides,
   };

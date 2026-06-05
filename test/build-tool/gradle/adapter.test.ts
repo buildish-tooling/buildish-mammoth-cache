@@ -39,6 +39,8 @@ function createTestGradleConfig(gradleUserHome: string): NormalizedGradleConfig 
     cacheSchemaVersion: 1,
     cleanupEnabled: true,
     restoreCleanupMode: 'none',
+    cacheGcMode: 'off',
+    cacheGcOlderThanDays: 14,
     wrapperSelectionMode: 'default',
     wrapperPropertiesGlob: '**/gradle-wrapper.properties',
     defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',

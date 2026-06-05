@@ -29,6 +29,7 @@ import { parse as parseYaml } from 'yaml';
 
 import { parseSerializedJson } from '../../util/serialization';
 import {
+  CACHE_GC_MODES,
   JOB_MODES,
   RESTORE_CLEANUP_MODES,
   type NormalizedGradleConfig,
@@ -96,6 +97,10 @@ export function readGradleActionInputs(inputProvider: InputProvider): RawGradleA
     }),
     cleanupEnabled: inputProvider.getInput('cleanup-enabled', { trimWhitespace: true }),
     restoreCleanupMode: inputProvider.getInput('restore-cleanup-mode', { trimWhitespace: true }),
+    cacheGcMode: inputProvider.getInput('cache-gc-mode', { trimWhitespace: true }),
+    cacheGcOlderThanDays: inputProvider.getInput('cache-gc-older-than-days', {
+      trimWhitespace: true,
+    }),
     gradleUserHome: inputProvider.getInput('gradle-user-home', { trimWhitespace: true }),
     setupJava: inputProvider.getInput('setup-java', { trimWhitespace: true }),
     githubToken: inputProvider.getInput('github-token', { trimWhitespace: true }),
@@ -178,6 +183,12 @@ export function normalizeGradleActionConfig(
     RESTORE_CLEANUP_MODES,
     'restore-cleanup-mode',
   );
+  const cacheGcMode = parseEnumInput(
+    rawInputs.cacheGcMode || 'timestamp',
+    CACHE_GC_MODES,
+    'cache-gc-mode',
+  );
+  const cacheGcOlderThanDays = parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14');
   const readOnly =
     rawInputs.readOnly.length > 0
       ? parseBooleanInput(rawInputs.readOnly, 'read-only')
@@ -215,6 +226,8 @@ export function normalizeGradleActionConfig(
     wrapperPropertiesFiles: explicitWrapperPropertiesFiles,
     cleanupEnabled,
     restoreCleanupMode,
+    cacheGcMode,
+    cacheGcOlderThanDays,
     gradleUserHome,
   };
 }
@@ -240,6 +253,8 @@ function createEmptyRawGradleActionInputs(): RawGradleActionInputs {
     wrapperPropertiesFiles: '',
     cleanupEnabled: '',
     restoreCleanupMode: '',
+    cacheGcMode: '',
+    cacheGcOlderThanDays: '',
     gradleUserHome: '',
     setupJava: '',
     githubToken: '',
@@ -405,6 +420,12 @@ function serializeConfigFileInputs(
       case 'restore-cleanup-mode':
         inputs.restoreCleanupMode = serializeStringConfigValue(value, key);
         break;
+      case 'cache-gc-mode':
+        inputs.cacheGcMode = serializeStringConfigValue(value, key);
+        break;
+      case 'cache-gc-older-than-days':
+        inputs.cacheGcOlderThanDays = serializeNumberLikeConfigValue(value, key);
+        break;
       case 'gradle-user-home':
         inputs.gradleUserHome = serializeStringConfigValue(value, key);
         break;
@@ -430,6 +451,18 @@ function serializeStringConfigValue(value: unknown, label: string): string {
 
 function serializeBooleanLikeConfigValue(value: unknown, label: string): string {
   return typeof value === 'boolean' ? String(value) : serializeStringConfigValue(value, label);
+}
+
+function serializeNumberLikeConfigValue(value: unknown, label: string): string {
+  return typeof value === 'number' ? String(value) : serializeStringConfigValue(value, label);
+}
+
+function parseCacheGcOlderThanDays(input: string): number {
+  const value = Number(input.trim());
+  if (!Number.isFinite(value) || value < 2) {
+    throw new Error('cache-gc-older-than-days must be a number greater than or equal to 2.');
+  }
+  return value;
 }
 
 function serializeListLikeConfigValue(value: unknown, label: string): string {
@@ -476,6 +509,8 @@ function overlayConfiguredInputs(
       directInputs.wrapperPropertiesFiles || fileInputs.wrapperPropertiesFiles,
     cleanupEnabled: directInputs.cleanupEnabled || fileInputs.cleanupEnabled,
     restoreCleanupMode: directInputs.restoreCleanupMode || fileInputs.restoreCleanupMode,
+    cacheGcMode: directInputs.cacheGcMode || fileInputs.cacheGcMode,
+    cacheGcOlderThanDays: directInputs.cacheGcOlderThanDays || fileInputs.cacheGcOlderThanDays,
     gradleUserHome: directInputs.gradleUserHome || fileInputs.gradleUserHome,
     setupJava: directInputs.setupJava || fileInputs.setupJava,
     githubToken: directInputs.githubToken,

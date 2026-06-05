@@ -219,6 +219,7 @@ describe('executePrepareAction', () => {
       expect(status.dependentDeltaResult).toEqual(
         expect.objectContaining({
           appliedArtifactCount: 1,
+          appliedRelativePaths: ['caches/modules-2/files-2.1/example/module.bin'],
           addedCount: 1,
           modifiedCount: 0,
           deletedCount: 0,
@@ -852,6 +853,7 @@ describe('executePrepareAction', () => {
       expect(status.dependentDeltaResult).toEqual(
         expect.objectContaining({
           appliedArtifactCount: 2,
+          appliedRelativePaths: ['caches/modules-2/files-2.1/example/module.bin'],
           addedCount: 1,
           modifiedCount: 0,
           deletedCount: 0,
@@ -1220,6 +1222,8 @@ function createTestConfig(gradleUserHome: string): NormalizedGradleConfig {
     wrapperPropertiesFiles: [],
     cleanupEnabled: true,
     restoreCleanupMode: 'none',
+    cacheGcMode: 'off',
+    cacheGcOlderThanDays: 14,
     gradleUserHome,
   };
 }
@@ -1463,6 +1467,7 @@ function createMinimalPrepareStatus(
     bootstrap: createMinimalPrepareBootstrapExecution(),
     restoreCleanupResult: null,
     dependentDeltaResult: null,
+    cacheGcResult: null,
     preBuildManifestState: null,
     message: 'Test.',
     ...overrides,
@@ -1510,6 +1515,7 @@ describe('createPrepareActionSummaryLines', () => {
         dependentDeltaResult: {
           requestedJobs: ['worker-a', 'worker-b'],
           downloadedArtifactNames: ['artifact-a', 'artifact-b'],
+          appliedRelativePaths: [],
           appliedArtifactCount: 2,
           message: 'Applied 2.',
           cacheRoot: '/tmp/.gradle',
@@ -1568,6 +1574,7 @@ describe('createPrepareActionLogLines', () => {
         dependentDeltaResult: {
           requestedJobs: ['worker-a', 'worker-b'],
           downloadedArtifactNames: ['artifact-a'],
+          appliedRelativePaths: [],
           appliedArtifactCount: 1,
           message: 'Applied 1.',
           cacheRoot: '/tmp/.gradle',

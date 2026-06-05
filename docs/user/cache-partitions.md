@@ -1,7 +1,7 @@
 ---
 title: Cache Partitions
 weight: 40
-description: Built-in partitions, customization, glob rules, and restore cleanup for Apache Buildish Mammoth Cache for Gradle and Maven.
+description: Built-in partitions, customization, glob rules, timestamp garbage collection, and restore cleanup for Apache Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
@@ -139,6 +139,37 @@ Examples:
 
 This example: overrides `modules`, disables `kotlin-dsl`, and adds a custom partition. The
 `partitionFingerprint` changes, so it uses a different base cache key than the default layout.
+
+## Timestamp garbage collection
+
+`cache-gc-mode: timestamp` is enabled by default to prevent managed cache partitions from growing
+without bound, especially Maven local repositories. GitHub Actions cache storage is finite, and a
+cache entry that only ever accumulates artifacts eventually becomes less useful or impossible to
+save.
+
+Timestamp GC runs after base-cache restore and dependent delta apply, but before the pre-build
+manifest is captured. A file is eligible only when all of these are true:
+
+- The file is matched by exactly one active cache partition.
+- The file is not excluded by partition excludes or hard safety excludes.
+- The file was not just applied from a dependent worker delta in the current prepare phase.
+- Its modification time is older than `cache-gc-older-than-days`.
+- Its effective access time is older than `cache-gc-older-than-days`.
+
+The effective access time is the newer of the file's access time and modification time. This keeps
+newly written files even when access time data is stale or unavailable. The default threshold is
+`14` days, and the minimum accepted threshold is `2` days because common Linux, macOS, and Windows
+runner filesystems do not provide precise "updated on every read" access-time behavior.
+
+The GC pass deletes eligible files and then removes empty parent directories. It does not delete
+unmanaged files elsewhere in the build tool cache directory. To disable it:
+
+```yaml
+cache-gc-mode: off
+```
+
+Use `cache-gc-mode: off` or a larger `cache-gc-older-than-days` value for jobs that intentionally
+rely on old, rarely touched artifacts and cannot redownload them.
 
 ## Restore cleanup behavior
 

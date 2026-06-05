@@ -53,6 +53,32 @@ even on the same branch with no dependency changes.
 
 ---
 
+## GitHub Actions cache storage keeps filling up
+
+**Symptom:** Repository cache storage approaches the GitHub Actions cache cap, cache saves stop
+being useful, or old cache entries are evicted before later jobs can reuse them.
+
+**Diagnostic steps:**
+
+1. **Keep timestamp GC enabled.** `cache-gc-mode: timestamp` is the default and prunes managed
+   files whose modification and effective access times are both older than
+   `cache-gc-older-than-days`.
+
+2. **Tune the cutoff.** The default cutoff is `14` days. Lower values prune more aggressively, but
+   the action rejects values below `2` days because common runner filesystems may not update access
+   times on every read.
+
+3. **Review custom partitions.** Broad custom `cache-partitions` can include generated or
+   low-value files that grow quickly. Disable or narrow partitions that do not materially improve
+   build time.
+
+4. **Expect Maven to redownload pruned artifacts.** Maven local repositories are safe to prune
+   conservatively because Maven can resolve old dependencies again when needed. If a workflow
+   must run without network access, increase `cache-gc-older-than-days` or set
+   `cache-gc-mode: off`.
+
+---
+
 ## Delta artifact not found by aggregator
 
 **Symptom:** The aggregator's finalize step fails with a message like

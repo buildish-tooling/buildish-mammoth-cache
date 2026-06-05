@@ -34,6 +34,7 @@ import {
   type DeltaApplyResult,
 } from '../../delta/apply';
 import { captureCacheManifest } from '../../cache/manifest';
+import { collectTimestampCacheGarbage, type TimestampCacheGcResult } from '../../cache/gc';
 import { restoreBaseCache } from '../../cache/service';
 import {
   persistBaseCacheRestoreResult,
@@ -54,6 +55,7 @@ import type { WorkflowArtifactBackend } from '../../delta/backend';
 export interface PrepareDependentDeltaResult extends DeltaApplyResult {
   readonly requestedJobs: readonly string[];
   readonly downloadedArtifactNames: readonly string[];
+  readonly appliedRelativePaths: readonly string[];
   readonly appliedArtifactCount: number;
   readonly message: string;
 }
@@ -65,6 +67,8 @@ export interface PrepareActionStatus {
   readonly restoreCleanupResult: RestoreCleanupResult | null;
   /** Result of downloading and applying dependent worker deltas; `null` when no dependent jobs were configured. */
   readonly dependentDeltaResult: PrepareDependentDeltaResult | null;
+  /** Result of best-effort cache garbage collection; `null` when disabled. */
+  readonly cacheGcResult: TimestampCacheGcResult | null;
   /** Path and metadata of the persisted pre-build cache manifest; `null` when the cache is disabled. */
   readonly preBuildManifestState: PersistedPreBuildCacheManifestState | null;
   readonly message: string;
@@ -116,6 +120,7 @@ export async function executePrepareAction(
       bootstrap,
       restoreCleanupResult: null,
       dependentDeltaResult: null,
+      cacheGcResult: null,
       preBuildManifestState: null,
       message: 'Prepare execution completed without cache orchestration.',
     } satisfies PrepareActionStatus;
@@ -129,6 +134,7 @@ export async function executePrepareAction(
 
   const restoreCleanupResult = await maybePruneManagedFilesAfterRestore(bootstrap, dependencies);
   const dependentDeltaResult = await applyDependentJobDeltas(bootstrap, dependencies);
+  const cacheGcResult = await maybeCollectCacheGarbage(bootstrap, dependentDeltaResult);
   if (dependentDeltaResult) {
     persistConsumedDeltaArtifactNames(
       dependentDeltaResult.downloadedArtifactNames,
@@ -150,6 +156,7 @@ export async function executePrepareAction(
     bootstrap,
     restoreCleanupResult,
     dependentDeltaResult,
+    cacheGcResult,
     preBuildManifestState,
     message:
       'Prepare execution completed and captured the pre-build cache manifest for finalize processing.',
@@ -161,6 +168,20 @@ export async function executePrepareAction(
   }
 
   return status;
+}
+
+async function maybeCollectCacheGarbage(
+  bootstrap: BootstrapExecution,
+  dependentDeltaResult: PrepareDependentDeltaResult | null,
+): Promise<TimestampCacheGcResult | null> {
+  if (bootstrap.config.cacheGcMode === 'off' || !bootstrap.cacheModel) {
+    return null;
+  }
+
+  return await collectTimestampCacheGarbage(bootstrap.cacheModel, {
+    olderThanDays: bootstrap.config.cacheGcOlderThanDays,
+    protectedRelativePaths: dependentDeltaResult?.appliedRelativePaths,
+  });
 }
 
 async function applyDependentJobDeltas(
@@ -191,7 +212,7 @@ async function applyDependentJobDeltas(
       allowDuplicateDependentDeltaPaths: bootstrap.config.allowDuplicateDependentDeltaPaths,
     });
     const applied = await applyMergedDeltaPlan(plan, bootstrap.cacheModel!.cacheRoot);
-    return createPrepareDependentDeltaResult(requestedJobs, downloadedPackages, applied);
+    return createPrepareDependentDeltaResult(requestedJobs, downloadedPackages, plan, applied);
   } finally {
     await cleanupDownloadedPackages(downloadedPackages);
   }
@@ -289,6 +310,7 @@ async function maybePruneManagedFilesAfterRestore(
 function createPrepareDependentDeltaResult(
   requestedJobs: readonly string[],
   downloadedPackages: readonly DownloadedDeltaArtifactPackage[],
+  plan: ReturnType<typeof mergeDeltaArtifactPackages>,
   applied: DeltaApplyResult,
 ): PrepareDependentDeltaResult {
   return {
@@ -296,6 +318,11 @@ function createPrepareDependentDeltaResult(
     requestedJobs,
     downloadedArtifactNames: downloadedPackages.map(
       (artifactPackage) => artifactPackage.artifact.name,
+    ),
+    appliedRelativePaths: plan.deltaManifest.partitions.flatMap((partition) =>
+      partition.entries
+        .filter((entry) => entry.changeType !== 'deleted')
+        .map((entry) => entry.relativePath),
     ),
     appliedArtifactCount: downloadedPackages.length,
     message:
@@ -328,6 +355,7 @@ export function createPrepareActionSummaryLines(status: PrepareActionStatus): re
     '## Apache Buildish prepare execution',
     `- Restore cleanup: ${describeRestoreCleanupSummary(status.restoreCleanupResult)}`,
     `- Dependent delta reuse: ${describeDependentDeltaSummary(dependentDelta)}`,
+    `- Cache GC: ${describeCacheGcSummary(status.cacheGcResult)}`,
     ...(status.preBuildManifestState
       ? ['- Pre-build manifest: persisted']
       : ['- Pre-build manifest: not persisted']),
@@ -348,6 +376,14 @@ export function createPrepareActionSummaryLines(status: PrepareActionStatus): re
             `- Restore cleanup deleted files: ${status.restoreCleanupResult.deletedFileCount}`,
           ]
         : []),
+      ...(status.cacheGcResult
+        ? [
+            `- Cache GC mode: ${escapeSummaryText(status.cacheGcResult.mode)}`,
+            `- Cache GC scanned files: ${status.cacheGcResult.scannedFileCount}`,
+            `- Cache GC deleted files: ${status.cacheGcResult.deletedFileCount}`,
+            `- Cache GC deleted bytes: ${status.cacheGcResult.deletedByteCount}`,
+          ]
+        : []),
     ]),
   ];
 }
@@ -364,6 +400,7 @@ export function createPrepareActionLogLines(status: PrepareActionStatus): readon
     ...createBootstrapLogLines(status.bootstrap),
     `Restore cleanup: ${describeRestoreCleanupSummary(status.restoreCleanupResult)}.`,
     `Dependent delta reuse: ${describeDependentDeltaSummary(status.dependentDeltaResult)}.`,
+    `Cache GC: ${describeCacheGcSummary(status.cacheGcResult)}.`,
     status.preBuildManifestState
       ? 'Pre-build manifest: persisted.'
       : 'Pre-build manifest: not persisted.',
@@ -371,6 +408,10 @@ export function createPrepareActionLogLines(status: PrepareActionStatus): readon
 
   if (status.restoreCleanupResult) {
     lines.push(status.restoreCleanupResult.message);
+  }
+
+  if (status.cacheGcResult) {
+    lines.push(status.cacheGcResult.message);
   }
 
   if (status.dependentDeltaResult) {
@@ -411,6 +452,14 @@ function describeDependentDeltaSummary(result: PrepareDependentDeltaResult | nul
   }
 
   return `${result.appliedArtifactCount} artifact(s) from ${result.requestedJobs.length} job(s)`;
+}
+
+function describeCacheGcSummary(result: TimestampCacheGcResult | null): string {
+  if (!result) {
+    return 'off';
+  }
+
+  return `${result.mode} (${result.deletedFileCount} deleted)`;
 }
 
 /**

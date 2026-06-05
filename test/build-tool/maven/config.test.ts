@@ -89,6 +89,8 @@ describe('readMavenActionInputs', () => {
       'cache-partitions': '',
       'cleanup-enabled': 'true',
       'restore-cleanup-mode': 'none',
+      'cache-gc-mode': 'timestamp',
+      'cache-gc-older-than-days': '14',
       'maven-local-repository': '/custom/m2',
       'github-token': 'ghs_token',
     });
@@ -101,6 +103,8 @@ describe('readMavenActionInputs', () => {
     expect(inputs.jobMode).toBe('standalone');
     expect(inputs.cleanupEnabled).toBe('true');
     expect(inputs.restoreCleanupMode).toBe('none');
+    expect(inputs.cacheGcMode).toBe('timestamp');
+    expect(inputs.cacheGcOlderThanDays).toBe('14');
     expect(inputs.mavenLocalRepository).toBe('/custom/m2');
     expect(inputs.githubToken).toBe('ghs_token');
   });
@@ -439,6 +443,8 @@ describe('normalizeMavenActionConfig', () => {
     expect(config.cacheSchemaVersion).toBe(1);
     expect(config.cleanupEnabled).toBe(true);
     expect(config.restoreCleanupMode).toBe('none');
+    expect(config.cacheGcMode).toBe('timestamp');
+    expect(config.cacheGcOlderThanDays).toBe(14);
     expect(config.mavenLocalRepository).toBe(path.join(os.homedir(), '.m2'));
   });
 
@@ -531,6 +537,31 @@ describe('normalizeMavenActionConfig', () => {
       ciContext: STUB_CI_CONTEXT,
     });
     expect(config.restoreCleanupMode).toBe('prune-managed');
+  });
+
+  it('parses timestamp cache GC settings', () => {
+    const raw = readMavenActionInputs(
+      makeInputProvider({
+        'cache-gc-mode': 'timestamp',
+        'cache-gc-older-than-days': '7',
+      }),
+    );
+    const config = normalizeMavenActionConfig(raw, {
+      phase: 'prepare',
+      ciContext: STUB_CI_CONTEXT,
+    });
+    expect(config.cacheGcMode).toBe('timestamp');
+    expect(config.cacheGcOlderThanDays).toBe(7);
+  });
+
+  it('rejects timestamp cache GC cutoffs below two days', () => {
+    const raw = readMavenActionInputs(makeInputProvider({ 'cache-gc-older-than-days': '1' }));
+    expect(() =>
+      normalizeMavenActionConfig(raw, {
+        phase: 'prepare',
+        ciContext: STUB_CI_CONTEXT,
+      }),
+    ).toThrow(/cache-gc-older-than-days/u);
   });
 
   it('rejects an invalid job-mode value', () => {

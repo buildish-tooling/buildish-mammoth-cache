@@ -1,7 +1,7 @@
 ---
 title: Base Cache Design
 weight: 20
-description: Base cache restore/save lifecycle, gating conditions, prune-managed cleanup, and the distributed delta exchange model.
+description: Base cache restore/save lifecycle, timestamp garbage collection, prune-managed cleanup, and the distributed delta exchange model.
 ---
 
 <!--
@@ -21,8 +21,8 @@ limitations under the License.
 -->
 
 This document describes the base cache restore/save lifecycle, the gating conditions that control
-whether a save occurs, the optional `prune-managed` cleanup mode, and the distributed
-worker/aggregator delta exchange model.
+whether a save occurs, timestamp garbage collection, the optional `prune-managed` cleanup mode, and
+the distributed worker/aggregator delta exchange model.
 
 ## Prepare / finalize lifecycle
 
@@ -39,6 +39,7 @@ sequenceDiagram
     P->>P: bootstrap (config, cache model, adapter provision)
     P->>P: restoreBaseCache()
     P->>P: armBaseCacheFinalize()
+    P->>P: timestamp cache GC [default]
     P->>P: capture pre-build manifest
     P-->>B: hand off to build
     B->>B: build runs …
@@ -97,6 +98,29 @@ flowchart TD
 
 Distributed worker jobs skip the base cache save intentionally: they only upload a delta artifact
 that the aggregator merges. This prevents redundant and conflicting base cache writers.
+
+## Timestamp cache garbage collection
+
+`cache-gc-mode: timestamp` runs by default during prepare after base-cache restore and dependent
+delta apply, before the pre-build manifest is captured. It is designed to counter unbounded cache
+growth in GitHub Actions cache entries, especially Maven local repositories.
+
+The GC pass captures the managed cache manifest, then deletes only managed files whose modification
+time and effective access time are both older than `cache-gc-older-than-days` (`14` by default).
+Effective access time is `max(atime, mtime)`, so recently written files are kept even if filesystem
+access-time behavior is stale, deferred, or disabled. The minimum supported cutoff is `2` days to
+avoid treating Linux `relatime`-style updates as precise same-day usage data.
+
+Paths applied from dependent worker deltas in the current prepare phase are protected from that same
+GC pass, even when their preserved file timestamps are old. After deleting eligible files, the pass
+removes empty parent directories and restores timestamps on retained files best-effort so the
+manifest scan does not itself manufacture recent access times. Before deleting or restoring
+timestamps, GC resolves the cache-relative path under the cache root and rechecks that the target is
+a regular non-symlink file. Because this runs before pre-build manifest capture, deleted files are
+absent from the baseline used for finalize delta computation.
+
+Operators can disable this behavior with `cache-gc-mode: off` or increase
+`cache-gc-older-than-days` when a build intentionally depends on old, rarely touched cache entries.
 
 ## Prune-managed cleanup mode (`restore-cleanup-mode: prune-managed`)
 

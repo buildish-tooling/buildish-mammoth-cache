@@ -67,6 +67,8 @@ const config: NormalizedGradleConfig = {
   wrapperPropertiesFiles: [],
   cleanupEnabled: true,
   restoreCleanupMode: 'none',
+  cacheGcMode: 'off',
+  cacheGcOlderThanDays: 14,
   gradleUserHome: '/home/runner/.gradle',
 };
 

@@ -29,6 +29,7 @@ import { parse as parseYaml } from 'yaml';
 
 import { parseSerializedJson } from '../../util/serialization';
 import {
+  CACHE_GC_MODES,
   JOB_MODES,
   RESTORE_CLEANUP_MODES,
   type NormalizedMavenConfig,
@@ -81,6 +82,10 @@ export function readMavenActionInputs(inputProvider: InputProvider): RawMavenAct
     cachePartitions: inputProvider.getInput('cache-partitions', { trimWhitespace: true }),
     cleanupEnabled: inputProvider.getInput('cleanup-enabled', { trimWhitespace: true }),
     restoreCleanupMode: inputProvider.getInput('restore-cleanup-mode', { trimWhitespace: true }),
+    cacheGcMode: inputProvider.getInput('cache-gc-mode', { trimWhitespace: true }),
+    cacheGcOlderThanDays: inputProvider.getInput('cache-gc-older-than-days', {
+      trimWhitespace: true,
+    }),
     mavenLocalRepository: inputProvider.getInput('maven-local-repository', {
       trimWhitespace: true,
     }),
@@ -148,6 +153,12 @@ export function normalizeMavenActionConfig(
     RESTORE_CLEANUP_MODES,
     'restore-cleanup-mode',
   );
+  const cacheGcMode = parseEnumInput(
+    rawInputs.cacheGcMode || 'timestamp',
+    CACHE_GC_MODES,
+    'cache-gc-mode',
+  );
+  const cacheGcOlderThanDays = parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14');
   const readOnly =
     rawInputs.readOnly.length > 0
       ? parseBooleanInput(rawInputs.readOnly, 'read-only')
@@ -175,6 +186,8 @@ export function normalizeMavenActionConfig(
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     cleanupEnabled,
     restoreCleanupMode,
+    cacheGcMode,
+    cacheGcOlderThanDays,
     mavenLocalRepository,
   };
 }
@@ -331,6 +344,12 @@ function serializeMavenConfigFileInputs(
       case 'restore-cleanup-mode':
         inputs.restoreCleanupMode = serializeMavenStringValue(value, key);
         break;
+      case 'cache-gc-mode':
+        inputs.cacheGcMode = serializeMavenStringValue(value, key);
+        break;
+      case 'cache-gc-older-than-days':
+        inputs.cacheGcOlderThanDays = serializeMavenNumberLikeValue(value, key);
+        break;
       case 'maven-local-repository':
         inputs.mavenLocalRepository = serializeMavenStringValue(value, key);
         break;
@@ -366,6 +385,8 @@ function overlayMavenConfiguredInputs(
     cachePartitions: directInputs.cachePartitions || fileInputs.cachePartitions,
     cleanupEnabled: directInputs.cleanupEnabled || fileInputs.cleanupEnabled,
     restoreCleanupMode: directInputs.restoreCleanupMode || fileInputs.restoreCleanupMode,
+    cacheGcMode: directInputs.cacheGcMode || fileInputs.cacheGcMode,
+    cacheGcOlderThanDays: directInputs.cacheGcOlderThanDays || fileInputs.cacheGcOlderThanDays,
     mavenLocalRepository: directInputs.mavenLocalRepository || fileInputs.mavenLocalRepository,
     githubToken: directInputs.githubToken,
   };
@@ -385,6 +406,8 @@ function createEmptyRawMavenActionInputs(): Record<keyof RawMavenActionInputs, s
     cachePartitions: '',
     cleanupEnabled: '',
     restoreCleanupMode: '',
+    cacheGcMode: '',
+    cacheGcOlderThanDays: '',
     mavenLocalRepository: '',
     githubToken: '',
   };
@@ -403,6 +426,19 @@ function serializeMavenStringValue(value: unknown, label: string): string {
 function serializeMavenBooleanLikeValue(value: unknown, label: string): string {
   if (typeof value === 'boolean') return String(value);
   return serializeMavenStringValue(value, label);
+}
+
+function serializeMavenNumberLikeValue(value: unknown, label: string): string {
+  if (typeof value === 'number') return String(value);
+  return serializeMavenStringValue(value, label);
+}
+
+function parseCacheGcOlderThanDays(input: string): number {
+  const value = Number(input.trim());
+  if (!Number.isFinite(value) || value < 2) {
+    throw new Error('cache-gc-older-than-days must be a number greater than or equal to 2.');
+  }
+  return value;
 }
 
 function serializeMavenListLikeValue(value: unknown, label: string): string {

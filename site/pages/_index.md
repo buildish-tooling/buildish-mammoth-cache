@@ -45,6 +45,9 @@ GPG-verified against the official Gradle release signing key before any code run
 🗂 **Content-fingerprinted cache keys** — changing the cache partition layout automatically
 produces a new key lineage; no manual version bumps required.
 
+🧹 **Bounded cache growth** — timestamp-based garbage collection is enabled by default so old
+managed Gradle and Maven cache entries do not accumulate indefinitely.
+
 🚫 **Read-only on pull requests** — PRs restore the shared cache but never write back,
 keeping the main cache clean by default.
 

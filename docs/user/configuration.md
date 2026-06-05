@@ -129,6 +129,23 @@ only by the corresponding action and ignored (or rejected) by the other.
 - Accepted values: `true`, `false`
 - Enables the later cleanup-trigger flow used by cache management.
 
+### `cache-gc-mode`
+
+- Default: `timestamp`
+- Supported values: `off`, `timestamp`
+- Controls best-effort garbage collection of managed cache files before the pre-build manifest is captured.
+- `timestamp` deletes a managed file only when both its modification time and effective access time are older than `cache-gc-older-than-days`.
+- Effective access time is evaluated conservatively as the newer of access time and modification time.
+- Set `off` when jobs must retain rarely used old cache entries, for example offline-style builds that cannot redownload pruned dependencies.
+
+### `cache-gc-older-than-days`
+
+- Default: `14`
+- Minimum: `2`
+- Age threshold for `cache-gc-mode: timestamp`.
+- The minimum is intentionally above 24 hours because common runner filesystems may defer or coalesce access-time updates.
+- Increase this value if your Gradle or Maven build uses a large dependency set with artifacts that are valid but touched infrequently.
+
 ### `restore-cleanup-mode`
 
 - Default: `none`
