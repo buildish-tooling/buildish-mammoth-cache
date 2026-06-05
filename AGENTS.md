@@ -1,3 +1,19 @@
+<!--
+Copyright 2026 The Apache Software Foundation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Repository Instructions
 
 This file contains repository-wide guidance for coding agents working in this
@@ -55,7 +71,7 @@ Static pages in `site/pages/` publish at the component mount path:
 - Link to `development/` only when the link text or surrounding prose clearly
   identifies the target as unreleased development documentation.
 - Do not label `development/` links as `latest`, `current`, `stable`, `release
-  docs`, or generic `docs`.
+docs`, or generic `docs`.
 - Public/static pages may link to `development/` before the first ASF release
   only when no released docs target exists.
 - After the first ASF release, public/static pages must link to released docs
