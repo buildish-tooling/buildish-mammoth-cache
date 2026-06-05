@@ -167,6 +167,32 @@ describe('collectTimestampCacheGarbage', () => {
     );
   });
 
+  it('bounds concurrent retained timestamp restoration work', async () => {
+    const cacheRoot = await createTempDirectory();
+    const atime = new Date('2026-06-04T12:00:00.000Z');
+    const mtime = new Date('2026-05-20T12:00:00.000Z');
+    let activeRestores = 0;
+    let maxActiveRestores = 0;
+
+    for (let index = 0; index < 80; index += 1) {
+      await writeTrackedFile(cacheRoot, `caches/retained-${index}.bin`, 'retained', atime, mtime);
+    }
+
+    await collectTimestampCacheGarbage(createCacheModel(cacheRoot), {
+      olderThanDays: 14,
+      now: new Date('2026-06-05T12:00:00.000Z'),
+      beforeRestoreTimestamps: async () => {
+        activeRestores += 1;
+        maxActiveRestores = Math.max(maxActiveRestores, activeRestores);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        activeRestores -= 1;
+      },
+    });
+
+    expect(maxActiveRestores).toBeLessThanOrEqual(64);
+    expect(maxActiveRestores).toBeGreaterThan(1);
+  });
+
   it('does not restore timestamps through a symlink that replaced a retained file', async () => {
     const cacheRoot = await createTempDirectory();
     const outsideDirectory = await createTempDirectory();

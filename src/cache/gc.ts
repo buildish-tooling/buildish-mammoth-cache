@@ -23,6 +23,7 @@ import { captureCacheManifest, type CacheFileManifestEntry } from './manifest';
 import type { CacheModel } from './model';
 
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
+const MAX_TIMESTAMP_RESTORE_CONCURRENCY = 64;
 
 export interface TimestampCacheGcOptions {
   readonly olderThanDays: number;
@@ -121,8 +122,24 @@ async function restoreRetainedFileTimestamps(
   setTimes: NonNullable<TimestampCacheGcOptions['setTimes']>,
   beforeRestoreTimestamps: TimestampCacheGcOptions['beforeRestoreTimestamps'],
 ): Promise<void> {
+  let nextEntryIndex = 0;
+  const workerCount = Math.min(MAX_TIMESTAMP_RESTORE_CONCURRENCY, entries.length);
   await Promise.all(
-    entries.map(async (entry) => {
+    Array.from({ length: workerCount }, async () => {
+      while (nextEntryIndex < entries.length) {
+        const entry = entries[nextEntryIndex++]!;
+        await restoreRetainedFileTimestamp(cacheRoot, entry, setTimes, beforeRestoreTimestamps);
+      }
+    }),
+  );
+}
+
+async function restoreRetainedFileTimestamp(
+  cacheRoot: string,
+  entry: CacheFileManifestEntry,
+  setTimes: NonNullable<TimestampCacheGcOptions['setTimes']>,
+  beforeRestoreTimestamps: TimestampCacheGcOptions['beforeRestoreTimestamps'],
+): Promise<void> {
       const absolutePath = resolveNormalizedPathWithinRoot(
         cacheRoot,
         entry.relativePath,
@@ -135,8 +152,6 @@ async function restoreRetainedFileTimestamps(
       await setTimes(absolutePath, new Date(entry.atimeMs), new Date(entry.mtimeMs)).catch(
         () => undefined,
       );
-    }),
-  );
 }
 
 async function isRegularNonSymlinkFile(absolutePath: string): Promise<boolean> {
