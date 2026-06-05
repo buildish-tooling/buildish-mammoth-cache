@@ -14,24 +14,21 @@
  * limitations under the License.
  */
 
-import { lstat, rm, rmdir, utimes } from 'node:fs/promises';
+import { lstat, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isMissingPathError } from '../util/fs';
 import { resolveNormalizedPathWithinRoot } from '../util/paths';
-import { captureCacheManifest, type CacheFileManifestEntry } from './manifest';
+import { captureCacheMetadataSnapshot, type CacheFileMetadataEntry } from './manifest';
 import type { CacheModel } from './model';
 
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
-const MAX_TIMESTAMP_RESTORE_CONCURRENCY = 64;
 
 export interface TimestampCacheGcOptions {
   readonly olderThanDays: number;
   readonly now?: Date;
   readonly protectedRelativePaths?: Iterable<string>;
-  readonly setTimes?: (filePath: string, atime: Date, mtime: Date) => Promise<unknown>;
   readonly beforeDelete?: (filePath: string) => Promise<unknown>;
-  readonly beforeRestoreTimestamps?: (filePath: string) => Promise<unknown>;
 }
 
 export interface TimestampCacheGcResult {
@@ -59,23 +56,20 @@ export async function collectTimestampCacheGarbage(
 
   const nowMs = (options.now ?? new Date()).getTime();
   const cutoffTimeMs = nowMs - options.olderThanDays * MILLIS_PER_DAY;
-  const manifest = await captureCacheManifest(cacheModel);
-  const setTimes = options.setTimes ?? utimes;
+  const snapshot = await captureCacheMetadataSnapshot(cacheModel);
   const protectedRelativePaths = new Set(options.protectedRelativePaths ?? []);
   const deletedDirectories = new Set<string>();
-  const retainedEntries: CacheFileManifestEntry[] = [];
   let scannedFileCount = 0;
   let deletedFileCount = 0;
   let deletedByteCount = 0;
 
-  for (const partition of manifest.partitions) {
+  for (const partition of snapshot.partitions) {
     for (const entry of partition.entries) {
       scannedFileCount += 1;
       if (
         protectedRelativePaths.has(entry.relativePath) ||
         !isTimestampGcEligible(entry, cutoffTimeMs)
       ) {
-        retainedEntries.push(entry);
         continue;
       }
 
@@ -95,12 +89,6 @@ export async function collectTimestampCacheGarbage(
     }
   }
 
-  await restoreRetainedFileTimestamps(
-    cacheModel.cacheRoot,
-    retainedEntries,
-    setTimes,
-    options.beforeRestoreTimestamps,
-  );
   await removeEmptyDirectories(cacheModel.cacheRoot, deletedDirectories);
 
   return {
@@ -114,48 +102,6 @@ export async function collectTimestampCacheGarbage(
       `Timestamp cache GC deleted ${deletedFileCount} managed file(s) ` +
       `older than ${options.olderThanDays} day(s).`,
   };
-}
-
-async function restoreRetainedFileTimestamps(
-  cacheRoot: string,
-  entries: readonly CacheFileManifestEntry[],
-  setTimes: NonNullable<TimestampCacheGcOptions['setTimes']>,
-  beforeRestoreTimestamps: TimestampCacheGcOptions['beforeRestoreTimestamps'],
-): Promise<void> {
-  let nextEntryIndex = 0;
-  const workerCount = Math.min(MAX_TIMESTAMP_RESTORE_CONCURRENCY, entries.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextEntryIndex < entries.length) {
-        const entry = entries[nextEntryIndex++]!;
-        await restoreRetainedFileTimestamp(cacheRoot, entry, setTimes, beforeRestoreTimestamps);
-      }
-    }),
-  );
-}
-
-async function restoreRetainedFileTimestamp(
-  cacheRoot: string,
-  entry: CacheFileManifestEntry,
-  setTimes: NonNullable<TimestampCacheGcOptions['setTimes']>,
-  beforeRestoreTimestamps: TimestampCacheGcOptions['beforeRestoreTimestamps'],
-): Promise<void> {
-  const absolutePath = resolveNormalizedPathWithinRoot(
-    cacheRoot,
-    entry.relativePath,
-    `Cache GC path '${entry.relativePath}' escapes the cache root.`,
-  );
-  await beforeRestoreTimestamps?.(absolutePath);
-  const currentStats = await lstatRegularNonSymlinkFile(absolutePath);
-  if (!currentStats) {
-    return;
-  }
-  if (currentStats.atimeMs === entry.atimeMs && currentStats.mtimeMs === entry.mtimeMs) {
-    return;
-  }
-  await setTimes(absolutePath, new Date(entry.atimeMs), new Date(entry.mtimeMs)).catch(
-    () => undefined,
-  );
 }
 
 async function isRegularNonSymlinkFile(absolutePath: string): Promise<boolean> {
@@ -177,7 +123,7 @@ async function lstatRegularNonSymlinkFile(
   return stats;
 }
 
-function isTimestampGcEligible(entry: CacheFileManifestEntry, cutoffTimeMs: number): boolean {
+function isTimestampGcEligible(entry: CacheFileMetadataEntry, cutoffTimeMs: number): boolean {
   const effectiveAccessTimeMs = Math.max(entry.atimeMs, entry.mtimeMs);
   return effectiveAccessTimeMs < cutoffTimeMs && entry.mtimeMs < cutoffTimeMs;
 }

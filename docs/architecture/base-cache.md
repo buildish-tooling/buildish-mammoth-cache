@@ -106,19 +106,18 @@ standalone and distributed-aggregator jobs. It is designed to counter unbounded 
 GitHub Actions cache entries, especially Maven local repositories, without slowing the pre-build
 restore path.
 
-The GC pass captures the managed cache manifest, then deletes only managed files whose modification
-time and effective access time are both older than `cache-gc-older-than-days` (`14` by default).
+The GC pass captures managed cache file metadata without hashing file contents, then deletes only
+managed files whose modification time and effective access time are both older than
+`cache-gc-older-than-days` (`14` by default).
 Effective access time is `max(atime, mtime)`, so recently written files are kept even if filesystem
 access-time behavior is stale, deferred, or disabled. The minimum supported cutoff is `2` days to
 avoid treating Linux `relatime`-style updates as precise same-day usage data.
 
 Distributed-worker jobs skip this GC pass because they produce delta artifacts rather than saving
-the base cache. After deleting eligible files, the pass removes empty parent directories and
-restores timestamps on retained files best-effort so the manifest scan does not itself manufacture
-recent access times. Before deleting or restoring timestamps, GC resolves the cache-relative path
-under the cache root and rechecks that the target is a regular non-symlink file. Because this runs
-before post-build manifest capture, deleted files are reflected naturally in the finalized cache
-state and any cache statistics.
+the base cache. After deleting eligible files, the pass removes empty parent directories. Before
+deleting a file, GC resolves the cache-relative path under the cache root and rechecks that the
+target is a regular non-symlink file. Because this runs before post-build manifest capture, deleted
+files are reflected naturally in the finalized cache state and any cache statistics.
 
 Operators can disable this behavior with `cache-gc-mode: off` or increase
 `cache-gc-older-than-days` when a build intentionally depends on old, rarely touched cache entries.

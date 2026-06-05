@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CACHE_MANIFEST_SCHEMA_VERSION,
+  captureCacheMetadataSnapshot,
   captureCacheManifest,
   computeCacheDelta,
   deserializeCacheManifest,
@@ -115,6 +116,26 @@ describe('captureCacheManifest', () => {
       ).toEqual([
         expect.objectContaining({ relativePath: 'caches/transforms-4/example/transform.bin' }),
       ]);
+    });
+  });
+
+  it('captures cache metadata without content hashes', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      await writeTrackedFile(gradleUserHome, 'caches/modules-2/files-2.1/example.jar', 'module');
+
+      const snapshot = await captureCacheMetadataSnapshot(createTestCacheModel(gradleUserHome));
+      const entry = snapshot.partitions.find((partition) => partition.partitionId === 'modules')
+        ?.entries[0];
+
+      expect(entry).toEqual(
+        expect.objectContaining({
+          relativePath: 'caches/modules-2/files-2.1/example.jar',
+          size: Buffer.byteLength('module'),
+          atimeMs: expect.any(Number),
+          mtimeMs: expect.any(Number),
+        }),
+      );
+      expect(entry).not.toHaveProperty('contentSha256');
     });
   });
 

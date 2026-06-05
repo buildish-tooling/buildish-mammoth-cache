@@ -178,15 +178,33 @@ export type CacheFileSnapshot = z.infer<typeof snapshotSchema>;
  */
 export type CacheFileManifestEntry = z.infer<typeof manifestEntrySchema>;
 
+export interface CacheFileMetadataEntry {
+  readonly relativePath: string;
+  readonly size: number;
+  readonly atimeMs: number;
+  readonly mtimeMs: number;
+}
+
 /**
  * Captured manifest entries for one logical cache partition.
  */
 export type CachePartitionManifest = z.infer<typeof manifestPartitionSchema>;
 
+export interface CachePartitionMetadata {
+  readonly partitionId: string;
+  readonly entries: readonly CacheFileMetadataEntry[];
+}
+
 /**
  * Full pre- or post-build cache manifest for all configured build tool cache partitions.
  */
 export type CacheManifest = z.infer<typeof cacheManifestSchema>;
+
+export interface CacheMetadataSnapshot {
+  readonly buildToolId: string;
+  readonly cacheRoot: string;
+  readonly partitions: readonly CachePartitionMetadata[];
+}
 
 /**
  * Captured change for a single path between two manifests.
@@ -227,60 +245,27 @@ type CompiledGlobSegment =
  */
 export async function captureCacheManifest(cacheModel: CacheModel): Promise<CacheManifest> {
   const cacheRoot = cacheModel.cacheRoot;
-  const compiledPartitions = cacheModel.partitions.map((partition) => ({
-    partition,
-    includePatterns: partition.relativeIncludeGlobs.map(compileGlobPattern),
-    excludePatterns: partition.relativeExcludeGlobs.map(compileGlobPattern),
-    entries: [] as CacheFileManifestEntry[],
-    seenRelativePaths: new Set<string>(),
-  }));
-  const claimedPaths = new Map<string, string>();
-
-  for (const compiledPartition of compiledPartitions) {
-    for (const includePattern of compiledPartition.includePatterns) {
-      const includeRoots = await expandIncludePatternRoots(cacheRoot, includePattern);
-
-      for (const includeRoot of includeRoots) {
-        await walkIncludedTree(includeRoot, async (absolutePath) => {
-          const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
-          if (
-            compiledPartition.seenRelativePaths.has(relativePath) ||
-            matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)
-          ) {
-            return;
-          }
-
-          const existingPartitionId = claimedPaths.get(relativePath);
-          if (existingPartitionId && existingPartitionId !== compiledPartition.partition.id) {
-            throw new Error(
-              `Cache manifest path '${relativePath}' matches multiple cache partitions: ${existingPartitionId}, ${compiledPartition.partition.id}.`,
-            );
-          }
-
-          const entry = await captureStableFileEntry(cacheRoot, absolutePath, relativePath);
-          if (!entry) {
-            return;
-          }
-
-          compiledPartition.seenRelativePaths.add(relativePath);
-          claimedPaths.set(relativePath, compiledPartition.partition.id);
-          compiledPartition.entries.push(entry);
-        });
-      }
-    }
-  }
+  const partitions = await scanCachePartitions(cacheModel, captureStableFileEntry);
 
   return {
     schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
     buildToolId: cacheModel.buildToolId,
     cacheRoot,
-    partitions: cacheModel.partitions.map((partition) => ({
-      partitionId: partition.id,
-      entries: [
-        ...(compiledPartitions.find((candidate) => candidate.partition.id === partition.id)
-          ?.entries ?? []),
-      ].sort((left, right) => left.relativePath.localeCompare(right.relativePath)),
-    })),
+    partitions,
+  };
+}
+
+/**
+ * Scans all configured cache partitions and captures regular-file metadata without reading file
+ * contents. This is intended for timestamp-only decisions such as cache garbage collection.
+ */
+export async function captureCacheMetadataSnapshot(
+  cacheModel: CacheModel,
+): Promise<CacheMetadataSnapshot> {
+  return {
+    buildToolId: cacheModel.buildToolId,
+    cacheRoot: cacheModel.cacheRoot,
+    partitions: await scanCachePartitions(cacheModel, captureFileMetadataEntry),
   };
 }
 
@@ -395,6 +380,100 @@ export function deserializeCacheDeltaManifest(serializedDeltaManifest: string): 
     parseSerializedJson(serializedDeltaManifest, 'cache delta manifest'),
     'cache delta manifest',
   );
+}
+
+async function scanCachePartitions<T extends { readonly relativePath: string }>(
+  cacheModel: CacheModel,
+  captureEntry: (
+    cacheRoot: string,
+    absolutePath: string,
+    relativePath: string,
+  ) => Promise<T | null>,
+): Promise<{ partitionId: string; entries: T[] }[]> {
+  const cacheRoot = cacheModel.cacheRoot;
+  const compiledPartitions = cacheModel.partitions.map((partition) => ({
+    partition,
+    includePatterns: partition.relativeIncludeGlobs.map(compileGlobPattern),
+    excludePatterns: partition.relativeExcludeGlobs.map(compileGlobPattern),
+    entries: [] as T[],
+    seenRelativePaths: new Set<string>(),
+  }));
+  const claimedPaths = new Map<string, string>();
+
+  for (const compiledPartition of compiledPartitions) {
+    for (const includePattern of compiledPartition.includePatterns) {
+      const includeRoots = await expandIncludePatternRoots(cacheRoot, includePattern);
+
+      for (const includeRoot of includeRoots) {
+        await walkIncludedTree(includeRoot, async (absolutePath) => {
+          const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
+          if (
+            compiledPartition.seenRelativePaths.has(relativePath) ||
+            matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)
+          ) {
+            return;
+          }
+
+          const existingPartitionId = claimedPaths.get(relativePath);
+          if (existingPartitionId && existingPartitionId !== compiledPartition.partition.id) {
+            throw new Error(
+              `Cache manifest path '${relativePath}' matches multiple cache partitions: ${existingPartitionId}, ${compiledPartition.partition.id}.`,
+            );
+          }
+
+          const entry = await captureEntry(cacheRoot, absolutePath, relativePath);
+          if (!entry) {
+            return;
+          }
+
+          compiledPartition.seenRelativePaths.add(relativePath);
+          claimedPaths.set(relativePath, compiledPartition.partition.id);
+          compiledPartition.entries.push(entry);
+        });
+      }
+    }
+  }
+
+  return cacheModel.partitions.map((partition) => ({
+    partitionId: partition.id,
+    entries: [
+      ...(compiledPartitions.find((candidate) => candidate.partition.id === partition.id)
+        ?.entries ?? []),
+    ].sort((left, right) => left.relativePath.localeCompare(right.relativePath)),
+  }));
+}
+
+async function captureFileMetadataEntry(
+  _cacheRoot: string,
+  absolutePath: string,
+  relativePath: string,
+): Promise<CacheFileMetadataEntry | null> {
+  const stats = await lstat(absolutePath).catch((error: unknown) => {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+
+    throw error;
+  });
+
+  if (!stats) {
+    return null;
+  }
+
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Cache manifest does not support symbolic links: '${relativePath}'.`);
+  }
+
+  if (!stats.isFile()) {
+    throw new Error(`Cache manifest only supports regular files, but found '${relativePath}'.`);
+  }
+
+  return {
+    relativePath,
+    size: stats.size,
+    atimeMs: stats.atimeMs,
+    mtimeMs: stats.mtimeMs,
+  };
 }
 
 async function captureStableFileEntry(

@@ -156,7 +156,7 @@ Concurrency assumptions:
 Memory, CPU, and time assumptions:
 
 - Wrapper downloads have retry caps, per-request timeouts, and response-size caps. _(documented)_
-- Manifest capture is proportional to the number and size of files in managed cache partitions; there is no documented global maximum cache size or file count. _(inferred)_
+- Manifest capture is proportional to the number and size of files in managed cache partitions; timestamp GC uses metadata-only scanning proportional to file count. There is no documented global maximum cache size or file count. _(inferred)_
 - Delta package processing is proportional to downloaded artifact contents after schema/path/hash validation; exact global size and count limits are delegated to the artifact backend and filesystem capacity. _(inferred)_
 
 What the project does not do to its host:
