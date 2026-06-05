@@ -187,21 +187,32 @@ async function removeEmptyDirectories(
   candidateDirectories: ReadonlySet<string>,
 ): Promise<void> {
   const resolvedRoot = path.resolve(cacheRoot);
-  const directories = [...candidateDirectories].sort((left, right) => right.length - left.length);
+  const directories = collectCandidateDirectories(resolvedRoot, candidateDirectories);
   for (const directory of directories) {
+    try {
+      await rmdir(directory);
+    } catch (error: unknown) {
+      if (isMissingPathError(error) || isNonEmptyDirectoryError(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function collectCandidateDirectories(
+  resolvedRoot: string,
+  candidateDirectories: ReadonlySet<string>,
+): readonly string[] {
+  const directories = new Set<string>();
+  for (const directory of candidateDirectories) {
     let current = path.resolve(directory);
     while (current !== resolvedRoot && current.startsWith(`${resolvedRoot}${path.sep}`)) {
-      try {
-        await rmdir(current);
-      } catch (error: unknown) {
-        if (isMissingPathError(error) || isNonEmptyDirectoryError(error)) {
-          break;
-        }
-        throw error;
-      }
+      directories.add(current);
       current = path.dirname(current);
     }
   }
+  return [...directories].sort((left, right) => right.length - left.length);
 }
 
 function isNonEmptyDirectoryError(error: unknown): boolean {
