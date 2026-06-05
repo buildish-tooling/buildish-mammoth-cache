@@ -146,17 +146,22 @@ describe('collectTimestampCacheGarbage', () => {
     expect(result.deletedFileCount).toBe(0);
   });
 
-  it('restores timestamps for retained files so the GC scan does not refresh atime', async () => {
+  it('restores timestamps for retained files when the GC scan changes them', async () => {
     const cacheRoot = await createTempDirectory();
     const atime = new Date('2026-06-04T12:00:00.000Z');
     const mtime = new Date('2026-05-20T12:00:00.000Z');
+    const driftedAtime = new Date('2026-06-05T12:00:00.000Z');
     const setTimes = vi.fn(async () => undefined);
+    const retainedPath = path.join(cacheRoot, 'caches/retained.bin');
 
     await writeTrackedFile(cacheRoot, 'caches/retained.bin', 'retained', atime, mtime);
 
     await collectTimestampCacheGarbage(createCacheModel(cacheRoot), {
       olderThanDays: 14,
       now: new Date('2026-06-05T12:00:00.000Z'),
+      beforeRestoreTimestamps: async () => {
+        await utimes(retainedPath, driftedAtime, mtime);
+      },
       setTimes,
     });
 
@@ -165,6 +170,27 @@ describe('collectTimestampCacheGarbage', () => {
       atime,
       mtime,
     );
+  });
+
+  it('does not restore timestamps for retained files when timestamps did not change', async () => {
+    const cacheRoot = await createTempDirectory();
+    const atime = new Date('2026-06-04T12:00:00.000Z');
+    const mtime = new Date('2026-05-20T12:00:00.000Z');
+    const setTimes = vi.fn(async () => undefined);
+    const retainedPath = path.join(cacheRoot, 'caches/retained.bin');
+
+    await writeTrackedFile(cacheRoot, 'caches/retained.bin', 'retained', atime, mtime);
+
+    await collectTimestampCacheGarbage(createCacheModel(cacheRoot), {
+      olderThanDays: 14,
+      now: new Date('2026-06-05T12:00:00.000Z'),
+      beforeRestoreTimestamps: async () => {
+        await utimes(retainedPath, atime, mtime);
+      },
+      setTimes,
+    });
+
+    expect(setTimes).not.toHaveBeenCalled();
   });
 
   it('bounds concurrent retained timestamp restoration work', async () => {

@@ -140,28 +140,41 @@ async function restoreRetainedFileTimestamp(
   setTimes: NonNullable<TimestampCacheGcOptions['setTimes']>,
   beforeRestoreTimestamps: TimestampCacheGcOptions['beforeRestoreTimestamps'],
 ): Promise<void> {
-      const absolutePath = resolveNormalizedPathWithinRoot(
-        cacheRoot,
-        entry.relativePath,
-        `Cache GC path '${entry.relativePath}' escapes the cache root.`,
-      );
-      await beforeRestoreTimestamps?.(absolutePath);
-      if (!(await isRegularNonSymlinkFile(absolutePath))) {
-        return;
-      }
-      await setTimes(absolutePath, new Date(entry.atimeMs), new Date(entry.mtimeMs)).catch(
-        () => undefined,
-      );
+  const absolutePath = resolveNormalizedPathWithinRoot(
+    cacheRoot,
+    entry.relativePath,
+    `Cache GC path '${entry.relativePath}' escapes the cache root.`,
+  );
+  await beforeRestoreTimestamps?.(absolutePath);
+  const currentStats = await lstatRegularNonSymlinkFile(absolutePath);
+  if (!currentStats) {
+    return;
+  }
+  if (currentStats.atimeMs === entry.atimeMs && currentStats.mtimeMs === entry.mtimeMs) {
+    return;
+  }
+  await setTimes(absolutePath, new Date(entry.atimeMs), new Date(entry.mtimeMs)).catch(
+    () => undefined,
+  );
 }
 
 async function isRegularNonSymlinkFile(absolutePath: string): Promise<boolean> {
+  return (await lstatRegularNonSymlinkFile(absolutePath)) !== null;
+}
+
+async function lstatRegularNonSymlinkFile(
+  absolutePath: string,
+): Promise<Awaited<ReturnType<typeof lstat>> | null> {
   const stats = await lstat(absolutePath).catch((error: unknown) => {
     if (isMissingPathError(error)) {
       return null;
     }
     throw error;
   });
-  return stats !== null && !stats.isSymbolicLink() && stats.isFile();
+  if (stats === null || stats.isSymbolicLink() || !stats.isFile()) {
+    return null;
+  }
+  return stats;
 }
 
 function isTimestampGcEligible(entry: CacheFileManifestEntry, cutoffTimeMs: number): boolean {
