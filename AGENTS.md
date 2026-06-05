@@ -75,3 +75,22 @@ copied under a release-version route:
 
 Links to another component may use that component's public catalog mount path,
 for example `/components/site-pipeline/`.
+
+## Security issues
+
+Before reporting or fixing security issues, read
+[docs/threat-model.md](docs/threat-model.md) to determine
+whether a finding is a Buildish vulnerability, a deployment responsibility,
+a dependency issue, or a false positive. Use [`SECURITY.md`](SECURITY.md)
+reporting process and disclosure handling.
+
+ASF severity, advisory status, and CVE candidacy are non-authoritative triage
+estimates. Do not infer them from `docs/threat-model.md` alone.
+
+Do not treat a test as proof of a vulnerability unless it demonstrates that the
+stated actor can cross a real trust boundary without already-authorized access,
+privileged fixtures, mocked trust decisions, or protected information.
+
+Do not include private vulnerability details, exploit payloads, reporter names,
+private mailing-list content, secrets, or non-public infrastructure details in
+code, comments, tests, documentation, commit messages, or PR descriptions.
