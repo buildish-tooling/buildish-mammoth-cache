@@ -72,8 +72,7 @@ flowchart TD
    knows a restore was attempted).
 4. For `distributed-aggregator` jobs with configured `dependent-jobs`, downloads and applies
    applicable delta artifact packages.
-5. Runs timestamp cache garbage collection when `cache-gc-mode` is `timestamp` (the default).
-6. Captures the pre-build file snapshot (`captureCacheManifest()`).
+5. Captures the pre-build file snapshot (`captureCacheManifest()`).
 
 ## Finalize phase
 
@@ -86,22 +85,25 @@ flowchart TD
     E --> F[executeFinalizeAction]
     F --> G{isBaseCacheFinalizeArmed?}
     G -- No --> Z1[skip save]
-    G -- Yes --> H[capture post-build manifest]
-    H --> I[computeCacheDelta]
-    I --> J[saveBaseCache\nif eligible]
-    I --> K[stageDeltaArtifact +\nuploadDeltaArtifact\nif distributed-worker]
-    J --> Z2[done]
-    K --> Z2
+    G -- Yes --> H[optional timestamp GC]
+    H --> I[capture post-build manifest]
+    I --> J[computeCacheDelta]
+    J --> K[stageDeltaArtifact +\nuploadDeltaArtifact\nif distributed-worker]
+    J --> L[saveBaseCache\nif eligible]
+    K --> Z2[done]
+    L --> Z2
 ```
 
 **`executeFinalizeAction()`** (`src/phases/finalize/flow.ts`):
 
-1. Checks that the finalize arm flag is set (written by the prepare phase).
-2. Captures the post-build file snapshot.
-3. Calls `computeCacheDelta()` (`src/cache/manifest.ts`) to diff pre- and post-build manifests.
-4. Calls `saveBaseCache()` (skipped for `distributed-worker`; see [Base Cache Design](../base-cache/)).
+1. Loads persisted prepare-phase state, including the pre-build manifest and finalize arm flag.
+2. Runs timestamp cache garbage collection for standalone and distributed-aggregator jobs when
+   `cache-gc-mode` is `timestamp`.
+3. Captures the post-build file snapshot.
+4. Calls `computeCacheDelta()` (`src/cache/manifest.ts`) to diff pre- and post-build manifests.
 5. For `distributed-worker`: stages the delta artifact locally, then uploads it.
-6. For `distributed-aggregator`: downloads worker deltas, merges them, applies the merged delta.
+6. Calls `saveBaseCache()` (skipped for `distributed-worker`; see [Base Cache Design](../base-cache/)).
+7. For `distributed-aggregator`: cleans up consumed worker delta artifacts.
 
 ## Configuration loading
 

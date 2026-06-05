@@ -23,10 +23,16 @@ import {
   type BootstrapExecution,
   type BootstrapDependencies,
 } from '../bootstrap';
+import { collectTimestampCacheGarbage, type TimestampCacheGcResult } from '../../cache/gc';
 import type { CacheDeltaManifest, CacheManifest } from '../../cache/manifest';
 import { captureCacheManifest, computeCacheDelta } from '../../cache/manifest';
 import type { CacheModel } from '../../cache/model';
-import type { BaseCacheRestoreResult } from '../../cache/service';
+import {
+  isBaseCacheFinalizeArmed,
+  saveBaseCache,
+  type BaseCacheOperationResult,
+  type BaseCacheRestoreResult,
+} from '../../cache/service';
 import type { BuildReport } from '../../build-tool/types';
 import { createHtmlLink } from '../../util/html';
 import {
@@ -89,6 +95,8 @@ export interface FinalizeActionStatus {
   readonly bootstrap: BootstrapExecution;
   /** Restored base cache result read from persisted prepare-phase state; `null` when cache is disabled. */
   readonly baseCacheRestoreResult: BaseCacheRestoreResult | null;
+  /** Result of best-effort cache garbage collection before cache save; `null` when disabled or not applicable. */
+  readonly cacheGcResult: TimestampCacheGcResult | null;
   /** Cache size statistics computed from the post-build manifest; `null` when cache is disabled. */
   readonly cacheStatistics: FinalizeCacheStatistics | null;
   /** Result of deleting consumed worker delta artifacts; `null` when no artifacts were consumed. */
@@ -124,9 +132,9 @@ export interface FinalizeActionDependencies extends BootstrapDependencies {
 /**
  * Runs the full finalize phase of the action.
  *
- * Sequence: bootstrap → cleanup consumed delta artifacts → load Gradle build report → capture
- * post-build manifest → save base cache (standalone/aggregator) or upload delta artifact
- * (distributed-worker) → publish log group and job summary.
+ * Sequence: bootstrap → cleanup consumed delta artifacts → load Gradle build report → optional
+ * timestamp cache GC → capture post-build manifest → save base cache (standalone/aggregator) or
+ * upload delta artifact (distributed-worker) → publish log group and job summary.
  *
  * @returns A {@link FinalizeActionStatus} snapshot covering all finalize-phase outcomes.
  */
@@ -147,6 +155,7 @@ export async function executeFinalizeAction(
     const status = {
       bootstrap,
       baseCacheRestoreResult,
+      cacheGcResult: null,
       cacheStatistics: null,
       consumedDeltaCleanupResult,
       deltaArtifactResult: null,
@@ -175,9 +184,13 @@ export async function executeFinalizeAction(
     );
   }
   if (!preBuildManifest) {
+    const cacheGcResult = await maybeCollectCacheGarbage(bootstrap);
+    const baseCacheSaveResult = await saveFinalizeBaseCache(bootstrap, dependencies);
+    const finalizedBootstrap = withBaseCacheResult(bootstrap, baseCacheSaveResult);
     const status = {
-      bootstrap,
+      bootstrap: finalizedBootstrap,
       baseCacheRestoreResult,
+      cacheGcResult,
       cacheStatistics: null,
       consumedDeltaCleanupResult,
       deltaArtifactResult: {
@@ -208,13 +221,17 @@ export async function executeFinalizeAction(
     return status;
   }
 
+  const cacheGcResult = await maybeCollectCacheGarbage(bootstrap);
   const currentManifest = await captureCacheManifest(bootstrap.cacheModel);
   const deltaManifest = computeCacheDelta(preBuildManifest, currentManifest);
   const deltaArtifactResult = await uploadFinalizeArtifact(deltaManifest, bootstrap, dependencies);
+  const baseCacheSaveResult = await saveFinalizeBaseCache(bootstrap, dependencies);
+  const finalizedBootstrap = withBaseCacheResult(bootstrap, baseCacheSaveResult);
 
   const status = {
-    bootstrap,
+    bootstrap: finalizedBootstrap,
     baseCacheRestoreResult,
+    cacheGcResult,
     cacheStatistics: createFinalizeCacheStatistics(
       bootstrap.cacheModel,
       preBuildManifest,
@@ -222,7 +239,7 @@ export async function executeFinalizeAction(
       deltaManifest,
       baseCacheRestoreResult,
       deltaArtifactResult,
-      bootstrap.baseCacheResult,
+      baseCacheSaveResult,
     ),
     consumedDeltaCleanupResult,
     deltaArtifactResult,
@@ -245,6 +262,51 @@ export async function executeFinalizeAction(
   }
 
   return status;
+}
+
+async function maybeCollectCacheGarbage(
+  bootstrap: BootstrapExecution,
+): Promise<TimestampCacheGcResult | null> {
+  if (
+    bootstrap.config.cacheGcMode === 'off' ||
+    !bootstrap.cacheModel ||
+    bootstrap.config.readOnly ||
+    bootstrap.config.jobMode === 'distributed-worker'
+  ) {
+    return null;
+  }
+
+  return await collectTimestampCacheGarbage(bootstrap.cacheModel, {
+    olderThanDays: bootstrap.config.cacheGcOlderThanDays,
+  });
+}
+
+async function saveFinalizeBaseCache(
+  bootstrap: BootstrapExecution,
+  dependencies: FinalizeActionDependencies,
+): Promise<BaseCacheOperationResult | null> {
+  if (!bootstrap.cacheModel) {
+    return null;
+  }
+
+  return await saveBaseCache(
+    bootstrap.config,
+    bootstrap.cacheModel,
+    isBaseCacheFinalizeArmed(dependencies.runtimeHost.getState),
+    {
+      cacheBackend: dependencies.cacheBackend,
+    },
+  );
+}
+
+function withBaseCacheResult(
+  bootstrap: BootstrapExecution,
+  baseCacheResult: BaseCacheOperationResult | null,
+): BootstrapExecution {
+  return {
+    ...bootstrap,
+    baseCacheResult,
+  };
 }
 
 async function uploadFinalizeArtifact(
@@ -519,6 +581,7 @@ function createCacheDetailLogLines(status: FinalizeActionStatus): readonly strin
 
   const lines = [
     `Base cache restore: ${status.baseCacheRestoreResult?.status ?? 'not evaluated'}.`,
+    `Cache GC: ${describeCacheGcSummary(status.cacheGcResult)}.`,
     `Base cache save: ${status.bootstrap.baseCacheResult?.status ?? 'not evaluated'}.`,
     `Delta artifact: ${status.deltaArtifactResult?.status ?? 'not evaluated'}.`,
   ];
@@ -535,11 +598,23 @@ function createCacheDetailLogLines(status: FinalizeActionStatus): readonly strin
     );
   }
 
+  if (status.cacheGcResult) {
+    lines.push(status.cacheGcResult.message);
+  }
+
   if (status.cacheStatistics) {
     lines.push(...createCacheStatisticsLogLines(status.cacheStatistics));
   }
 
   return lines;
+}
+
+function describeCacheGcSummary(result: TimestampCacheGcResult | null): string {
+  if (!result) {
+    return 'off';
+  }
+
+  return `${result.mode} (${result.deletedFileCount} deleted)`;
 }
 
 function createExecutionContextLogLines(status: FinalizeActionStatus): readonly string[] {

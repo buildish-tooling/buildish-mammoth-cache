@@ -101,9 +101,10 @@ that the aggregator merges. This prevents redundant and conflicting base cache w
 
 ## Timestamp cache garbage collection
 
-`cache-gc-mode: timestamp` runs by default during prepare after base-cache restore and dependent
-delta apply, before the pre-build manifest is captured. It is designed to counter unbounded cache
-growth in GitHub Actions cache entries, especially Maven local repositories.
+`cache-gc-mode: timestamp` runs by default during finalize before the base cache is saved by
+standalone and distributed-aggregator jobs. It is designed to counter unbounded cache growth in
+GitHub Actions cache entries, especially Maven local repositories, without slowing the pre-build
+restore path.
 
 The GC pass captures the managed cache manifest, then deletes only managed files whose modification
 time and effective access time are both older than `cache-gc-older-than-days` (`14` by default).
@@ -111,13 +112,13 @@ Effective access time is `max(atime, mtime)`, so recently written files are kept
 access-time behavior is stale, deferred, or disabled. The minimum supported cutoff is `2` days to
 avoid treating Linux `relatime`-style updates as precise same-day usage data.
 
-Paths applied from dependent worker deltas in the current prepare phase are protected from that same
-GC pass, even when their preserved file timestamps are old. After deleting eligible files, the pass
-removes empty parent directories and restores timestamps on retained files best-effort so the
-manifest scan does not itself manufacture recent access times. Before deleting or restoring
-timestamps, GC resolves the cache-relative path under the cache root and rechecks that the target is
-a regular non-symlink file. Because this runs before pre-build manifest capture, deleted files are
-absent from the baseline used for finalize delta computation.
+Distributed-worker jobs skip this GC pass because they produce delta artifacts rather than saving
+the base cache. After deleting eligible files, the pass removes empty parent directories and
+restores timestamps on retained files best-effort so the manifest scan does not itself manufacture
+recent access times. Before deleting or restoring timestamps, GC resolves the cache-relative path
+under the cache root and rechecks that the target is a regular non-symlink file. Because this runs
+before post-build manifest capture, deleted files are reflected naturally in the finalized cache
+state and any cache statistics.
 
 Operators can disable this behavior with `cache-gc-mode: off` or increase
 `cache-gc-older-than-days` when a build intentionally depends on old, rarely touched cache entries.

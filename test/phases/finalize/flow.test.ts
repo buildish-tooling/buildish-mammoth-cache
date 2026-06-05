@@ -15,7 +15,7 @@
  */
 
 import { cp } from 'node:fs/promises';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -524,6 +524,106 @@ describe('executeFinalizeAction', () => {
     });
   });
 
+  it('runs timestamp cache GC before saving the standalone base cache', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
+      const savedState = new Map<string, string>();
+      const staleRelativePath = 'caches/modules-2/files-2.1/org/example/stale.bin';
+      const stalePath = path.join(gradleUserHome, staleRelativePath);
+      let stalePresentWhenSaving = true;
+
+      await writeGradleFile(gradleUserHome, staleRelativePath, 'stale');
+      await utimes(
+        stalePath,
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2026-01-01T00:00:00.000Z'),
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+
+      const status = await executeFinalizeAction({
+        artifactBackend: artifactApi,
+        cacheBackend: createCacheApi({
+          saveCache: async () => {
+            stalePresentWhenSaving = await pathExists(stalePath);
+            return 82;
+          },
+        }),
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
+        env: createTestEnv(workspace, gradleUserHome, 'build'),
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'build'),
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
+          inputProvider: createInputProvider('standalone'),
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.cacheGcResult).toEqual(
+        expect.objectContaining({
+          deletedFileCount: 1,
+          deletedByteCount: 5,
+        }),
+      );
+      expect(status.deltaArtifactResult).toEqual(
+        expect.objectContaining({
+          status: 'not-distributed-worker',
+          deletedCount: 1,
+          totalChangedCount: 1,
+        }),
+      );
+      expect(status.bootstrap.baseCacheResult).toEqual(
+        expect.objectContaining({ status: 'saved', cacheId: 82 }),
+      );
+      expect(stalePresentWhenSaving).toBe(false);
+      await expect(pathExists(stalePath)).resolves.toBe(false);
+    });
+  });
+
+  it('skips timestamp cache GC for distributed-worker delta producers', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
+      const savedState = new Map<string, string>();
+      const staleRelativePath = 'caches/modules-2/files-2.1/org/example/stale.bin';
+      const stalePath = path.join(gradleUserHome, staleRelativePath);
+
+      await writeGradleFile(gradleUserHome, staleRelativePath, 'stale');
+      await utimes(
+        stalePath,
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2026-01-01T00:00:00.000Z'),
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+
+      const status = await executeFinalizeAction({
+        artifactBackend: artifactApi,
+        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
+        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createArmedGetState(savedState),
+          inputProvider: createInputProvider('distributed-worker'),
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.cacheGcResult).toBeNull();
+      expect(status.deltaArtifactResult).toEqual(
+        expect.objectContaining({
+          status: 'no-changes',
+          totalChangedCount: 0,
+        }),
+      );
+      await expect(pathExists(stalePath)).resolves.toBe(true);
+    });
+  });
+
   it('skips consumed artifact cleanup when the artifact backend does not support deletion', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
@@ -924,6 +1024,17 @@ async function writeGradleFile(
   await writeFile(absolutePath, contents, 'utf8');
 }
 
+async function pathExists(absolutePath: string): Promise<boolean> {
+  return await lstat(absolutePath)
+    .then(() => true)
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+        return false;
+      }
+      throw error;
+    });
+}
+
 async function writeCapturedBuildResult(
   gradleUserHome: string,
   options: {
@@ -1170,6 +1281,7 @@ function createMinimalFinalizeStatus(
   return {
     bootstrap: createMinimalBootstrapExecution(),
     baseCacheRestoreResult: null,
+    cacheGcResult: null,
     cacheStatistics: null,
     consumedDeltaCleanupResult: null,
     deltaArtifactResult: null,

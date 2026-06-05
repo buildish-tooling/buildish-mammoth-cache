@@ -27,7 +27,6 @@ const prepareFlowMock = vi.hoisted(() => ({
     bootstrap: { baseCacheResult: null },
     restoreCleanupResult: null,
     dependentDeltaResult: null,
-    cacheGcResult: null,
     message: 'Prepare execution completed.',
     preBuildManifestState: null,
   })),

@@ -16,9 +16,7 @@
 
 import {
   armBaseCacheFinalize,
-  isBaseCacheFinalizeArmed,
   restoreBaseCache,
-  saveBaseCache,
   type BaseCacheOperationResult,
 } from '../cache/service';
 import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from '../ci';
@@ -327,12 +325,5 @@ async function runBaseCachePhase(
     return restoreResult;
   }
 
-  return await saveBaseCache(
-    config,
-    cacheModel,
-    isBaseCacheFinalizeArmed(dependencies.runtimeHost.getState),
-    {
-      cacheBackend: dependencies.cacheBackend,
-    },
-  );
+  return null;
 }

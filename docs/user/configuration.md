@@ -133,7 +133,8 @@ only by the corresponding action and ignored (or rejected) by the other.
 
 - Default: `timestamp`
 - Supported values: `off`, `timestamp`
-- Controls best-effort garbage collection of managed cache files before the pre-build manifest is captured.
+- Controls best-effort garbage collection of managed cache files before standalone or
+  distributed-aggregator jobs save the base cache.
 - `timestamp` deletes a managed file only when both its modification time and effective access time are older than `cache-gc-older-than-days`.
 - Effective access time is evaluated conservatively as the newer of access time and modification time.
 - Set `off` when jobs must retain rarely used old cache entries, for example offline-style builds that cannot redownload pruned dependencies.

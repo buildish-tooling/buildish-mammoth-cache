@@ -104,8 +104,9 @@ inputs:
     required: false
   cache-gc-mode:
     description: >-
-      Best-effort managed cache garbage-collection mode applied before the
-      pre-build manifest is captured. Supported values: `off` and `timestamp`.
+      Best-effort managed cache garbage-collection mode applied before
+      standalone or distributed-aggregator jobs save the base cache. Supported
+      values: `off` and `timestamp`.
       `timestamp` deletes managed files only when both access and modification
       timestamps are older than `cache-gc-older-than-days`. Default:
       `timestamp`.

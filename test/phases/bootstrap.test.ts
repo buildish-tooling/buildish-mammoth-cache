@@ -415,7 +415,7 @@ describe('bootstrap helpers', () => {
     });
   });
 
-  it('bootstraps the finalize phase and saves the base cache when armed', async () => {
+  it('bootstraps the finalize phase without saving the base cache', async () => {
     const summaryLines: string[] = [];
     let writeCalls = 0;
     const cacheBackend: BaseCacheBackend = {
@@ -427,7 +427,7 @@ describe('bootstrap helpers', () => {
         throw new Error('restoreCache should not be called during post bootstrap');
       },
       async saveCache(): Promise<number> {
-        return 42;
+        throw new Error('saveCache should not be called during finalize bootstrap');
       },
       isMissingPathsError(): boolean {
         return false;
@@ -472,16 +472,7 @@ describe('bootstrap helpers', () => {
         ...deps,
       });
 
-      expect(status.baseCacheResult).toEqual(
-        expect.objectContaining({
-          operation: 'save',
-          status: 'saved',
-          cacheKey: expect.stringMatching(
-            /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-main$/,
-          ),
-          cacheId: 42,
-        }),
-      );
+      expect(status.baseCacheResult).toBeNull();
       expect(summaryLines).toEqual([]);
       expect(writeCalls).toBe(0);
     });

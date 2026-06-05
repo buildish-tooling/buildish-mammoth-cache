@@ -37,10 +37,11 @@ Maven local repositories tend to grow monotonically because old dependency versi
 even after the project stops using them. The action therefore enables `cache-gc-mode: timestamp` by
 default for both Maven and Gradle.
 
-For Maven this means managed local-repository files are pruned before the build when both their
-modification time and effective access time are older than `cache-gc-older-than-days` (`14` by
-default). This keeps GitHub Actions cache entries from growing indefinitely while still allowing
-Maven to redownload an old artifact if the build needs it again.
+For Maven this means managed local-repository files are pruned before standalone or
+distributed-aggregator jobs save the base cache when both their modification time and effective
+access time are older than `cache-gc-older-than-days` (`14` by default). This keeps GitHub Actions
+cache entries from growing indefinitely while still allowing Maven to redownload an old artifact if
+the build needs it again.
 
 If a workflow intentionally relies on a large offline-style local repository, either increase the
 cutoff or disable GC:

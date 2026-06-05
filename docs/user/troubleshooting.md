@@ -61,8 +61,8 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
 **Diagnostic steps:**
 
 1. **Keep timestamp GC enabled.** `cache-gc-mode: timestamp` is the default and prunes managed
-   files whose modification and effective access times are both older than
-   `cache-gc-older-than-days`.
+   files before standalone or distributed-aggregator jobs save the base cache when modification and
+   effective access times are both older than `cache-gc-older-than-days`.
 
 2. **Tune the cutoff.** The default cutoff is `14` days. Lower values prune more aggressively, but
    the action rejects values below `2` days because common runner filesystems may not update access

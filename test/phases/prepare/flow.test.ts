@@ -1467,7 +1467,6 @@ function createMinimalPrepareStatus(
     bootstrap: createMinimalPrepareBootstrapExecution(),
     restoreCleanupResult: null,
     dependentDeltaResult: null,
-    cacheGcResult: null,
     preBuildManifestState: null,
     message: 'Test.',
     ...overrides,

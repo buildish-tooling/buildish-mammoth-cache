@@ -147,12 +147,11 @@ without bound, especially Maven local repositories. GitHub Actions cache storage
 cache entry that only ever accumulates artifacts eventually becomes less useful or impossible to
 save.
 
-Timestamp GC runs after base-cache restore and dependent delta apply, but before the pre-build
-manifest is captured. A file is eligible only when all of these are true:
+Timestamp GC runs during finalize before standalone or distributed-aggregator jobs save the base
+cache. A file is eligible only when all of these are true:
 
 - The file is matched by exactly one active cache partition.
 - The file is not excluded by partition excludes or hard safety excludes.
-- The file was not just applied from a dependent worker delta in the current prepare phase.
 - Its modification time is older than `cache-gc-older-than-days`.
 - Its effective access time is older than `cache-gc-older-than-days`.
 
@@ -161,8 +160,9 @@ newly written files even when access time data is stale or unavailable. The defa
 `14` days, and the minimum accepted threshold is `2` days because common Linux, macOS, and Windows
 runner filesystems do not provide precise "updated on every read" access-time behavior.
 
-The GC pass deletes eligible files and then removes empty parent directories. It does not delete
-unmanaged files elsewhere in the build tool cache directory. To disable it:
+Distributed-worker jobs skip timestamp GC because they upload delta artifacts instead of saving the
+base cache. The GC pass deletes eligible files and then removes empty parent directories. It does
+not delete unmanaged files elsewhere in the build tool cache directory. To disable it:
 
 ```yaml
 cache-gc-mode: off

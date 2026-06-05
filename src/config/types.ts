@@ -263,7 +263,7 @@ export interface NormalizedActionConfig {
   readonly cleanupEnabled: boolean;
   /** Restore-time cleanup mode applied before the build starts. Defaults to `none`. */
   readonly restoreCleanupMode: RestoreCleanupMode;
-  /** Best-effort cache garbage-collection mode applied before pre-build manifest capture. */
+  /** Best-effort cache garbage-collection mode applied before finalize saves the base cache. */
   readonly cacheGcMode: CacheGcMode;
   /** Age threshold in days for timestamp-based cache garbage collection. */
   readonly cacheGcOlderThanDays: number;
