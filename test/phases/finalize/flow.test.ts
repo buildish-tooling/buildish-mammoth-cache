@@ -534,12 +534,12 @@ describe('executeFinalizeAction', () => {
       let stalePresentWhenSaving = true;
 
       await writeGradleFile(gradleUserHome, staleRelativePath, 'stale');
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
       await utimes(
         stalePath,
         new Date('2026-01-01T00:00:00.000Z'),
         new Date('2026-01-01T00:00:00.000Z'),
       );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
 
       const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
