@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { hashFileSha256, isMissingPathError } from '../util/fs';
+import { hashStableFileSha256, isMissingPathError } from '../util/fs';
 import {
   resolveNormalizedPathWithinRoot,
   validateNormalizedRelativePosixPath,
@@ -423,16 +423,31 @@ async function captureStableFileEntry(
       throw new Error(`Cache manifest only supports regular files, but found '${relativePath}'.`);
     }
 
-    const contentSha256 = await hashFileSha256(absolutePath).catch((error: unknown) => {
-      if (isMissingPathError(error)) {
-        return null;
-      }
+    const contentSha256 = await hashStableFileSha256(absolutePath, beforeStat).catch(
+      (error: unknown) => {
+        if (isMissingPathError(error)) {
+          return null;
+        }
 
-      throw error;
-    });
+        throw error;
+      },
+    );
 
     if (!contentSha256) {
-      return null;
+      const currentStat = await lstat(absolutePath).catch((error: unknown) => {
+        if (isMissingPathError(error)) {
+          return null;
+        }
+
+        throw error;
+      });
+      if (currentStat?.isSymbolicLink()) {
+        throw new Error(`Cache manifest does not support symbolic links: '${relativePath}'.`);
+      }
+      if (!currentStat) {
+        return null;
+      }
+      continue;
     }
 
     const afterStat = await lstat(absolutePath).catch((error: unknown) => {

@@ -14,7 +14,17 @@
  * limitations under the License.
  */
 
-import { chmod, mkdir, mkdtemp, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -38,6 +48,7 @@ import {
 } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { NormalizedGradleConfig } from '../../src/config/types';
+import { hashStableFileSha256 } from '../../src/util/fs';
 
 describe('captureCacheManifest', () => {
   it('captures regular files by partition and excludes lock/configuration-cache content', async () => {
@@ -242,6 +253,22 @@ describe('computeCacheDelta', () => {
 });
 
 describe('captureCacheManifest — error handling', () => {
+  it('does not hash through a symlink that replaces a checked regular file', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      const checkedPath = path.join(gradleUserHome, 'caches/modules-2/files-2.1/module.jar');
+      const targetPath = path.join(gradleUserHome, 'outside-secret.txt');
+      await mkdir(path.dirname(checkedPath), { recursive: true });
+      await writeFile(checkedPath, 'original', 'utf8');
+      await writeFile(targetPath, 'outside-target', 'utf8');
+
+      const checkedStats = await lstat(checkedPath);
+      await unlink(checkedPath);
+      await symlink(targetPath, checkedPath);
+
+      await expect(hashStableFileSha256(checkedPath, checkedStats)).resolves.toBeNull();
+    });
+  });
+
   it('throws when a symbolic link is encountered inside the scanned cache tree', async () => {
     await withGradleUserHome(async (gradleUserHome) => {
       // Create a real file and a symlink pointing at it inside a tracked partition directory.

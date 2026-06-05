@@ -15,8 +15,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { lstat, realpath } from 'node:fs/promises';
+import { constants, createReadStream, type Stats } from 'node:fs';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 
 import { isAbsolutePosixOrWindowsPath } from './paths';
@@ -103,4 +103,57 @@ export async function hashFileSha256(filePath: string): Promise<string> {
   const hash = createHash('sha256');
   await pipeline(createReadStream(filePath), hash);
   return hash.digest('hex');
+}
+
+/**
+ * Computes the SHA-256 digest of a file only when the opened descriptor still matches a
+ * previously captured `lstat` snapshot. This closes the path-replacement window between a
+ * symlink check and the file read.
+ */
+export async function hashStableFileSha256(
+  filePath: string,
+  expectedStats: Stats,
+): Promise<string | null> {
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  const fileHandle = await open(filePath, flags).catch((error: unknown) => {
+    if (isSymlinkOpenError(error)) {
+      return null;
+    }
+
+    throw error;
+  });
+  if (!fileHandle) {
+    return null;
+  }
+
+  try {
+    const openedStats = await fileHandle.stat();
+    if (!isSameOpenedFile(expectedStats, openedStats)) {
+      return null;
+    }
+
+    const hash = createHash('sha256');
+    await pipeline(fileHandle.createReadStream(), hash);
+    return hash.digest('hex');
+  } finally {
+    await fileHandle.close();
+  }
+}
+
+function isSymlinkOpenError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ELOOP';
+}
+
+function isSameOpenedFile(expectedStats: Stats, openedStats: Stats): boolean {
+  if (expectedStats.dev !== openedStats.dev || expectedStats.ino !== openedStats.ino) {
+    return false;
+  }
+
+  return (
+    expectedStats.mode === openedStats.mode &&
+    expectedStats.size === openedStats.size &&
+    expectedStats.mtimeMs === openedStats.mtimeMs &&
+    expectedStats.ctimeMs === openedStats.ctimeMs
+  );
 }
