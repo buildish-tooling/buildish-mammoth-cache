@@ -135,6 +135,24 @@ jobs:
         working-directory: build/integration-fixtures/standalone-round-trip
         run: ./gradlew --info --no-daemon resolveStandalone
 
+      - name: Inspect Gradle cache after online resolve
+        run: |
+          set -euxo pipefail
+          echo "HOME=$HOME"
+          echo "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}"
+          test -d "$HOME/.gradle"
+          find "$HOME/.gradle/caches/modules-2/files-2.1" \
+            -path '*org.apache.commons/commons-lang3/3.18.0/*' \
+            -type f \
+            -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %p\n' \
+            | sort
+          find "$HOME/.gradle/caches/modules-2" \
+            -path '*/metadata-*/*' \
+            -type f \
+            -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %p\n' \
+            | sort \
+            | sed -n '1,120p'
+
       - name: Save exact standalone cache snapshot
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
@@ -156,6 +174,31 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: ${{ steps.prepare.outputs.cache-key }}
+
+      - name: Inspect restored Gradle cache before offline resolve
+        env:
+          RESTORE_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+          RESTORE_CACHE_KEY: ${{ steps.restore.outputs.cache-primary-key }}
+          RESTORE_MATCHED_KEY: ${{ steps.restore.outputs.cache-matched-key }}
+        run: |
+          set -euxo pipefail
+          echo "restore.cache-hit=$RESTORE_CACHE_HIT"
+          echo "restore.cache-primary-key=$RESTORE_CACHE_KEY"
+          echo "restore.cache-matched-key=$RESTORE_MATCHED_KEY"
+          echo "HOME=$HOME"
+          echo "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}"
+          find "$HOME/.gradle" -maxdepth 3 -type d | sort | sed -n '1,120p'
+          find "$HOME/.gradle/caches/modules-2/files-2.1" \
+            -path '*org.apache.commons/commons-lang3/3.18.0/*' \
+            -type f \
+            -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %p\n' \
+            | sort
+          find "$HOME/.gradle/caches/modules-2" \
+            -path '*/metadata-*/*' \
+            -type f \
+            -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %p\n' \
+            | sort \
+            | sed -n '1,120p'
 
       - name: Verify the saved cache restores offline
         working-directory: build/integration-fixtures/standalone-round-trip
