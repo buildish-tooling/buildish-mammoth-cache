@@ -33,11 +33,13 @@ For the contribution process (branching model, PR expectations, code-of-conduct)
 | Tool          | Minimum version                                       | Notes                                                              |
 | ------------- | ----------------------------------------------------- | ------------------------------------------------------------------ |
 | Node.js       | as specified in `.nvmrc`                              | Use [nvm](https://github.com/nvm-sh/nvm): `nvm install && nvm use` |
-| npm           | as specified in `package.json` `packageManager` field | Installed automatically by nvm                                     |
+| npm           | as specified in `package.json` `packageManager` field | Provision this exact version after selecting Node.js               |
 | Java          | 21+                                                   | Required only for local integration tests; any distribution works  |
 | Maven (`mvn`) | 3.9+                                                  | Required only for the Maven distributed-reuse integration test     |
 
-No global npm packages are required — all tooling is installed locally via `npm ci`.
+No project tooling needs to be installed globally. The setup below only updates the npm CLI in
+the selected nvm-managed Node.js installation; all project dependencies are installed locally
+via `npm ci`.
 
 ---
 
@@ -48,7 +50,13 @@ No global npm packages are required — all tooling is installed locally via `np
 nvm install   # installs if not present, selects the version from .nvmrc
 nvm use
 
-# 2. Install dependencies (clean install from package-lock.json)
+# 2. Provision the npm version selected by package.json
+npm_version="$(node scripts/resolve-npm-version.mjs)"
+if [[ "$(npm --version)" != "$npm_version" ]]; then
+  npm install --global --ignore-scripts --no-audit --no-fund "npm@$npm_version"
+fi
+
+# 3. Install dependencies (clean install from package-lock.json)
 make build    # runs npm ci + tsc + esbuild in one step
 ```
 

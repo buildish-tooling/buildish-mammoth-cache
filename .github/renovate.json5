@@ -63,6 +63,16 @@
       ],
       automerge: false, // just be explicit (false is the default)
     },
+    // packageManager is the npm CLI used by CI and release materialization. Keep its
+    // updates visible as toolchain changes instead of mixing them with library updates.
+    {
+      matchManagers: ['npm'],
+      matchDepTypes: ['packageManager'],
+      matchPackageNames: ['npm'],
+      semanticCommitType: 'chore',
+      semanticCommitScope: 'toolchain',
+      automerge: false,
+    },
     // NPM dependencies
     {
       matchDatasources: ['npm'],

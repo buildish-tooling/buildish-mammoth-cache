@@ -208,16 +208,27 @@ jobs:
       - name: Fetch remote heads and tags
         run: |
           git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
-      - id: source-node-version
-        name: Resolve source Node.js version
+      - id: source-tool-versions
+        name: Resolve source Node.js and npm versions
         env:
           RESOLVED_SOURCE_REF: ${{ needs.resolve-state.outputs.resolved_source_ref }}
         run: |
           node_version="$(git show "${RESOLVED_SOURCE_REF}:.nvmrc" | tr -d '[:space:]')"
-          echo "node_version=${node_version}" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          if [[ ! "$node_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf 'Source .nvmrc must contain an exact Node.js version; received %q.\n' \
+              "$node_version" >&2
+            exit 1
+          fi
+          npm_version="$(
+            git show "${RESOLVED_SOURCE_REF}:package.json" |
+              node scripts/resolve-npm-version.mjs --package-json -
+          )"
+          printf 'node_version=%s\n' "$node_version" >> "$GITHUB_OUTPUT"
+          printf 'npm_version=%s\n' "$npm_version" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-node-npm
         with:
-          node-version: ${{ steps.source-node-version.outputs.node_version }}
+          node-version: ${{ steps.source-tool-versions.outputs.node_version }}
+          npm-version: ${{ steps.source-tool-versions.outputs.npm_version }}
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Install Python 3.13 for uv-managed commands
         run: uv python install 3.13

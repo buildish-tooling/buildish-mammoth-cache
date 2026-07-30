@@ -41,10 +41,10 @@ sanity-check: ## Verify the active node and npm versions match the project expec
 		echo "Error: expected node $$expected_node_version but found $$actual_node_version. Run 'nvm use' first."; \
 		exit 1; \
 	fi
-	@expected_npm_version="$$(node -e "const packageJson = JSON.parse(require('fs').readFileSync('package.json', 'utf8')); const packageManager = packageJson.packageManager || ''; const match = /^npm@(.*)$$/.exec(packageManager); if (!match) { throw new Error('package.json packageManager must be set to npm@<version>'); } process.stdout.write(match[1]);")"; \
+	@expected_npm_version="$$(node scripts/resolve-npm-version.mjs)"; \
 	actual_npm_version="$$($(NPM) --version)"; \
 	if [ "$$actual_npm_version" != "$$expected_npm_version" ]; then \
-		echo "Error: expected npm $$expected_npm_version but found $$actual_npm_version. Run 'nvm use' first."; \
+		echo "Error: expected npm $$expected_npm_version but found $$actual_npm_version. Provision npm as documented in docs/dev/contributing.md."; \
 		exit 1; \
 	fi
 
