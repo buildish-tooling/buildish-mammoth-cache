@@ -37,7 +37,7 @@
   "engines": {
     "node": ">=24 <25"
   },
-  "packageManager": "npm@11.16.0",
+  "packageManager": "npm@11.18.0",
   "dependencies": {
     "@actions/artifact": "6.2.1",
     "@actions/cache": "6.2.0",
