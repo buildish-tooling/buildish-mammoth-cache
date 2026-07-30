@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -437,7 +437,7 @@ function createInitScriptContents(captureRoot: string | null): string {
   const captureRootLiteral = captureRoot ? toGroovySingleQuotedString(captureRoot) : 'null';
 
   return `/*
- * Apache Buildish Mammoth Cache for Gradle — per-invocation build result capture
+ * Buildish Mammoth Cache for Gradle — per-invocation build result capture
  *
  * Installed as a Gradle init script. Records metadata for each top-level build and writes it
  * to structured JSON files that the action finalize phase collects for the job summary.

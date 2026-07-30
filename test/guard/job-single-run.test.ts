@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -155,7 +155,7 @@ function createCiContext(
   }> = {},
 ) {
   return {
-    repository: overrides.repository ?? 'apache/buildish',
+    repository: overrides.repository ?? 'buildish-tooling/buildish',
     workflowName: overrides.workflowName ?? 'CI',
     jobName: overrides.jobName ?? 'check',
     runId: overrides.runId ?? 12345,

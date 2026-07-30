@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -156,7 +156,7 @@ describe('executePrepareAction', () => {
         env: {
           GITHUB_EVENT_NAME: 'push',
           GITHUB_REF: 'refs/heads/main',
-          GITHUB_REPOSITORY: 'apache/buildish',
+          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
           GITHUB_WORKFLOW: 'CI',
           GITHUB_JOB: 'aggregate',
           GITHUB_RUN_ID: '101',
@@ -172,7 +172,7 @@ describe('executePrepareAction', () => {
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
-            GITHUB_REPOSITORY: 'apache/buildish',
+            GITHUB_REPOSITORY: 'buildish-tooling/buildish',
             GITHUB_WORKFLOW: 'CI',
             GITHUB_JOB: 'aggregate',
             GITHUB_RUN_ID: '101',
@@ -246,7 +246,7 @@ describe('executePrepareAction', () => {
       ).toContain('caches/modules-2/files-2.1/example/module.bin');
       expect(summary.lines).toEqual([]);
       const summaryText = createPrepareActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Apache Buildish prepare execution');
+      expect(summaryText).toContain('## Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: none');
       expect(summaryText).toContain('- Dependent delta reuse: 1 artifact(s) from 1 job(s)');
       expect(summaryText).toContain('- Pre-build manifest: persisted');
@@ -257,7 +257,7 @@ describe('executePrepareAction', () => {
       expect(summaryText).toContain('- Post-job artifact cleanup scheduled: 1');
       expect(infoMessages).toEqual(
         expect.arrayContaining([
-          '::group::Apache Buildish prepare execution',
+          '::group::Buildish prepare execution',
           'Bootstrap: Prepared prepare phase for push on main in distributed-aggregator mode.',
           "GitHub input 'github-token' present: no.",
           "GitHub environment 'GITHUB_TOKEN' available: no.",
@@ -336,7 +336,7 @@ describe('executePrepareAction', () => {
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
-            GITHUB_REPOSITORY: 'apache/buildish',
+            GITHUB_REPOSITORY: 'buildish-tooling/buildish',
             GITHUB_WORKFLOW: 'CI',
             GITHUB_JOB: 'aggregate',
             GITHUB_RUN_ID: '101',
@@ -352,7 +352,7 @@ describe('executePrepareAction', () => {
             env: {
               GITHUB_EVENT_NAME: 'push',
               GITHUB_REF: 'refs/heads/main',
-              GITHUB_REPOSITORY: 'apache/buildish',
+              GITHUB_REPOSITORY: 'buildish-tooling/buildish',
               GITHUB_WORKFLOW: 'CI',
               GITHUB_JOB: 'aggregate',
               GITHUB_RUN_ID: '101',
@@ -429,7 +429,7 @@ describe('executePrepareAction', () => {
         env: {
           GITHUB_EVENT_NAME: 'push',
           GITHUB_REF: 'refs/heads/main',
-          GITHUB_REPOSITORY: 'apache/buildish',
+          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
           GITHUB_WORKFLOW: 'CI',
           GITHUB_JOB: 'build',
           GITHUB_RUN_ID: '101',
@@ -445,7 +445,7 @@ describe('executePrepareAction', () => {
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
-            GITHUB_REPOSITORY: 'apache/buildish',
+            GITHUB_REPOSITORY: 'buildish-tooling/buildish',
             GITHUB_WORKFLOW: 'CI',
             GITHUB_JOB: 'build',
             GITHUB_RUN_ID: '101',
@@ -485,7 +485,7 @@ describe('executePrepareAction', () => {
       expect(status.preBuildManifestState).not.toBeNull();
       expect(savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE)).toBeTruthy();
       const summaryText = createPrepareActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Apache Buildish prepare execution');
+      expect(summaryText).toContain('## Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: none');
       expect(summaryText).toContain('- Dependent delta reuse: none');
       expect(summaryText).toContain('<summary>Prepare-phase details</summary>');
@@ -568,7 +568,7 @@ describe('executePrepareAction', () => {
         env: {
           GITHUB_EVENT_NAME: 'push',
           GITHUB_REF: 'refs/heads/main',
-          GITHUB_REPOSITORY: 'apache/buildish',
+          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
           GITHUB_WORKFLOW: 'CI',
           GITHUB_JOB: 'build',
           GITHUB_RUN_ID: '101',
@@ -584,7 +584,7 @@ describe('executePrepareAction', () => {
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
-            GITHUB_REPOSITORY: 'apache/buildish',
+            GITHUB_REPOSITORY: 'buildish-tooling/buildish',
             GITHUB_WORKFLOW: 'CI',
             GITHUB_JOB: 'build',
             GITHUB_RUN_ID: '101',
@@ -633,7 +633,7 @@ describe('executePrepareAction', () => {
       expect(restoreCalls).toBe(2);
       await expect(readFile(managedFile, 'utf8')).resolves.toBe('from-cache-2');
       const summaryText = createPrepareActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Apache Buildish prepare execution');
+      expect(summaryText).toContain('## Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: prune-managed (1 deleted)');
       expect(summaryText).toContain('- Restore cleanup status: pruned');
       expect(summaryText).toContain('- Restore cleanup deleted files: 1');
@@ -686,7 +686,7 @@ describe('executePrepareAction', () => {
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
-            GITHUB_REPOSITORY: 'apache/buildish',
+            GITHUB_REPOSITORY: 'buildish-tooling/buildish',
             GITHUB_WORKFLOW: 'CI',
             GITHUB_JOB: 'aggregate',
             GITHUB_RUN_ID: '101',
@@ -702,7 +702,7 @@ describe('executePrepareAction', () => {
             env: {
               GITHUB_EVENT_NAME: 'push',
               GITHUB_REF: 'refs/heads/main',
-              GITHUB_REPOSITORY: 'apache/buildish',
+              GITHUB_REPOSITORY: 'buildish-tooling/buildish',
               GITHUB_WORKFLOW: 'CI',
               GITHUB_JOB: 'aggregate',
               GITHUB_RUN_ID: '101',
@@ -796,7 +796,7 @@ describe('executePrepareAction', () => {
         env: {
           GITHUB_EVENT_NAME: 'push',
           GITHUB_REF: 'refs/heads/main',
-          GITHUB_REPOSITORY: 'apache/buildish',
+          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
           GITHUB_WORKFLOW: 'CI',
           GITHUB_JOB: 'aggregate',
           GITHUB_RUN_ID: '101',
@@ -812,7 +812,7 @@ describe('executePrepareAction', () => {
           env: {
             GITHUB_EVENT_NAME: 'push',
             GITHUB_REF: 'refs/heads/main',
-            GITHUB_REPOSITORY: 'apache/buildish',
+            GITHUB_REPOSITORY: 'buildish-tooling/buildish',
             GITHUB_WORKFLOW: 'CI',
             GITHUB_JOB: 'aggregate',
             GITHUB_RUN_ID: '101',
@@ -897,7 +897,7 @@ describe('executePrepareAction', () => {
       const env = {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'build',
         GITHUB_RUN_ID: '101',
@@ -1000,7 +1000,7 @@ describe('executePrepareAction', () => {
       const env = {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'build',
         GITHUB_RUN_ID: '101',
@@ -1083,7 +1083,7 @@ describe('executePrepareAction', () => {
       const env = {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'build',
         GITHUB_RUN_ID: '101',
@@ -1244,7 +1244,7 @@ function createCiContext(
     runnerArch,
     defaultBranch: 'main',
     isPullRequest: false,
-    repository: 'apache/buildish',
+    repository: 'buildish-tooling/buildish',
     workflowName: 'CI',
     jobName,
     runId,
@@ -1434,7 +1434,7 @@ function createMinimalPrepareBootstrapExecution(): BootstrapExecution {
       runnerArch: 'x64',
       defaultBranch: 'main',
       isPullRequest: false,
-      repository: 'apache/buildish',
+      repository: 'buildish-tooling/buildish',
       workflowName: 'CI',
       jobName: 'build',
       runId: 1,
@@ -1476,7 +1476,7 @@ function createMinimalPrepareStatus(
 describe('createPrepareActionSummaryLines', () => {
   it('includes the top-level heading', () => {
     const text = createPrepareActionSummaryLines(createMinimalPrepareStatus()).join('\n');
-    expect(text).toContain('## Apache Buildish prepare execution');
+    expect(text).toContain('## Buildish prepare execution');
   });
 
   it('shows "none" for restore cleanup when restoreCleanupResult is null', () => {

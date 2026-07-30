@@ -1,4 +1,4 @@
-# Copyright 2026 The Apache Software Foundation
+# Copyright 2026 The Buildish Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -203,7 +203,7 @@ jobs:
         run: |
           final_tag="v${RELEASE_VERSION}"
           asset_dir="$RUNNER_TEMP/release-assets"
-          archive_name="apache-buildish-mammoth-cache-${RELEASE_VERSION}-incubating-github-action.zip"
+          archive_name="buildish-mammoth-cache-${RELEASE_VERSION}-github-action.zip"
           archive_root="${archive_name%.zip}/"
           archive_path="${asset_dir}/${archive_name}"
           mkdir -p "$asset_dir"
@@ -224,8 +224,8 @@ jobs:
           {
             echo "### Final GitHub Action references"
             echo
-            echo "- \`apache/buildish-mammoth-cache/actions/github/gradle@v${RELEASE_VERSION}\`"
-            echo "- \`apache/buildish-mammoth-cache/actions/github/maven@v${RELEASE_VERSION}\`"
+            echo "- \`buildish-tooling/buildish-mammoth-cache/actions/github/gradle@v${RELEASE_VERSION}\`"
+            echo "- \`buildish-tooling/buildish-mammoth-cache/actions/github/maven@v${RELEASE_VERSION}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   update-moving-tags:

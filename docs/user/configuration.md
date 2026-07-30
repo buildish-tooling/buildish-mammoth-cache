@@ -1,11 +1,11 @@
 ---
 title: Configuration Reference
 weight: 30
-description: All action inputs and config-file options for Apache Buildish Mammoth Cache for Gradle and Maven.
+description: All action inputs and config-file options for Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,8 +30,8 @@ list and rationale. Search for SYNC in the repository to find all sync-obligated
 
 The action is available in two build-tool-specific variants that share most inputs:
 
-- **Gradle** — `apache/buildish-mammoth-cache/actions/github/gradle@<sha>`
-- **Maven** — `apache/buildish-mammoth-cache/actions/github/maven@<sha>`
+- **Gradle** — `buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<sha>`
+- **Maven** — `buildish-tooling/buildish-mammoth-cache/actions/github/maven@<sha>`
 
 All inputs described in [Common inputs](#common-inputs) apply to both. Inputs described under
 [Gradle-only inputs](#gradle-only-inputs) or [Maven-only inputs](#maven-only-inputs) are accepted
@@ -288,7 +288,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with: { distribution: temurin, java-version: '21' }
-      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
           github-job-name: worker-a # stable name used by the aggregator
@@ -304,7 +304,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with: { distribution: temurin, java-version: '21' }
-      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
           github-job-name: worker-b
@@ -321,7 +321,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with: { distribution: temurin, java-version: '21' }
-      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-aggregator
           dependent-jobs: worker-a, worker-b # must match github-job-name on each worker
@@ -342,7 +342,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with: { distribution: temurin, java-version: '21' }
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-worker
           github-job-name: worker-a
@@ -358,7 +358,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with: { distribution: temurin, java-version: '21' }
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-worker
           github-job-name: worker-b
@@ -375,7 +375,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with: { distribution: temurin, java-version: '21' }
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-aggregator
           dependent-jobs: worker-a, worker-b

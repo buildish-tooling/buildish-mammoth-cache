@@ -1,11 +1,11 @@
 ---
 title: Maintenance
 weight: 10
-description: Ongoing maintenance tasks for Apache Buildish Mammoth Cache for Gradle — signing keys, schema versions, and partition fingerprints.
+description: Ongoing maintenance tasks for Buildish Mammoth Cache for Gradle — signing keys, schema versions, and partition fingerprints.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -78,16 +78,14 @@ full report at all severity levels.
 
 ### CodeQL
 
-CodeQL analysis runs as the `codeql` job in `.github/workflows/ci.yml` on every push to `main`
-or a `release/**` branch and on every pull request. The job uses
-`github/codeql-action` (from the `github.com/github` organisation, which is implicitly approved
-under Apache Infrastructure policy) with `build-mode: none` — CodeQL analyses the TypeScript
-source directly without building, which is appropriate because the compiled bundles in `dist/`
-contain no information the source does not.
+CodeQL analysis runs as the `codeql` job in `.github/workflows/ci.yml` on every
+push to `main` or a `release/**` branch and on every pull request. The job uses
+`github/codeql-action` with `build-mode: none` — CodeQL analyses the TypeScript
+source directly without building, which is appropriate because the compiled
+bundles in `dist/` contain no information the source does not.
 
-The `analyze` job carries `if: github.repository_owner == 'apache'` so it skips cleanly when
-run from a personal fork or from the repository's pre-incubation location. Remove that condition
-once the repository is in the `apache` GitHub organisation.
+The `analyze` job carries `if: github.repository_owner == 'buildish-tooling'` so it skips cleanly when
+run from a personal fork.
 
 Results are uploaded to the repository's **Security → Code scanning** tab as SARIF. The job
 requires `security-events: write` permission, which is scoped to the job rather than the

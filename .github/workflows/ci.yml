@@ -1,5 +1,5 @@
 #
-# Copyright 2026 The Apache Software Foundation
+# Copyright 2026 The Buildish Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -234,10 +234,9 @@ jobs:
 
   codeql:
     name: CodeQL (JavaScript / TypeScript)
-    # Requires GitHub Advanced Security, available for public repositories in the
-    # apache organisation. Skips cleanly elsewhere — remove this condition once
-    # the repository has been transferred to the apache organisation.
-    if: github.repository_owner == 'apache'
+    # Temporarily disabled because GitHub Advanced Security is unavailable.
+    if: false
+    #if: github.repository_owner == 'buildish-tooling'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -262,13 +261,10 @@ jobs:
 
   zizmor:
     name: Zizmor (GitHub Actions security)
-    # Requires GitHub Advanced Security, available for public repositories in the
-    # apache organisation. Skips cleanly elsewhere.
-    if: github.repository_owner == 'apache'
+    if: github.repository_owner == 'buildish-tooling'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -277,6 +273,8 @@ jobs:
 
       - name: Run Zizmor 🌈
         uses: zizmorcore/zizmor-action@6fc4b006235f201fdab3722e17240ab420d580e5 # v0.6.1
+        with:
+          advanced-security: false
 
   required_checks:
     name: Required Checks

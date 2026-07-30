@@ -1,5 +1,5 @@
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Apache Buildish Mammoth Cache for Gradle and Maven
+# Buildish Mammoth Cache for Gradle and Maven
 
-Apache Buildish Mammoth Cache for Gradle and Maven provides local and distributed build cache
+Buildish Mammoth Cache for Gradle and Maven provides local and distributed build cache
 management for GitHub Actions — with secure Gradle wrapper provisioning for Gradle builds and
 lightweight local-repository caching for Maven builds. Support for Codeberg/Forgejo and GitLab CI
 is planned for the future.
@@ -25,15 +25,15 @@ The action is split by build tool. Reference the one that matches your project:
 
 ```yaml
 # Gradle
-- uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+- uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
 
 # Maven
-- uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+- uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
 ```
 
-Project documentation lives on the Apache Buildish site:
+Project documentation lives on the Buildish site:
 
-- <https://buildish.apache.org/components/mammoth-cache-gradle/>
+- <https://buildish.org/components/mammoth-cache/>
 
 Use the site docs for workflow usage, configuration, cache-partition behavior, security notes,
 maintenance guidance, and current project status.
@@ -41,7 +41,3 @@ maintenance guidance, and current project status.
 ## License
 
 See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
-
-## Incubation status
-
-See [`DISCLAIMER`](DISCLAIMER).

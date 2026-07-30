@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,11 +44,15 @@ describe('createGitHubWorkflowArtifactBackend', () => {
     };
 
     const backend = createGitHubWorkflowArtifactBackend(client as never);
-    const scope = { token: 'ghs_test', runId: 42, repository: 'apache/buildish' } as const;
+    const scope = {
+      token: 'ghs_test',
+      runId: 42,
+      repository: 'buildish-tooling/buildish',
+    } as const;
     const findBy = {
       token: 'ghs_test',
       workflowRunId: 42,
-      repositoryOwner: 'apache',
+      repositoryOwner: 'buildish-tooling',
       repositoryName: 'buildish',
     };
 
@@ -85,7 +89,7 @@ describe('createGitHubWorkflowArtifactBackend', () => {
 
     await expect(
       backend.listArtifacts({
-        scope: { token: 'ghs_test', runId: 42, repository: 'apache/buildish/extra' },
+        scope: { token: 'ghs_test', runId: 42, repository: 'buildish-tooling/buildish/extra' },
       }),
     ).rejects.toThrow("must use 'owner/name' form");
   });

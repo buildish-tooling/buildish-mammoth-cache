@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright 2026 The Apache Software Foundation
+# Copyright 2026 The Buildish Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ usage() {
 is_tooling_dir() {
   local tooling_dir="$1"
 
-  [[ -f "$tooling_dir/pyproject.toml" && -d "$tooling_dir/src/apache_buildish_release_tooling" ]]
+  [[ -f "$tooling_dir/pyproject.toml" && -d "$tooling_dir/src/buildish_release_tooling" ]]
 }
 
 resolve_tooling_dir() {

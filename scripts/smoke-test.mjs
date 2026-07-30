@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -84,7 +84,7 @@ async function main() {
           GITHUB_EVENT_NAME: 'push',
           GITHUB_REF: 'refs/heads/main',
           GITHUB_REF_NAME: 'main',
-          GITHUB_REPOSITORY: 'apache/buildish',
+          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
           GITHUB_WORKFLOW: 'Local Smoke Test',
           GITHUB_JOB: `smoke-${scenario.name}`,
           GITHUB_RUN_ID: '1',

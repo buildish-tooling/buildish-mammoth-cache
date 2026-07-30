@@ -1,10 +1,10 @@
 ---
-title: Apache Buildish Mammoth Cache for Gradle and Maven
-description: Documentation for Apache Buildish Mammoth Cache for Gradle and Maven — CI actions that cache the build tool's local artifact store across workflow runs.
+title: Buildish Mammoth Cache for Gradle and Maven
+description: Documentation for Buildish Mammoth Cache for Gradle and Maven — CI actions that cache the build tool's local artifact store across workflow runs.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-Apache Buildish Mammoth Cache for Gradle and Maven is a pair of CI actions that cache the build
+Buildish Mammoth Cache for Gradle and Maven is a pair of CI actions that cache the build
 tool's local artifact store across workflow runs:
 
 - **Gradle** — caches `GRADLE_USER_HOME` and provisions Gradle wrapper JARs securely before the

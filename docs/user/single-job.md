@@ -1,11 +1,11 @@
 ---
 title: Single-Job Builds
 weight: 20
-description: Using Apache Buildish Mammoth Cache in a workflow with a single build job.
+description: Using Buildish Mammoth Cache in a workflow with a single build job.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
       - run: ./gradlew build
 ```
 
@@ -73,7 +73,7 @@ wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
 ```yaml
 steps:
   - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-  - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+  - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
     with:
       config-file: .github/buildish-mammoth-gradle.yml
   - run: ./gradlew build
@@ -112,7 +112,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
       - run: mvn verify
 ```
 
@@ -126,7 +126,7 @@ cache-key-prefix: my-project-maven-
 ```yaml
 steps:
   - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-  - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+  - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
     with:
       config-file: .github/buildish-mammoth-maven.yml
   - run: mvn verify

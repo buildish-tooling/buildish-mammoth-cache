@@ -5,7 +5,7 @@ description: How to get the most out of Maven caching — what is portable in th
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -131,7 +131,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
       - run: mvn verify
 
   deploy:
@@ -146,7 +146,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           read-only: true
       - run: mvn deploy -DskipTests

@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -123,7 +123,7 @@ export async function executePrepareAction(
 
     const logLines = createPrepareActionLogLines(status);
     if (logLines.length > 0) {
-      bootstrap.reportSink.publishLogGroup('Apache Buildish prepare execution', logLines, logInfo);
+      bootstrap.reportSink.publishLogGroup('Buildish prepare execution', logLines, logInfo);
     }
     return status;
   }
@@ -158,7 +158,7 @@ export async function executePrepareAction(
 
   const logLines = createPrepareActionLogLines(status);
   if (logLines.length > 0) {
-    bootstrap.reportSink.publishLogGroup('Apache Buildish prepare execution', logLines, logInfo);
+    bootstrap.reportSink.publishLogGroup('Buildish prepare execution', logLines, logInfo);
   }
 
   return status;
@@ -332,7 +332,7 @@ export function createPrepareActionSummaryLines(status: PrepareActionStatus): re
   const dependentDelta = status.dependentDeltaResult;
 
   return [
-    '## Apache Buildish prepare execution',
+    '## Buildish prepare execution',
     `- Restore cleanup: ${describeRestoreCleanupSummary(status.restoreCleanupResult)}`,
     `- Dependent delta reuse: ${describeDependentDeltaSummary(dependentDelta)}`,
     ...(status.preBuildManifestState

@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -208,7 +208,7 @@ describe('executeFinalizeAction', () => {
       ).toBe(true);
       expect(summary.lines).toEqual([]);
       const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
+      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
       expect(summaryText).toContain('Gradle builds');
       expect(summaryText).not.toContain('<summary>Cache details</summary>');
       expect(summaryText).not.toContain('Delta artifact');
@@ -341,9 +341,9 @@ describe('executeFinalizeAction', () => {
       const publishedSummary = await readFile(path.join(workspace, 'step-summary.md'), 'utf8');
       const summaryContent = createFinalizeActionSummaryLines(status).join('\n');
       expect(publishedSummary).toBe(`${summaryContent}\n`);
-      expect(summaryContent).toContain('## Apache Buildish Mammoth Cache for Gradle');
+      expect(summaryContent).toContain('## Buildish Mammoth Cache for Gradle');
       expect(summaryContent).toContain(
-        '### <a href="https://github.com/apache/buildish/actions/runs/101/job/987654321">Gradle builds</a>',
+        '### <a href="https://github.com/buildish-tooling/buildish/actions/runs/101/job/987654321">Gradle builds</a>',
       );
       expect(summaryContent).toContain('Gradle 8\\.14\\.3 / Java 21\\.0\\.4');
       expect(summaryContent).not.toContain('<summary>Cache details</summary>');
@@ -355,11 +355,11 @@ describe('executeFinalizeAction', () => {
       expect(summaryContent).not.toContain('### Errors');
       expect(infoMessages).toEqual(
         expect.arrayContaining([
-          '::group::Apache Buildish Mammoth Cache for Gradle',
+          '::group::Buildish Mammoth Cache for Gradle',
           'Bootstrap: Prepared finalize phase for push on main in distributed-worker mode.',
           'Base cache restore: exact-hit.',
           'Delta artifact: uploaded.',
-          'Execution details: https://github.com/apache/buildish/actions/runs/101/job/987654321',
+          'Execution details: https://github.com/buildish-tooling/buildish/actions/runs/101/job/987654321',
           'Cache partition statistics (manifest-derived, uncompressed content sizes):',
           expect.stringContaining("Uploaded delta artifact 'buildish-mammoth-cache-delta-"),
           "Gradle 8.14.3 SUCCESS (config-cache hit) tasks='build --scan' project='platform' scan=https://scans.gradle.com/s/local-it-published",
@@ -443,7 +443,7 @@ describe('executeFinalizeAction', () => {
         }),
       );
       const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
+      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
       expect(summaryText).toContain('Gradle builds');
       expect(summaryText).not.toContain('Delta artifact');
       expect(summaryText).not.toContain('Post-build cache delta');
@@ -514,7 +514,7 @@ describe('executeFinalizeAction', () => {
         }),
       );
       const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
+      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
       expect(summaryText).not.toContain('<summary>Cache details</summary>');
       expect(summaryText).not.toContain('Consumed delta cleanup');
       expect(summaryText).not.toContain('Delta artifact');
@@ -723,7 +723,7 @@ describe('executeFinalizeAction', () => {
         }),
       );
       const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Apache Buildish Mammoth Cache for Gradle');
+      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
       expect(summaryText).not.toContain('Delta artifact');
       expect(summaryText).not.toContain('Post-build cache delta');
       expect(summary.writeCalls).toBe(0);
@@ -881,7 +881,7 @@ function createTestEnv(
   return {
     GITHUB_EVENT_NAME: 'push',
     GITHUB_REF: 'refs/heads/main',
-    GITHUB_REPOSITORY: 'apache/buildish',
+    GITHUB_REPOSITORY: 'buildish-tooling/buildish',
     GITHUB_WORKFLOW: 'CI',
     GITHUB_JOB: jobName,
     GITHUB_RUN_ID: '101',
@@ -905,7 +905,7 @@ function createTestCiContext(workspace: string) {
     runnerArch: 'x64',
     defaultBranch: 'main',
     isPullRequest: false,
-    repository: 'apache/buildish',
+    repository: 'buildish-tooling/buildish',
     workflowName: 'CI',
     jobName: 'worker-build',
     runId: 101,
@@ -1194,7 +1194,7 @@ async function stageWorkerArtifactForCleanup(
       runnerArch: 'x64',
       defaultBranch: 'main',
       isPullRequest: false,
-      repository: 'apache/buildish',
+      repository: 'buildish-tooling/buildish',
       workflowName: 'CI',
       jobName,
       runId: 101,
@@ -1302,7 +1302,7 @@ function createMinimalFinalizeStatus(
 describe('createFinalizeActionSummaryLines', () => {
   it('includes the build-tool name in the top-level heading', () => {
     const lines = createFinalizeActionSummaryLines(createMinimalFinalizeStatus()).join('\n');
-    expect(lines).toContain('## Apache Buildish Mammoth Cache for Gradle');
+    expect(lines).toContain('## Buildish Mammoth Cache for Gradle');
   });
 
   it('shows success icon and label when there are no issues', () => {
@@ -1350,10 +1350,12 @@ describe('createFinalizeActionSummaryLines', () => {
 
   it('renders the tool builds heading as an HTML link when jobUrl is present', () => {
     const status = createMinimalFinalizeStatus({
-      jobUrl: 'https://github.com/apache/buildish/actions/runs/101/jobs/42',
+      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42',
     });
     const lines = createFinalizeActionSummaryLines(status).join('\n');
-    expect(lines).toContain('href="https://github.com/apache/buildish/actions/runs/101/jobs/42"');
+    expect(lines).toContain(
+      'href="https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42"',
+    );
     expect(lines).toContain('Gradle builds');
   });
 
@@ -1420,22 +1422,22 @@ describe('createFinalizeActionLogLines', () => {
 
   it('includes an Execution details line from jobUrl when present', () => {
     const status = createMinimalFinalizeStatus({
-      jobUrl: 'https://github.com/apache/buildish/actions/runs/101/jobs/42',
+      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42',
     });
     const lines = createFinalizeActionLogLines(status).join('\n');
     expect(lines).toContain(
-      'Execution details: https://github.com/apache/buildish/actions/runs/101/jobs/42',
+      'Execution details: https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42',
     );
   });
 
   it('falls back to workflowRunUrl for the Execution details line when jobUrl is absent', () => {
     const status = createMinimalFinalizeStatus({
       jobUrl: null,
-      workflowRunUrl: 'https://github.com/apache/buildish/actions/runs/101',
+      workflowRunUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101',
     });
     const lines = createFinalizeActionLogLines(status).join('\n');
     expect(lines).toContain(
-      'Execution details: https://github.com/apache/buildish/actions/runs/101',
+      'Execution details: https://github.com/buildish-tooling/buildish/actions/runs/101',
     );
   });
 

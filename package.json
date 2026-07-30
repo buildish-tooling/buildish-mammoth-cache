@@ -29,9 +29,9 @@
     "verify": "npm audit --audit-level=high && npm run lint && npm run format && npm run test && npm run rebuild && npm run release-legal:check-category-x"
   },
   "keywords": [],
-  "author": "Apache Buildish",
+  "author": "Buildish",
   "license": "Apache-2.0",
-  "description": "Apache Buildish Mammoth Cache Action for Gradle: secure wrapper provisioning plus local and distributed cache management.",
+  "description": "Buildish Mammoth Cache Action for Gradle: secure wrapper provisioning plus local and distributed cache management.",
   "private": true,
   "type": "module",
   "engines": {

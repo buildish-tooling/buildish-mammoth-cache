@@ -1,4 +1,4 @@
-# Copyright 2026 The Apache Software Foundation
+# Copyright 2026 The Buildish Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 component_id: buildish-mammoth-cache
-source_artifact_prefix: apache-buildish-mammoth-cache
+source_artifact_prefix: buildish-mammoth-cache
 asf_dist_dev_base: https://dist.apache.org/repos/dist/dev/incubator/buildish/buildish-mammoth-cache
 asf_dist_release_base: https://dist.apache.org/repos/dist/release/incubator/buildish/buildish-mammoth-cache
 moving_tags_enabled: true
@@ -22,10 +22,10 @@ secondary_targets:
   - github-action
   - github-release
 final_tag_mode: detached-materialization-commit
-vote_release_name: Apache Buildish Mammoth Cache
+vote_release_name: Buildish Mammoth Cache
 incubator_vote_enabled: true
 release_summary_include_final_tag_mode: true
-release_verification_guide_url: https://buildish.apache.org/buildish-mammoth-cache/release-verification/
+release_verification_guide_url: https://buildish.org/components/mammoth-cache/release-verification/
 verify_rc_instructions: |
   Run this bash verification flow on trusted Linux or macOS hardware:
   1. verify .sha512

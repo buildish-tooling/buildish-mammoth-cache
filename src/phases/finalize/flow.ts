@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -149,7 +149,7 @@ export async function executeFinalizeAction(
   );
   const consumedDeltaCleanupResult = await cleanupConsumedDeltaArtifacts(bootstrap, dependencies);
   const buildReport = await bootstrap.buildToolAdapter.collectBuildReport(bootstrap.ciContext);
-  const logGroupName = `Apache Buildish Mammoth Cache for ${bootstrap.buildToolAdapter.getName()}`;
+  const logGroupName = `Buildish Mammoth Cache for ${bootstrap.buildToolAdapter.getName()}`;
 
   if (!bootstrap.cacheModel) {
     const status = {
@@ -506,7 +506,7 @@ export function createFinalizeActionSummaryLines(status: FinalizeActionStatus): 
   const overallStatus = determineOverallSummaryStatus(summaryIssues);
   const toolName = status.bootstrap.buildToolAdapter.getName();
   return [
-    `## Apache Buildish Mammoth Cache for ${toolName}`,
+    `## Buildish Mammoth Cache for ${toolName}`,
     `${getSummaryStatusIcon(overallStatus)} Overall status: ${getSummaryStatusLabel(overallStatus)}`,
     '',
     status.jobUrl

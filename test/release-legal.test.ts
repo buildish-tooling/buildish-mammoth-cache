@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ describe('release-legal helpers', () => {
     expect(renderLicenseReference('MIT/X11')).toBe('MIT/X11');
   });
 
-  it('renders ASF-style bundled sections', () => {
+  it('renders bundled dependency sections', () => {
     const section = renderLicenseSection({
       attributionText: 'MIT License\n\nCopyright (c) 2020 Example Corp.',
       copyright: 'Copyright (c) 2020 Example Corp.',

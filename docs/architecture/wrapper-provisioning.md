@@ -5,7 +5,7 @@ description: How the action discovers, downloads, and verifies gradle-wrapper.ja
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

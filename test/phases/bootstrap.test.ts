@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -80,7 +80,7 @@ const ciContext = {
   runnerArch: 'x64',
   defaultBranch: 'main',
   isPullRequest: false,
-  repository: 'apache/buildish',
+  repository: 'buildish-tooling/buildish',
   workflowName: 'CI',
   jobName: 'check',
   runId: 123,
@@ -365,7 +365,7 @@ describe('bootstrap helpers', () => {
       const bootstrapEnv = {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         GITHUB_WORKSPACE: workspace,
@@ -447,7 +447,7 @@ describe('bootstrap helpers', () => {
       const finalizeEnv = {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         GITHUB_WORKSPACE: workspace,
@@ -521,7 +521,7 @@ describe('bootstrap helpers', () => {
         const cfEnv = {
           GITHUB_EVENT_NAME: 'push',
           GITHUB_REF: 'refs/heads/main',
-          GITHUB_REPOSITORY: 'apache/buildish',
+          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
           GITHUB_WORKFLOW: 'CI',
           GITHUB_JOB: 'check',
           GITHUB_WORKSPACE: workspace,
@@ -575,7 +575,7 @@ describe('bootstrap helpers', () => {
 
       vi.stubEnv('GITHUB_EVENT_NAME', 'push');
       vi.stubEnv('GITHUB_REF', 'refs/heads/main');
-      vi.stubEnv('GITHUB_REPOSITORY', 'apache/buildish');
+      vi.stubEnv('GITHUB_REPOSITORY', 'buildish-tooling/buildish');
       vi.stubEnv('GITHUB_WORKFLOW', 'CI');
       vi.stubEnv('GITHUB_JOB', 'check');
       vi.stubEnv('GITHUB_WORKSPACE', workspace);

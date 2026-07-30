@@ -1,5 +1,21 @@
 #!/usr/bin/env node
 
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +26,7 @@ import { build } from 'esbuild';
  * Generate and verify distribution-oriented legal files for the bundled GitHub
  * Action under dist/github/.
  *
- * The repository-root LICENSE / NOTICE describe the ASF project itself. The
+ * The repository-root LICENSE / NOTICE describe the Buildish project itself. The
  * generated files under legal/github/ describe which third-party npm packages
  * are bundled into the shipped action artifact and what attribution text must be
  * carried forward for that distribution.
@@ -307,7 +323,7 @@ function renderPipedBlock(text) {
     .join('\n');
 }
 
-/** Append generated bundled-dependency sections after the ASF project boilerplate. */
+/** Append generated bundled-dependency sections after the project boilerplate. */
 export function appendBundledSections(baseText, sections) {
   const trimmedBase = baseText.replace(/\r\n/g, '\n').trimEnd();
   if (sections.length === 0) {
@@ -569,7 +585,7 @@ export async function collectPackageInfo(packageRoot) {
 
 async function analyzeDistribution() {
   // Group by upstream project rather than by package name so the generated
-  // output talks about the original source project in ASF distribution style.
+  // output talks about the original source project in distribution style.
   const packageRoots = await collectBundledPackageRoots();
   const packageInfos = await Promise.all(
     packageRoots.map((packageRoot) => collectPackageInfo(packageRoot)),

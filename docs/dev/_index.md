@@ -1,11 +1,11 @@
 ---
 title: Developer Guide
 weight: 30
-description: Architecture, portability, and release information for contributors to Apache Buildish Mammoth Cache for Gradle.
+description: Architecture, portability, and release information for contributors to Buildish Mammoth Cache for Gradle.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

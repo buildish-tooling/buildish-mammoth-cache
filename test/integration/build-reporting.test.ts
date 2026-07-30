@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
     assert.ok(finalizeStatus.buildReport.builds.some((build) => build.requestedTasks === 'help'));
 
     const summaryText = await readFile(summaryPath, 'utf8');
-    assert.match(summaryText, /## Apache Buildish Mammoth Cache for Gradle/u);
+    assert.match(summaryText, /## Buildish Mammoth Cache for Gradle/u);
     // When a jobUrl is available the heading is wrapped in an HTML link:
     //   ### <a href="…">Gradle builds</a>
     // When it is absent it is plain text:
@@ -227,7 +227,7 @@ async function stageProject(
       GITHUB_EVENT_NAME: 'push',
       GITHUB_REF: 'refs/heads/main',
       GITHUB_REF_NAME: 'main',
-      GITHUB_REPOSITORY: 'apache/buildish',
+      GITHUB_REPOSITORY: 'buildish-tooling/buildish',
       GITHUB_WORKFLOW: WORKFLOW_NAME,
       GITHUB_JOB: 'build-reporting',
       GITHUB_RUN_ID: RUN_ID,

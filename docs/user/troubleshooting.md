@@ -1,11 +1,11 @@
 ---
 title: Troubleshooting
 weight: 55
-description: Diagnostic steps for the most common problems with Apache Buildish Mammoth Cache for Gradle and Maven.
+description: Diagnostic steps for the most common problems with Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -106,12 +106,12 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
 
    ```yaml
    # worker
-   - uses: apache/buildish-mammoth-cache/actions/github/gradle@<sha>
+   - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<sha>
      with:
        job-mode: distributed-worker
        github-job-name: worker-a
    # aggregator
-   - uses: apache/buildish-mammoth-cache/actions/github/gradle@<sha>
+   - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<sha>
      with:
        job-mode: distributed-aggregator
        dependent-jobs: worker-a, worker-b
@@ -178,7 +178,7 @@ already present in the repository.
 **How to pass it:**
 
 ```yaml
-- uses: apache/buildish-mammoth-cache/actions/github/gradle@<sha>
+- uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<sha>
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
 ```

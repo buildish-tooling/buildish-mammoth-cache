@@ -5,7 +5,7 @@ description: How to use the distributed worker/aggregator mode to cache builds t
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -82,7 +82,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: ./gradlew :module-a:build
@@ -98,7 +98,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: ./gradlew :module-b:build
@@ -115,7 +115,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-aggregator
           dependent-jobs: worker-a, worker-b
@@ -136,7 +136,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: mvn -pl module-a verify
@@ -152,7 +152,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-worker
       - run: mvn -pl module-b verify
@@ -169,7 +169,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: apache/buildish-mammoth-cache/actions/github/maven@<commit-sha>
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-aggregator
           dependent-jobs: worker-a, worker-b
@@ -204,13 +204,13 @@ wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
 
 ```yaml
 # Each worker job
-- uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+- uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
   with:
     job-mode: distributed-worker
     config-file: .github/buildish-mammoth-gradle.yml
 
 # Aggregator job
-- uses: apache/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+- uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
   with:
     job-mode: distributed-aggregator
     dependent-jobs: worker-a, worker-b

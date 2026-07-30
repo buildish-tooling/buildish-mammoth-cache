@@ -1,11 +1,11 @@
 ---
 title: User Guide
 weight: 10
-description: How to use Apache Buildish Mammoth Cache for Gradle and Maven in your workflows.
+description: How to use Buildish Mammoth Cache for Gradle and Maven in your workflows.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

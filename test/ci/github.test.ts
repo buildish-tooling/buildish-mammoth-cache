@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ describe('createGitHubContext', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/feature/cache-improvements',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         RUNNER_OS: 'Linux',
@@ -52,7 +52,7 @@ describe('createGitHubContext', () => {
     const context = createGitHubContext({
       env: {
         GITHUB_EVENT_NAME: 'pull_request',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
       },
@@ -70,7 +70,7 @@ describe('createGitHubContext', () => {
     const context = createGitHubContext({
       env: {
         GITHUB_EVENT_NAME: 'pull_request_target',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
       },
@@ -90,7 +90,7 @@ describe('createGitHubContext', () => {
       env: {
         GITHUB_EVENT_NAME: 'workflow_dispatch',
         GITHUB_REF: 'refs/heads/release/2026.03',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
       },
@@ -110,7 +110,7 @@ describe('createGitHubContext', () => {
     const context = createGitHubContext({
       env: {
         GITHUB_EVENT_NAME: 'workflow_call',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
       },
@@ -136,7 +136,7 @@ describe('createGitHubContext', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         RUNNER_OS: 'macOS',
@@ -156,7 +156,7 @@ describe('createGitHubContext', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         RUNNER_OS: 'Windows',
@@ -175,7 +175,7 @@ describe('createGitHubContext', () => {
     const context = createGitHubContext({
       env: {
         GITHUB_EVENT_NAME: 'schedule',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
       },
@@ -194,7 +194,7 @@ describe('createGitHubPlatform', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
       },
@@ -208,7 +208,7 @@ describe('createGitHubPlatform', () => {
       new Map([
         ['accept', 'application/vnd.github.raw'],
         ['authorization', 'Bearer ghs_test_token'],
-        ['user-agent', 'apache-buildish-mammoth-cache-action'],
+        ['user-agent', 'buildish-mammoth-cache-action'],
         ['x-github-api-version', '2022-11-28'],
       ]),
     );
@@ -220,7 +220,7 @@ describe('createGitHubPlatform', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         GITHUB_TOKEN: '  ghs_env_token  ',
@@ -234,7 +234,7 @@ describe('createGitHubPlatform', () => {
       new Map([
         ['accept', 'application/vnd.github.raw'],
         ['authorization', 'Bearer ghs_env_token'],
-        ['user-agent', 'apache-buildish-mammoth-cache-action'],
+        ['user-agent', 'buildish-mammoth-cache-action'],
         ['x-github-api-version', '2022-11-28'],
       ]),
     );
@@ -245,7 +245,7 @@ describe('createGitHubPlatform', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         GITHUB_RUN_ID: '101',
@@ -267,8 +267,8 @@ describe('createGitHubPlatform', () => {
     ]);
     expect(platform.createBootstrapDiagnosticsLines('finalize')).toEqual([]);
     expect(platform.executionUrls).toEqual({
-      jobUrl: 'https://github.com/apache/buildish/actions/runs/101/job/987654321',
-      workflowRunUrl: 'https://github.com/apache/buildish/actions/runs/101/attempts/2',
+      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/job/987654321',
+      workflowRunUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/attempts/2',
     });
   });
 
@@ -280,7 +280,7 @@ describe('createGitHubPlatform', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_RUN_ID: '101',
         GITHUB_RUN_ATTEMPT: '1',
         GITHUB_SERVER_URL: 'http://insecure.example.com',
@@ -288,8 +288,8 @@ describe('createGitHubPlatform', () => {
     });
 
     expect(platform.executionUrls).toEqual({
-      jobUrl: 'https://github.com/apache/buildish/actions/runs/101/attempts/1',
-      workflowRunUrl: 'https://github.com/apache/buildish/actions/runs/101/attempts/1',
+      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/attempts/1',
+      workflowRunUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/attempts/1',
     });
   });
 });
@@ -352,7 +352,7 @@ describe('createGitHubReportSink', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         RUNNER_OS: 'Linux',
@@ -376,7 +376,7 @@ describe('createGitHubReportSink', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
       },
@@ -408,7 +408,7 @@ describe('createGitHubReportSink', () => {
       env: {
         GITHUB_EVENT_NAME: 'push',
         GITHUB_REF: 'refs/heads/main',
-        GITHUB_REPOSITORY: 'apache/buildish',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
         GITHUB_STEP_SUMMARY: summaryPath,

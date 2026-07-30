@@ -1,5 +1,5 @@
 #
-# Copyright 2026 The Apache Software Foundation
+# Copyright 2026 The Buildish Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,9 +17,9 @@
 # files too. See docs/dev/maintenance.md § "Action input documentation sync" for the full list
 # and rationale. Search for SYNC in the repository to find all sync-obligated locations.
 
-name: Apache Buildish Mammoth Cache Action for Maven
+name: Buildish Mammoth Cache Action for Maven
 description: Local and distributed cache management for Maven builds in GitHub Actions.
-author: Apache Buildish
+author: Buildish
 inputs:
   config-file:
     description: >-

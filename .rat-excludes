@@ -1,5 +1,5 @@
 #
-# Copyright 2026 The Apache Software Foundation
+# Copyright 2026 The Buildish Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 # limitations under the License.
 
 .nvmrc
+CODE_OF_CONDUCT.md
 .idea/.name
 .idea/copyright/ApacheLicense_v2.xml
 .idea/copyright/profiles_settings.xml

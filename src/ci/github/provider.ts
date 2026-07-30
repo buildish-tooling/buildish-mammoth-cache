@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -224,7 +224,7 @@ function createGitHubHttpHeadersByHost(
       new Map([
         ['accept', 'application/vnd.github.raw'],
         ['authorization', `Bearer ${token}`],
-        ['user-agent', 'apache-buildish-mammoth-cache-action'],
+        ['user-agent', 'buildish-mammoth-cache-action'],
         ['x-github-api-version', '2022-11-28'],
       ]),
     ],

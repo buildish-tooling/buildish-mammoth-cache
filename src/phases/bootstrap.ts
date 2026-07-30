@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 The Apache Software Foundation
+ * Copyright 2026 The Buildish Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -209,7 +209,7 @@ export function createBootstrapSummaryLines(status: BootstrapStatus): readonly s
   const reusedCount = status.toolProvisioning.items.length - downloadedCount;
 
   return [
-    '## Apache Buildish bootstrap',
+    '## Buildish bootstrap',
     `- Base cache ${status.baseCacheResult?.operation ?? 'state'}: ${status.baseCacheResult?.status ?? (status.cacheModel ? 'not-run' : 'disabled')}`,
     `- Tool provisioning: ${status.toolProvisioning.items.length} ready (${downloadedCount} downloaded, ${reusedCount} reused)`,
     ...createDetailsSection('Execution context', [

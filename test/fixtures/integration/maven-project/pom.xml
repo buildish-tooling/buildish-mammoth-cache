@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Copyright 2026 The Apache Software Foundation
+  Copyright 2026 The Buildish Authors
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>org.apache.buildish.it</groupId>
+  <groupId>org.buildish.it</groupId>
   <artifactId>mammoth-cache-maven-it</artifactId>
   <version>1.0-SNAPSHOT</version>
   <packaging>pom</packaging>

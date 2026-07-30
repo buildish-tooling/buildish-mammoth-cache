@@ -1,11 +1,11 @@
 ---
 title: Architecture & Background
 weight: 20
-description: Design documents covering the internal architecture of Apache Buildish Mammoth Cache for Gradle and Maven.
+description: Design documents covering the internal architecture of Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

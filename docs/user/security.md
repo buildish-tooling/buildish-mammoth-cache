@@ -1,11 +1,11 @@
 ---
 title: Security
 weight: 50
-description: Required permissions, wrapper verification, token scoping, and hard cache exclusions for Apache Buildish Mammoth Cache for Gradle and Maven.
+description: Required permissions, wrapper verification, token scoping, and hard cache exclusions for Buildish Mammoth Cache for Gradle and Maven.
 ---
 
 <!--
-Copyright 2026 The Apache Software Foundation
+Copyright 2026 The Buildish Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
