@@ -88,7 +88,7 @@ zizmor-check: ## Run Zizmor GitHub Actions security analysis (requires zizmor on
 		echo "Install it with: cargo install zizmor"; \
 		exit 1; \
 	}
-	zizmor .github/workflows/
+	zizmor .
 
 release-legal-category-x-check: sanity-check $(NODE_MODULES_STAMP) ## Fail if the bundled GitHub action distribution contains a Category X license.
 	$(NPM) run release-legal:check-category-x

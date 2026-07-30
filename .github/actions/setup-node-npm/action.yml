@@ -87,7 +87,8 @@ runs:
       shell: bash
       env:
         EXPECTED_NPM_VERSION: ${{ steps.npm-version.outputs.version }}
-      run: |
+      # npm CLI releases bundle their dependencies; packageManager pins the exact release.
+      run: | # zizmor: ignore[adhoc-packages]
         actual_npm_version="$(npm --version)"
         if [[ "$actual_npm_version" != "$EXPECTED_NPM_VERSION" ]]; then
           npm install \
