@@ -22,11 +22,10 @@ set -euo pipefail
 
 ./gradlew --info --no-daemon --continue resolveWorkerA resolveWorkerB 2>&1 | tee aggregator-gradle.log
 
-grep -F 'resolved workerA: guava-33.4.8-jre.jar'    aggregator-gradle.log
-grep -F 'resolved workerB: commons-io-2.18.0.jar'   aggregator-gradle.log
+grep -F 'resolved workerA: guava-33.6.0-jre.jar'    aggregator-gradle.log
+grep -F 'resolved workerB: commons-io-2.22.0.jar'   aggregator-gradle.log
 
-if grep -Eq '(?:Downloading|Downloaded).*(?:guava-33\.4\.8-jre|commons-io-2\.18\.0)\.jar' aggregator-gradle.log; then
+if grep -Eq '(?:Downloading|Downloaded).*(?:guava-33\.6\.0-jre|commons-io-2\.22\.0)\.jar' aggregator-gradle.log; then
   echo 'Expected restored worker dependency jars to be reused, but Gradle downloaded them again.' >&2
   exit 1
 fi
-

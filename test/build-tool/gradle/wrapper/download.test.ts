@@ -114,8 +114,7 @@ describe('provisionWrapperJars', () => {
         });
         expect(verifyWrapperSignature).toHaveBeenCalledOnce();
         const verifiedCall = verifyWrapperSignature.mock.calls[0] as unknown as
-          | [Uint8Array, string, { readonly relativePath: string }]
-          | undefined;
+          [Uint8Array, string, { readonly relativePath: string }] | undefined;
         expect(verifiedCall).toBeDefined();
         const [verifiedJarBytes, verifiedSignature, verifiedPlan] = verifiedCall!;
         expect(Buffer.from(verifiedJarBytes)).toEqual(jarBytes);
@@ -234,8 +233,7 @@ describe('provisionWrapperJars', () => {
         expect(fetchImpl).toHaveBeenCalledTimes(2);
         expect(verifyWrapperSignature).toHaveBeenCalledOnce();
         const verifiedCall = verifyWrapperSignature.mock.calls[0] as unknown as
-          | [Uint8Array, string, { readonly relativePath: string }]
-          | undefined;
+          [Uint8Array, string, { readonly relativePath: string }] | undefined;
         expect(verifiedCall).toBeDefined();
         const [verifiedJarBytes, verifiedSignature, verifiedPlan] = verifiedCall!;
         expect(Buffer.from(verifiedJarBytes)).toEqual(jarBytes);

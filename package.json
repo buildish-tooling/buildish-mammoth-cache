@@ -8,11 +8,11 @@
     "bundle": "npm run bundle:github",
     "bundle:github": "npm run bundle:github:gradle && npm run bundle:github:maven",
     "bundle:github:gradle": "npm run bundle:github:gradle:main && npm run bundle:github:gradle:post",
-    "bundle:github:gradle:main": "esbuild src/ci/github/gradle/main.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/github/gradle/main/index.cjs",
-    "bundle:github:gradle:post": "esbuild src/ci/github/gradle/post.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/github/gradle/post/index.cjs",
+    "bundle:github:gradle:main": "esbuild src/ci/github/gradle/main.ts --bundle --platform=node --target=node24 --format=cjs --alias:@azure/storage-common=./node_modules/@azure/storage-common/dist/commonjs/index.js --outfile=dist/github/gradle/main/index.cjs",
+    "bundle:github:gradle:post": "esbuild src/ci/github/gradle/post.ts --bundle --platform=node --target=node24 --format=cjs --alias:@azure/storage-common=./node_modules/@azure/storage-common/dist/commonjs/index.js --outfile=dist/github/gradle/post/index.cjs",
     "bundle:github:maven": "npm run bundle:github:maven:main && npm run bundle:github:maven:post",
-    "bundle:github:maven:main": "esbuild src/ci/github/maven/main.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/github/maven/main/index.cjs",
-    "bundle:github:maven:post": "esbuild src/ci/github/maven/post.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/github/maven/post/index.cjs",
+    "bundle:github:maven:main": "esbuild src/ci/github/maven/main.ts --bundle --platform=node --target=node24 --format=cjs --alias:@azure/storage-common=./node_modules/@azure/storage-common/dist/commonjs/index.js --outfile=dist/github/maven/main/index.cjs",
+    "bundle:github:maven:post": "esbuild src/ci/github/maven/post.ts --bundle --platform=node --target=node24 --format=cjs --alias:@azure/storage-common=./node_modules/@azure/storage-common/dist/commonjs/index.js --outfile=dist/github/maven/post/index.cjs",
     "build": "npm run compile && npm run bundle",
     "rebuild": "npm run clean && npm run build",
     "smoke-test": "node scripts/smoke-test.mjs",
@@ -37,26 +37,32 @@
   "engines": {
     "node": ">=24 <25"
   },
-  "packageManager": "npm@11.6.2",
+  "packageManager": "npm@11.16.0",
   "dependencies": {
     "@actions/artifact": "6.2.1",
-    "@actions/cache": "6.0.1",
+    "@actions/cache": "6.2.0",
     "@actions/core": "3.0.1",
     "yaml": "2.9.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@types/node": "25.9.1",
-    "@typescript-eslint/eslint-plugin": "8.60.0",
-    "@typescript-eslint/parser": "8.60.0",
-    "@vitest/coverage-v8": "4.1.7",
-    "esbuild": "0.28.0",
-    "eslint": "10.4.1",
+    "@types/node": "26.1.1",
+    "@typescript-eslint/eslint-plugin": "8.65.0",
+    "@typescript-eslint/parser": "8.65.0",
+    "@vitest/coverage-v8": "4.1.10",
+    "esbuild": "0.28.1",
+    "eslint": "10.7.0",
     "eslint-config-prettier": "10.1.8",
-    "eslint-plugin-regexp": "3.1.0",
-    "prettier": "3.8.3",
+    "eslint-plugin-regexp": "3.1.1",
+    "prettier": "3.9.6",
     "typescript": "6.0.3",
-    "vitest": "4.1.7"
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.8"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }

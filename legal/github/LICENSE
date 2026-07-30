@@ -206,10 +206,10 @@ This product bundles packages from the source project at https://github.com/acti
 
 * npm package IDs:
   * @actions/artifact@6.2.1
-  * @actions/cache@6.0.1
+  * @actions/cache@6.2.0
   * @actions/core@3.0.1
   * @actions/exec@3.0.0
-  * @actions/github@9.0.0
+  * @actions/github@9.1.1
   * @actions/glob@0.6.1
   * @actions/io@3.0.2
 
@@ -461,7 +461,48 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/Azure/azure-sdk-for-js.
 
 * npm package IDs:
-  * @azure/abort-controller@2.1.2
+  * @azure/abort-controller@2.2.0
+  * @azure/core-auth@1.11.0
+  * @azure/core-client@1.11.0
+  * @azure/core-http-compat@2.5.0
+  * @azure/core-rest-pipeline@1.25.0
+  * @azure/core-tracing@1.4.0
+  * @azure/core-util@1.14.0
+  * @azure/core-xml@1.6.0
+  * @azure/logger@1.4.0
+  * @azure/storage-blob@12.33.0
+  * @typespec/ts-http-runtime@0.3.8
+
+Copyright: Copyright (c) Microsoft Corporation.
+Home page: https://github.com/Azure/azure-sdk-for-js
+License: MIT - https://spdx.org/licenses/MIT.html
+| Copyright (c) Microsoft Corporation.
+|
+| MIT License
+|
+| Permission is hereby granted, free of charge, to any person obtaining a copy
+| of this software and associated documentation files (the "Software"), to deal
+| in the Software without restriction, including without limitation the rights
+| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+| copies of the Software, and to permit persons to whom the Software is
+| furnished to do so, subject to the following conditions:
+|
+| The above copyright notice and this permission notice shall be included in all
+| copies or substantial portions of the Software.
+|
+| THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+| SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+This product bundles packages from the source project at https://github.com/Azure/azure-sdk-for-js.
+
+* npm package IDs:
   * @azure/core-lro@2.7.2
 
 Copyright: Copyright (c) 2020 Microsoft
@@ -494,48 +535,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/Azure/azure-sdk-for-js.
 
 * npm package IDs:
-  * @azure/core-auth@1.10.1
-  * @azure/core-client@1.10.1
-  * @azure/core-http-compat@2.3.2
-  * @azure/core-rest-pipeline@1.23.0
-  * @azure/core-tracing@1.3.1
-  * @azure/core-util@1.13.1
-  * @azure/core-xml@1.5.0
-  * @azure/logger@1.3.0
-  * @azure/storage-blob@12.31.0
-  * @typespec/ts-http-runtime@0.3.4
-
-Copyright: Copyright (c) Microsoft Corporation.
-Home page: https://github.com/Azure/azure-sdk-for-js
-License: MIT - https://spdx.org/licenses/MIT.html
-| Copyright (c) Microsoft Corporation.
-|
-| MIT License
-|
-| Permission is hereby granted, free of charge, to any person obtaining a copy
-| of this software and associated documentation files (the "Software"), to deal
-| in the Software without restriction, including without limitation the rights
-| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-| copies of the Software, and to permit persons to whom the Software is
-| furnished to do so, subject to the following conditions:
-|
-| The above copyright notice and this permission notice shall be included in all
-| copies or substantial portions of the Software.
-|
-| THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-| SOFTWARE.
-
---------------------------------------------------------------------------------
-
-This product bundles packages from the source project at https://github.com/Azure/azure-sdk-for-js.
-
-* npm package IDs:
-  * @azure/storage-common@12.3.0
+  * @azure/storage-common@12.4.1
 
 Copyright: Copyright (c) 2018 Microsoft
 Home page: https://github.com/Azure/azure-sdk-for-js
@@ -760,41 +760,6 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 --------------------------------------------------------------------------------
 
-This product bundles packages from the source project at https://github.com/fastify/fast-content-type-parse.
-
-* npm package IDs:
-  * fast-content-type-parse@3.0.0
-
-Copyright: Copyright (c) 2023 The Fastify Team
-Home page: https://github.com/fastify/fast-content-type-parse
-License: MIT - https://spdx.org/licenses/MIT.html
-| MIT License
-|
-| Copyright (c) 2023 The Fastify Team
-|
-| The Fastify team members are listed at https://github.com/fastify/fastify#team
-| and in the README file.
-|
-| Permission is hereby granted, free of charge, to any person obtaining a copy
-| of this software and associated documentation files (the "Software"), to deal
-| in the Software without restriction, including without limitation the rights
-| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-| copies of the Software, and to permit persons to whom the Software is
-| furnished to do so, subject to the following conditions:
-|
-| The above copyright notice and this permission notice shall be included in all
-| copies or substantial portions of the Software.
-|
-| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-| SOFTWARE.
-
---------------------------------------------------------------------------------
-
 This product bundles packages from the source project at https://github.com/feross/safe-buffer.
 
 * npm package IDs:
@@ -860,7 +825,7 @@ License: ISC - https://spdx.org/licenses/ISC.html
 This product bundles packages from the source project at https://github.com/holepunchto/b4a.
 
 * npm package IDs:
-  * b4a@1.8.0
+  * b4a@1.8.1
 
 Copyright: Copyright (c) Holepunch
 Home page: https://github.com/holepunchto/b4a
@@ -1212,7 +1177,7 @@ License: BlueOak-1.0.0 - https://spdx.org/licenses/BlueOak-1.0.0.html
 This product bundles packages from the source project at https://github.com/Ivan-Korolenko/json-with-bigint.
 
 * npm package IDs:
-  * json-with-bigint@3.5.8
+  * json-with-bigint@3.5.10
 
 Copyright: Copyright (c) 2023 Ivan Korolenko
 Home page: https://github.com/Ivan-Korolenko/json-with-bigint
@@ -1306,17 +1271,52 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 --------------------------------------------------------------------------------
 
+This product bundles packages from the source project at https://github.com/jshttp/content-type.
+
+* npm package IDs:
+  * content-type@2.0.0
+
+Copyright: Copyright (c) 2015 Douglas Christopher Wilson
+Home page: https://github.com/jshttp/content-type
+License: MIT - https://spdx.org/licenses/MIT.html
+| (The MIT License)
+|
+| Copyright (c) 2015 Douglas Christopher Wilson
+|
+| Permission is hereby granted, free of charge, to any person obtaining
+| a copy of this software and associated documentation files (the
+| 'Software'), to deal in the Software without restriction, including
+| without limitation the rights to use, copy, modify, merge, publish,
+| distribute, sublicense, and/or sell copies of the Software, and to
+| permit persons to whom the Software is furnished to do so, subject to
+| the following conditions:
+|
+| The above copyright notice and this permission notice shall be
+| included in all copies or substantial portions of the Software.
+|
+| THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+| EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+| MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+| IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+| CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+| TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+| SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
 This product bundles packages from the source project at https://github.com/juliangruber/balanced-match.
 
 * npm package IDs:
-  * balanced-match@1.0.2
+  * balanced-match@4.0.4
 
-Copyright: Copyright (c) 2013 Julian Gruber &lt;julian@juliangruber.com&gt;
+Copyright: Original code Copyright Julian Gruber <julian@juliangruber.com>; Port to TypeScript Copyright Isaac Z. Schlueter <i@izs.me>
 Home page: https://github.com/juliangruber/balanced-match
 License: MIT - https://spdx.org/licenses/MIT.html
 | (MIT)
 |
-| Copyright (c) 2013 Julian Gruber &lt;julian@juliangruber.com&gt;
+| Original code Copyright Julian Gruber <julian@juliangruber.com>
+|
+| Port to TypeScript Copyright Isaac Z. Schlueter <i@izs.me>
 |
 | Permission is hereby granted, free of charge, to any person obtaining a copy of
 | this software and associated documentation files (the "Software"), to deal in
@@ -1341,15 +1341,16 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/juliangruber/brace-expansion.
 
 * npm package IDs:
-  * brace-expansion@1.1.14
-  * brace-expansion@2.1.0
+  * brace-expansion@5.0.8
 
-Copyright: Copyright (c) 2013 Julian Gruber <julian@juliangruber.com>
+Copyright: Copyright Julian Gruber <julian@juliangruber.com>; TypeScript port Copyright Isaac Z. Schlueter <i@izs.me>
 Home page: https://github.com/juliangruber/brace-expansion
 License: MIT - https://spdx.org/licenses/MIT.html
 | MIT License
 |
-| Copyright (c) 2013 Julian Gruber <julian@juliangruber.com>
+| Copyright Julian Gruber <julian@juliangruber.com>
+|
+| TypeScript port Copyright Isaac Z. Schlueter <i@izs.me>
 |
 | Permission is hereby granted, free of charge, to any person obtaining a copy
 | of this software and associated documentation files (the "Software"), to deal
@@ -1528,7 +1529,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/mafintosh/streamx.
 
 * npm package IDs:
-  * streamx@2.25.0
+  * streamx@2.28.0
 
 Copyright: Copyright (c) 2019 Mathias Buus
 Home page: https://github.com/mafintosh/streamx
@@ -1560,7 +1561,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/mafintosh/tar-stream.
 
 * npm package IDs:
-  * tar-stream@3.1.8
+  * tar-stream@3.2.0
 
 Copyright: Copyright (c) 2014 Mathias Buus
 Home page: https://github.com/mafintosh/tar-stream
@@ -1685,10 +1686,42 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 --------------------------------------------------------------------------------
 
+This product bundles packages from the source project at https://github.com/NaturalIntelligence/anynum.
+
+* npm package IDs:
+  * anynum@1.0.1
+
+Copyright: Copyright (c) 2026 Natural Intelligence
+Home page: https://github.com/NaturalIntelligence/anynum
+License: MIT - https://spdx.org/licenses/MIT.html
+| MIT License
+|
+| Copyright (c) 2026 Natural Intelligence
+|
+| Permission is hereby granted, free of charge, to any person obtaining a copy
+| of this software and associated documentation files (the "Software"), to deal
+| in the Software without restriction, including without limitation the rights
+| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+| copies of the Software, and to permit persons to whom the Software is
+| furnished to do so, subject to the following conditions:
+|
+| The above copyright notice and this permission notice shall be included in all
+| copies or substantial portions of the Software.
+|
+| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+| SOFTWARE.
+
+--------------------------------------------------------------------------------
+
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/fast-xml-builder.
 
 * npm package IDs:
-  * fast-xml-builder@1.2.0
+  * fast-xml-builder@1.3.0
 
 Copyright: Copyright (c) 2026 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/fast-xml-builder
@@ -1720,7 +1753,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/fast-xml-parser.
 
 * npm package IDs:
-  * fast-xml-parser@5.8.0
+  * fast-xml-parser@5.10.1
 
 Copyright: Copyright (c) 2017 Amit Kumar Gupta
 Home page: https://github.com/NaturalIntelligence/fast-xml-parser
@@ -1749,10 +1782,42 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 --------------------------------------------------------------------------------
 
+This product bundles packages from the source project at https://github.com/NaturalIntelligence/is-unsafe.
+
+* npm package IDs:
+  * is-unsafe@2.0.0
+
+Copyright: Copyright (c) 2026 Natural Intelligence
+Home page: https://github.com/NaturalIntelligence/is-unsafe
+License: MIT - https://spdx.org/licenses/MIT.html
+| MIT License
+|
+| Copyright (c) 2026 Natural Intelligence
+|
+| Permission is hereby granted, free of charge, to any person obtaining a copy
+| of this software and associated documentation files (the "Software"), to deal
+| in the Software without restriction, including without limitation the rights
+| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+| copies of the Software, and to permit persons to whom the Software is
+| furnished to do so, subject to the following conditions:
+|
+| The above copyright notice and this permission notice shall be included in all
+| copies or substantial portions of the Software.
+|
+| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+| SOFTWARE.
+
+--------------------------------------------------------------------------------
+
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/path-expression-matcher.
 
 * npm package IDs:
-  * path-expression-matcher@1.5.0
+  * path-expression-matcher@1.6.2
 
 Copyright: Copyright (c) 2024
 Home page: https://github.com/NaturalIntelligence/path-expression-matcher
@@ -1784,7 +1849,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/strnum.
 
 * npm package IDs:
-  * strnum@2.3.0
+  * strnum@2.4.1
 
 Copyright: Copyright (c) 2021 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/strnum
@@ -1816,14 +1881,14 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/xml-naming.
 
 * npm package IDs:
-  * xml-naming@0.1.0
+  * xml-naming@0.3.0
 
-Copyright: Copyright (c) Amit Gupta (https://solothought.com)
+Copyright: Copyright (c) 2026 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/xml-naming
 License: MIT - https://spdx.org/licenses/MIT.html
 | MIT License
 |
-| Copyright (c) Amit Gupta (https://solothought.com)
+| Copyright (c) 2026 Natural Intelligence
 |
 | Permission is hereby granted, free of charge, to any person obtaining a copy
 | of this software and associated documentation files (the "Software"), to deal
@@ -1848,7 +1913,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/nodable/val-parsers.
 
 * npm package IDs:
-  * @nodable/entities@2.1.1
+  * @nodable/entities@3.0.0
 
 Copyright: Copyright (c) Amit Gupta (https://solothought.com)
 Home page: https://github.com/nodable/val-parsers
@@ -1998,7 +2063,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/nodejs/undici.
 
 * npm package IDs:
-  * undici@6.24.1
+  * undici@6.28.0
 
 Copyright: Copyright (c) Matteo Collina and Undici contributors
 Home page: https://github.com/nodejs/undici
@@ -2030,7 +2095,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/npm/node-semver.
 
 * npm package IDs:
-  * semver@7.7.4
+  * semver@7.8.5
 
 Copyright: Copyright (c) Isaac Z. Schlueter and Contributors
 Home page: https://github.com/npm/node-semver
@@ -2302,7 +2367,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/octokit/request.js.
 
 * npm package IDs:
-  * @octokit/request@10.0.8
+  * @octokit/request@10.0.11
 
 Copyright: Copyright (c) 2018 Octokit contributors
 Home page: https://github.com/octokit/request.js
@@ -2582,35 +2647,6 @@ License: MIT/X11
 | LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 | OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 | SOFTWARE.
-
---------------------------------------------------------------------------------
-
-This product bundles packages from the source project at https://github.com/substack/node-concat-map.
-
-* npm package IDs:
-  * concat-map@0.0.1
-
-Copyright: Copyright (c) James Halliday <mail@substack.net> (http://substack.net)
-Home page: https://github.com/substack/node-concat-map
-License: MIT - https://spdx.org/licenses/MIT.html
-| This software is released under the MIT license:
-|
-| Permission is hereby granted, free of charge, to any person obtaining a copy of
-| this software and associated documentation files (the "Software"), to deal in
-| the Software without restriction, including without limitation the rights to
-| use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-| the Software, and to permit persons to whom the Software is furnished to do so,
-| subject to the following conditions:
-|
-| The above copyright notice and this permission notice shall be included in all
-| copies or substantial portions of the Software.
-|
-| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-| FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-| COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-| IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-| CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 --------------------------------------------------------------------------------
 

@@ -29,9 +29,9 @@ configurations {
 }
 
 dependencies {
-  standalone 'org.apache.commons:commons-lang3:3.18.0'
-  workerA 'com.google.guava:guava:33.4.8-jre'
-  workerB 'commons-io:commons-io:2.18.0'
+  standalone 'org.apache.commons:commons-lang3:3.20.0'
+  workerA 'com.google.guava:guava:33.6.0-jre'
+  workerB 'commons-io:commons-io:2.22.0'
 }
 
 def registerResolver = { taskName, configurationName ->

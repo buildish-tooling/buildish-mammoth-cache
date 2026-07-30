@@ -39,9 +39,8 @@ printf '%-42s %s\n' 'dependent-jobs-count:'      "$ACTION_DEPENDENT_JOBS_COUNT"
 test "$ACTION_BASE_CACHE_RESTORE_STATUS" = 'miss'
 test "$ACTION_JAVA_MAJOR"               = '21'
 test "$ACTION_JOB_MODE"                 = 'standalone'
-test "$ACTION_GRADLE_VERSIONS"          = '8.14.0'
+test "$ACTION_GRADLE_VERSIONS"          = '9.6.1'
 test "$ACTION_READ_ONLY"                = 'true'
 test "$ACTION_RESOLVED_REF_NAME"        = "$CALLER_RESOLVED_REF_NAME"
 test "$ACTION_SAFE_REF_NAME"            = "$expected_safe"
 test "$ACTION_DEPENDENT_JOBS_COUNT"     = '0'
-
