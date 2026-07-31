@@ -91,50 +91,24 @@ Results are uploaded to the repository's **Security → Code scanning** tab as S
 requires `security-events: write` permission, which is scoped to the job rather than the
 workflow to follow least-privilege practice.
 
-## Action input documentation sync
+## Public action contract
 
-There is intentionally **no code generation** for action inputs. The descriptions and defaults are
-maintained manually across three places, and that is a deliberate tradeoff.
+`src/config/public-contract.ts` is the typed source of truth for public input names, applicability,
+defaults, config-file permission, descriptions, and prepare outputs. Runtime readers resolve names
+through that contract, and config-file parsing checks its allowlist before serializing values.
 
-### What needs to stay in sync
+When adding or changing an input or output:
 
-| File                               | What it carries                                                                            |
-| ---------------------------------- | ------------------------------------------------------------------------------------------ |
-| `actions/github/gradle/action.yml` | `description:` and `default:` for every Gradle input                                       |
-| `actions/github/maven/action.yml`  | `description:` and `default:` for every Maven input                                        |
-| `docs/user/configuration.md`       | User-facing reference page with bulleted constraints, examples, and cross-references       |
-| `src/config/types.ts`              | Enum value lists (`JOB_MODES`, `RESTORE_CLEANUP_MODES`, `CACHE_KEY_TEMPLATE_PLACEHOLDERS`) |
+1. Update the typed contract.
+2. Update normalization or output value creation as needed.
+3. Refresh the matching action descriptor and the generated contract block in
+   `docs/user/configuration.md`.
+4. Add detailed prose or examples when the compact contract description is not sufficient.
 
-The TypeScript side (`RawSharedActionInputs`, `RawGradleActionInputs`, `RawMavenActionInputs`, and
-the `createEmptyRaw*ActionInputs()` helpers) is largely self-policing: the compiler rejects an
-object literal that omits a required interface field, so structural drift there tends to surface at
-build time rather than silently at runtime.
-
-### Why not code generation?
-
-The `action.yml` descriptions and the `configuration.md` content serve different audiences and
-formats:
-
-- `action.yml` descriptions are compact paragraph prose shown in the GitHub UI input tooltip.
-- `docs/user/configuration.md` uses bullet lists per constraint with richer context and
-  cross-references.
-
-Storing both in one schema means either carrying two description fields per input (a schema that's
-larger than the two files it replaces) or accepting a degraded format in one of the two outputs.
-A generator script, the schema it reads, and the tests that verify the output are collectively
-more complexity than the sync obligation they eliminate. Manual sync with prominent warnings in
-each file is the pragmatic choice at the current scale.
-
-### What to do when adding or changing an input
-
-1. Add or update the `action.yml` entry in whichever of the two action files applies (or both).
-2. Add or update the corresponding section in `docs/user/configuration.md`.
-3. Update `src/config/types.ts` if enum values changed.
-4. Update `readGradleActionInputs` / `readMavenActionInputs` (the `getInput` call) and
-   `createEmptyRaw*ActionInputs` in the build-tool config modules.
-
-All four files carry a prominent warning comment pointing here. Search for `SYNC` in the repo to
-find all sync-obligated locations quickly.
+`test/config/public-contract.test.ts` compares both action descriptors and the documentation block
+to the typed contract exactly. The test fails on undeclared reads/outputs, declared-but-unused
+metadata fields, default drift, description drift, tool-applicability drift, and stale reference
+rows.
 
 ## Adding a new CI provider
 

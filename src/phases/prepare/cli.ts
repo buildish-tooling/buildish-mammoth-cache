@@ -26,7 +26,7 @@ import { claimSingleRunPrepareExecution } from '../../guard/job-single-run';
  * Runtime host required at the prepare entrypoint boundary.
  *
  * Extends the base main-action runtime host with {@link HostOutputSink} so the entrypoint can
- * emit action outputs (e.g. `cache-key`) after the prepare phase completes.
+ * emit action outputs (e.g. `cache-family-key`) after the prepare phase completes.
  */
 export type PrepareEntrypointRuntimeHost = PrepareActionDependencies['runtimeHost'] &
   HostOutputSink;

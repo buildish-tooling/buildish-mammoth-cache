@@ -13,202 +13,111 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# SYNC: When adding, removing, or changing any input description or default here, update these
-# files too. See docs/dev/maintenance.md § "Action input documentation sync" for the full list
-# and rationale. Search for SYNC in the repository to find all sync-obligated locations.
-
 name: Buildish Mammoth Cache Action for Gradle
 description: Secure Gradle wrapper provisioning plus local and distributed cache management for Gradle builds in GitHub Actions.
 author: Buildish
 inputs:
   config-file:
-    description: >-
-      Optional workspace-relative `.json`, `.yml`, or `.yaml` configuration file.
-      The file must contain a top-level object whose keys use the same kebab-case
-      names as this action's inputs. Direct action inputs override values loaded
-      from the file. `github-token` is intentionally rejected in config files;
-      pass secrets directly as action inputs or environment variables instead.
+    description: Optional workspace-relative JSON or YAML configuration file. Direct action inputs override file values; secrets and GitHub context inputs are direct-only.
     required: false
   base-directory:
-    description: >-
-      Repository-relative base directory used for Gradle wrapper discovery and any
-      project-relative paths. Windows-style relative paths using `\` are accepted
-      and normalized internally, but drive-prefixed, rooted, and UNC paths are
-      rejected. Must stay inside the workspace. Default: `.`.
+    description: Repository-relative project base directory. Rooted paths and paths that escape the workspace are rejected.
     required: false
     default: .
   cache-enabled:
-    description: >-
-      Enables Gradle cache orchestration for this action. Accepted values: `true`
-      or `false`. Default: `true`.
+    description: 'Enables cache orchestration. Accepted values: true or false.'
     required: false
     default: 'true'
   read-only:
-    description: >-
-      Prevents persistence of modified cache state. Accepted values: `true` or
-      `false`. Defaults to `true` for pull requests and `false` for other events
-      when omitted.
+    description: Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor.
     required: false
   job-mode:
-    description: >-
-      Cache coordination mode. Supported values: `standalone`,
-      `distributed-worker`, or `distributed-aggregator`. Default: `standalone`.
+    description: 'Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.'
     required: false
     default: standalone
   dependent-jobs:
-    description: >-
-      Comma- or newline-separated dependent job names whose cache deltas should be
-      consumed later. Only valid with distributed job modes.
+    description: Comma- or newline-separated worker job names consumed by a distributed aggregator.
     required: false
   allow-duplicate-dependent-delta-paths:
-    description: >-
-      Only for `distributed-aggregator` jobs. Accepted values: `true` or `false`.
-      Default: `false`. When `true`, overlapping dependent-job delta paths that do
-      not match exactly may be resolved by choosing the entry with the newest
-      modification time instead of failing. Exact same-content/same-mode overlaps
-      already merge by keeping the highest access and modification times even when
-      this flag is `false`, so enable this only when duplicate-path worker output is
-      expected and the relaxed conflict resolution is acceptable.
+    description: Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.
     required: false
     default: 'false'
   cache-key-prefix:
-    description: >-
-      Namespace prefix used for action-generated cache families. The action
-      always appends build tool, schema, Java, runner, partition, ref-lineage,
-      and immutable-generation identity. Must start with an alphanumeric
-      character and then use only letters, numbers, dot, underscore, and dash.
-      Default: `buildish-mammoth-cache-`.
+    description: Namespace prefix for action-owned cache families; build, runner, partition, ref-lineage, and generation identity are appended automatically.
     required: false
     default: buildish-mammoth-cache-
   cache-partitions:
-    description: >-
-      Optional JSON array of cache partition overrides and custom partitions.
-      Each object must contain `id`, `includes`, and optional `excludes`, all
-      relative to the supported Gradle user home. Include globs must end in
-      `/**`; excludes may use `*` within a segment and `**` as a whole segment.
-      Overriding a built-in partition replaces its include/exclude lists. Giving a
-      built-in partition an empty `includes` array disables it. Custom partitions
-      must have at least one include. Hard safety excludes such as
-      `**/*.lock`, `**/configuration-cache/**`, `caches/*/cc-keystore`, and
-      `caches/journal-1/**` are always enforced. Active built-ins keep a
-      deterministic order, custom partitions are appended after them, and if two
-      partitions match the same file the manifest capture fails. The resolved
-      layout feeds the action-owned partition fingerprint, so changing partition
-      layout also changes the cache family.
+    description: JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.
     required: false
+  cleanup-enabled:
+    description: Enables restore cleanup and timestamp garbage collection.
+    required: false
+    default: 'true'
+  restore-cleanup-mode:
+    description: 'Restore-time cleanup mode: none or prune-managed.'
+    required: false
+    default: none
   cache-gc-mode:
-    description: >-
-      Best-effort managed cache garbage-collection mode applied before
-      standalone or distributed-aggregator jobs save the base cache. Supported
-      values: `off` and `timestamp`.
-      `timestamp` deletes managed files only when both access and modification
-      timestamps are older than `cache-gc-older-than-days`. Default:
-      `timestamp`.
+    description: 'Pre-save managed-cache garbage collection mode: off or timestamp.'
     required: false
     default: timestamp
   cache-gc-older-than-days:
-    description: >-
-      Age threshold in days for `cache-gc-mode=timestamp`. Must be at least `2`
-      days so Linux `relatime` and similarly deferred access-time updates are not
-      treated as precise same-day usage data. Default: `14`.
+    description: Age threshold for timestamp garbage collection. Must be at least 2 days.
     required: false
     default: '14'
+  github-token:
+    description: Optional GitHub token for authenticated API requests. Pass secrets directly, never through repository config.
+    required: false
+  github-job-check-run-id:
+    description: Optional check-run ID used to create a direct current-job link.
+    required: false
+  github-event-name:
+    description: Optional triggering-event override for reusable workflows. Pass the trusted caller event.
+    required: false
+  github-job-name:
+    description: Optional stable job-name override used for distributed artifact coordination.
+    required: false
+  github-ref-name:
+    description: Optional resolved-ref override for reusable workflows.
+    required: false
+  github-default-branch:
+    description: Optional repository default-branch override for reusable workflows.
+    required: false
   process-all-wrapper-files:
-    description: >-
-      Process every matching `gradle-wrapper.properties` file under the configured
-      base directory. Accepted values: `true` or `false`. Cannot be combined with
-      `wrapper-properties-files`. Default: `false`.
+    description: Processes every matching Gradle wrapper properties file. Cannot be combined with wrapper-properties-files.
     required: false
     default: 'false'
   wrapper-properties-glob:
-    description: >-
-      Repository-relative glob used to discover Gradle wrapper properties beneath
-      `base-directory`. Windows-style relative paths using `\` are accepted and
-      normalized internally, but drive-prefixed, rooted, and UNC paths are rejected.
-      Default:
-      `**/gradle/wrapper/gradle-wrapper.properties`.
+    description: Repository-relative Gradle wrapper properties discovery glob.
     required: false
     default: '**/gradle/wrapper/gradle-wrapper.properties'
   wrapper-properties-files:
-    description: >-
-      Comma- or newline-separated explicit `gradle-wrapper.properties` files,
-      relative to `base-directory`. Windows-style relative paths using `\` are
-      accepted and normalized internally, but drive-prefixed, rooted, and UNC paths
-      are rejected. Cannot be combined with `process-all-wrapper-files`.
+    description: Comma- or newline-separated explicit Gradle wrapper properties files relative to base-directory.
     required: false
-  allowed-wrapper-checksums:
-    description: >-
-      Optional newline- or comma-separated list of additional trusted Gradle wrapper
-      JAR SHA-256 checksums. Each value must be exactly 64 lowercase hexadecimal
-      characters.
-    required: false
-  wrapper-validation-mode:
-    description: >-
-      Wrapper validation policy. Supported values: `strict`, `log-only`, and
-      `disabled`. Default: `strict`.
-    required: false
-    default: strict
-  wrapper-provenance-mode:
-    description: >-
-      Wrapper provenance verification policy for detached `.asc` signatures.
-      Supported values: `verify`, `log-only`, and `disabled`. Default: `verify`.
-    required: false
-    default: verify
   gradle-user-home:
-    description: >-
-      Optional repository-relative override for the Gradle user home that should be
-      managed by the cache model. Must stay inside the workspace when provided.
+    description: Gradle user home to manage. The current version accepts only the runner default.
     required: false
-  github-token:
-    description: >-
-      Optional GitHub token used for GitHub API requests when locating artifacts or
-      emitting deep links. When omitted, the action falls back to the `GITHUB_TOKEN`
-      environment variable if available.
+  setup-java:
+    description: Reserved compatibility flag. The current version rejects true; run actions/setup-java first.
     required: false
-  github-job-check-run-id:
-    description: >-
-      Optional override for the current GitHub job check-run ID.
-      When set, job URLs point at that specific check run instead of the workflow
-      run page.
-    required: false
-  github-event-name:
-    description: >-
-      Optional override for the triggering event name. Required in reusable workflows
-      invoked via `workflow_call`, where GitHub sets `GITHUB_EVENT_NAME` to `workflow_call`
-      instead of the original caller's event name. Pass `github.event_name` from
-      the caller workflow. Typical values: `push`, `pull_request`.
-    required: false
-  github-job-name:
-    description: >-
-      Optional override for the job name used in cache coordination and artifact naming.
-      Use in reusable workflows to assign a stable, predictable job name independent of
-      the GitHub Actions job key or matrix label.
-    required: false
-  github-ref-name:
-    description: >-
-      Optional override for the resolved ref name used in cache keys. Required in reusable
-      workflows invoked via `workflow_call` to propagate the caller's ref name. Pass
-      `github.ref_name` (or an equivalent resolved value) from the caller workflow.
-    required: false
-  github-default-branch:
-    description: >-
-      Optional override for the repository's default branch name used in cache key fallbacks.
-      Required in reusable workflows invoked via `workflow_call` to propagate the caller's
-      default branch. Pass `github.event.repository.default_branch` from the caller.
-    required: false
+    default: 'false'
 outputs:
   cache-family-key:
-    description: Stable compatibility family shared by structurally compatible cache generations.
+    description: Stable compatibility family shared by structurally compatible generations.
   cache-lineage-prefix:
-    description: Current-ref prefix used to restore the newest immutable cache generation.
+    description: Current-ref prefix used to restore the newest immutable generation.
   base-cache-restore-status:
-    description: Classified base-cache restore outcome for the prepare phase.
+    description: Classified base-cache restore outcome for prepare.
   restored-cache-key:
-    description: Exact immutable generation key restored by the prepare phase, when any.
+    description: Exact immutable generation restored during prepare, when any.
   read-only:
-    description: Whether cache and delta writes are disabled for this execution.
+    description: Whether cache and delta writes are disabled.
   job-mode:
     description: Effective standalone or distributed job mode.
+  dependent-delta-status:
+    description: 'Dependent-delta outcome: not-configured, applied, or skipped-read-only.'
+  dependent-delta-artifact-count:
+    description: Number of dependent worker artifacts applied during prepare.
 runs:
   using: node24
   main: ../../../dist/github/gradle/main/index.cjs

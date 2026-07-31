@@ -133,8 +133,6 @@ export interface RawSharedActionInputs {
   readonly cacheGcMode: string;
   /** Raw cache GC age threshold in days. Empty string later defaults to `'14'`. */
   readonly cacheGcOlderThanDays: string;
-  /** Raw `github-token` input used only for authenticated GitHub-host fetches. */
-  readonly githubToken: string;
 }
 
 /**

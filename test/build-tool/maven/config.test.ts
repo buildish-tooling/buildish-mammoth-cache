@@ -92,7 +92,6 @@ describe('readMavenActionInputs', () => {
       'cache-gc-mode': 'timestamp',
       'cache-gc-older-than-days': '14',
       'maven-local-repository': '/custom/m2',
-      'github-token': 'ghs_token',
     });
     const inputs = readMavenActionInputs(provider);
 
@@ -106,14 +105,12 @@ describe('readMavenActionInputs', () => {
     expect(inputs.cacheGcMode).toBe('timestamp');
     expect(inputs.cacheGcOlderThanDays).toBe('14');
     expect(inputs.mavenLocalRepository).toBe('/custom/m2');
-    expect(inputs.githubToken).toBe('ghs_token');
   });
 
   it('returns empty strings for absent inputs', () => {
     const inputs = readMavenActionInputs(makeInputProvider());
     expect(inputs.configFile).toBe('');
     expect(inputs.mavenLocalRepository).toBe('');
-    expect(inputs.githubToken).toBe('');
   });
 });
 
@@ -471,6 +468,21 @@ describe('normalizeMavenActionConfig', () => {
       ciContext: { ...STUB_CI_CONTEXT, eventName: 'pull_request', isPullRequest: true },
     });
     expect(config.readOnly).toBe(false);
+  });
+
+  it('does not let repository config lower the pull-request read-only floor', async () => {
+    await withWorkspace({ 'cache.yml': 'read-only: false\n' }, async (workspace) => {
+      const raw = await resolveMavenActionInputsFromConfigFile(
+        readMavenActionInputs(makeInputProvider({ 'config-file': 'cache.yml' })),
+        { workspace },
+      );
+      const config = normalizeMavenActionConfig(raw, {
+        phase: 'prepare',
+        ciContext: { ...STUB_CI_CONTEXT, eventName: 'pull_request', isPullRequest: true },
+      });
+
+      expect(config.readOnly).toBe(true);
+    });
   });
 
   it('uses MAVEN_USER_HOME env var as the default local repository', () => {

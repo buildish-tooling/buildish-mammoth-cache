@@ -140,7 +140,8 @@ events — no configuration needed. In read-only mode the cache is restored as n
 finalize step skips the save, preventing untrusted fork code from poisoning the cache.
 
 You can also force read-only mode explicitly with `read-only: true` for any event, or opt out
-with `read-only: false` when you have controlled-fork trust setups.
+with a direct `read-only: false` workflow input when you have a controlled-fork trust setup. A
+checked-out config file cannot lower the pull-request safety floor.
 
 ## Next steps
 

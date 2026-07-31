@@ -24,7 +24,8 @@ name: IT Mammoth Cache for Gradle (Reusable)
 # - worker_a + worker_b -> aggregator exercises distributed worker delta publication plus
 #   same-run aggregator download/merge/apply using deterministic worker job names.
 # - duplicate_invocation_guard proves duplicate same-job action usage is rejected.
-# - pull_request_read_only checks the default PR read-only behavior under minimal permissions.
+# - pull_request_worker -> pull_request_read_only checks the full PR read-only distributed topology
+#   under minimal permissions: no worker upload and an explicit aggregator no-op.
 # - standalone_cross_platform is a lightweight smoke check on macOS/Windows only.
 #
 # Isolation/safety notes:
@@ -59,8 +60,8 @@ on:
         type: string
       run-pr-scenarios:
         description: >-
-          Run the fork-safe pull-request scenario that verifies PR events stay read-only by
-          default and can still consume the prepared wrapper/cache state.
+          Run the fork-safe pull-request worker/aggregator topology that verifies PR events stay
+          read-only, workers upload nothing, and aggregation is an explicit no-op.
         required: true
         type: boolean
       run-writable-scenarios:
@@ -121,14 +122,13 @@ jobs:
 
       - name: Assert prepare outputs
         env:
+          ACTION_CACHE_FAMILY_KEY: ${{ steps.prepare.outputs.cache-family-key }}
+          ACTION_CACHE_LINEAGE_PREFIX: ${{ steps.prepare.outputs.cache-lineage-prefix }}
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
-          ACTION_GRADLE_VERSIONS: ${{ steps.prepare.outputs.gradle-versions }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
-          CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-gradle-standalone.sh
 
       - name: Resolve standalone dependencies online
@@ -141,7 +141,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ steps.prepare.outputs.cache-key }}
+          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
 
       - name: Wipe Gradle user home to prove restore
         run: |
@@ -155,7 +155,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ steps.prepare.outputs.cache-key }}
+          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
 
       - name: Verify the saved cache restores offline
         working-directory: build/integration-fixtures/standalone-round-trip
@@ -251,14 +251,9 @@ jobs:
       - name: Assert both worker artifacts were consumed
         env:
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
-          ACTION_GRADLE_VERSIONS: ${{ steps.prepare.outputs.gradle-versions }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
-          ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT: ${{ steps.prepare.outputs.downloaded-dependent-artifact-count }}
-          CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-gradle-aggregator.sh
 
   # Proves that two action invocations in the same GitHub job cannot race or double-run post-work.
@@ -314,10 +309,47 @@ jobs:
         env:
           STEPS_DUPLICATE_ACTION_OUTCOME: ${{ steps.duplicate_action.outcome }}
 
-  # Validates the PR default remains read-only under minimal permissions.
-  pull_request_read_only:
-    name: Pull request standalone (default read-only behavior)
+  # A PR worker exercises the distributed-worker finalize path under read-only permissions. It must
+  # complete without uploading an envelope for the downstream no-op aggregator.
+  pull_request_worker:
+    name: Pull request distributed worker (no artifact upload)
     if: inputs.run-pr-scenarios
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh pull-request-worker
+
+      - name: Prepare Mammoth Cache for Gradle
+        uses: ./actions/github/gradle
+        with:
+          base-directory: build/integration-fixtures/pull-request-worker
+          job-mode: distributed-worker
+          cache-key-prefix: it-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: pull_request_worker
+
+      - name: Run a read-only PR worker build
+        working-directory: build/integration-fixtures/pull-request-worker
+        run: ./gradlew --info --no-daemon resolveWorkerA
+
+  # Validates the full PR worker/aggregator topology under minimal permissions.
+  pull_request_read_only:
+    name: Pull request aggregator (explicit read-only no-op)
+    if: inputs.run-pr-scenarios
+    needs: [pull_request_worker]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -339,27 +371,25 @@ jobs:
         uses: ./actions/github/gradle
         with:
           base-directory: build/integration-fixtures/pull-request
+          job-mode: distributed-aggregator
+          dependent-jobs: pull_request_worker
           cache-key-prefix: it-pr-${{ github.run_id }}-${{ github.run_attempt }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
           github-job-name: pull_request_read_only
 
-      - name: Run a read-only PR build
+      - name: Run a read-only PR aggregator build
         working-directory: build/integration-fixtures/pull-request
         run: ./gradlew --info --no-daemon resolveStandalone
 
       - name: Assert the PR default stayed read-only
         env:
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
-          ACTION_GRADLE_VERSIONS: ${{ steps.prepare.outputs.gradle-versions }}
           ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
-          CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-gradle-pr.sh
 
   # Lightweight macOS/Windows smoke coverage only. This runs under bash on both platforms and uses

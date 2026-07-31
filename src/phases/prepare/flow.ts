@@ -34,7 +34,6 @@ import {
   type DeltaApplyResult,
 } from '../../delta/apply';
 import { captureCacheManifest } from '../../cache/manifest';
-import { renderCacheJavaMajor } from '../../cache/model';
 import { restoreBaseCache } from '../../cache/service';
 import {
   CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
@@ -44,6 +43,7 @@ import {
 } from '../finalize/state';
 import { createDetailsSection, escapeSummaryText } from '../../util/html';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
+import type { PublicActionOutputName } from '../../config/public-contract';
 
 /**
  * Combined result of downloading and applying dependent worker delta artifacts during the prepare phase.
@@ -52,6 +52,8 @@ import type { WorkflowArtifactBackend } from '../../delta/backend';
  * and actually applied, plus a human-readable summary message for the runtime log.
  */
 export interface PrepareDependentDeltaResult extends DeltaApplyResult {
+  /** Whether dependent deltas were applied or intentionally skipped by the read-only contract. */
+  readonly status: 'applied' | 'skipped-read-only';
   readonly requestedJobs: readonly string[];
   readonly downloadedArtifactNames: readonly string[];
   readonly appliedRelativePaths: readonly string[];
@@ -162,19 +164,20 @@ export async function executePrepareAction(
         runAttempt: bootstrap.ciContext.runAttempt,
       },
       sourceRevision: bootstrap.ciContext.sourceRevision ?? null,
-      dependentDelta: dependentDeltaResult
-        ? {
-            requestedJobs: [...dependentDeltaResult.requestedJobs],
-            artifactNames: [...dependentDeltaResult.downloadedArtifactNames],
-            addedCount: dependentDeltaResult.addedCount,
-            modifiedCount: dependentDeltaResult.modifiedCount,
-            deletedCount: dependentDeltaResult.deletedCount,
-            totalChangedCount:
-              dependentDeltaResult.addedCount +
-              dependentDeltaResult.modifiedCount +
-              dependentDeltaResult.deletedCount,
-          }
-        : null,
+      dependentDelta:
+        dependentDeltaResult?.status === 'applied'
+          ? {
+              requestedJobs: [...dependentDeltaResult.requestedJobs],
+              artifactNames: [...dependentDeltaResult.downloadedArtifactNames],
+              addedCount: dependentDeltaResult.addedCount,
+              modifiedCount: dependentDeltaResult.modifiedCount,
+              deletedCount: dependentDeltaResult.deletedCount,
+              totalChangedCount:
+                dependentDeltaResult.addedCount +
+                dependentDeltaResult.modifiedCount +
+                dependentDeltaResult.deletedCount,
+            }
+          : null,
     },
     dependencies.runtimeHost.saveState,
   );
@@ -204,6 +207,23 @@ async function applyDependentJobDeltas(
   const requestedJobs = bootstrap.config.dependentJobs;
   if (requestedJobs.length === 0) {
     return null;
+  }
+
+  if (bootstrap.config.readOnly) {
+    return {
+      status: 'skipped-read-only',
+      requestedJobs,
+      downloadedArtifactNames: [],
+      appliedRelativePaths: [],
+      appliedArtifactCount: 0,
+      cacheRoot: bootstrap.cacheModel!.cacheRoot,
+      addedCount: 0,
+      modifiedCount: 0,
+      deletedCount: 0,
+      warnings: [],
+      message:
+        'Dependent delta aggregation skipped because read-only mode disables artifact exchange.',
+    };
   }
 
   const artifactBackend = resolveArtifactBackend(dependencies);
@@ -291,7 +311,11 @@ async function maybePruneManagedFilesAfterRestore(
   bootstrap: BootstrapExecution,
   dependencies: PrepareActionDependencies,
 ): Promise<RestoreCleanupResult | null> {
-  if (bootstrap.config.restoreCleanupMode === 'none' || !bootstrap.cacheModel) {
+  if (
+    !bootstrap.config.cleanupEnabled ||
+    bootstrap.config.restoreCleanupMode === 'none' ||
+    !bootstrap.cacheModel
+  ) {
     return null;
   }
 
@@ -348,6 +372,7 @@ function createPrepareDependentDeltaResult(
 ): PrepareDependentDeltaResult {
   return {
     ...applied,
+    status: 'applied',
     requestedJobs,
     downloadedArtifactNames: downloadedPackages.map(
       (artifactPackage) => artifactPackage.artifact.name,
@@ -491,7 +516,9 @@ function describeDependentDeltaSummary(result: PrepareDependentDeltaResult | nul
     return 'none';
   }
 
-  return `${result.appliedArtifactCount} artifact(s) from ${result.requestedJobs.length} job(s)`;
+  return result.status === 'skipped-read-only'
+    ? `skipped-read-only (${result.requestedJobs.length} configured job(s))`
+    : `${result.appliedArtifactCount} artifact(s) from ${result.requestedJobs.length} job(s)`;
 }
 
 function describeRestoreOrigin(
@@ -507,34 +534,28 @@ function describeRestoreOrigin(
  * Derives the action output key-value map from a completed prepare-phase status.
  *
  * The returned map is passed to the CI runtime output sink (e.g. `setOutput` on GitHub Actions).
- * Outputs include the resolved cache key, restore status, and any tool-specific outputs contributed
- * by the active {@link BuildToolAdapter} via {@link BuildToolProvisioning.additionalOutputs}.
+ * The exact key set is part of the canonical public action contract. Internal diagnostics and
+ * tool-provisioning details belong in logs and summaries rather than undeclared outputs.
  */
-export function createPrepareActionOutputs(status: PrepareActionStatus): Record<string, string> {
+export function createPrepareActionOutputs(
+  status: PrepareActionStatus,
+): Record<PublicActionOutputName, string> {
   const cacheModel = status.bootstrap.cacheModel;
   const restoreResult =
     status.bootstrap.baseCacheResult?.operation === 'restore'
       ? status.bootstrap.baseCacheResult
       : null;
   return {
-    // Generic outputs
     'cache-family-key': cacheModel?.cacheFamilyKey ?? '',
     'cache-lineage-prefix': cacheModel?.currentRefLineagePrefix ?? '',
     'base-cache-restore-status': restoreResult?.status ?? '',
     'restored-cache-key': restoreResult?.matchedKey ?? '',
-    'cache-key': cacheModel?.cacheKey ?? '',
-    'java-major': cacheModel ? renderCacheJavaMajor(cacheModel.javaMajor) : '',
     'job-mode': status.bootstrap.config.jobMode,
     'read-only': String(status.bootstrap.config.readOnly),
-    'resolved-ref-name': status.bootstrap.ciContext.resolvedRefName,
-    'safe-ref-name': status.bootstrap.ciContext.safeRefName,
-    'dependent-jobs-count': String(status.bootstrap.config.dependentJobs.length),
-    'downloaded-dependent-artifact-count': String(
+    'dependent-delta-status': status.dependentDeltaResult?.status ?? 'not-configured',
+    'dependent-delta-artifact-count': String(
       status.dependentDeltaResult?.appliedArtifactCount ?? 0,
     ),
-    'job-name': status.bootstrap.ciContext.jobName,
-    // Tool-specific outputs contributed by the active build tool adapter
-    ...status.bootstrap.toolProvisioning.additionalOutputs,
   };
 }
 

@@ -22,9 +22,9 @@ limitations under the License.
 
 ## Why distributed mode exists
 
-When multiple build jobs run in parallel and each one tries to save the cache at the end, only the
-last writer survives. The other jobs' dependency downloads and other cached outputs are overwritten
-and lost on the next run.
+When multiple build jobs run in parallel and each publishes an independent full-cache generation,
+those generations diverge. Restoring only the newest one loses dependency downloads and other cache
+changes that exist solely in the other workers' generations.
 
 Distributed mode solves this with **delta exchange**:
 
@@ -62,10 +62,14 @@ sequenceDiagram
 3. The worker's **finalize** step captures a second snapshot (the post-build manifest), computes
    the difference, packs only the changed and added files into a compressed artifact, and uploads
    it. The base cache is not written.
-4. The aggregator's **prepare** step restores the base cache.
-5. The aggregator's **finalize** step downloads every worker delta in `dependent-jobs` order,
-   merges them (later jobs win on conflicts), applies the result to the cache directory, and saves
-   the new base cache entry.
+4. The aggregator's **prepare** step restores the base cache, downloads the selected worker
+   envelopes, validates their identity and preconditions, and applies the merged delta.
+5. The aggregator's **finalize** step saves the resulting immutable base-cache generation.
+
+On pull-request events, read-only mode performs no exchange: workers upload nothing, and an
+aggregator returns `skipped-read-only` without listing, downloading, validating, applying, or
+deleting artifacts. This makes a static topology safe, but a workflow should avoid allocating the
+aggregator runner when it can express the writable-event condition directly.
 
 ## Gradle workflow example
 
@@ -105,6 +109,7 @@ jobs:
 
   aggregator:
     needs: [worker-a, worker-b]
+    if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -159,6 +164,7 @@ jobs:
 
   aggregator:
     needs: [worker-a, worker-b]
+    if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -182,7 +188,12 @@ Two worker jobs with the same name would produce the same artifact name and the 
 only see one of them.
 
 **The aggregator must declare `needs` for every worker.** This ensures all deltas are uploaded
-before the aggregator starts its finalize step.
+before the aggregator starts and consumes them during prepare.
+
+**A writable aggregator should use `if: always()` together with its trusted-event condition.** The
+aggregator must run after a failed worker so it can report the missing envelope instead of being
+silently skipped. Pull-request aggregators may be omitted entirely; if they do run, their read-only
+result is the explicit no-op described above.
 
 **Workers do not need the aggregator in their `needs`.** Workers are independent of each other;
 only the aggregator depends on all workers.

@@ -28,12 +28,16 @@ The minimum required token permissions depend on the job mode and read-only sett
 | ----------------------- | --------- | ---------- |
 | Standalone, cache write | `write`   | `read`     |
 | Standalone, read-only   | `read`    | `read`     |
-| Distributed worker      | `write`   | `read`     |
-| Distributed aggregator  | `write`   | `read`     |
+| Distributed, writable   | `write`   | `read`     |
+| Distributed, read-only  | `read`    | `read`     |
 | Cache disabled          | none      | `read`     |
 
 `actions: write` is required to save cache entries and to upload or download workflow artifacts used
 by the distributed delta exchange. `contents: read` is required for workspace checkout.
+
+Read-only workers upload no envelopes. Read-only aggregators do not contact the artifact backend at
+all: their dependent-delta result is `skipped-read-only`. When possible, skip the aggregator job on
+pull-request events to avoid allocating a runner that can only perform this no-op.
 
 The `github-token` input (or `GITHUB_TOKEN` environment variable) is used only by the **Gradle**
 action for authenticated wrapper JAR downloads against the GitHub API. The Maven action does not
@@ -103,6 +107,7 @@ because all PR builds fall back to it via the restore key chain.
 | Mitigation                                | Detail                                                                                                                                                                                                                                                          |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Read-only by default on PRs**           | `pull_request` and `pull_request_target` events default to `read-only: true`. Worker and aggregator jobs on PRs do not save cache entries or upload delta artifacts to the shared backend, so a PR build cannot mutate the default-branch cache.                |
+| **Trusted lowering of the PR floor**      | Repository config can enable read-only mode but cannot disable the pull-request default. Only a direct workflow input can make that trusted-workflow decision.                                                                                                  |
 | **Gradle wrapper JAR verification**       | Every wrapper JAR is verified with a SHA-256 checksum and a GnuPG detached signature against a pinned key allowlist before it is written to disk. A tampered JAR downloaded from a compromised `distributionUrl` is rejected before Gradle is invoked.          |
 | **Hard cache exclusions**                 | Paths that could carry encryption key material, PID-bearing lock files, or per-runner absolute paths are excluded unconditionally and cannot be re-enabled via `cache-partitions` overrides. See [Hard cache safety exclusions](#hard-cache-safety-exclusions). |
 | **Token never persisted**                 | `github-token` is applied per-host and never written to summaries, logs, or post-action state. A token leak via a poisoned cache is therefore not possible through this action.                                                                                 |

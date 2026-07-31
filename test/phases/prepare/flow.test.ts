@@ -276,23 +276,12 @@ describe('executePrepareAction', () => {
         'cache-lineage-prefix': expect.stringMatching(
           /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
         ),
-        'cache-key': expect.stringMatching(
-          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
-        ),
         'base-cache-restore-status': 'miss',
         'restored-cache-key': '',
-        'java-major': '21',
         'job-mode': 'distributed-aggregator',
         'read-only': 'false',
-        'wrapper-count': '1',
-        'gradle-versions': '8.14.0',
-        'wrapper-downloaded-count': '0',
-        'wrapper-reused-count': '1',
-        'resolved-ref-name': 'main',
-        'safe-ref-name': 'main',
-        'dependent-jobs-count': '1',
-        'downloaded-dependent-artifact-count': '1',
-        'job-name': 'aggregate',
+        'dependent-delta-status': 'applied',
+        'dependent-delta-artifact-count': '1',
       });
       expect(summary.writeCalls).toBe(1);
     });
@@ -509,25 +498,112 @@ describe('executePrepareAction', () => {
         'cache-lineage-prefix': expect.stringMatching(
           /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
         ),
-        'cache-key': expect.stringMatching(
-          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
-        ),
         'base-cache-restore-status': 'miss',
         'restored-cache-key': '',
-        'java-major': '21',
         'job-mode': 'standalone',
         'read-only': 'false',
-        'wrapper-count': '1',
-        'gradle-versions': '8.14.0',
-        'wrapper-downloaded-count': '0',
-        'wrapper-reused-count': '1',
-        'resolved-ref-name': 'main',
-        'safe-ref-name': 'main',
-        'dependent-jobs-count': '0',
-        'downloaded-dependent-artifact-count': '0',
-        'job-name': 'build',
+        'dependent-delta-status': 'not-configured',
+        'dependent-delta-artifact-count': '0',
       });
       expect(summary.writeCalls).toBe(1);
+    });
+  });
+
+  it('makes read-only aggregation an explicit no-op without an artifact backend', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const wrapperJarBytes = Buffer.from('existing-wrapper-jar');
+      const wrapperJarSha256 = sha256Hex(wrapperJarBytes);
+      const savedState = new Map<string, string>();
+
+      await mkdir(path.join(workspace, 'gradle', 'wrapper'), { recursive: true });
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar'),
+        wrapperJarBytes,
+      );
+      await writeFile(
+        path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+        [
+          'distributionBase=GRADLE_USER_HOME',
+          'distributionPath=wrapper/dists',
+          'distributionSha256Sum=61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa',
+          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip',
+          'validateDistributionUrl=true',
+          'zipStoreBase=GRADLE_USER_HOME',
+          'zipStorePath=wrapper/dists',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const env = {
+        GITHUB_EVENT_NAME: 'pull_request',
+        GITHUB_REF: 'refs/pull/42/merge',
+        GITHUB_HEAD_REF: 'feature/read-only',
+        GITHUB_REPOSITORY: 'buildish-tooling/buildish',
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_JOB: 'aggregate',
+        GITHUB_RUN_ID: '101',
+        GITHUB_RUN_ATTEMPT: '1',
+        GITHUB_WORKSPACE: workspace,
+        GRADLE_USER_HOME: gradleUserHome,
+        HOME: workspace,
+        RUNNER_OS: 'Linux',
+        RUNNER_ARCH: 'X64',
+        RUNNER_TEMP: path.join(workspace, 'runner-temp'),
+      };
+      const dependencies = await createPrepareActionDependencies({
+        env,
+        eventPayload: {
+          repository: { default_branch: 'main' },
+          pull_request: { head: { ref: 'feature/read-only' } },
+        },
+        inputs: {
+          'job-mode': 'distributed-aggregator',
+          'dependent-jobs': 'worker-a,worker-b',
+        },
+        saveState(name: string, value: string): void {
+          savedState.set(name, value);
+        },
+        summaryWriter: createSummaryCapture().writer,
+        workspace,
+        adapterOptions: {
+          fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+            const url = String(input);
+            if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+              return new Response(`${wrapperJarSha256}\n`, { status: 200 });
+            }
+            if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+              return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+            }
+            throw new Error(`Unexpected fetch URL: ${url}`);
+          },
+          verifyWrapperSignature: async () => {},
+        },
+      });
+
+      const status = await executePrepareAction({
+        ...dependencies,
+        cacheBackend: createCacheApi(),
+        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
+        env,
+      });
+
+      expect(status.dependentDeltaResult).toEqual(
+        expect.objectContaining({
+          status: 'skipped-read-only',
+          requestedJobs: ['worker-a', 'worker-b'],
+          appliedArtifactCount: 0,
+          downloadedArtifactNames: [],
+        }),
+      );
+      expect(
+        getPersistedCacheLifecycleRecord((name: string) => savedState.get(name) ?? '')
+          ?.dependentDelta,
+      ).toBeNull();
+      expect(createPrepareActionSummaryLines(status).join('\n')).toContain(
+        'Dependent delta reuse: skipped-read-only',
+      );
     });
   });
 
@@ -1524,7 +1600,7 @@ describe('createPrepareActionOutputs', () => {
       },
     });
 
-    expect(createPrepareActionOutputs(status)['java-major']).toBe('0');
+    expect(createPrepareActionOutputs(status)['cache-family-key']).toContain('-v2-0-');
   });
 });
 
@@ -1567,6 +1643,7 @@ describe('createPrepareActionSummaryLines', () => {
     const text = createPrepareActionSummaryLines(
       createMinimalPrepareStatus({
         dependentDeltaResult: {
+          status: 'applied',
           requestedJobs: ['worker-a', 'worker-b'],
           downloadedArtifactNames: ['artifact-a', 'artifact-b'],
           appliedRelativePaths: [],
@@ -1631,6 +1708,7 @@ describe('createPrepareActionLogLines', () => {
     const text = createPrepareActionLogLines(
       createMinimalPrepareStatus({
         dependentDeltaResult: {
+          status: 'applied',
           requestedJobs: ['worker-a', 'worker-b'],
           downloadedArtifactNames: ['artifact-a'],
           appliedRelativePaths: [],

@@ -34,6 +34,10 @@ This is split across `src/delta/discovery.ts` (bounded rerun selection), `src/de
 The shared prepare/finalize phases call these functions at the right points in the two-phase
 lifecycle.
 
+Read-only execution deliberately does not enter this protocol. Workers upload no envelope, and an
+aggregator returns `skipped-read-only` before obtaining an artifact backend or performing discovery,
+download, validation, merge, apply, or deletion.
+
 ---
 
 ## Artifact naming

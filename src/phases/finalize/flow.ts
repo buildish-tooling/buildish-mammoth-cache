@@ -127,7 +127,7 @@ export interface FinalizeConsumedDeltaCleanupResult {
  * deltas or clean up consumed aggregator delta artifacts.
  */
 export interface FinalizeActionDependencies extends BootstrapDependencies {
-  readonly artifactBackend: WorkflowArtifactBackend;
+  readonly artifactBackend?: WorkflowArtifactBackend;
 }
 
 /**
@@ -312,6 +312,7 @@ async function maybeCollectCacheGarbage(
 ): Promise<TimestampCacheGcResult | null> {
   if (
     bootstrap.config.cacheGcMode === 'off' ||
+    !bootstrap.config.cleanupEnabled ||
     !bootstrap.cacheModel ||
     bootstrap.config.readOnly ||
     bootstrap.config.jobMode === 'distributed-worker'
@@ -418,7 +419,7 @@ async function uploadFinalizeArtifact(
     };
   }
 
-  const artifactBackend = dependencies.artifactBackend;
+  const artifactBackend = resolveFinalizeArtifactBackend(dependencies);
   const deltaArtifactExecutionContext = {
     ...bootstrap.ciContext,
     jobName: lifecycleRecord.executionIdentity.jobName,
@@ -471,6 +472,16 @@ async function cleanupConsumedDeltaArtifacts(
     return null;
   }
 
+  if (bootstrap.config.readOnly) {
+    return {
+      attemptedArtifactNames: [],
+      deletedArtifactNames: [],
+      warnings: [],
+      message:
+        'Consumed delta artifact cleanup skipped because read-only mode disables artifact exchange.',
+    };
+  }
+
   const artifactNames = [...new Set(lifecycleRecord?.dependentDelta?.artifactNames ?? [])];
 
   if (artifactNames.length === 0) {
@@ -483,7 +494,7 @@ async function cleanupConsumedDeltaArtifacts(
     };
   }
 
-  const artifactBackend = dependencies.artifactBackend;
+  const artifactBackend = resolveFinalizeArtifactBackend(dependencies);
   if (!artifactBackend.capabilities.supportsDeletion) {
     return {
       attemptedArtifactNames: artifactNames,
@@ -523,6 +534,16 @@ async function cleanupConsumedDeltaArtifacts(
     warnings,
     message: `Consumed delta artifact cleanup deleted ${deletedArtifactNames.length} of ${artifactNames.length} persisted artifact(s).`,
   };
+}
+
+function resolveFinalizeArtifactBackend(
+  dependencies: Pick<FinalizeActionDependencies, 'artifactBackend'>,
+): WorkflowArtifactBackend {
+  const { artifactBackend } = dependencies;
+  if (!artifactBackend) {
+    throw new Error('Artifact backend dependency is required for writable artifact operations.');
+  }
+  return artifactBackend;
 }
 
 function countDeltaEntries(deltaManifest: Parameters<typeof stageDeltaArtifactPackage>[2]): {

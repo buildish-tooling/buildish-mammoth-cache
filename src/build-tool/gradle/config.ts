@@ -49,11 +49,12 @@ import {
   validateNamedValue,
 } from '../../util/action-input';
 import {
-  defaultReadOnlyForEvent,
   normalizeRelativePath,
   parseCachePartitionsInput,
   validateCacheKeyPrefix,
 } from '../../config/shared';
+import { recordReadOnlyInputSource, resolveReadOnlyInput } from '../../config/input-provenance';
+import { getConfigFileInput, getPublicActionInputName } from '../../config/public-contract';
 
 export type {
   InputProvider,
@@ -71,37 +72,29 @@ const EXPLICIT_PATH_GLOB_PATTERN = /[*?[\]{}!]/;
  * Reads every Gradle action input exactly once and returns the raw string values.
  */
 export function readGradleActionInputs(inputProvider: InputProvider): RawGradleActionInputs {
+  const read = (property: Parameters<typeof getPublicActionInputName>[1]): string =>
+    inputProvider.getInput(getPublicActionInputName('gradle', property), {
+      trimWhitespace: true,
+    });
   return {
-    configFile: inputProvider.getInput('config-file', { trimWhitespace: true }),
-    baseDirectory: inputProvider.getInput('base-directory', { trimWhitespace: true }),
-    cacheEnabled: inputProvider.getInput('cache-enabled', { trimWhitespace: true }),
-    readOnly: inputProvider.getInput('read-only', { trimWhitespace: true }),
-    jobMode: inputProvider.getInput('job-mode', { trimWhitespace: true }),
-    dependentJobs: inputProvider.getInput('dependent-jobs', { trimWhitespace: true }),
-    allowDuplicateDependentDeltaPaths: inputProvider.getInput(
-      'allow-duplicate-dependent-delta-paths',
-      { trimWhitespace: true },
-    ),
-    cacheKeyPrefix: inputProvider.getInput('cache-key-prefix', { trimWhitespace: true }),
-    cachePartitions: inputProvider.getInput('cache-partitions', { trimWhitespace: true }),
-    processAllWrapperFiles: inputProvider.getInput('process-all-wrapper-files', {
-      trimWhitespace: true,
-    }),
-    wrapperPropertiesGlob: inputProvider.getInput('wrapper-properties-glob', {
-      trimWhitespace: true,
-    }),
-    wrapperPropertiesFiles: inputProvider.getInput('wrapper-properties-files', {
-      trimWhitespace: true,
-    }),
-    cleanupEnabled: inputProvider.getInput('cleanup-enabled', { trimWhitespace: true }),
-    restoreCleanupMode: inputProvider.getInput('restore-cleanup-mode', { trimWhitespace: true }),
-    cacheGcMode: inputProvider.getInput('cache-gc-mode', { trimWhitespace: true }),
-    cacheGcOlderThanDays: inputProvider.getInput('cache-gc-older-than-days', {
-      trimWhitespace: true,
-    }),
-    gradleUserHome: inputProvider.getInput('gradle-user-home', { trimWhitespace: true }),
-    setupJava: inputProvider.getInput('setup-java', { trimWhitespace: true }),
-    githubToken: inputProvider.getInput('github-token', { trimWhitespace: true }),
+    configFile: read('configFile'),
+    baseDirectory: read('baseDirectory'),
+    cacheEnabled: read('cacheEnabled'),
+    readOnly: read('readOnly'),
+    jobMode: read('jobMode'),
+    dependentJobs: read('dependentJobs'),
+    allowDuplicateDependentDeltaPaths: read('allowDuplicateDependentDeltaPaths'),
+    cacheKeyPrefix: read('cacheKeyPrefix'),
+    cachePartitions: read('cachePartitions'),
+    processAllWrapperFiles: read('processAllWrapperFiles'),
+    wrapperPropertiesGlob: read('wrapperPropertiesGlob'),
+    wrapperPropertiesFiles: read('wrapperPropertiesFiles'),
+    cleanupEnabled: read('cleanupEnabled'),
+    restoreCleanupMode: read('restoreCleanupMode'),
+    cacheGcMode: read('cacheGcMode'),
+    cacheGcOlderThanDays: read('cacheGcOlderThanDays'),
+    gradleUserHome: read('gradleUserHome'),
+    setupJava: read('setupJava'),
   };
 }
 
@@ -135,7 +128,16 @@ export async function resolveGradleActionInputsFromConfigFile(
     parseConfigFileContents(contents, normalizedConfigFile),
     normalizedConfigFile,
   );
-  return overlayConfiguredInputs(fileInputs, directInputs);
+  const resolvedInputs = overlayConfiguredInputs(fileInputs, directInputs);
+  recordReadOnlyInputSource(
+    resolvedInputs,
+    directInputs.readOnly.length > 0
+      ? 'direct'
+      : fileInputs.readOnly.length > 0
+        ? 'config-file'
+        : 'unset',
+  );
+  return resolvedInputs;
 }
 
 /**
@@ -186,10 +188,7 @@ export function normalizeGradleActionConfig(
     'cache-gc-mode',
   );
   const cacheGcOlderThanDays = parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14');
-  const readOnly =
-    rawInputs.readOnly.length > 0
-      ? parseBooleanInput(rawInputs.readOnly, 'read-only')
-      : defaultReadOnlyForEvent(options.ciContext.eventName);
+  const readOnly = resolveReadOnlyInput(rawInputs, rawInputs.readOnly, options.ciContext);
   const gradleUserHome = normalizeGradleUserHome(rawInputs.gradleUserHome, options.env);
   const setupJava = parseBooleanInput(rawInputs.setupJava || 'false', 'setup-java');
 
@@ -252,7 +251,6 @@ function createEmptyRawGradleActionInputs(): RawGradleActionInputs {
     cacheGcOlderThanDays: '',
     gradleUserHome: '',
     setupJava: '',
-    githubToken: '',
   };
 }
 
@@ -368,6 +366,7 @@ function serializeConfigFileInputs(
 ): RawGradleActionInputs {
   const inputs: Record<keyof RawGradleActionInputs, string> = createEmptyRawGradleActionInputs();
   for (const [key, value] of Object.entries(values)) {
+    getConfigFileInput('gradle', key);
     switch (key) {
       case 'config-file':
         throw new Error(
@@ -424,10 +423,6 @@ function serializeConfigFileInputs(
       case 'setup-java':
         inputs.setupJava = serializeBooleanLikeConfigValue(value, key);
         break;
-      case 'github-token':
-        throw new Error(
-          `config-file '${normalizedConfigFile}' must not contain github-token. Pass it directly as an action input or environment secret instead.`,
-        );
       default:
         throw new Error(
           `config-file '${normalizedConfigFile}' contains unsupported key '${key}'. Use the same kebab-case names as action inputs.`,
@@ -504,7 +499,6 @@ function overlayConfiguredInputs(
     cacheGcOlderThanDays: directInputs.cacheGcOlderThanDays || fileInputs.cacheGcOlderThanDays,
     gradleUserHome: directInputs.gradleUserHome || fileInputs.gradleUserHome,
     setupJava: directInputs.setupJava || fileInputs.setupJava,
-    githubToken: directInputs.githubToken,
   };
 }
 

@@ -48,11 +48,12 @@ import {
   validateNamedValue,
 } from '../../util/action-input';
 import {
-  defaultReadOnlyForEvent,
   normalizeRelativePath,
   parseCachePartitionsInput,
   validateCacheKeyPrefix,
 } from '../../config/shared';
+import { recordReadOnlyInputSource, resolveReadOnlyInput } from '../../config/input-provenance';
+import { getConfigFileInput, getPublicActionInputName } from '../../config/public-contract';
 
 export type { NormalizeActionConfigOptions, ResolveActionInputsFromConfigFileOptions };
 
@@ -64,29 +65,25 @@ export type { NormalizeActionConfigOptions, ResolveActionInputsFromConfigFileOpt
  * Reads every Maven action input exactly once and returns the raw string values.
  */
 export function readMavenActionInputs(inputProvider: InputProvider): RawMavenActionInputs {
+  const read = (property: Parameters<typeof getPublicActionInputName>[1]): string =>
+    inputProvider.getInput(getPublicActionInputName('maven', property), {
+      trimWhitespace: true,
+    });
   return {
-    configFile: inputProvider.getInput('config-file', { trimWhitespace: true }),
-    baseDirectory: inputProvider.getInput('base-directory', { trimWhitespace: true }),
-    cacheEnabled: inputProvider.getInput('cache-enabled', { trimWhitespace: true }),
-    readOnly: inputProvider.getInput('read-only', { trimWhitespace: true }),
-    jobMode: inputProvider.getInput('job-mode', { trimWhitespace: true }),
-    dependentJobs: inputProvider.getInput('dependent-jobs', { trimWhitespace: true }),
-    allowDuplicateDependentDeltaPaths: inputProvider.getInput(
-      'allow-duplicate-dependent-delta-paths',
-      { trimWhitespace: true },
-    ),
-    cacheKeyPrefix: inputProvider.getInput('cache-key-prefix', { trimWhitespace: true }),
-    cachePartitions: inputProvider.getInput('cache-partitions', { trimWhitespace: true }),
-    cleanupEnabled: inputProvider.getInput('cleanup-enabled', { trimWhitespace: true }),
-    restoreCleanupMode: inputProvider.getInput('restore-cleanup-mode', { trimWhitespace: true }),
-    cacheGcMode: inputProvider.getInput('cache-gc-mode', { trimWhitespace: true }),
-    cacheGcOlderThanDays: inputProvider.getInput('cache-gc-older-than-days', {
-      trimWhitespace: true,
-    }),
-    mavenLocalRepository: inputProvider.getInput('maven-local-repository', {
-      trimWhitespace: true,
-    }),
-    githubToken: inputProvider.getInput('github-token', { trimWhitespace: true }),
+    configFile: read('configFile'),
+    baseDirectory: read('baseDirectory'),
+    cacheEnabled: read('cacheEnabled'),
+    readOnly: read('readOnly'),
+    jobMode: read('jobMode'),
+    dependentJobs: read('dependentJobs'),
+    allowDuplicateDependentDeltaPaths: read('allowDuplicateDependentDeltaPaths'),
+    cacheKeyPrefix: read('cacheKeyPrefix'),
+    cachePartitions: read('cachePartitions'),
+    cleanupEnabled: read('cleanupEnabled'),
+    restoreCleanupMode: read('restoreCleanupMode'),
+    cacheGcMode: read('cacheGcMode'),
+    cacheGcOlderThanDays: read('cacheGcOlderThanDays'),
+    mavenLocalRepository: read('mavenLocalRepository'),
   };
 }
 
@@ -119,7 +116,16 @@ export async function resolveMavenActionInputsFromConfigFile(
     parseMavenConfigFileContents(contents, normalizedConfigFile),
     normalizedConfigFile,
   );
-  return overlayMavenConfiguredInputs(fileInputs, directInputs);
+  const resolvedInputs = overlayMavenConfiguredInputs(fileInputs, directInputs);
+  recordReadOnlyInputSource(
+    resolvedInputs,
+    directInputs.readOnly.length > 0
+      ? 'direct'
+      : fileInputs.readOnly.length > 0
+        ? 'config-file'
+        : 'unset',
+  );
+  return resolvedInputs;
 }
 
 /**
@@ -155,10 +161,7 @@ export function normalizeMavenActionConfig(
     'cache-gc-mode',
   );
   const cacheGcOlderThanDays = parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14');
-  const readOnly =
-    rawInputs.readOnly.length > 0
-      ? parseBooleanInput(rawInputs.readOnly, 'read-only')
-      : defaultReadOnlyForEvent(options.ciContext.eventName);
+  const readOnly = resolveReadOnlyInput(rawInputs, rawInputs.readOnly, options.ciContext);
   const mavenLocalRepository = normalizeMavenLocalRepository(
     rawInputs.mavenLocalRepository,
     options.env,
@@ -301,6 +304,7 @@ function serializeMavenConfigFileInputs(
 ): RawMavenActionInputs {
   const inputs: Record<keyof RawMavenActionInputs, string> = createEmptyRawMavenActionInputs();
   for (const [key, value] of Object.entries(values)) {
+    getConfigFileInput('maven', key);
     switch (key) {
       case 'config-file':
         throw new Error(
@@ -345,10 +349,6 @@ function serializeMavenConfigFileInputs(
       case 'maven-local-repository':
         inputs.mavenLocalRepository = serializeMavenStringValue(value, key);
         break;
-      case 'github-token':
-        throw new Error(
-          `config-file '${normalizedConfigFile}' must not contain github-token. Pass it directly as an action input or environment secret instead.`,
-        );
       default:
         throw new Error(
           `config-file '${normalizedConfigFile}' contains unsupported key '${key}'. Use the same kebab-case names as action inputs.`,
@@ -379,7 +379,6 @@ function overlayMavenConfiguredInputs(
     cacheGcMode: directInputs.cacheGcMode || fileInputs.cacheGcMode,
     cacheGcOlderThanDays: directInputs.cacheGcOlderThanDays || fileInputs.cacheGcOlderThanDays,
     mavenLocalRepository: directInputs.mavenLocalRepository || fileInputs.mavenLocalRepository,
-    githubToken: directInputs.githubToken,
   };
 }
 
@@ -399,7 +398,6 @@ function createEmptyRawMavenActionInputs(): Record<keyof RawMavenActionInputs, s
     cacheGcMode: '',
     cacheGcOlderThanDays: '',
     mavenLocalRepository: '',
-    githubToken: '',
   };
 }
 

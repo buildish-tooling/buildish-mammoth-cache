@@ -39,9 +39,8 @@ unchanged runs.
 ## Distributed multi-job mode
 
 When a workflow runs multiple build jobs in parallel — for example, one job per subproject or one
-job per test suite — a naive shared cache has a fundamental problem: every parallel job writes back
-its own version of the cache at the end, and the last writer wins. Jobs that finish earlier have
-their dependency downloads discarded because a later job overwrites the cache with whatever _it_ saw.
+job per test suite — independent full-cache generations diverge. Restoring only the newest
+generation then loses the dependency downloads that exist solely in the other workers' generations.
 
 This action solves that with a **delta exchange** model:
 
@@ -50,8 +49,7 @@ This action solves that with a **delta exchange** model:
 - A dedicated **aggregator job**, which runs after all workers complete, downloads every delta,
   merges them, and saves the merged result as the new base cache entry.
 
-The result: every parallel job's dependency downloads are captured in the next cache entry, not just
-the last job to finish.
+The result: every parallel job's dependency downloads are captured in one merged generation.
 
 ```mermaid
 graph LR

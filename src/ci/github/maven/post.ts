@@ -22,6 +22,7 @@ import {
 } from '../../../build-tool/maven/config';
 import { runFinalizeExecution } from '../../../phases/finalize/cli';
 import type { NormalizedMavenConfig } from '../../../config/types';
+import { readGitHubPlatformActionInputs } from '../action-inputs';
 
 import {
   createGitHubBaseCacheBackend,
@@ -34,12 +35,7 @@ import {
 const runtimeHost = createGitHubHost();
 const ciProvider = createGitHubPlatform({
   env: process.env,
-  githubTokenInput: runtimeHost.getInput('github-token', { trimWhitespace: true }),
-  githubJobCheckRunId: runtimeHost.getInput('github-job-check-run-id', { trimWhitespace: true }),
-  githubEventNameInput: runtimeHost.getInput('github-event-name', { trimWhitespace: true }),
-  githubJobNameInput: runtimeHost.getInput('github-job-name', { trimWhitespace: true }),
-  githubRefNameInput: runtimeHost.getInput('github-ref-name', { trimWhitespace: true }),
-  githubDefaultBranchInput: runtimeHost.getInput('github-default-branch', { trimWhitespace: true }),
+  ...readGitHubPlatformActionInputs(runtimeHost, 'maven'),
 });
 const reportSink = createGitHubReportSink({ env: process.env });
 
@@ -61,7 +57,7 @@ async function main(): Promise<void> {
     config,
     env: process.env,
     cacheBackend: createGitHubBaseCacheBackend(),
-    artifactBackend: createGitHubWorkflowArtifactBackend(),
+    artifactBackend: config.readOnly ? undefined : createGitHubWorkflowArtifactBackend(),
     buildToolAdapterFactory: () => new MavenBuildToolAdapter(config),
   });
 }

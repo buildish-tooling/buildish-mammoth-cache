@@ -189,6 +189,7 @@ flowchart TD
 - Compute the delta between the pre- and post-build manifest snapshots.
 - Pack only changed or added files into a delta artifact package and upload it.
 - Skip the base cache save step.
+- In read-only mode, skip artifact staging and upload as well.
 
 **Aggregator jobs** (`job-mode: distributed-aggregator`):
 
@@ -197,10 +198,13 @@ flowchart TD
 - Merge the deltas in dependency order, applying the most recent version of each file.
 - Apply the merged delta to the build tool cache root.
 - Save the resulting cache root as the new base cache entry.
+- In read-only mode, perform no artifact discovery, download, validation, apply, or deletion and
+  return `skipped-read-only`.
 
-Delta packages are identified by a combination of the producing job name, the run number, and the
-run attempt. This identity triple ensures that a re-run of a failed worker does not cause the
-aggregator to pick up a stale artifact from the previous attempt.
+Delta packages carry producing job, run, attempt, source revision, cache family, lineage, restored
+generation, pre-build manifest digest, runner, and partition identity. The aggregator selects the
+highest unambiguous producer attempt not newer than its own, enabling safe full, failed-job, and
+aggregator-only reruns without crossing workflow run IDs.
 
 The artifact package includes an integrity manifest (SHA-256 hashes for each file), a schema
 version field, and a metadata section describing the producer job. The schema version is checked at

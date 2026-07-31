@@ -20,14 +20,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-<!--
-SYNC: This page is maintained manually in parallel with the `description:` and `default:` fields
-in actions/github/gradle/action.yml and actions/github/maven/action.yml, and with the enum value
-lists in src/config/types.ts. When adding, removing, or changing any input keep all of those
-files up to date. See docs/dev/maintenance.md § "Action input documentation sync" for the full
-list and rationale. Search for SYNC in the repository to find all sync-obligated locations.
--->
-
 The action is available in two build-tool-specific variants that share most inputs:
 
 - **Gradle** — `buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<sha>`
@@ -36,6 +28,57 @@ The action is available in two build-tool-specific variants that share most inpu
 All inputs described in [Common inputs](#common-inputs) apply to both. Inputs described under
 [Gradle-only inputs](#gradle-only-inputs) or [Maven-only inputs](#maven-only-inputs) are accepted
 only by the corresponding action and ignored (or rejected) by the other.
+
+The following compact matrix is generated from the typed public contract. The detailed sections
+below add examples and rationale; the parity test ensures metadata, readers, config-file keys,
+runtime outputs, and these reference rows cannot silently diverge.
+
+<!-- BEGIN GENERATED PUBLIC ACTION CONTRACT -->
+
+### Canonical input matrix
+
+| Input                                   | Action        | Default                                       | Config file | Meaning                                                                                                                                                                      |
+| --------------------------------------- | ------------- | --------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config-file`                           | Gradle, Maven | `event-dependent or unset`                    | no          | Optional workspace-relative JSON or YAML configuration file. Direct action inputs override file values; secrets and GitHub context inputs are direct-only.                   |
+| `base-directory`                        | Gradle, Maven | `.`                                           | yes         | Repository-relative project base directory. Rooted paths and paths that escape the workspace are rejected.                                                                   |
+| `cache-enabled`                         | Gradle, Maven | `true`                                        | yes         | Enables cache orchestration. Accepted values: true or false.                                                                                                                 |
+| `read-only`                             | Gradle, Maven | `event-dependent or unset`                    | yes         | Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor. |
+| `job-mode`                              | Gradle, Maven | `standalone`                                  | yes         | Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.                                                                                          |
+| `dependent-jobs`                        | Gradle, Maven | `event-dependent or unset`                    | yes         | Comma- or newline-separated worker job names consumed by a distributed aggregator.                                                                                           |
+| `allow-duplicate-dependent-delta-paths` | Gradle, Maven | `false`                                       | yes         | Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.  |
+| `cache-key-prefix`                      | Gradle, Maven | `buildish-mammoth-cache-`                     | yes         | Namespace prefix for action-owned cache families; build, runner, partition, ref-lineage, and generation identity are appended automatically.                                 |
+| `cache-partitions`                      | Gradle, Maven | `event-dependent or unset`                    | yes         | JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.                                                                |
+| `cleanup-enabled`                       | Gradle, Maven | `true`                                        | yes         | Enables restore cleanup and timestamp garbage collection.                                                                                                                    |
+| `restore-cleanup-mode`                  | Gradle, Maven | `none`                                        | yes         | Restore-time cleanup mode: none or prune-managed.                                                                                                                            |
+| `cache-gc-mode`                         | Gradle, Maven | `timestamp`                                   | yes         | Pre-save managed-cache garbage collection mode: off or timestamp.                                                                                                            |
+| `cache-gc-older-than-days`              | Gradle, Maven | `14`                                          | yes         | Age threshold for timestamp garbage collection. Must be at least 2 days.                                                                                                     |
+| `github-token`                          | Gradle, Maven | `event-dependent or unset`                    | no          | Optional GitHub token for authenticated API requests. Pass secrets directly, never through repository config.                                                                |
+| `github-job-check-run-id`               | Gradle, Maven | `event-dependent or unset`                    | no          | Optional check-run ID used to create a direct current-job link.                                                                                                              |
+| `github-event-name`                     | Gradle, Maven | `event-dependent or unset`                    | no          | Optional triggering-event override for reusable workflows. Pass the trusted caller event.                                                                                    |
+| `github-job-name`                       | Gradle, Maven | `event-dependent or unset`                    | no          | Optional stable job-name override used for distributed artifact coordination.                                                                                                |
+| `github-ref-name`                       | Gradle, Maven | `event-dependent or unset`                    | no          | Optional resolved-ref override for reusable workflows.                                                                                                                       |
+| `github-default-branch`                 | Gradle, Maven | `event-dependent or unset`                    | no          | Optional repository default-branch override for reusable workflows.                                                                                                          |
+| `process-all-wrapper-files`             | Gradle        | `false`                                       | yes         | Processes every matching Gradle wrapper properties file. Cannot be combined with wrapper-properties-files.                                                                   |
+| `wrapper-properties-glob`               | Gradle        | `**/gradle/wrapper/gradle-wrapper.properties` | yes         | Repository-relative Gradle wrapper properties discovery glob.                                                                                                                |
+| `wrapper-properties-files`              | Gradle        | `event-dependent or unset`                    | yes         | Comma- or newline-separated explicit Gradle wrapper properties files relative to base-directory.                                                                             |
+| `gradle-user-home`                      | Gradle        | `event-dependent or unset`                    | yes         | Gradle user home to manage. The current version accepts only the runner default.                                                                                             |
+| `setup-java`                            | Gradle        | `false`                                       | yes         | Reserved compatibility flag. The current version rejects true; run actions/setup-java first.                                                                                 |
+| `maven-local-repository`                | Maven         | `event-dependent or unset`                    | yes         | Absolute or working-directory-relative Maven local repository to manage; defaults to MAVEN_USER_HOME or ~/.m2.                                                               |
+
+### Canonical output matrix
+
+| Output                           | Meaning                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| `cache-family-key`               | Stable compatibility family shared by structurally compatible generations. |
+| `cache-lineage-prefix`           | Current-ref prefix used to restore the newest immutable generation.        |
+| `base-cache-restore-status`      | Classified base-cache restore outcome for prepare.                         |
+| `restored-cache-key`             | Exact immutable generation restored during prepare, when any.              |
+| `read-only`                      | Whether cache and delta writes are disabled.                               |
+| `job-mode`                       | Effective standalone or distributed job mode.                              |
+| `dependent-delta-status`         | Dependent-delta outcome: not-configured, applied, or skipped-read-only.    |
+| `dependent-delta-artifact-count` | Number of dependent worker artifacts applied during prepare.               |
+
+<!-- END GENERATED PUBLIC ACTION CONTRACT -->
 
 ---
 
@@ -72,6 +115,8 @@ only by the corresponding action and ignored (or rejected) by the other.
 - Accepted values: `true`, `false`
 - Defaults to `true` for `pull_request` / `pull_request_target`.
 - Defaults to `false` for other events.
+- A repository config file may set `true`, but cannot set `false` to lower the pull-request safety
+  floor. Only a direct workflow input can make that explicit trusted-workflow choice.
 - Use this to prevent cache mutation.
 
 ### `job-mode`
@@ -115,7 +160,8 @@ only by the corresponding action and ignored (or rejected) by the other.
 
 - Default: `true`
 - Accepted values: `true`, `false`
-- Enables the later cleanup-trigger flow used by cache management.
+- Enables restore cleanup and timestamp garbage collection. When `false`, both are skipped even if
+  their individual modes request cleanup.
 
 ### `cache-gc-mode`
 
@@ -148,9 +194,19 @@ only by the corresponding action and ignored (or rejected) by the other.
 
 - Default: `false`
 - Accepted values: `true`, `false`
-- When `true`, the aggregator tolerates two worker deltas that both modified the same path (last writer wins).
-- When `false`, any path conflict is treated as an error to prevent silent data loss.
+- When `true`, the aggregator resolves non-identical overlapping worker paths by newest modification
+  time.
+- Exact same-content overlaps merge safely without this option.
+- When `false`, non-identical path conflicts are errors.
 - Only relevant for distributed aggregator jobs.
+
+### `github-token`
+
+- Default: unset (falls back to `GITHUB_TOKEN` when available)
+- Used for authenticated requests to the configured GitHub API host. The Gradle action uses these
+  headers for authenticated wrapper downloads; provider integrations may also use them.
+- Direct-only: config files reject this secret-bearing input.
+- Never written to summaries or persisted post-action state.
 
 ### `github-event-name`
 
@@ -203,14 +259,16 @@ only by the corresponding action and ignored (or rejected) by the other.
 
 Both actions expose the same cache lifecycle outputs after prepare:
 
-| Output                      | Meaning                                                                         |
-| --------------------------- | ------------------------------------------------------------------------------- |
-| `cache-family-key`          | Structural compatibility family, without ref or generation identity             |
-| `cache-lineage-prefix`      | Current-ref prefix used for newest-generation restore                           |
-| `base-cache-restore-status` | `feature-unavailable`, `miss`, `current-lineage-hit`, or `fallback-lineage-hit` |
-| `restored-cache-key`        | Exact immutable generation restored, or an empty string when there was no hit   |
-| `read-only`                 | Effective write policy as `true` or `false`                                     |
-| `job-mode`                  | Effective standalone or distributed mode                                        |
+| Output                           | Meaning                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------- |
+| `cache-family-key`               | Structural compatibility family, without ref or generation identity             |
+| `cache-lineage-prefix`           | Current-ref prefix used for newest-generation restore                           |
+| `base-cache-restore-status`      | `feature-unavailable`, `miss`, `current-lineage-hit`, or `fallback-lineage-hit` |
+| `restored-cache-key`             | Exact immutable generation restored, or an empty string when there was no hit   |
+| `read-only`                      | Effective write policy as `true` or `false`                                     |
+| `job-mode`                       | Effective standalone or distributed mode                                        |
+| `dependent-delta-status`         | `not-configured`, `applied`, or `skipped-read-only`                             |
+| `dependent-delta-artifact-count` | Number of worker artifacts applied during prepare                               |
 
 Generation keys are finalize outcomes and are intentionally not planned prepare outputs. The job
 summary and finalize log report the exact key only after a successful publication.
@@ -218,13 +276,6 @@ summary and finalize log report the exact key only after a successful publicatio
 ---
 
 ## Gradle-only inputs
-
-### `github-token`
-
-- Default: unset
-- Used for authenticated wrapper JAR downloads against the GitHub API (see below).
-- When omitted, the Gradle action falls back to `GITHUB_TOKEN` from the runner environment if available.
-- Never written to summaries or persisted post-action state.
 
 ### `process-all-wrapper-files`
 
@@ -267,8 +318,9 @@ summary and finalize log report the exact key only after a successful publicatio
 ### `maven-local-repository`
 
 - Default: `$MAVEN_USER_HOME` when set, otherwise `$HOME/.m2`
-- Absolute path to the Maven local repository that the action should cache.
-- In v1, the path must resolve to the default Maven local repository location.
+- Accepts an absolute path or a path resolved from the action process working directory.
+- Operators are responsible for ensuring a custom path contains only intended Maven cache state
+  and is not shared across trust zones.
 
 ---
 
@@ -319,6 +371,7 @@ jobs:
 
   aggregator:
     needs: [worker-a, worker-b]
+    if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -373,6 +426,7 @@ jobs:
 
   aggregator:
     needs: [worker-a, worker-b]
+    if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write

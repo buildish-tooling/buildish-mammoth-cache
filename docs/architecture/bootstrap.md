@@ -68,9 +68,11 @@ flowchart TD
 
 1. Calls `restoreBaseCache()` which classifies the outcome as a miss, current-lineage hit, or
    default-branch fallback hit.
-2. If restore-cleanup mode is `prune-managed`, deletes managed files and re-restores.
-3. For `distributed-aggregator` jobs with configured `dependent-jobs`, downloads and applies
-   applicable delta artifact packages.
+2. If cleanup is enabled and restore-cleanup mode is `prune-managed`, deletes managed files and
+   re-restores.
+3. For writable `distributed-aggregator` jobs with configured `dependent-jobs`, downloads and
+   applies applicable delta artifact packages. Read-only aggregators return `skipped-read-only`
+   without requiring an artifact backend.
 4. Captures the pre-build file snapshot (`captureCacheManifest()`).
 5. Persists one validated lifecycle record containing cache identity, restore outcome, generation
    seed, manifest digest, execution identity, and dependent-delta evidence.
@@ -99,10 +101,11 @@ flowchart TD
 
 1. Loads and validates the complete prepare-phase lifecycle record and its pre-build manifest.
 2. Runs timestamp cache garbage collection for standalone and distributed-aggregator jobs when
-   `cache-gc-mode` is `timestamp`.
+   cleanup is enabled and `cache-gc-mode` is `timestamp`.
 3. Captures the post-build file snapshot.
 4. Calls `computeCacheDelta()` (`src/cache/manifest.ts`) to diff pre- and post-build manifests.
-5. For `distributed-worker`: stages the delta artifact locally, then uploads it.
+5. For a writable `distributed-worker`: stages the delta artifact locally, then uploads it.
+   Read-only workers upload nothing.
 6. Calls `saveBaseCache()` (skipped for `distributed-worker`; see [Base Cache Design](../base-cache/)).
 7. For `distributed-aggregator`: cleans up consumed worker delta artifacts.
 

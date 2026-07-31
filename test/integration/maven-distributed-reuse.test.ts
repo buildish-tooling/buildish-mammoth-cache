@@ -19,7 +19,7 @@
  *
  * Exercises the full worker-A → worker-B → aggregator delta-exchange flow using
  * {@link MavenBuildToolAdapter} and a staged Maven fixture project.  The GitHub Actions cache
- * is replaced by {@link UNAVAILABLE_CACHE_API}; artifact exchange uses an in-process
+ * is represented by an immutable in-memory backend; artifact exchange uses an in-process
  * {@link FakeArtifactApi} that copies artifact directories on disk.
  *
  * Each job gets an isolated Maven user home (`<job-root>/m2`).  The MAVEN_USER_HOME env var
@@ -58,31 +58,14 @@ import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
 } from '../../src/delta/backend';
-import {
-  STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  type BaseCacheBackend,
-} from '../../src/cache/backend';
+import type { BaseCacheBackend } from '../../src/cache/backend';
+import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
 
 const RUN_ID = '92003';
 const RUN_ATTEMPT = '1';
 const CACHE_KEY_PREFIX = `local-it-maven-distributed-${RUN_ID}-${RUN_ATTEMPT}-`;
 const INTEGRATION_WORKFLOW_NAME = 'Local Maven Distributed Reuse Integration Test';
 const FIXTURE_JOB_NAMES = ['maven_worker_a', 'maven_worker_b', 'maven_aggregator'] as const;
-const UNAVAILABLE_CACHE_API: BaseCacheBackend = {
-  capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  isFeatureAvailable(): boolean {
-    return false;
-  },
-  async restoreCache(): Promise<string | undefined> {
-    throw new Error('restoreCache must not be called when the cache feature is unavailable.');
-  },
-  async saveCache(): Promise<number> {
-    throw new Error('saveCache must not be called when the cache feature is unavailable.');
-  },
-  isMissingPathsError(): boolean {
-    return false;
-  },
-};
 
 interface LocalMavenJobRuntime {
   readonly jobName: string;
@@ -113,12 +96,13 @@ async function main(): Promise<void> {
 
   try {
     const artifactApi = new FakeArtifactApi(path.join(stagedRoot, 'artifacts'));
+    const cacheBackend = new ImmutableCacheBackend();
     const jobs = await stageJobs(stagedRoot, fixtureSourceDirectory);
 
     // Worker A resolves guava and publishes a delta artifact.
-    await runWorkerJob(jobs.maven_worker_a, 'worker-a', artifactApi);
+    await runWorkerJob(jobs.maven_worker_a, 'worker-a', artifactApi, cacheBackend);
     // Worker B resolves commons-io and publishes a separate delta artifact.
-    await runWorkerJob(jobs.maven_worker_b, 'worker-b', artifactApi);
+    await runWorkerJob(jobs.maven_worker_b, 'worker-b', artifactApi, cacheBackend);
 
     const uploadedArtifacts = await artifactApi.listArtifacts();
     assert.equal(
@@ -136,9 +120,10 @@ async function main(): Promise<void> {
         'cache-key-prefix': CACHE_KEY_PREFIX,
       },
       artifactApi,
+      cacheBackend,
     );
     const aggregatorOutputs = createPrepareActionOutputs(aggregatorPrepareStatus);
-    assert.equal(aggregatorOutputs['downloaded-dependent-artifact-count'], '2');
+    assert.equal(aggregatorOutputs['dependent-delta-artifact-count'], '2');
     printOutputs('maven_aggregator', aggregatorOutputs);
 
     // Both profiles must resolve offline — proves the delta merge populated the local repo.
@@ -161,6 +146,7 @@ async function main(): Promise<void> {
         'cache-key-prefix': CACHE_KEY_PREFIX,
       },
       artifactApi,
+      cacheBackend,
     );
     assert.equal(
       aggregatorFinalizeStatus.consumedDeltaCleanupResult?.deletedArtifactNames.length,
@@ -252,6 +238,7 @@ async function runWorkerJob(
   job: LocalMavenJobRuntime,
   profile: 'worker-a' | 'worker-b',
   artifactApi: WorkflowArtifactBackend,
+  cacheBackend: BaseCacheBackend,
 ): Promise<void> {
   const prepareStatus = await executePreparePhase(
     job,
@@ -260,6 +247,7 @@ async function runWorkerJob(
       'cache-key-prefix': CACHE_KEY_PREFIX,
     },
     artifactApi,
+    cacheBackend,
   );
   printOutputs(job.jobName, createPrepareActionOutputs(prepareStatus));
   // Resolve the profile dependency online — populates the isolated local repository.
@@ -271,6 +259,7 @@ async function runWorkerJob(
       'cache-key-prefix': CACHE_KEY_PREFIX,
     },
     artifactApi,
+    cacheBackend,
   );
   assert.equal(finalizeStatus.deltaArtifactResult?.status, 'uploaded');
 }
@@ -279,11 +268,12 @@ async function executePreparePhase(
   job: LocalMavenJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
+  cacheBackend: BaseCacheBackend,
 ) {
   return await executePrepareAction({
     env: job.env,
     artifactBackend: artifactApi,
-    cacheBackend: UNAVAILABLE_CACHE_API,
+    cacheBackend,
     ...(await createActionDependencies(job, inputs, createSummaryWriter(job.jobName), 'prepare')),
   });
 }
@@ -292,11 +282,12 @@ async function executeFinalizePhase(
   job: LocalMavenJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
+  cacheBackend: BaseCacheBackend,
 ) {
   return await executeFinalizeAction({
     env: job.env,
     artifactBackend: artifactApi,
-    cacheBackend: UNAVAILABLE_CACHE_API,
+    cacheBackend,
     ...(await createActionDependencies(
       job,
       inputs,

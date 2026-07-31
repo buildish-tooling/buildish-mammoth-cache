@@ -67,7 +67,10 @@ commit SHA:
 See [Security](../security/) for the full permissions breakdown.
 
 The action defaults to **read-only** on `pull_request` and `pull_request_target` events, so
-cache writes from untrusted forks are automatically suppressed.
+cache writes from untrusted forks are automatically suppressed. Repository config can make this
+policy stricter but cannot lower the pull-request floor; only a direct workflow input can do that.
+Distributed read-only workers upload nothing, and read-only aggregators perform no artifact
+exchange.
 
 ### Gradle
 

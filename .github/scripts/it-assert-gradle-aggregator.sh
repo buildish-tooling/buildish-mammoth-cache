@@ -14,33 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Prints and asserts the Gradle action outputs for the distributed aggregator
-# prepare phase, confirming both worker artifacts were downloaded and applied.
-#
-# Required env: ACTION_BASE_CACHE_RESTORE_STATUS, ACTION_JAVA_MAJOR,
-#   ACTION_JOB_MODE, ACTION_GRADLE_VERSIONS, ACTION_RESOLVED_REF_NAME,
-#   ACTION_SAFE_REF_NAME, ACTION_DEPENDENT_JOBS_COUNT,
-#   ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT, CALLER_RESOLVED_REF_NAME
-
 set -euo pipefail
 
-expected_safe="$(printf '%s' "$CALLER_RESOLVED_REF_NAME" \
-  | sed -E 's/[ /]+/-/g; s/[^A-Za-z0-9._-]/-/g; s/-+/-/g; s/^-+|-+$//g')"
-
-printf '%-42s %s\n' 'base-cache-restore-status:'          "$ACTION_BASE_CACHE_RESTORE_STATUS"
-printf '%-42s %s\n' 'java-major:'                         "$ACTION_JAVA_MAJOR"
-printf '%-42s %s\n' 'job-mode:'                           "$ACTION_JOB_MODE"
-printf '%-42s %s\n' 'gradle-versions:'                    "$ACTION_GRADLE_VERSIONS"
-printf '%-42s %s\n' 'resolved-ref-name:'                  "$ACTION_RESOLVED_REF_NAME"
-printf '%-42s %s  (expected: %s)\n' 'safe-ref-name:' "$ACTION_SAFE_REF_NAME" "$expected_safe"
-printf '%-42s %s\n' 'dependent-jobs-count:'               "$ACTION_DEPENDENT_JOBS_COUNT"
-printf '%-42s %s\n' 'downloaded-dependent-artifact-count:' "$ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT"
-
-test "$ACTION_BASE_CACHE_RESTORE_STATUS"           = 'miss'
-test "$ACTION_JAVA_MAJOR"                          = '21'
-test "$ACTION_JOB_MODE"                            = 'distributed-aggregator'
-test "$ACTION_GRADLE_VERSIONS"                     = '9.6.1'
-test "$ACTION_RESOLVED_REF_NAME"                   = "$CALLER_RESOLVED_REF_NAME"
-test "$ACTION_SAFE_REF_NAME"                       = "$expected_safe"
-test "$ACTION_DEPENDENT_JOBS_COUNT"                = '2'
-test "$ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT" = '2'
+test "$ACTION_BASE_CACHE_RESTORE_STATUS" = 'miss'
+test "$ACTION_JOB_MODE" = 'distributed-aggregator'
+test "$ACTION_DEPENDENT_DELTA_STATUS" = 'applied'
+test "$ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT" = '2'

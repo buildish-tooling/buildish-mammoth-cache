@@ -65,7 +65,6 @@ describe('readActionInputs', () => {
       baseDirectory: 'subdir',
       cacheEnabled: 'false',
       jobMode: 'distributed-worker',
-      githubToken: '',
     });
   });
 });
@@ -427,6 +426,36 @@ describe('normalizeActionConfig', () => {
     });
 
     expect(config.readOnly).toBe(true);
+  });
+
+  it('does not let repository config lower the pull-request read-only floor', async () => {
+    await withWorkspace({ 'cache.yml': 'read-only: false\n' }, async (workspace) => {
+      const rawInputs = await resolveActionInputsFromConfigFile(
+        readActionInputs(createInputProvider({ 'config-file': 'cache.yml' })),
+        { workspace },
+      );
+
+      const config = normalizeActionConfig(rawInputs, {
+        phase: 'prepare',
+        ciContext: { ...baseCiContext, eventName: 'pull_request', isPullRequest: true },
+        env: {},
+      });
+
+      expect(config.readOnly).toBe(true);
+    });
+  });
+
+  it('lets a direct workflow input lower the pull-request read-only floor', () => {
+    const config = normalizeActionConfig(
+      readActionInputs(createInputProvider({ 'read-only': 'false' })),
+      {
+        phase: 'prepare',
+        ciContext: { ...baseCiContext, eventName: 'pull_request', isPullRequest: true },
+        env: {},
+      },
+    );
+
+    expect(config.readOnly).toBe(false);
   });
 
   it('keeps workflow_dispatch writable by default', () => {

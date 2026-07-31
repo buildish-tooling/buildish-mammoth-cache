@@ -39,31 +39,14 @@ import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
 } from '../../src/delta/backend';
-import {
-  STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  type BaseCacheBackend,
-} from '../../src/cache/backend';
+import type { BaseCacheBackend } from '../../src/cache/backend';
+import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
 
 const RUN_ID = '92001';
 const RUN_ATTEMPT = '1';
 const CACHE_KEY_PREFIX = `local-it-distributed-${RUN_ID}-${RUN_ATTEMPT}-`;
 const INTEGRATION_WORKFLOW_NAME = 'Local Distributed Reuse Integration Test';
 const FIXTURE_JOB_NAMES = ['worker_a', 'worker_b', 'aggregator'] as const;
-const UNAVAILABLE_CACHE_API: BaseCacheBackend = {
-  capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  isFeatureAvailable(): boolean {
-    return false;
-  },
-  async restoreCache(): Promise<string | undefined> {
-    throw new Error('restoreCache must not be called when the cache feature is unavailable.');
-  },
-  async saveCache(): Promise<number> {
-    throw new Error('saveCache must not be called when the cache feature is unavailable.');
-  },
-  isMissingPathsError(): boolean {
-    return false;
-  },
-};
 
 interface LocalJobRuntime {
   readonly jobName: string;
@@ -97,10 +80,11 @@ async function main(): Promise<void> {
 
   try {
     const artifactApi = new FakeArtifactApi(path.join(stagedRoot, 'artifacts'));
+    const cacheBackend = new ImmutableCacheBackend();
     const jobs = await stageJobs(stagedRoot, fixtureSourceDirectory);
 
-    await runWorkerJob(jobs.worker_a, 'resolveWorkerA', artifactApi);
-    await runWorkerJob(jobs.worker_b, 'resolveWorkerB', artifactApi);
+    await runWorkerJob(jobs.worker_a, 'resolveWorkerA', artifactApi, cacheBackend);
+    await runWorkerJob(jobs.worker_b, 'resolveWorkerB', artifactApi, cacheBackend);
 
     const uploadedArtifacts = await artifactApi.listArtifacts();
     assert.equal(
@@ -118,9 +102,10 @@ async function main(): Promise<void> {
         'cache-key-prefix': CACHE_KEY_PREFIX,
       },
       artifactApi,
+      cacheBackend,
     );
     const aggregatorOutputs = createPrepareActionOutputs(aggregatorPrepareStatus);
-    assert.equal(aggregatorOutputs['downloaded-dependent-artifact-count'], '2');
+    assert.equal(aggregatorOutputs['dependent-delta-artifact-count'], '2');
     printOutputs('aggregator', aggregatorOutputs);
 
     const aggregatorLog = await runGradle(
@@ -151,6 +136,7 @@ async function main(): Promise<void> {
         'cache-key-prefix': CACHE_KEY_PREFIX,
       },
       artifactApi,
+      cacheBackend,
     );
     assert.equal(
       aggregatorFinalizeStatus.consumedDeltaCleanupResult?.deletedArtifactNames.length,
@@ -237,6 +223,7 @@ async function runWorkerJob(
   job: LocalJobRuntime,
   taskName: 'resolveWorkerA' | 'resolveWorkerB',
   artifactApi: WorkflowArtifactBackend,
+  cacheBackend: BaseCacheBackend,
 ): Promise<void> {
   const prepareStatus = await executePreparePhase(
     job,
@@ -246,6 +233,7 @@ async function runWorkerJob(
       'cache-key-prefix': CACHE_KEY_PREFIX,
     },
     artifactApi,
+    cacheBackend,
   );
   printOutputs(job.jobName, createPrepareActionOutputs(prepareStatus));
   await runGradle(job, ['--info', '--no-daemon', taskName], `${job.jobName}-gradle`);
@@ -257,6 +245,7 @@ async function runWorkerJob(
       'cache-key-prefix': CACHE_KEY_PREFIX,
     },
     artifactApi,
+    cacheBackend,
   );
   assert.equal(finalizeStatus.deltaArtifactResult?.status, 'uploaded');
 }
@@ -265,11 +254,12 @@ async function executePreparePhase(
   job: LocalJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
+  cacheBackend: BaseCacheBackend,
 ) {
   return await executePrepareAction({
     env: job.env,
     artifactBackend: artifactApi,
-    cacheBackend: UNAVAILABLE_CACHE_API,
+    cacheBackend,
     ...(await createGitHubActionDependencies(
       job,
       inputs,
@@ -283,11 +273,12 @@ async function executeFinalizePhase(
   job: LocalJobRuntime,
   inputs: Record<string, string>,
   artifactApi: WorkflowArtifactBackend,
+  cacheBackend: BaseCacheBackend,
 ) {
   return await executeFinalizeAction({
     env: job.env,
     artifactBackend: artifactApi,
-    cacheBackend: UNAVAILABLE_CACHE_API,
+    cacheBackend,
     ...(await createGitHubActionDependencies(
       job,
       inputs,

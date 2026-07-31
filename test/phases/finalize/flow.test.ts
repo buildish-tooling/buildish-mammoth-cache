@@ -836,6 +836,46 @@ describe('executeFinalizeAction', () => {
     });
   });
 
+  it('honors cleanup-enabled=false by skipping timestamp cache GC', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      const staleRelativePath = 'caches/modules-2/files-2.1/org/example/stale.bin';
+      const stalePath = path.join(gradleUserHome, staleRelativePath);
+
+      await writeGradleFile(gradleUserHome, staleRelativePath, 'stale');
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      await utimes(
+        stalePath,
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2026-01-01T00:00:00.000Z'),
+      );
+
+      const status = await executeFinalizeAction({
+        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+        cacheBackend: createCacheApi({ saveCache: async () => 83 }),
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
+        env: createTestEnv(workspace, gradleUserHome, 'build'),
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'build'),
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createLifecycleGetState(savedState),
+          inputProvider: {
+            getInput(name: string): string {
+              if (name === 'cleanup-enabled') return 'false';
+              return '';
+            },
+          },
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.cacheGcResult).toBeNull();
+      await expect(pathExists(stalePath)).resolves.toBe(true);
+    });
+  });
+
   it('skips timestamp cache GC for distributed-worker delta producers', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
@@ -939,6 +979,54 @@ describe('executeFinalizeAction', () => {
       );
       expect(artifactApi.deletedArtifactNames).toEqual([]);
       await expect(artifactBackend.listArtifacts()).resolves.toHaveLength(1);
+    });
+  });
+
+  it('does not require an artifact backend for read-only aggregator finalize', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      replaceLifecycleRecord(savedState, (record) =>
+        withConsumedArtifacts(record, ['must-not-be-read-or-deleted']),
+      );
+
+      const status = await executeFinalizeAction({
+        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
+        env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
+        ...(await createFinalizeActionDependencies({
+          env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
+          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+          getState: createLifecycleGetState(savedState),
+          inputProvider: {
+            getInput(name: string): string {
+              if (name === 'job-mode') return 'distributed-aggregator';
+              if (name === 'read-only') return 'true';
+              return '';
+            },
+          },
+          summaryWriter: createSummaryCapture().writer,
+          workspace,
+        })),
+      });
+
+      expect(status.consumedDeltaCleanupResult).toEqual({
+        attemptedArtifactNames: [],
+        deletedArtifactNames: [],
+        warnings: [],
+        message:
+          'Consumed delta artifact cleanup skipped because read-only mode disables artifact exchange.',
+      });
+      expect(status.bootstrap.baseCacheResult).toEqual(
+        expect.objectContaining({ status: 'read-only' }),
+      );
     });
   });
 
@@ -1050,7 +1138,6 @@ describe('executeFinalizeAction', () => {
       await writeGradleFile(gradleUserHome, 'caches/modules-2/files-2.1/module.bin', 'after');
 
       const status = await executeFinalizeAction({
-        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),

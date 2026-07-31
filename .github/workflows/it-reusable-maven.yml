@@ -25,7 +25,8 @@ name: IT Mammoth Cache for Maven (Reusable)
 #   publication plus same-run aggregator download/merge/apply using deterministic worker job names.
 #   Assertion: both worker-profile dependencies resolve offline in the aggregator after merge.
 # - maven_duplicate_invocation_guard proves duplicate same-job action usage is rejected.
-# - maven_pull_request_read_only checks the default PR read-only behavior under minimal permissions.
+# - maven_pull_request_worker -> maven_pull_request_read_only checks the full PR read-only
+#   distributed topology under minimal permissions.
 # - maven_standalone_cross_platform is a lightweight smoke check on macOS/Windows only.
 #   Maven (from setup-java) is available on all runners; no GnuPG setup is required.
 #
@@ -58,7 +59,8 @@ on:
         type: string
       run-pr-scenarios:
         description: >-
-          Run the fork-safe pull-request scenario that verifies PR events stay read-only by default.
+          Run the fork-safe pull-request worker/aggregator topology that verifies PR events stay
+          read-only, workers upload nothing, and aggregation is an explicit no-op.
         required: true
         type: boolean
       run-writable-scenarios:
@@ -116,13 +118,13 @@ jobs:
 
       - name: Assert prepare outputs
         env:
+          ACTION_CACHE_FAMILY_KEY: ${{ steps.prepare.outputs.cache-family-key }}
+          ACTION_CACHE_LINEAGE_PREFIX: ${{ steps.prepare.outputs.cache-lineage-prefix }}
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
-          CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-maven-standalone.sh
 
       - name: Resolve standalone dependencies online
@@ -135,7 +137,7 @@ jobs:
           path: |
             ~/.m2/repository
             ~/.m2/wrapper/dists
-          key: ${{ steps.prepare.outputs.cache-key }}
+          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
 
       - name: Wipe Maven local repository to prove restore
         run: |
@@ -149,7 +151,7 @@ jobs:
           path: |
             ~/.m2/repository
             ~/.m2/wrapper/dists
-          key: ${{ steps.prepare.outputs.cache-key }}
+          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
 
       - name: Verify the saved cache restores offline
         working-directory: build/integration-fixtures/maven-standalone-round-trip
@@ -249,13 +251,9 @@ jobs:
       - name: Assert both worker artifacts were consumed
         env:
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
-          ACTION_DOWNLOADED_DEPENDENT_ARTIFACT_COUNT: ${{ steps.prepare.outputs.downloaded-dependent-artifact-count }}
-          CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-maven-aggregator.sh
 
   # Proves that two action invocations in the same GitHub job cannot race or double-run post-work.
@@ -307,10 +305,46 @@ jobs:
         env:
           STEPS_DUPLICATE_ACTION_OUTCOME: ${{ steps.duplicate_action.outcome }}
 
-  # Validates the PR default remains read-only under minimal permissions.
-  maven_pull_request_read_only:
-    name: Maven pull request standalone (default read-only behavior)
+  # A PR worker exercises distributed-worker finalize without artifact write permission.
+  maven_pull_request_worker:
+    name: Maven pull request distributed worker (no artifact upload)
     if: inputs.run-pr-scenarios
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up integration test environment
+        uses: ./.github/actions/it-setup
+
+      - name: Stage fixture
+        run: bash .github/scripts/stage-fixture.sh maven-pull-request-worker
+
+      - name: Prepare Mammoth Cache for Maven
+        uses: ./actions/github/maven
+        with:
+          base-directory: build/integration-fixtures/maven-pull-request-worker
+          job-mode: distributed-worker
+          cache-key-prefix: it-maven-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: maven_pull_request_worker
+
+      - name: Run a read-only PR worker build
+        working-directory: build/integration-fixtures/maven-pull-request-worker
+        run: mvn -P worker-a dependency:resolve -q
+
+  # Validates the full PR worker/aggregator topology under minimal permissions.
+  maven_pull_request_read_only:
+    name: Maven pull request aggregator (explicit read-only no-op)
+    if: inputs.run-pr-scenarios
+    needs: [maven_pull_request_worker]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -332,26 +366,25 @@ jobs:
         uses: ./actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-pull-request
+          job-mode: distributed-aggregator
+          dependent-jobs: maven_pull_request_worker
           cache-key-prefix: it-maven-pr-${{ github.run_id }}-${{ github.run_attempt }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
           github-job-name: maven_pull_request_read_only
 
-      - name: Run a read-only PR build
+      - name: Run a read-only PR aggregator build
         working-directory: build/integration-fixtures/maven-pull-request
         run: mvn -P standalone dependency:resolve -q
 
       - name: Assert the PR default stayed read-only
         env:
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
-          ACTION_JAVA_MAJOR: ${{ steps.prepare.outputs.java-major }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
           ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
-          ACTION_RESOLVED_REF_NAME: ${{ steps.prepare.outputs.resolved-ref-name }}
-          ACTION_SAFE_REF_NAME: ${{ steps.prepare.outputs.safe-ref-name }}
-          ACTION_DEPENDENT_JOBS_COUNT: ${{ steps.prepare.outputs.dependent-jobs-count }}
-          CALLER_RESOLVED_REF_NAME: ${{ inputs.caller-resolved-ref-name }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-maven-pr.sh
 
   # Lightweight macOS/Windows smoke coverage. No GnuPG setup required for Maven.

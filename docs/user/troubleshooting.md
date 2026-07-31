@@ -86,18 +86,23 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
 
 **Diagnostic steps:**
 
-1. **Verify the `dependent-jobs` value on the aggregator matches the exact job key of each
+1. **Check the effective read-only policy.** A read-only aggregator intentionally performs no
+   artifact lookup and reports `skipped-read-only`; missing artifacts are not an error in that
+   mode. If the workflow only aggregates writable events, use a trusted-event `if` condition to
+   skip the aggregator job entirely.
+
+2. **Verify the `dependent-jobs` value on the aggregator matches the exact job key of each
    worker.** The job key is the YAML key in the `jobs:` map, not the `name:` field. For example,
    if the worker is defined as `jobs: { build-worker-a: … }`, the aggregator must list
    `dependent-jobs: build-worker-a`.
 
-2. **Check whether the worker's finalize step actually ran.** If the worker build failed and the
+3. **Check whether the worker's finalize step actually ran.** If the worker build failed and the
    step running the action was skipped or the post-action hook was suppressed, no delta artifact
    was uploaded. The aggregator must still run (`if: always()` or equivalent) to clean up; it
    will report every missing or invalid configured worker rather than silently producing a broken
    cache. A successful writable worker uploads an explicit envelope even when it made no changes.
 
-3. **Check for matrix job names with special characters.** Matrix dimension values such as
+4. **Check for matrix job names with special characters.** Matrix dimension values such as
    `ubuntu-latest / Java 21` contain spaces and slashes that are sanitized when constructing
    the artifact name, but the `dependent-jobs` input must use the original unsanitized job key
    (e.g. `build (ubuntu-latest, 21)`). Use the `github-job-name` input on both worker and
@@ -117,13 +122,12 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
        github-job-name: aggregator
    ```
 
-4. **Check whether you are re-running only the aggregator without re-running the workers.**
-   Delta artifacts are scoped to the run ID _and_ attempt number. Re-running only the aggregator
-   increments its attempt number but does not change the workers' attempt numbers, so the
-   aggregator looks for artifacts with the new attempt number that do not exist. Re-run all jobs
-   together or re-run from the first failed job.
+5. **Check rerun selection diagnostics.** The aggregator selects the newest unambiguous worker
+   attempt not newer than its own attempt, so aggregator-only and failed-job reruns can reuse
+   retained earlier envelopes. Duplicate artifacts for the same worker attempt are rejected as
+   ambiguous instead of being selected arbitrarily.
 
-5. **Confirm `actions: write` permission is set on the worker jobs.** Without this permission the
+6. **Confirm `actions: write` permission is set on writable worker jobs.** Without this permission the
    worker cannot upload the artifact and the aggregator will not find it.
 
 ---

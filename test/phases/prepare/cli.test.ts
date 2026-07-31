@@ -22,7 +22,9 @@ import {
 } from '../../../src/phases/prepare/cli';
 
 const prepareFlowMock = vi.hoisted(() => ({
-  createPrepareActionOutputs: vi.fn(() => ({ 'cache-key': 'cache-key-value' })),
+  createPrepareActionOutputs: vi.fn(() => ({
+    'cache-family-key': 'cache-family-key-value',
+  })),
   executePrepareAction: vi.fn(async () => ({
     bootstrap: { baseCacheResult: null },
     restoreCleanupResult: null,
@@ -103,6 +105,9 @@ describe('prepare entrypoint', () => {
       saveState: runtimeHost.saveState,
     });
     expect(prepareFlowMock.executePrepareAction).toHaveBeenCalledWith(dependencies);
-    expect(runtimeHost.setOutput).toHaveBeenCalledWith('cache-key', 'cache-key-value');
+    expect(runtimeHost.setOutput).toHaveBeenCalledWith(
+      'cache-family-key',
+      'cache-family-key-value',
+    );
   });
 });
