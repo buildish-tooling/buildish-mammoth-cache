@@ -110,6 +110,11 @@ flowchart TD
 6. Calls `saveBaseCache()` (skipped for `distributed-worker`; see [Base Cache Design](../base-cache/)).
 7. For `distributed-aggregator`: cleans up consumed worker delta artifacts.
 
+`src/phases/finalize/flow.ts` owns lifecycle orchestration and side effects.
+`src/phases/finalize/reporting.ts` owns the final status model, manifest-derived statistics, and
+human-readable log and job-summary rendering. `flow.ts` re-exports the reporting contract so
+existing consumers retain a stable facade.
+
 ## Configuration loading
 
 The full priority order for action configuration:
