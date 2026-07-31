@@ -21,6 +21,7 @@ import { performance } from 'node:perf_hooks';
 import { getHeapStatistics } from 'node:v8';
 
 import {
+  DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY,
   captureCacheManifest,
   computeCacheDelta,
   serializeCacheDeltaManifest,
@@ -46,24 +47,36 @@ interface Measurement<T> {
 }
 
 const DEFAULT_FILE_COUNTS = [10_000, 50_000, 100_000] as const;
+const DEFAULT_SHAPES = ['mixed'] as const;
 const MEASUREMENT_POLL_INTERVAL_MS = 25;
+
+type BenchmarkShape = 'mixed' | 'broad' | 'deep';
+
+interface BenchmarkOptions {
+  readonly fileCounts: readonly number[];
+  readonly shapes: readonly BenchmarkShape[];
+}
 
 await main();
 
 async function main(): Promise<void> {
-  const fileCounts = parseFileCounts(process.argv.slice(2));
+  const { fileCounts, shapes } = parseBenchmarkOptions(process.argv.slice(2));
   const heapLimit = getHeapStatistics().heap_size_limit;
 
   console.log(`Node ${process.version}`);
   console.log(`Heap size limit: ${formatBytes(heapLimit)}`);
+  console.log(`Manifest scan concurrency: ${DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY}`);
   console.log('Benchmark counts:', fileCounts.join(', '));
+  console.log('Benchmark shapes:', shapes.join(', '));
 
-  for (const fileCount of fileCounts) {
-    await runScenario(fileCount);
+  for (const shape of shapes) {
+    for (const fileCount of fileCounts) {
+      await runScenario(fileCount, shape);
+    }
   }
 }
 
-async function runScenario(fileCount: number): Promise<void> {
+async function runScenario(fileCount: number, shape: BenchmarkShape): Promise<void> {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-manifest-bench-'));
   const gradleUserHome = path.join(tempRoot, '.gradle');
   const cacheModel = createBenchmarkCacheModel(gradleUserHome);
@@ -73,10 +86,17 @@ async function runScenario(fileCount: number): Promise<void> {
 
   try {
     await mkdir(gradleUserHome, { recursive: true });
-    const generatedBytes = await generateSyntheticCacheTree(gradleUserHome, fileCount, 0);
+    const generatedBytes = await generateSyntheticCacheTree(gradleUserHome, fileCount, 0, shape);
     const previousCapture = await measureAsync(() => captureCacheManifest(cacheModel));
 
-    await mutateSyntheticCacheTree(gradleUserHome, fileCount, modifyCount, deleteCount, addCount);
+    await mutateSyntheticCacheTree(
+      gradleUserHome,
+      fileCount,
+      modifyCount,
+      deleteCount,
+      addCount,
+      shape,
+    );
 
     const currentCapture = await measureAsync(() => captureCacheManifest(cacheModel));
     const deltaComputation = measureSync(() =>
@@ -92,7 +112,7 @@ async function runScenario(fileCount: number): Promise<void> {
       0,
     );
 
-    console.log(`\nScenario: ${fileCount.toLocaleString()} files`);
+    console.log(`\nScenario: ${shape}, ${fileCount.toLocaleString()} files`);
     console.log(`Synthetic bytes written: ${formatBytes(generatedBytes)}`);
     console.log(
       `Mutations: modified=${modifyCount.toLocaleString()}, deleted=${deleteCount.toLocaleString()}, added=${addCount.toLocaleString()}`,
@@ -121,11 +141,12 @@ async function generateSyntheticCacheTree(
   gradleUserHome: string,
   fileCount: number,
   generationOffset: number,
+  shape: BenchmarkShape,
 ): Promise<number> {
   let writtenBytes = 0;
 
   for (let index = 0; index < fileCount; index += 1) {
-    const relativePath = relativePathForFileIndex(index + generationOffset);
+    const relativePath = relativePathForFileIndex(index + generationOffset, shape);
     const content = syntheticFileContent(index + generationOffset, 'base');
     writtenBytes += Buffer.byteLength(content);
     await writeSyntheticFile(gradleUserHome, relativePath, content);
@@ -140,30 +161,44 @@ async function mutateSyntheticCacheTree(
   modifyCount: number,
   deleteCount: number,
   addCount: number,
+  shape: BenchmarkShape,
 ): Promise<void> {
   for (let index = 0; index < modifyCount; index += 1) {
     await writeSyntheticFile(
       gradleUserHome,
-      relativePathForFileIndex(index),
+      relativePathForFileIndex(index, shape),
       syntheticFileContent(index, 'modified'),
     );
   }
 
   for (let index = modifyCount; index < modifyCount + deleteCount; index += 1) {
-    await unlink(path.join(gradleUserHome, relativePathForFileIndex(index)));
+    await unlink(path.join(gradleUserHome, relativePathForFileIndex(index, shape)));
   }
 
   for (let index = 0; index < addCount; index += 1) {
     const newFileIndex = fileCount + index;
     await writeSyntheticFile(
       gradleUserHome,
-      relativePathForFileIndex(newFileIndex),
+      relativePathForFileIndex(newFileIndex, shape),
       syntheticFileContent(newFileIndex, 'added'),
     );
   }
 }
 
-function relativePathForFileIndex(index: number): string {
+function relativePathForFileIndex(index: number, shape: BenchmarkShape): string {
+  if (shape === 'broad') {
+    return `caches/modules-2/files-2.1/broad/artifact-${String(index).padStart(8, '0')}.bin`;
+  }
+
+  if (shape === 'deep') {
+    const branch = String(index % 250).padStart(3, '0');
+    const levels = Array.from(
+      { length: 12 },
+      (_, level) => `level-${String(level).padStart(2, '0')}`,
+    );
+    return `caches/modules-2/files-2.1/deep/branch-${branch}/${levels.join('/')}/artifact-${String(index).padStart(8, '0')}.bin`;
+  }
+
   const bucket = Math.floor(index / 100);
   const shard = index % 100;
   switch (index % 10) {
@@ -277,19 +312,41 @@ function printMeasurement<T>(label: string, measurement: Measurement<T>): void {
   );
 }
 
-function parseFileCounts(arguments_: readonly string[]): readonly number[] {
-  if (arguments_.length === 0) {
-    return DEFAULT_FILE_COUNTS;
+function parseBenchmarkOptions(arguments_: readonly string[]): BenchmarkOptions {
+  const countArguments = arguments_.filter((value) => !value.startsWith('--shape='));
+  const shapeArguments = arguments_.filter((value) => value.startsWith('--shape='));
+  if (shapeArguments.length > 1) {
+    throw new Error('Expected at most one --shape argument.');
   }
 
-  return arguments_.map((value) => {
-    const parsed = Number(value);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      throw new Error(`Invalid file-count argument '${value}'. Expected a positive integer.`);
-    }
+  const fileCounts = (countArguments.length === 0 ? DEFAULT_FILE_COUNTS : countArguments).map(
+    (value) => {
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`Invalid file-count argument '${value}'. Expected a positive integer.`);
+      }
 
-    return parsed;
-  });
+      return parsed;
+    },
+  );
+  const shapeValue = shapeArguments[0]?.slice('--shape='.length) ?? DEFAULT_SHAPES.join(',');
+  const requestedShapes = shapeValue === 'all' ? ['mixed', 'broad', 'deep'] : shapeValue.split(',');
+  const shapes: BenchmarkShape[] = [];
+  for (const shape of requestedShapes) {
+    if (!isBenchmarkShape(shape)) {
+      throw new Error(`Invalid benchmark shape '${shape}'. Expected mixed, broad, deep, or all.`);
+    }
+    shapes.push(shape);
+  }
+
+  return {
+    fileCounts,
+    shapes,
+  };
+}
+
+function isBenchmarkShape(value: string): value is BenchmarkShape {
+  return value === 'mixed' || value === 'broad' || value === 'deep';
 }
 
 function runGc(): void {

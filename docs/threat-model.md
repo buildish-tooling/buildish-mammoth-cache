@@ -295,8 +295,9 @@ Out-of-scope adversaries:
 - No guarantee that custom cache partitions are secret-free. Hard excludes cover known built-in unsafe paths, not all possible project-specific secrets. _(documented)_
 - No constant-time, cryptographic, authentication, authorization, or access-control guarantees for its own APIs; it relies on GitHub Actions permissions and repository policy. _(inferred)_
 - No promise that concurrent writers make newest-prefix restore globally deterministic; current-ref and default-branch candidates remain compatibility-bounded. _(documented)_
-- No global resource-exhaustion guarantee for arbitrarily large cache roots or manifest capture;
-  the documented delta-exchange caps cover artifact discovery and package validation only. _(inferred)_
+- No global resource-exhaustion guarantee for arbitrarily large cache roots or manifest capture.
+  Traversal and hashing concurrency are bounded, but the documented delta-exchange caps cover
+  artifact discovery and package validation rather than local cache-root cardinality. _(inferred)_
 - No protection against malicious or compromised GitHub cache/artifact services, runner hosts, `gpg`, Node.js, npm dependencies, or GitHub toolkit packages. _(inferred)_
 - No support guarantee for non-GitHub CI execution paths in the current model. _(documented)_
 

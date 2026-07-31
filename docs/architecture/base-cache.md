@@ -113,6 +113,18 @@ Standalone backend failures are prominent warnings so the build result remains u
 save failures are fatal because the merged distributed result has not become durable. Reports name
 a generation as published only after the backend returns a successful cache ID.
 
+## Bounded manifest scanning
+
+Content-manifest capture and metadata-only garbage-collection scans share one expandable work queue
+per include root. The queue runs at most 32 filesystem tasks concurrently, including directory
+inspection and file hashing. It does not create one promise or open file stream for every directory
+entry in a broad cache tree.
+
+Traversal completion order does not affect the contract: entries are sorted by normalized relative
+path before the manifest is returned, and canonical digest fields are unchanged. The bound protects
+runner file descriptors and reduces transient allocation; it is not a total cache-size or manifest
+cardinality limit.
+
 ## Timestamp cache garbage collection
 
 `cache-gc-mode: timestamp` runs by default during finalize before the base cache is saved by

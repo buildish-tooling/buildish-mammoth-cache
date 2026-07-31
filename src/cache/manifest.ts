@@ -21,6 +21,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { hashStableFileSha256, isMissingPathError } from '../util/fs';
+import { processAsyncWorkQueue, type EnqueueAsyncWork } from '../util/async-work-queue';
 import {
   resolveNormalizedPathWithinRoot,
   validateNormalizedRelativePosixPath,
@@ -30,6 +31,8 @@ import type { CacheModel } from './model';
 
 /** Schema version embedded in every captured cache manifest. Increment on breaking format changes. */
 export const CACHE_MANIFEST_SCHEMA_VERSION = 1;
+/** Maximum simultaneous filesystem operations used by manifest and metadata traversal. */
+export const DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY = 32;
 const STABLE_ENTRY_CAPTURE_ATTEMPTS = 3;
 const CACHE_PARTITION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -238,15 +241,36 @@ type CompiledGlobSegment =
       readonly regex: RegExp;
     };
 
+/** Tuning options for deterministic manifest and metadata capture. */
+export interface CacheManifestCaptureOptions {
+  /**
+   * Maximum simultaneous traversal or file-capture operations. Defaults to
+   * {@link DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY}.
+   */
+  readonly maxConcurrency?: number;
+}
+
+interface IncludedTreeWorkItem {
+  readonly absolutePath: string;
+  readonly kind: 'inspect' | 'directory' | 'file' | 'symbolic-link';
+}
+
 /**
  * Scans all configured cache partitions and captures a deterministic manifest of regular files.
  *
  * The scanner retries a small number of times when a file changes while being hashed, so the later delta
  * computation does not observe inconsistent size/hash metadata for the same path.
  */
-export async function captureCacheManifest(cacheModel: CacheModel): Promise<CacheManifest> {
+export async function captureCacheManifest(
+  cacheModel: CacheModel,
+  options: CacheManifestCaptureOptions = {},
+): Promise<CacheManifest> {
   const cacheRoot = cacheModel.cacheRoot;
-  const partitions = await scanCachePartitions(cacheModel, captureStableFileEntry);
+  const partitions = await scanCachePartitions(
+    cacheModel,
+    captureStableFileEntry,
+    resolveManifestScanConcurrency(options.maxConcurrency),
+  );
 
   return {
     schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
@@ -262,11 +286,16 @@ export async function captureCacheManifest(cacheModel: CacheModel): Promise<Cach
  */
 export async function captureCacheMetadataSnapshot(
   cacheModel: CacheModel,
+  options: CacheManifestCaptureOptions = {},
 ): Promise<CacheMetadataSnapshot> {
   return {
     buildToolId: cacheModel.buildToolId,
     cacheRoot: cacheModel.cacheRoot,
-    partitions: await scanCachePartitions(cacheModel, captureFileMetadataEntry),
+    partitions: await scanCachePartitions(
+      cacheModel,
+      captureFileMetadataEntry,
+      resolveManifestScanConcurrency(options.maxConcurrency),
+    ),
   };
 }
 
@@ -416,6 +445,7 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
     absolutePath: string,
     relativePath: string,
   ) => Promise<T | null>,
+  maxConcurrency: number,
 ): Promise<{ partitionId: string; entries: T[] }[]> {
   const cacheRoot = cacheModel.cacheRoot;
   const compiledPartitions = cacheModel.partitions.map((partition) => ({
@@ -432,31 +462,35 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
       const includeRoots = await expandIncludePatternRoots(cacheRoot, includePattern);
 
       for (const includeRoot of includeRoots) {
-        await walkIncludedTree(includeRoot, async (absolutePath) => {
-          const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
-          if (
-            compiledPartition.seenRelativePaths.has(relativePath) ||
-            matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)
-          ) {
-            return;
-          }
+        await walkIncludedTree(
+          includeRoot,
+          async (absolutePath) => {
+            const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
+            if (
+              compiledPartition.seenRelativePaths.has(relativePath) ||
+              matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)
+            ) {
+              return;
+            }
 
-          const existingPartitionId = claimedPaths.get(relativePath);
-          if (existingPartitionId && existingPartitionId !== compiledPartition.partition.id) {
-            throw new Error(
-              `Cache manifest path '${relativePath}' matches multiple cache partitions: ${existingPartitionId}, ${compiledPartition.partition.id}.`,
-            );
-          }
+            const existingPartitionId = claimedPaths.get(relativePath);
+            if (existingPartitionId && existingPartitionId !== compiledPartition.partition.id) {
+              throw new Error(
+                `Cache manifest path '${relativePath}' matches multiple cache partitions: ${existingPartitionId}, ${compiledPartition.partition.id}.`,
+              );
+            }
 
-          const entry = await captureEntry(cacheRoot, absolutePath, relativePath);
-          if (!entry) {
-            return;
-          }
+            const entry = await captureEntry(cacheRoot, absolutePath, relativePath);
+            if (!entry) {
+              return;
+            }
 
-          compiledPartition.seenRelativePaths.add(relativePath);
-          claimedPaths.set(relativePath, compiledPartition.partition.id);
-          compiledPartition.entries.push(entry);
-        });
+            compiledPartition.seenRelativePaths.add(relativePath);
+            claimedPaths.set(relativePath, compiledPartition.partition.id);
+            compiledPartition.entries.push(entry);
+          },
+          maxConcurrency,
+        );
       }
     }
   }
@@ -586,58 +620,76 @@ async function captureStableFileEntry(
 async function walkIncludedTree(
   pathToScan: string,
   onFile: (absolutePath: string) => Promise<void>,
+  maxConcurrency: number,
 ): Promise<void> {
-  const entryStat = await lstat(pathToScan).catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return null;
-    }
-
-    throw error;
-  });
-
-  if (!entryStat) {
-    return;
-  }
-
-  if (entryStat.isSymbolicLink() || entryStat.isFile()) {
-    await onFile(pathToScan);
-    return;
-  }
-
-  if (!entryStat.isDirectory()) {
-    return;
-  }
-
-  const entries = await readSortedDirectoryEntries(pathToScan);
-
-  if (!entries) {
-    return;
-  }
-
-  // Process all directory entries concurrently. Within a single directory, each entry has a
-  // unique name, so the onFile callbacks for different entries are guaranteed to operate on
-  // distinct absolute paths — there are no shared-state race conditions. The outer loop in
-  // captureCacheManifest still processes include patterns sequentially, so cross-pattern
-  // deduplication via seenRelativePaths continues to work correctly.
-  await Promise.all(
-    entries.map(async (entry) => {
-      const absolutePath = path.join(pathToScan, entry.name);
-
-      if (entry.isSymbolicLink()) {
-        await onFile(absolutePath);
+  await processAsyncWorkQueue<IncludedTreeWorkItem>(
+    [{ absolutePath: pathToScan, kind: 'inspect' }],
+    maxConcurrency,
+    async (item, enqueue) => {
+      if (item.kind === 'file' || item.kind === 'symbolic-link') {
+        await onFile(item.absolutePath);
         return;
       }
 
-      if (entry.isDirectory()) {
-        await walkIncludedTree(absolutePath, onFile);
+      const entryStat = await lstat(item.absolutePath).catch((error: unknown) => {
+        if (isMissingPathError(error)) {
+          return null;
+        }
+
+        throw error;
+      });
+
+      if (!entryStat) {
         return;
       }
 
-      if (entry.isFile()) {
-        await onFile(absolutePath);
+      if (entryStat.isSymbolicLink() || entryStat.isFile()) {
+        await onFile(item.absolutePath);
+        return;
       }
-    }),
+
+      if (!entryStat.isDirectory()) {
+        return;
+      }
+
+      const entries = await readSortedDirectoryEntries(item.absolutePath);
+      if (entries) {
+        enqueueDirectoryEntries(item.absolutePath, entries, enqueue);
+      }
+    },
   );
+}
+
+function enqueueDirectoryEntries(
+  directoryPath: string,
+  entries: NonNullable<Awaited<ReturnType<typeof readSortedDirectoryEntries>>>,
+  enqueue: EnqueueAsyncWork<IncludedTreeWorkItem>,
+): void {
+  enqueue(createDirectoryWorkItems(directoryPath, entries));
+}
+
+function* createDirectoryWorkItems(
+  directoryPath: string,
+  entries: NonNullable<Awaited<ReturnType<typeof readSortedDirectoryEntries>>>,
+): Iterable<IncludedTreeWorkItem> {
+  for (const entry of entries) {
+    const absolutePath = path.join(directoryPath, entry.name);
+    if (entry.isSymbolicLink()) {
+      yield { absolutePath, kind: 'symbolic-link' };
+    } else if (entry.isDirectory()) {
+      yield { absolutePath, kind: 'directory' };
+    } else if (entry.isFile()) {
+      yield { absolutePath, kind: 'file' };
+    }
+  }
+}
+
+function resolveManifestScanConcurrency(value: number | undefined): number {
+  const concurrency = value ?? DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error('Cache manifest scan concurrency must be a positive integer.');
+  }
+  return concurrency;
 }
 
 async function expandIncludePatternRoots(

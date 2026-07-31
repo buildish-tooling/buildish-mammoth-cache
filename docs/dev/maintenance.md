@@ -110,6 +110,26 @@ to the typed contract exactly. The test fails on undeclared reads/outputs, decla
 metadata fields, default drift, description drift, tool-applicability drift, and stale reference
 rows.
 
+## Manifest performance benchmark
+
+`npm run benchmark:manifest -- 10000 --shape=broad,deep` measures manifest capture, delta
+computation, and serialization against repeatable synthetic broad and deep cache trees. Use the same
+file count and shape list for before/after comparisons, and record Node version, elapsed capture
+time, peak heap, and peak RSS. The fixture and local filesystem dominate parts of the result, so
+treat the numbers as directional rather than as a production service-level objective.
+
+On POSIX systems, a constrained-descriptor check can be run in a subshell without changing machine
+configuration:
+
+```bash
+ulimit -n 64
+npm run benchmark:manifest -- 10000 --shape=broad,deep
+```
+
+Manifest and metadata traversal use a shared default concurrency bound of 32. If that implementation
+constant changes, rerun both normal and constrained-descriptor scenarios and verify that canonical
+manifest digests remain unchanged across concurrency limits.
+
 ## Adding a new CI provider
 
 See [CI Abstraction Layer](../../architecture/ci-abstraction/) for the interfaces a new provider

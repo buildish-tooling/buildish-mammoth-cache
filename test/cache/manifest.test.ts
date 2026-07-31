@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CACHE_MANIFEST_SCHEMA_VERSION,
+  DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY,
   calculateCanonicalCacheManifestDigest,
   captureCacheMetadataSnapshot,
   captureCacheManifest,
@@ -53,6 +54,10 @@ import type { NormalizedGradleConfig } from '../../src/config/types';
 import { hashStableFileSha256 } from '../../src/util/fs';
 
 describe('captureCacheManifest', () => {
+  it('uses a conservative bounded default concurrency', () => {
+    expect(DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY).toBe(32);
+  });
+
   it('captures regular files by partition and excludes lock/configuration-cache content', async () => {
     await withGradleUserHome(async (gradleUserHome) => {
       await writeTrackedFile(gradleUserHome, 'caches/modules-2/files-2.1/example.jar', 'module');
@@ -120,6 +125,41 @@ describe('captureCacheManifest', () => {
     });
   });
 
+  it.each(['broad', 'deep'] as const)(
+    'preserves canonical manifest semantics for a %s tree across concurrency limits',
+    async (shape) => {
+      await withGradleUserHome(async (gradleUserHome) => {
+        const fileCount = 400;
+        for (let index = 0; index < fileCount; index += 1) {
+          const relativePath =
+            shape === 'broad'
+              ? `caches/modules-2/files-2.1/broad/file-${String(index).padStart(4, '0')}.bin`
+              : `caches/modules-2/files-2.1/deep/branch-${String(index % 20).padStart(2, '0')}/one/two/three/four/five/file-${String(index).padStart(4, '0')}.bin`;
+          await writeTrackedFile(gradleUserHome, relativePath, `contents-${index}`);
+        }
+
+        const cacheModel = createTestCacheModel(gradleUserHome);
+        const serialManifest = await captureCacheManifest(cacheModel, { maxConcurrency: 1 });
+        const parallelManifest = await captureCacheManifest(cacheModel, { maxConcurrency: 4 });
+
+        expect(flattenManifestPaths(parallelManifest)).toEqual(
+          flattenManifestPaths(serialManifest),
+        );
+        expect(calculateCanonicalCacheManifestDigest(parallelManifest)).toBe(
+          calculateCanonicalCacheManifestDigest(serialManifest),
+        );
+      });
+    },
+  );
+
+  it('rejects invalid scan concurrency before traversing the cache', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      await expect(
+        captureCacheManifest(createTestCacheModel(gradleUserHome), { maxConcurrency: 0 }),
+      ).rejects.toThrow(/positive integer/u);
+    });
+  });
+
   it('captures cache metadata without content hashes', async () => {
     await withGradleUserHome(async (gradleUserHome) => {
       await writeTrackedFile(gradleUserHome, 'caches/modules-2/files-2.1/example.jar', 'module');
@@ -137,6 +177,16 @@ describe('captureCacheManifest', () => {
         }),
       );
       expect(entry).not.toHaveProperty('contentSha256');
+    });
+  });
+
+  it('applies scan concurrency validation to metadata capture', async () => {
+    await withGradleUserHome(async (gradleUserHome) => {
+      await expect(
+        captureCacheMetadataSnapshot(createTestCacheModel(gradleUserHome), {
+          maxConcurrency: 0,
+        }),
+      ).rejects.toThrow(/positive integer/u);
     });
   });
 
