@@ -14,173 +14,39 @@
  * limitations under the License.
  */
 
-import { createHash } from 'node:crypto';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { z } from 'zod';
-
 import { hashStableFileSha256, isMissingPathError } from '../util/fs';
 import { processAsyncWorkQueue, type EnqueueAsyncWork } from '../util/async-work-queue';
+import { resolveNormalizedPathWithinRoot } from '../util/paths';
 import {
-  resolveNormalizedPathWithinRoot,
-  validateNormalizedRelativePosixPath,
-} from '../util/paths';
-import { parseSerializedJson, parseWithZod } from '../util/serialization';
+  CACHE_MANIFEST_SCHEMA_VERSION,
+  type CacheFileManifestEntry,
+  type CacheManifest,
+} from './manifest-format';
 import type { CacheModel } from './model';
 
-/** Schema version embedded in every captured cache manifest. Increment on breaking format changes. */
-export const CACHE_MANIFEST_SCHEMA_VERSION = 1;
+export {
+  CACHE_MANIFEST_SCHEMA_VERSION,
+  calculateCanonicalCacheManifestDigest,
+  computeCacheDelta,
+  deserializeCacheDeltaManifest,
+  deserializeCacheManifest,
+  serializeCacheDeltaManifest,
+  serializeCacheManifest,
+  type CacheDeltaEntry,
+  type CacheDeltaManifest,
+  type CacheFileManifestEntry,
+  type CacheFileSnapshot,
+  type CacheManifest,
+  type CachePartitionDelta,
+  type CachePartitionManifest,
+} from './manifest-format';
+
 /** Maximum simultaneous filesystem operations used by manifest and metadata traversal. */
 export const DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY = 32;
 const STABLE_ENTRY_CAPTURE_ATTEMPTS = 3;
-const CACHE_PARTITION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
-const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-
-// ---------------------------------------------------------------------------
-// Zod schemas — define once, derive both the runtime validator and the TS type
-// ---------------------------------------------------------------------------
-
-const cacheRelativePathSchema = z.string().refine((val) => {
-  try {
-    validateNormalizedRelativePosixPath(val, '', 'cache root');
-    return true;
-  } catch {
-    return false;
-  }
-}, 'Must be a normalized relative POSIX path inside the cache root');
-
-const snapshotSchema = z.object({
-  contentSha256: z
-    .string()
-    .regex(LOWERCASE_SHA256_PATTERN, 'Must be a lowercase hex SHA-256 digest'),
-  size: z.number().int().nonnegative(),
-  mode: z.number().int().nonnegative(),
-  atimeMs: z.number().finite().nonnegative(),
-  mtimeMs: z.number().finite().nonnegative(),
-});
-
-const manifestEntrySchema = snapshotSchema.extend({
-  relativePath: cacheRelativePathSchema,
-});
-
-const manifestPartitionSchema = z.object({
-  partitionId: z
-    .string()
-    .regex(CACHE_PARTITION_ID_PATTERN, 'Contains unsupported partition identifier'),
-  entries: z.array(manifestEntrySchema).superRefine((entries, ctx) => {
-    let prev = '';
-    for (const [i, entry] of entries.entries()) {
-      if (prev.localeCompare(entry.relativePath) >= 0) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [i, 'relativePath'],
-          message: 'Entries must be sorted by strictly increasing relativePath',
-        });
-      }
-      prev = entry.relativePath;
-    }
-  }),
-});
-
-const cacheManifestSchema = z.object({
-  schemaVersion: z.literal(CACHE_MANIFEST_SCHEMA_VERSION),
-  buildToolId: z.string().min(1),
-  cacheRoot: z.string(),
-  partitions: z.array(manifestPartitionSchema).superRefine((partitions, ctx) => {
-    const seen = new Set<string>();
-    for (const [i, p] of partitions.entries()) {
-      if (seen.has(p.partitionId)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [i, 'partitionId'],
-          message: `Duplicate partition id '${p.partitionId}'`,
-        });
-      }
-      seen.add(p.partitionId);
-    }
-  }),
-});
-
-const deltaEntrySchema = z
-  .object({
-    relativePath: cacheRelativePathSchema,
-    changeType: z.enum(['added', 'modified', 'deleted']),
-    previous: snapshotSchema.nullable(),
-    current: snapshotSchema.nullable(),
-  })
-  .superRefine((entry, ctx) => {
-    const addIssue = (message: string): void => {
-      ctx.addIssue({ code: 'custom', message });
-    };
-    if (entry.changeType === 'added' && (entry.previous !== null || entry.current === null)) {
-      addIssue(`Delta entry '${entry.relativePath}' must only include a current snapshot`);
-    } else if (
-      entry.changeType === 'deleted' &&
-      (entry.previous === null || entry.current !== null)
-    ) {
-      addIssue(`Delta entry '${entry.relativePath}' must only include a previous snapshot`);
-    } else if (
-      entry.changeType === 'modified' &&
-      (entry.previous === null || entry.current === null)
-    ) {
-      addIssue(
-        `Delta entry '${entry.relativePath}' must include both previous and current snapshots`,
-      );
-    }
-  });
-
-const deltaPartitionSchema = z.object({
-  partitionId: z
-    .string()
-    .regex(CACHE_PARTITION_ID_PATTERN, 'Contains unsupported partition identifier'),
-  entries: z.array(deltaEntrySchema).superRefine((entries, ctx) => {
-    let prev = '';
-    for (const [i, entry] of entries.entries()) {
-      if (prev.localeCompare(entry.relativePath) >= 0) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [i, 'relativePath'],
-          message: 'Entries must be sorted by strictly increasing relativePath',
-        });
-      }
-      prev = entry.relativePath;
-    }
-  }),
-});
-
-const cacheDeltaManifestSchema = z.object({
-  schemaVersion: z.literal(CACHE_MANIFEST_SCHEMA_VERSION),
-  buildToolId: z.string().min(1),
-  cacheRoot: z.string(),
-  partitions: z.array(deltaPartitionSchema).superRefine((partitions, ctx) => {
-    const seen = new Set<string>();
-    for (const [i, p] of partitions.entries()) {
-      if (seen.has(p.partitionId)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [i, 'partitionId'],
-          message: `Duplicate partition id '${p.partitionId}'`,
-        });
-      }
-      seen.add(p.partitionId);
-    }
-  }),
-});
-
-// ---------------------------------------------------------------------------
-// Exported types (derived from schemas — single source of truth)
-// ---------------------------------------------------------------------------
-
-/**
- * Stable file metadata captured for one cache file at one point in time.
- */
-export type CacheFileSnapshot = z.infer<typeof snapshotSchema>;
-
-/**
- * Captured manifest entry for one regular file rooted under the build tool's cache root.
- */
-export type CacheFileManifestEntry = z.infer<typeof manifestEntrySchema>;
 
 export interface CacheFileMetadataEntry {
   readonly relativePath: string;
@@ -189,43 +55,16 @@ export interface CacheFileMetadataEntry {
   readonly mtimeMs: number;
 }
 
-/**
- * Captured manifest entries for one logical cache partition.
- */
-export type CachePartitionManifest = z.infer<typeof manifestPartitionSchema>;
-
 export interface CachePartitionMetadata {
   readonly partitionId: string;
   readonly entries: readonly CacheFileMetadataEntry[];
 }
-
-/**
- * Full pre- or post-build cache manifest for all configured build tool cache partitions.
- */
-export type CacheManifest = z.infer<typeof cacheManifestSchema>;
 
 export interface CacheMetadataSnapshot {
   readonly buildToolId: string;
   readonly cacheRoot: string;
   readonly partitions: readonly CachePartitionMetadata[];
 }
-
-/**
- * Captured change for a single path between two manifests.
- */
-export type CacheDeltaEntry = z.infer<typeof deltaEntrySchema>;
-
-/**
- * Partition-local delta entries.
- */
-export type CachePartitionDelta = z.infer<typeof deltaPartitionSchema>;
-
-/**
- * Full delta manifest between two cache manifests for the same build tool cache root.
- */
-export type CacheDeltaManifest = z.infer<typeof cacheDeltaManifestSchema>;
-
-// ---------------------------------------------------------------------------
 
 interface CompiledGlobPattern {
   readonly source: string;
@@ -297,145 +136,6 @@ export async function captureCacheMetadataSnapshot(
       resolveManifestScanConcurrency(options.maxConcurrency),
     ),
   };
-}
-
-/**
- * Computes the partitioned file delta between two manifests captured from the same build tool cache root.
- */
-export function computeCacheDelta(
-  previousManifest: CacheManifest,
-  currentManifest: CacheManifest,
-): CacheDeltaManifest {
-  validateComparableManifests(previousManifest, currentManifest);
-
-  return {
-    schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
-    buildToolId: previousManifest.buildToolId,
-    cacheRoot: previousManifest.cacheRoot,
-    partitions: previousManifest.partitions.map((previousPartition, index) => {
-      const currentPartition = currentManifest.partitions[index];
-      const entries: CacheDeltaEntry[] = [];
-      let previousIndex = 0;
-      let currentIndex = 0;
-
-      while (
-        previousIndex < previousPartition.entries.length ||
-        currentIndex < currentPartition.entries.length
-      ) {
-        const previousEntry = previousPartition.entries[previousIndex] ?? null;
-        const currentEntry = currentPartition.entries[currentIndex] ?? null;
-
-        if (!previousEntry && currentEntry) {
-          entries.push(createDeltaEntry(currentEntry.relativePath, 'added', null, currentEntry));
-          currentIndex += 1;
-          continue;
-        }
-
-        if (previousEntry && !currentEntry) {
-          entries.push(
-            createDeltaEntry(previousEntry.relativePath, 'deleted', previousEntry, null),
-          );
-          previousIndex += 1;
-          continue;
-        }
-
-        if (!previousEntry || !currentEntry) {
-          continue;
-        }
-
-        const pathComparison = previousEntry.relativePath.localeCompare(currentEntry.relativePath);
-        if (pathComparison < 0) {
-          entries.push(
-            createDeltaEntry(previousEntry.relativePath, 'deleted', previousEntry, null),
-          );
-          previousIndex += 1;
-          continue;
-        }
-
-        if (pathComparison > 0) {
-          entries.push(createDeltaEntry(currentEntry.relativePath, 'added', null, currentEntry));
-          currentIndex += 1;
-          continue;
-        }
-
-        if (!areManifestEntriesEquivalent(previousEntry, currentEntry)) {
-          entries.push(
-            createDeltaEntry(previousEntry.relativePath, 'modified', previousEntry, currentEntry),
-          );
-        }
-
-        previousIndex += 1;
-        currentIndex += 1;
-      }
-
-      return {
-        partitionId: previousPartition.partitionId,
-        entries,
-      };
-    }),
-  };
-}
-
-/**
- * Serializes a captured manifest into deterministic compact JSON with a trailing newline for file storage.
- */
-export function serializeCacheManifest(manifest: CacheManifest): string {
-  return `${JSON.stringify(manifest)}\n`;
-}
-
-/**
- * Serializes a computed delta manifest into deterministic compact JSON with a trailing newline for file storage.
- */
-export function serializeCacheDeltaManifest(deltaManifest: CacheDeltaManifest): string {
-  return `${JSON.stringify(deltaManifest)}\n`;
-}
-
-/**
- * Calculates the portable material-state digest used in immutable generation keys.
- *
- * Access time and the machine-specific absolute cache root are intentionally excluded. Partition
- * and entry order are retained because validated manifests already require deterministic ordering.
- */
-export function calculateCanonicalCacheManifestDigest(manifest: CacheManifest): string {
-  const canonicalManifest = {
-    schemaVersion: manifest.schemaVersion,
-    buildToolId: manifest.buildToolId,
-    cacheRoot: '$CACHE_ROOT',
-    partitions: manifest.partitions.map((partition) => ({
-      partitionId: partition.partitionId,
-      entries: partition.entries.map((entry) => ({
-        relativePath: entry.relativePath,
-        contentSha256: entry.contentSha256,
-        size: entry.size,
-        mode: entry.mode,
-        mtimeMs: entry.mtimeMs,
-      })),
-    })),
-  };
-
-  return createHash('sha256').update(JSON.stringify(canonicalManifest)).digest('hex');
-}
-
-/**
- * Parses a serialized cache manifest and validates that it conforms to the current schema.
- */
-export function deserializeCacheManifest(serializedManifest: string): CacheManifest {
-  return parseWithZod(
-    cacheManifestSchema,
-    parseSerializedJson(serializedManifest, 'cache manifest'),
-    'cache manifest',
-  );
-}
-
-/**
- * Parses a serialized delta manifest and validates that it conforms to the current schema.
- */
-export function deserializeCacheDeltaManifest(serializedDeltaManifest: string): CacheDeltaManifest {
-  return parseWithZod(
-    cacheDeltaManifestSchema,
-    parseSerializedJson(serializedDeltaManifest, 'cache delta manifest'),
-    'cache delta manifest',
-  );
 }
 
 async function scanCachePartitions<T extends { readonly relativePath: string }>(
@@ -832,73 +532,6 @@ function compileSegmentRegex(patternSegment: string): RegExp {
   return new RegExp(
     `^${patternSegment.replaceAll(/([.+^${}()|[\]\\])/g, '\\$1').replaceAll('*', '[^/]*')}$`,
     'u',
-  );
-}
-
-function createDeltaEntry(
-  relativePath: string,
-  changeType: CacheDeltaEntry['changeType'],
-  previousEntry: CacheFileManifestEntry | null,
-  currentEntry: CacheFileManifestEntry | null,
-): CacheDeltaEntry {
-  return {
-    relativePath,
-    changeType,
-    previous: previousEntry ? toSnapshot(previousEntry) : null,
-    current: currentEntry ? toSnapshot(currentEntry) : null,
-  };
-}
-
-function toSnapshot({
-  relativePath: _relativePath,
-  ...snapshot
-}: CacheFileManifestEntry): CacheFileSnapshot {
-  return snapshot;
-}
-
-function validateComparableManifests(
-  previousManifest: CacheManifest,
-  currentManifest: CacheManifest,
-): void {
-  if (
-    previousManifest.schemaVersion !== CACHE_MANIFEST_SCHEMA_VERSION ||
-    currentManifest.schemaVersion !== CACHE_MANIFEST_SCHEMA_VERSION
-  ) {
-    throw new Error('Cache delta computation only supports the current manifest schema version.');
-  }
-
-  if (previousManifest.buildToolId !== currentManifest.buildToolId) {
-    throw new Error(
-      `Cache delta computation requires manifests from the same build tool, but got '${previousManifest.buildToolId}' and '${currentManifest.buildToolId}'.`,
-    );
-  }
-
-  if (previousManifest.cacheRoot !== currentManifest.cacheRoot) {
-    throw new Error('Cache delta computation requires manifests from the same cache root.');
-  }
-
-  if (previousManifest.partitions.length !== currentManifest.partitions.length) {
-    throw new Error('Cache delta computation requires matching partition layouts.');
-  }
-
-  previousManifest.partitions.forEach((partition, index) => {
-    if (partition.partitionId !== currentManifest.partitions[index]?.partitionId) {
-      throw new Error(
-        'Cache delta computation requires matching partition identifiers in the same order.',
-      );
-    }
-  });
-}
-
-function areManifestEntriesEquivalent(
-  previousEntry: CacheFileManifestEntry,
-  currentEntry: CacheFileManifestEntry,
-): boolean {
-  return (
-    previousEntry.contentSha256 === currentEntry.contentSha256 &&
-    previousEntry.size === currentEntry.size &&
-    previousEntry.mode === currentEntry.mode &&
-    previousEntry.mtimeMs === currentEntry.mtimeMs
   );
 }
 

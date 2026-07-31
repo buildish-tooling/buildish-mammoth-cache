@@ -103,7 +103,8 @@ flowchart TD
 2. Runs timestamp cache garbage collection for standalone and distributed-aggregator jobs when
    cleanup is enabled and `cache-gc-mode` is `timestamp`.
 3. Captures the post-build file snapshot.
-4. Calls `computeCacheDelta()` (`src/cache/manifest.ts`) to diff pre- and post-build manifests.
+4. Calls `computeCacheDelta()` (`src/cache/manifest-format.ts`, re-exported by
+   `src/cache/manifest.ts`) to diff pre- and post-build manifests.
 5. For a writable `distributed-worker`: stages the delta artifact locally, then uploads it.
    Read-only workers upload nothing.
 6. Calls `saveBaseCache()` (skipped for `distributed-worker`; see [Base Cache Design](../base-cache/)).

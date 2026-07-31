@@ -120,6 +120,11 @@ per include root. The queue runs at most 32 filesystem tasks concurrently, inclu
 inspection and file hashing. It does not create one promise or open file stream for every directory
 entry in a broad cache tree.
 
+`src/cache/manifest.ts` owns this filesystem capture and glob traversal. The provider-neutral
+schemas, serialization, canonical digest, and delta semantics live in
+`src/cache/manifest-format.ts`; `manifest.ts` re-exports that format contract so existing consumers
+retain one stable facade.
+
 Traversal completion order does not affect the contract: entries are sorted by normalized relative
 path before the manifest is returned, and canonical digest fields are unchanged. The bound protects
 runner file descriptors and reduces transient allocation; it is not a total cache-size or manifest
