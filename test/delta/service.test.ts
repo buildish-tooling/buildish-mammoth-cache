@@ -862,7 +862,6 @@ function createFixtureCacheModel(gradleUserHome: string): CacheModel {
     currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
     fallbackRefLineagePrefixes: [],
     plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
-    cacheKey: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',

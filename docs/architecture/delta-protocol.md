@@ -30,7 +30,8 @@ uploads the result as a CI artifact. The aggregator then downloads every worker'
 merges the diffs, and writes the combined set of files into its own local cache.
 
 This is split across `src/delta/discovery.ts` (bounded rerun selection), `src/delta/service.ts`
-(staging, upload, download, and package verification), and `src/delta/apply.ts` (merge and apply).
+(staging, upload, download, and package verification), `src/delta/apply.ts` (merge planning and the
+stable facade), and `src/delta/apply-execution.ts` (precondition validation and filesystem apply).
 The shared prepare/finalize phases call these functions at the right points in the two-phase
 lifecycle.
 

@@ -169,8 +169,6 @@ const cacheModel: CacheModel = {
     'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
   fallbackRefLineagePrefixes: [],
   plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
-  cacheKey:
-    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
   javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',

@@ -250,7 +250,6 @@ function createBenchmarkCacheModel(gradleUserHome: string): CacheModel {
     currentRefLineagePrefix: 'benchmark-family-ref-benchmark-aaaaaaaaaaaa-gen-',
     fallbackRefLineagePrefixes: [],
     plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
-    cacheKey: 'benchmark-family-ref-benchmark-aaaaaaaaaaaa-gen-',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',

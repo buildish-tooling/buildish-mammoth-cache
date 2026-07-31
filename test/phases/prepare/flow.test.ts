@@ -1637,7 +1637,6 @@ describe('createPrepareActionOutputs', () => {
           javaMajor: null,
           cacheFamilyKey: 'test-family-v2-0-linux-x64-layout',
           currentRefLineagePrefix: 'test-family-v2-0-linux-x64-layout-ref-main-gen-',
-          cacheKey: 'test-family-v2-0-linux-x64-layout-ref-main-gen-',
         } as unknown as CacheModel,
       },
     });

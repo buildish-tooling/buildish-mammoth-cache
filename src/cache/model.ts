@@ -53,13 +53,6 @@ export interface CacheModel {
   /** Execution-unique generation identifier derived for this writer invocation. */
   readonly plannedGenerationId: string;
   /**
-   * Transitional distributed-delta identity until the v2 envelope adopts explicit family and
-   * lineage fields in Slice 3.
-   *
-   * This value is the current ref lineage prefix and is never a saved cache key.
-   */
-  readonly cacheKey: string;
-  /**
    * The detected Java major version, derived from `$JAVA_HOME/release` or `java -version`.
    *
    * `null` when Java cannot be located at all; the cache family renders this as `'0'`
@@ -274,7 +267,6 @@ export async function createCacheModel(
     currentRefLineagePrefix,
     fallbackRefLineagePrefixes,
     plannedGenerationId,
-    cacheKey: currentRefLineagePrefix,
     buildToolId,
     cacheRoot,
     javaMajor,

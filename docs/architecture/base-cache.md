@@ -227,8 +227,9 @@ The artifact package includes an integrity manifest (SHA-256 hashes for each fil
 version field, and a metadata section describing the producer job. The schema version is checked at
 download time to detect incompatible format changes.
 
-The delta computation and merge logic lives in `src/delta/apply.ts`. The artifact staging, upload,
-and download logic lives in `src/delta/service.ts`.
+Delta merge planning lives in `src/delta/apply.ts`, while precondition validation and filesystem
+application live in `src/delta/apply-execution.ts`. Artifact staging, upload, and download live in
+`src/delta/service.ts`.
 
 ### Artifact uniqueness constraint
 

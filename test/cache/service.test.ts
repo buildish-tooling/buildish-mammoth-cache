@@ -62,8 +62,6 @@ const cacheModel: CacheModel = {
     'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-222222222222-gen-',
   ],
   plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
-  cacheKey:
-    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-feature-cache-model-111111111111-gen-',
   javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',

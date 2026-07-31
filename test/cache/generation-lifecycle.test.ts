@@ -57,9 +57,6 @@ const baseModel: CacheModel = {
     'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-0d6e4079e367-gen-',
   fallbackRefLineagePrefixes: [],
   plannedGenerationId: 'run-101-attempt-1-job-aaaaaaaaaaaa',
-  // Transitional distributed-delta identity until the v2 envelope lands in Slice 3.
-  cacheKey:
-    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-0d6e4079e367-gen-',
   javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',
