@@ -19,25 +19,29 @@ limitations under the License.
 Transparent, incremental dependency caching for Gradle and Maven builds on GitHub Actions —
 from simple single-job pipelines to large parallel fan-out workflows.
 
-One action wraps your build step. Before the build, restore a warm cache; capture only
-what changed during a build and writes back a precise delta. No manual cache-key juggling, no
-stale entries from unrelated jobs, no wasted re-uploads of files that haven't changed.
+One action wraps your build step. Before the build, it restores the newest compatible immutable
+cache generation. After a material change, a standalone job publishes a new complete generation;
+distributed workers instead exchange precise deltas through an aggregator. No manual cache-key
+juggling, and unchanged standalone runs publish no duplicate generation.
+
+> **Pre-release status:** Mammoth Cache does not have a published release yet. The links below lead
+> to unreleased development documentation; pin a reviewed commit SHA when testing the action.
 
 ---
 
 {{< buildish-button appearance="primary" >}}
-[Get started](development/user/getting-started/)
+[Preview the unreleased development guide](development/user/getting-started/)
 {{< /buildish-button >}}
 
-{{< buildish-component-link kind="development" label="Docs" appearance="primary" >}}
+{{< buildish-component-link kind="development" label="Development docs (unreleased)" appearance="primary" >}}
 
 _Docs cover workflow usage, configuration, cache-partition behaviour, security notes, and
 maintenance guidance._
 
 ## Highlights
 
-🔁 **Incremental deltas** — only files new or changed since the last build are packaged and
-uploaded, keeping artifact sizes small even as the dependency set grows.
+🔁 **Distributed deltas** — worker artifacts package only files changed relative to their restored
+base; the aggregator merges them into a complete generation for later runs.
 
 🔒 **Secure Gradle wrapper provisioning** — wrapper JARs are checksum-validated and
 GPG-verified against the official Gradle release signing key before any code runs.
@@ -45,8 +49,8 @@ GPG-verified against the official Gradle release signing key before any code run
 🗂 **Content-fingerprinted cache keys** — changing the cache partition layout automatically
 produces a new key lineage; no manual version bumps required.
 
-🧹 **Bounded cache growth** — timestamp-based garbage collection is enabled by default so old
-managed Gradle and Maven cache entries do not accumulate indefinitely.
+🧹 **Age-based cleanup** — best-effort timestamp garbage collection removes old managed Gradle and
+Maven cache entries before a changed generation is published.
 
 🚫 **Read-only on pull requests** — PRs restore the shared cache but never write back,
 keeping the main cache clean by default.
@@ -61,7 +65,7 @@ One action call is all it takes. The action runs transparently before and after 
 
 ```mermaid
 flowchart LR
-    RC([Restore\ncache]) --> B([Build]) --> SD([Save\ndelta])
+    RC([Restore\ngeneration]) --> B([Build]) --> SD([Publish changed\ngeneration])
 ```
 
 ### Distributed multi-job

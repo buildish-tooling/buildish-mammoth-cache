@@ -1,7 +1,7 @@
 ---
 title: Maintenance
 weight: 10
-description: Ongoing maintenance tasks for Buildish Mammoth Cache for Gradle — signing keys, schema versions, and partition fingerprints.
+description: Ongoing maintenance tasks for Buildish Mammoth Cache for Gradle and Maven — signing keys, schema versions, partition fingerprints, and CI checks.
 ---
 
 <!--
@@ -78,18 +78,15 @@ full report at all severity levels.
 
 ### CodeQL
 
-CodeQL analysis runs as the `codeql` job in `.github/workflows/ci.yml` on every
-push to `main` or a `release/**` branch and on every pull request. The job uses
-`github/codeql-action` with `build-mode: none` — CodeQL analyses the TypeScript
-source directly without building, which is appropriate because the compiled
-bundles in `dist/` contain no information the source does not.
+The `codeql` job in `.github/workflows/ci.yml` is currently disabled with `if: false` because GitHub
+Advanced Security is unavailable for the repository. It is retained as preparatory configuration,
+but it does not currently analyse source or upload SARIF results. The required-check aggregator
+accepts the resulting skipped state.
 
-The `analyze` job carries `if: github.repository_owner == 'buildish-tooling'` so it skips cleanly when
-run from a personal fork.
-
-Results are uploaded to the repository's **Security → Code scanning** tab as SARIF. The job
-requires `security-events: write` permission, which is scoped to the job rather than the
-workflow to follow least-privilege practice.
+When the repository can use CodeQL, replace the temporary condition with the intended repository
+scope and validate the job before documenting it as an active check. The prepared job uses
+`github/codeql-action` with `build-mode: none` to analyse TypeScript source directly and scopes
+`security-events: write` to that job.
 
 ## CI Node.js and npm setup helper
 

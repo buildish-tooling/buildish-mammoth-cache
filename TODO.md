@@ -16,22 +16,15 @@ limitations under the License.
 
 # Open TODOs
 
-1. Cleanup the code base
-   - MANUALLY inspect all files
-2. Site + logo!
-   - We need a logo for the project!
-   - Leverage the work done in Polaris, use Hugo.
-   - But come up with better Docker builds for the site.
-   - Respect that different plugins/actions/tools have different release cadences.
-   - Also respect that different plugins/actions/tools have different documentation needs.
-3. Add release workflows
-   - Use version tags. "full" version tags like v1.2.3 become actual GitHub releases.
-     We can provide "moving" tags like v1, v1.2 as well. Those would then point to the latest release in their
-     respective series.
-   - The plan is to use GitHub's immutable release feature.
-     See https://docs.github.com/en/actions/how-tos/create-and-publish-actions/using-immutable-releases-and-tags-to-manage-your-actions-releases
-   - As the action's `dist/` folder is .gitignore'd, we need to ensure that the release workflow ensure that the
-     `dist/` folder is included in the Git commit for the release tag.
+1. Adopt the in-development release workflows after the Buildish release process and legal policy
+   are approved.
+   - Replace transitional release configuration and enable mandatory build, test, legal, and
+     verification gates.
+   - Materialize and validate both action `dist/` entrypoints in the release commit and immutable
+     version tag.
+   - Validate moving tags, release assets, approval boundaries, rollback, and rerun behavior before
+     publishing the first release.
+   - Replace pre-release documentation with tested installation references after publication.
 
 ## Deferred / explicitly out of scope for v1
 

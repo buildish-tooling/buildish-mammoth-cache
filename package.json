@@ -31,7 +31,7 @@
   "keywords": [],
   "author": "Buildish",
   "license": "Apache-2.0",
-  "description": "Buildish Mammoth Cache Action for Gradle: secure wrapper provisioning plus local and distributed cache management.",
+  "description": "Buildish Mammoth Cache actions for Gradle and Maven: local and distributed dependency caching with secure Gradle wrapper provisioning.",
   "private": true,
   "type": "module",
   "engines": {
