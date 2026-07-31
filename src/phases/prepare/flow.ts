@@ -21,6 +21,7 @@ import {
   downloadAndVerifyDeltaArtifactPackage,
   selectDeltaArtifactsForProducerJobs,
   type DownloadedDeltaArtifactPackage,
+  type TemporaryDirectoryRemover,
 } from '../../delta/service';
 import {
   bootstrapPhase,
@@ -101,6 +102,8 @@ export interface RestoreCleanupResult {
  */
 export interface PrepareActionDependencies extends BootstrapDependencies {
   readonly artifactBackend?: WorkflowArtifactBackend;
+  /** Test seam for cleanup of downloaded delta-package temporary directories. */
+  readonly removeTemporaryDirectory?: TemporaryDirectoryRemover;
 }
 
 /**
@@ -253,6 +256,7 @@ async function applyDependentJobDeltas(
     for (const selected of selectedArtifacts) {
       downloadedPackages.push(
         await downloadAndVerifyDeltaArtifactPackage(artifactBackend, selected.artifact, {
+          removeTemporaryDirectory: dependencies.removeTemporaryDirectory,
           expectedIdentity: {
             repository: bootstrap.ciContext.repository,
             workflowName: bootstrap.ciContext.workflowName,
@@ -271,7 +275,13 @@ async function applyDependentJobDeltas(
     const applied = await applyMergedDeltaPlan(plan, bootstrap.cacheModel!.cacheRoot);
     return createPrepareDependentDeltaResult(requestedJobs, downloadedPackages, plan, applied);
   } finally {
-    await cleanupDownloadedPackages(downloadedPackages);
+    const cleanupWarnings = await cleanupDownloadedPackages(
+      downloadedPackages,
+      dependencies.removeTemporaryDirectory,
+    );
+    for (const warning of cleanupWarnings) {
+      dependencies.runtimeHost.warning(warning);
+    }
   }
 }
 
@@ -422,15 +432,28 @@ function createPrepareDependentDeltaResult(
 
 async function cleanupDownloadedPackages(
   downloadedPackages: readonly DownloadedDeltaArtifactPackage[],
-): Promise<void> {
-  await Promise.all(
+  removeTemporaryDirectory: TemporaryDirectoryRemover = async (directory) => {
+    await rm(directory, { recursive: true, force: true });
+  },
+): Promise<readonly string[]> {
+  const results = await Promise.allSettled(
     downloadedPackages.map(async (artifactPackage) => {
-      await rm(artifactPackage.temporaryDirectory ?? artifactPackage.downloadDirectory, {
-        recursive: true,
-        force: true,
-      });
+      const directory = artifactPackage.temporaryDirectory ?? artifactPackage.downloadDirectory;
+      await removeTemporaryDirectory(directory);
+      return { artifactName: artifactPackage.artifact.name, directory };
     }),
   );
+  return results.flatMap((result, index) =>
+    result.status === 'rejected'
+      ? [
+          `Could not remove temporary files for delta artifact '${downloadedPackages[index]!.artifact.name}': ${describeCleanupError(result.reason)}`,
+        ]
+      : [],
+  );
+}
+
+function describeCleanupError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

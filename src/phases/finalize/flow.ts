@@ -16,7 +16,11 @@
 
 import { rm } from 'node:fs/promises';
 
-import { uploadDeltaArtifactPackage, stageDeltaArtifactPackage } from '../../delta/service';
+import {
+  uploadDeltaArtifactPackage,
+  stageDeltaArtifactPackage,
+  type TemporaryDirectoryRemover,
+} from '../../delta/service';
 import { bootstrapPhase, type BootstrapExecution, type BootstrapDependencies } from '../bootstrap';
 import { collectTimestampCacheGarbage, type TimestampCacheGcResult } from '../../cache/gc';
 import { decideBaseCacheGeneration } from '../../cache/lifecycle';
@@ -62,6 +66,8 @@ const DELTA_ARTIFACT_RETENTION_DAYS = 7;
  */
 export interface FinalizeActionDependencies extends BootstrapDependencies {
   readonly artifactBackend?: WorkflowArtifactBackend;
+  /** Test seam for cleanup of staged delta-package temporary directories. */
+  readonly removeTemporaryDirectory?: TemporaryDirectoryRemover;
 }
 
 /**
@@ -370,6 +376,7 @@ async function uploadFinalizeArtifact(
         restoredGenerationKey: lifecycleRecord.restoreResult.matchedKey,
         preBuildManifestDigest: lifecycleRecord.preBuildManifestDigest,
       },
+      removeTemporaryDirectory: dependencies.removeTemporaryDirectory,
     },
   );
 
@@ -393,8 +400,22 @@ async function uploadFinalizeArtifact(
         `unconsumed artifacts expire after ${DELTA_ARTIFACT_RETENTION_DAYS} day(s).`,
     };
   } finally {
-    await rm(stagedPackage.stagingDirectory, { recursive: true, force: true });
+    try {
+      if (dependencies.removeTemporaryDirectory) {
+        await dependencies.removeTemporaryDirectory(stagedPackage.stagingDirectory);
+      } else {
+        await rm(stagedPackage.stagingDirectory, { recursive: true, force: true });
+      }
+    } catch (error) {
+      dependencies.runtimeHost.warning(
+        `Could not remove staged delta artifact temporary directory '${stagedPackage.stagingDirectory}': ${describeFinalizeError(error)}`,
+      );
+    }
   }
+}
+
+function describeFinalizeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function cleanupConsumedDeltaArtifacts(

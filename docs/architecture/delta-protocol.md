@@ -197,3 +197,6 @@ more than 2 GiB provider-reported size, an extracted package exceeds 4 GiB, or a
 Workers upload one envelope even when the delta is empty. An empty envelope proves that the worker
 completed successfully; a missing envelope remains a hard aggregation failure. Staging and download
 temporary directories are removed on success and on validation, download, or packaging failure.
+Aggregator cleanup uses all-settled semantics so every successfully downloaded sibling gets a
+cleanup attempt. Cleanup failures are reported separately and never replace the primary validation,
+download, packaging, upload, or application error.

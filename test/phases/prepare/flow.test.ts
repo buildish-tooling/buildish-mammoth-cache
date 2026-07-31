@@ -72,6 +72,7 @@ async function createPrepareActionDependencies(options: {
   readonly inputs?: Readonly<Record<string, string>>;
   readonly saveState?: (name: string, value: string) => void;
   readonly info?: (message: string) => void;
+  readonly warning?: (message: string) => void;
   readonly adapterOptions?: GradleAdapterOptions;
   readonly workspace: string;
 }) {
@@ -79,6 +80,7 @@ async function createPrepareActionDependencies(options: {
     inputs: options.inputs,
     saveState: options.saveState,
     info: options.info,
+    warning: options.warning,
   });
   const ciProvider = createTestGitHubProvider(runtimeHost, {
     env: options.env,
@@ -308,6 +310,8 @@ describe('executePrepareAction', () => {
       const wrapperJarBytes = Buffer.from('existing-wrapper-jar');
       const wrapperJarSha256 = sha256Hex(wrapperJarBytes);
       const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
+      const cleanupAttempts: string[] = [];
+      const warningMessages: string[] = [];
 
       await mkdir(path.join(workspace, 'gradle', 'wrapper'), { recursive: true });
       await mkdir(gradleUserHome, { recursive: true });
@@ -331,6 +335,13 @@ describe('executePrepareAction', () => {
       );
 
       await stageWorkerDeltaArtifact(artifactApi, workspace, {
+        jobName: 'worker-good',
+        runId: 101,
+        runAttempt: 2,
+        relativePath: 'caches/modules-2/files-2.1/example/good.bin',
+        contents: 'from-compatible-worker',
+      });
+      await stageWorkerDeltaArtifact(artifactApi, workspace, {
         jobName: 'worker-build',
         runId: 101,
         runAttempt: 2,
@@ -343,6 +354,10 @@ describe('executePrepareAction', () => {
         executePrepareAction({
           artifactBackend: artifactApi,
           cacheBackend: createCacheApi(),
+          async removeTemporaryDirectory(directory: string): Promise<void> {
+            cleanupAttempts.push(directory);
+            throw new Error('cleanup failed');
+          },
           captureCommandOutput: async (): Promise<string> =>
             'openjdk version "21.0.4" 2024-07-16\n',
           env: {
@@ -381,7 +396,10 @@ describe('executePrepareAction', () => {
             },
             inputs: {
               'job-mode': 'distributed-aggregator',
-              'dependent-jobs': 'worker-build',
+              'dependent-jobs': 'worker-good,worker-build',
+            },
+            warning(message: string): void {
+              warningMessages.push(message);
             },
             saveState(): void {},
             summaryWriter: createSummaryCapture().writer,
@@ -402,6 +420,9 @@ describe('executePrepareAction', () => {
           })),
         }),
       ).rejects.toThrow(/does not match the aggregator's cache family/u);
+      expect(cleanupAttempts).toHaveLength(2);
+      expect(warningMessages).toHaveLength(2);
+      expect(warningMessages.every((message) => message.includes('cleanup failed'))).toBe(true);
     });
   });
 

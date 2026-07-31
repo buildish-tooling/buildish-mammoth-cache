@@ -551,6 +551,40 @@ describe('artifact exchange service', () => {
     await expect(readdir(downloadParent)).resolves.toEqual([]);
   });
 
+  it('preserves the validation failure when temporary-directory cleanup also fails', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+    const fakeApi = new FakeArtifactApi(
+      await createTempDirectory(
+        temporaryDirectories,
+        'buildish-mammoth-cache-cleanup-error-store-',
+      ),
+    );
+    const uploaded = await uploadDeltaArtifactPackage(fakeApi, stagedPackage);
+
+    const failure = await downloadAndVerifyDeltaArtifactPackage(fakeApi, uploaded.artifact, {
+      expectedIdentity: {
+        repository: stagedPackage.metadata.producer.repository,
+        workflowName: stagedPackage.metadata.producer.workflowName,
+        runId: stagedPackage.metadata.producer.runId,
+        producerJobName: stagedPackage.metadata.producer.jobName,
+        producerAttempt: stagedPackage.metadata.producer.runAttempt,
+        sourceRevision: 'different-revision',
+      },
+      async removeTemporaryDirectory(): Promise<void> {
+        throw new Error('cleanup exploded');
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: expect.stringMatching(/source revision.*cleanup exploded/u),
+      errors: [
+        expect.objectContaining({ message: expect.stringMatching(/source revision/u) }),
+        expect.objectContaining({ message: 'cleanup exploded' }),
+      ],
+    });
+  });
+
   it('rejects every selected producer execution-identity mismatch', async () => {
     const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
     const fakeApi = new FakeArtifactApi(

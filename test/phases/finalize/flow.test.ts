@@ -106,6 +106,7 @@ async function createFinalizeActionDependencies(options: {
   readonly inputProvider: { getInput(name: string): string };
   readonly getState?: (name: string) => string;
   readonly info?: (message: string) => void;
+  readonly warning?: (message: string) => void;
   readonly adapterOptions?: GradleAdapterOptions;
   readonly workspace: string;
 }) {
@@ -115,6 +116,7 @@ async function createFinalizeActionDependencies(options: {
     },
     getState: options.getState,
     info: options.info,
+    warning: options.warning,
   });
   const ciProvider = createTestGitHubProvider(runtimeHost, {
     env: options.env,
@@ -150,6 +152,7 @@ describe('executeFinalizeAction', () => {
       const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
       const savedState = new Map<string, string>();
       const summary = createSummaryCapture();
+      const warningMessages: string[] = [];
 
       await writeGradleFile(
         gradleUserHome,
@@ -168,12 +171,19 @@ describe('executeFinalizeAction', () => {
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
         captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+        async removeTemporaryDirectory(directory: string): Promise<void> {
+          await rm(directory, { recursive: true, force: true });
+          throw new Error('simulated cleanup reporting failure');
+        },
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
           getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
+          warning(message: string): void {
+            warningMessages.push(message);
+          },
           workspace,
         })),
       });
@@ -207,6 +217,9 @@ describe('executeFinalizeAction', () => {
       expect(summaryText).not.toContain('<summary>Cache details</summary>');
       expect(summaryText).toContain('Delta artifact');
       expect(summary.writeCalls).toBe(0);
+      expect(warningMessages).toEqual([
+        expect.stringMatching(/Could not remove staged delta artifact.*simulated cleanup/u),
+      ]);
       await rm(downloaded.downloadDirectory, { recursive: true, force: true });
     });
   });

@@ -256,6 +256,8 @@ export interface StageDeltaArtifactPackageOptions {
   readonly artifactName?: string;
   /** Exact prepare-phase base and digest identity embedded in the v2 envelope. */
   readonly lifecycleIdentity: DeltaEnvelopeLifecycleIdentity;
+  /** Test seam for helper-owned temporary-directory cleanup. */
+  readonly removeTemporaryDirectory?: TemporaryDirectoryRemover;
 }
 
 /**
@@ -277,7 +279,12 @@ export interface DownloadDeltaArtifactPackageOptions
   readonly parentDirectory?: string;
   /** Expected current-run and selected-producer identity validated after extraction. */
   readonly expectedIdentity?: ExpectedDeltaArtifactIdentity;
+  /** Test seam for helper-owned temporary-directory cleanup. */
+  readonly removeTemporaryDirectory?: TemporaryDirectoryRemover;
 }
+
+/** Removes one helper-owned temporary directory recursively. */
+export type TemporaryDirectoryRemover = (directory: string) => Promise<void>;
 
 /** Context against which a selected envelope is validated after download. */
 export interface ExpectedDeltaArtifactIdentity {
@@ -399,8 +406,11 @@ export async function stageDeltaArtifactPackage(
       deltaManifest: portableDeltaManifest,
     };
   } catch (error) {
-    await rm(stagingDirectory, { recursive: true, force: true });
-    throw error;
+    return await rethrowAfterTemporaryDirectoryCleanup(
+      error,
+      stagingDirectory,
+      options.removeTemporaryDirectory,
+    );
   }
 }
 
@@ -479,9 +489,37 @@ export async function downloadAndVerifyDeltaArtifactPackage(
       deltaManifest: verified.deltaManifest,
     };
   } catch (error) {
-    await rm(downloadDirectory, { recursive: true, force: true });
-    throw error;
+    return await rethrowAfterTemporaryDirectoryCleanup(
+      error,
+      downloadDirectory,
+      options.removeTemporaryDirectory,
+    );
   }
+}
+
+async function rethrowAfterTemporaryDirectoryCleanup(
+  primaryError: unknown,
+  directory: string,
+  removeTemporaryDirectory: TemporaryDirectoryRemover = defaultTemporaryDirectoryRemover,
+): Promise<never> {
+  try {
+    await removeTemporaryDirectory(directory);
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [primaryError, cleanupError],
+      `${describeError(primaryError)} Temporary-directory cleanup also failed: ${describeError(cleanupError)}`,
+      { cause: cleanupError },
+    );
+  }
+  throw primaryError;
+}
+
+async function defaultTemporaryDirectoryRemover(directory: string): Promise<void> {
+  await rm(directory, { recursive: true, force: true });
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function assertDownloadPathWithinTemporaryDirectory(
