@@ -131,14 +131,19 @@ step starts.
 
 The aggregator first selects every required worker artifact, then downloads and verifies them
 without mutating the cache, and finally merges them into a single
-`MergedDeltaPlan` (`mergeDeltaArtifactPackages` in `src/delta/apply.ts`).
+`MergedDeltaPlan` (`mergeDeltaArtifactPackages` in `src/delta/apply.ts`). Filesystem inspection and
+mutation live separately in `src/delta/apply-execution.ts`; `src/delta/apply.ts` re-exports the
+execution API so existing consumers retain one stable facade.
 
 The merge is per-partition and per-relative-path:
 
 - If a path appears in only one worker's delta it is taken as-is.
 - If a path appears in two or more worker deltas with **identical** content (same SHA-256), the
-  entry is deduplicated silently. This covers the common case where multiple workers download
-  the same dependency JAR.
+  entry is deduplicated and every compatible previous state is retained as an apply precondition.
+  This covers the common case where workers started from different compatible generations and
+  downloaded the same dependency JAR.
+- Deletions with different previous states are compatible because they share the same desired
+  absent state; each declared previous state remains an accepted precondition.
 - If a path appears in two or more worker deltas with **different** content, it is recorded as a
   conflict. All conflicts across all paths are collected before the error is thrown, so the
   operator can see the full picture in one go rather than re-running to discover the next
@@ -147,21 +152,30 @@ The merge is per-partition and per-relative-path:
 The `allowDuplicateDependentDeltaPaths` option relaxes conflict detection: when set, two entries
 for the same path are resolved by taking the one with the newer `mtimeMs`. Use this only when
 you know the conflicting files are semantically equivalent (e.g. resolver-marker files whose
-content varies only by timestamp).
+content varies only by timestamp). Only the selected winner's previous state is accepted; losing
+entries cannot broaden its precondition.
 
 ---
 
 ## Apply phase
 
-`applyMergedDeltaPlan` writes the merged delta to the aggregator's cache root:
+`applyMergedDeltaPlan` applies the merged delta through a two-stage protocol:
 
-- **Added / modified** entries: the payload file is copied to the target path, then `chmod` and
-  `utimes` are applied to preserve the original file mode and modification timestamp. The copy
-  uses a rename-from-temp strategy to avoid partial writes if the process is interrupted.
-- **Deleted** entries: the target path is removed. A missing file is treated as a no-op (not an
-  error) because the aggregator may have started with a partially warm cache.
-- Warnings are emitted (never errors) when a delete target is missing or a copy's content hash
-  does not match the manifest after writing — the latter indicating filesystem corruption.
+1. Every target is inspected before any mutation. It must already match the desired state or one
+   of the compatible workers' declared previous states. Snapshot comparison uses content SHA-256,
+   size, mode, and modification time; access time is not a precondition.
+2. Any mismatch rejects the complete plan before a path changes.
+3. Targets already matching the desired state, including already-absent deletions, are idempotent
+   no-ops.
+4. Each target selected for mutation is re-inspected immediately before it changes. A concurrent
+   change aborts application rather than being silently overwritten.
+5. Added and modified payloads are copied through a temporary file and atomic rename, then `chmod`
+   and `utimes` preserve the declared mode and timestamps. Deleted targets are removed.
+
+Payload hashes are checked during package validation and again while copying. A mismatch is a hard
+error. Once mutation begins, the cache filesystem is not globally transactional; a later I/O or
+concurrency failure can leave earlier per-path mutations in place, and the enclosing lifecycle must
+not publish that partial state as a new generation.
 
 ---
 

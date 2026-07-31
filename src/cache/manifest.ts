@@ -29,6 +29,7 @@ import type { CacheModel } from './model';
 
 export {
   CACHE_MANIFEST_SCHEMA_VERSION,
+  areCacheFileSnapshotsMateriallyEquivalent,
   calculateCanonicalCacheManifestDigest,
   computeCacheDelta,
   deserializeCacheDeltaManifest,

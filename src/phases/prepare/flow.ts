@@ -58,7 +58,18 @@ export interface PrepareDependentDeltaResult extends DeltaApplyResult {
   readonly downloadedArtifactNames: readonly string[];
   readonly appliedRelativePaths: readonly string[];
   readonly appliedArtifactCount: number;
+  readonly selectedProducers: readonly PrepareDependentDeltaProducer[];
+  readonly workerBasesDiffered: boolean;
   readonly message: string;
+}
+
+/** Selected worker-envelope identity shown in aggregator diagnostics. */
+export interface PrepareDependentDeltaProducer {
+  readonly jobName: string;
+  readonly runAttempt: number | null;
+  readonly artifactName: string;
+  readonly restoredGenerationKey: string | null;
+  readonly preBuildManifestDigest: string;
 }
 
 /** Complete status snapshot produced by {@link executePrepareAction} at the end of the prepare phase. */
@@ -217,10 +228,14 @@ async function applyDependentJobDeltas(
       appliedRelativePaths: [],
       appliedArtifactCount: 0,
       cacheRoot: bootstrap.cacheModel!.cacheRoot,
+      preconditionValidatedCount: 0,
       addedCount: 0,
       modifiedCount: 0,
       deletedCount: 0,
+      noopCount: 0,
       warnings: [],
+      selectedProducers: [],
+      workerBasesDiffered: false,
       message:
         'Dependent delta aggregation skipped because read-only mode disables artifact exchange.',
     };
@@ -370,6 +385,13 @@ function createPrepareDependentDeltaResult(
   plan: ReturnType<typeof mergeDeltaArtifactPackages>,
   applied: DeltaApplyResult,
 ): PrepareDependentDeltaResult {
+  const selectedProducers = downloadedPackages.map((artifactPackage) => ({
+    jobName: artifactPackage.metadata.producer.jobName,
+    runAttempt: artifactPackage.metadata.producer.runAttempt,
+    artifactName: artifactPackage.artifact.name,
+    restoredGenerationKey: artifactPackage.metadata.cacheIdentity.restoredGenerationKey,
+    preBuildManifestDigest: artifactPackage.metadata.cacheIdentity.preBuildManifestDigest,
+  }));
   return {
     ...applied,
     status: 'applied',
@@ -383,6 +405,14 @@ function createPrepareDependentDeltaResult(
         .map((entry) => entry.relativePath),
     ),
     appliedArtifactCount: downloadedPackages.length,
+    selectedProducers,
+    workerBasesDiffered:
+      new Set(
+        selectedProducers.map(
+          (producer) =>
+            `${producer.restoredGenerationKey ?? '<none>'}:${producer.preBuildManifestDigest}`,
+        ),
+      ).size > 1,
     message:
       `Applied ${downloadedPackages.length} dependent delta artifact(s) ` +
       `from ${requestedJobs.length} configured job(s): ` +
@@ -438,6 +468,13 @@ export function createPrepareActionSummaryLines(status: PrepareActionStatus): re
       ...(dependentDelta
         ? [
             `- Applied delta changes: ${dependentDelta.addedCount} added, ${dependentDelta.modifiedCount} modified, ${dependentDelta.deletedCount} deleted.`,
+            `- Validated delta preconditions: ${dependentDelta.preconditionValidatedCount}`,
+            `- Idempotent delta no-ops: ${dependentDelta.noopCount}`,
+            `- Worker bases differed: ${dependentDelta.workerBasesDiffered ? 'yes' : 'no'}`,
+            ...dependentDelta.selectedProducers.map(
+              (producer) =>
+                `- Selected worker ${escapeSummaryText(producer.jobName)}: attempt ${producer.runAttempt ?? 'unknown'}, artifact ${escapeSummaryText(producer.artifactName)}, restored base ${escapeSummaryText(producer.restoredGenerationKey ?? 'none')}, pre-build digest ${escapeSummaryText(producer.preBuildManifestDigest.slice(0, 12))}`,
+            ),
             `- Delta apply warnings: ${dependentDelta.warnings.length}`,
             `- Post-job artifact cleanup scheduled: ${dependentDelta.downloadedArtifactNames.length}`,
           ]
@@ -488,6 +525,16 @@ export function createPrepareActionLogLines(status: PrepareActionStatus): readon
     if (status.dependentDeltaResult.downloadedArtifactNames.length > 0) {
       lines.push(
         `Downloaded dependent delta artifacts: ${formatSummaryList(status.dependentDeltaResult.downloadedArtifactNames)}.`,
+      );
+    }
+    if (status.dependentDeltaResult.selectedProducers.length > 0) {
+      lines.push(
+        `Validated ${status.dependentDeltaResult.preconditionValidatedCount} dependent delta path precondition(s); ${status.dependentDeltaResult.noopCount} path(s) were already in the desired state.`,
+        `Worker bases differed: ${status.dependentDeltaResult.workerBasesDiffered ? 'yes' : 'no'}.`,
+        ...status.dependentDeltaResult.selectedProducers.map(
+          (producer) =>
+            `Selected worker '${producer.jobName}' attempt ${producer.runAttempt ?? 'unknown'} artifact '${producer.artifactName}'; restored base '${producer.restoredGenerationKey ?? 'none'}'; pre-build digest ${producer.preBuildManifestDigest.slice(0, 12)}.`,
+        ),
       );
     }
   }

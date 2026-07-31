@@ -218,11 +218,22 @@ describe('executePrepareAction', () => {
         expect.objectContaining({
           appliedArtifactCount: 1,
           appliedRelativePaths: ['caches/modules-2/files-2.1/example/module.bin'],
+          preconditionValidatedCount: 1,
           addedCount: 1,
           modifiedCount: 0,
           deletedCount: 0,
+          noopCount: 0,
+          workerBasesDiffered: false,
         }),
       );
+      expect(status.dependentDeltaResult?.selectedProducers).toEqual([
+        expect.objectContaining({
+          jobName: 'worker-build',
+          runAttempt: 2,
+          restoredGenerationKey: null,
+          preBuildManifestDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        }),
+      ]);
       await expect(
         readFile(
           path.join(gradleUserHome, 'caches', 'modules-2', 'files-2.1', 'example', 'module.bin'),
@@ -254,6 +265,10 @@ describe('executePrepareAction', () => {
       expect(summaryText).toContain('<summary>Prepare-phase details</summary>');
       expect(summaryText).toContain('- Downloaded delta artifacts: 1');
       expect(summaryText).toContain('- Applied delta changes: 1 added, 0 modified, 0 deleted.');
+      expect(summaryText).toContain('- Validated delta preconditions: 1');
+      expect(summaryText).toContain('- Idempotent delta no-ops: 0');
+      expect(summaryText).toContain('- Worker bases differed: no');
+      expect(summaryText).toContain('- Selected worker worker\\-build: attempt 2');
       expect(summaryText).toContain('- Delta apply warnings: 0');
       expect(summaryText).toContain('- Post-job artifact cleanup scheduled: 1');
       expect(infoMessages).toEqual(
@@ -872,6 +887,7 @@ describe('executePrepareAction', () => {
         contents: 'from-worker-a',
         modifiedAt: new Date('2026-03-25T12:00:02.000Z'),
         accessedAt: new Date('2026-03-25T12:00:01.000Z'),
+        restoredGenerationId: 'run-100-attempt-1-job-worker-a-aaaaaaaaaaaa',
       });
       await stageWorkerDeltaArtifact(artifactApi, workspace, {
         jobName: 'worker-b',
@@ -881,6 +897,7 @@ describe('executePrepareAction', () => {
         contents: 'from-worker-b',
         modifiedAt: new Date('2026-03-25T12:00:06.000Z'),
         accessedAt: new Date('2026-03-25T12:00:05.000Z'),
+        restoredGenerationId: 'run-100-attempt-1-job-worker-b-bbbbbbbbbbbb',
       });
 
       const status = await executePrepareAction({
@@ -951,6 +968,7 @@ describe('executePrepareAction', () => {
           addedCount: 1,
           modifiedCount: 0,
           deletedCount: 0,
+          workerBasesDiffered: true,
         }),
       );
       await expect(
@@ -1244,6 +1262,7 @@ async function stageWorkerDeltaArtifact(
     readonly runnerOs?: string;
     readonly runnerArch?: string;
     readonly overrideCacheFamilyKey?: string;
+    readonly restoredGenerationId?: string;
   },
 ): Promise<void> {
   const workerGradleHome = path.join(workspace, `${options.jobName}-gradle-home`);
@@ -1282,7 +1301,9 @@ async function stageWorkerDeltaArtifact(
     deltaManifest,
     {
       lifecycleIdentity: {
-        restoredGenerationKey: null,
+        restoredGenerationKey: options.restoredGenerationId
+          ? `${cacheModel.currentRefLineagePrefix}${options.restoredGenerationId}`
+          : null,
         preBuildManifestDigest: calculateCanonicalCacheManifestDigest(previousManifest),
       },
     },
@@ -1648,6 +1669,10 @@ describe('createPrepareActionSummaryLines', () => {
           downloadedArtifactNames: ['artifact-a', 'artifact-b'],
           appliedRelativePaths: [],
           appliedArtifactCount: 2,
+          preconditionValidatedCount: 4,
+          noopCount: 1,
+          selectedProducers: [],
+          workerBasesDiffered: false,
           message: 'Applied 2.',
           cacheRoot: '/tmp/.gradle',
           addedCount: 3,
@@ -1713,6 +1738,10 @@ describe('createPrepareActionLogLines', () => {
           downloadedArtifactNames: ['artifact-a'],
           appliedRelativePaths: [],
           appliedArtifactCount: 1,
+          preconditionValidatedCount: 2,
+          noopCount: 0,
+          selectedProducers: [],
+          workerBasesDiffered: false,
           message: 'Applied 1.',
           cacheRoot: '/tmp/.gradle',
           addedCount: 1,

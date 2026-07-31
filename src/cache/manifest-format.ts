@@ -115,6 +115,19 @@ const cacheDeltaManifestSchema = z.object({
 /** Stable file metadata captured for one cache file at one point in time. */
 export type CacheFileSnapshot = z.infer<typeof snapshotSchema>;
 
+/** Compares cache file state relevant to delta preconditions; access time is intentionally ignored. */
+export function areCacheFileSnapshotsMateriallyEquivalent(
+  left: CacheFileSnapshot,
+  right: CacheFileSnapshot,
+): boolean {
+  return (
+    left.contentSha256 === right.contentSha256 &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeMs === right.mtimeMs
+  );
+}
+
 /** Captured manifest entry for one regular file rooted under the build tool's cache root. */
 export type CacheFileManifestEntry = z.infer<typeof manifestEntrySchema>;
 
@@ -321,12 +334,7 @@ function areManifestEntriesEquivalent(
   previousEntry: CacheFileManifestEntry,
   currentEntry: CacheFileManifestEntry,
 ): boolean {
-  return (
-    previousEntry.contentSha256 === currentEntry.contentSha256 &&
-    previousEntry.size === currentEntry.size &&
-    previousEntry.mode === currentEntry.mode &&
-    previousEntry.mtimeMs === currentEntry.mtimeMs
-  );
+  return areCacheFileSnapshotsMateriallyEquivalent(previousEntry, currentEntry);
 }
 
 function validateSortedEntries(

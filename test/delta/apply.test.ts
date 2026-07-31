@@ -104,6 +104,184 @@ describe('cache delta merge/apply engine', () => {
     ).rejects.toThrow();
   });
 
+  it('validates every target precondition before changing any path', async () => {
+    const packageA = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker A',
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'after-a');
+        await writeGradleFile(home, 'caches/build-cache-1/output.bin', 'build-output');
+      },
+    );
+    const targetGradleUserHome = await createGradleUserHome(
+      temporaryDirectories,
+      'buildish-mammoth-cache-precondition-atomicity-',
+    );
+    await seedBaseGradleUserHome(targetGradleUserHome);
+    await writeGradleFile(
+      targetGradleUserHome,
+      'caches/build-cache-1/output.bin',
+      'unexpected-existing-output',
+    );
+
+    await expect(
+      applyMergedDeltaPlan(mergeDeltaArtifactPackages([packageA]), targetGradleUserHome),
+    ).rejects.toThrow(/does not match its desired state or any accepted previous state/u);
+    await expect(
+      readFile(path.join(targetGradleUserHome, 'caches/modules-2/files-2.1/example.jar'), 'utf8'),
+    ).resolves.toBe('before');
+  });
+
+  it('treats an already-applied plan as an idempotent no-op', async () => {
+    const packageA = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker A',
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'after-a');
+        await writeGradleFile(home, 'caches/build-cache-1/output.bin', 'build-output');
+        await rm(path.join(home, 'wrapper/dists/gradle-8.10/bin.zip'));
+      },
+    );
+    const targetGradleUserHome = await createGradleUserHome(
+      temporaryDirectories,
+      'buildish-mammoth-cache-idempotent-',
+    );
+    await seedBaseGradleUserHome(targetGradleUserHome);
+    const plan = mergeDeltaArtifactPackages([packageA]);
+
+    await applyMergedDeltaPlan(plan, targetGradleUserHome);
+    const repeated = await applyMergedDeltaPlan(plan, targetGradleUserHome);
+
+    expect(repeated).toMatchObject({ addedCount: 0, modifiedCount: 0, deletedCount: 0 });
+  });
+
+  it('accepts any compatible worker previous state for the same desired content', async () => {
+    const packageA = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker A',
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'shared-after');
+      },
+    );
+    const packageB = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker B',
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'shared-after');
+      },
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'alternate-before');
+      },
+    );
+    const targetGradleUserHome = await createGradleUserHome(
+      temporaryDirectories,
+      'buildish-mammoth-cache-compatible-bases-',
+    );
+    await seedBaseGradleUserHome(targetGradleUserHome);
+    await writeGradleFile(
+      targetGradleUserHome,
+      'caches/modules-2/files-2.1/example.jar',
+      'alternate-before',
+    );
+
+    const plan = mergeDeltaArtifactPackages([packageA, packageB]);
+    const precondition = plan.preconditions.find(
+      (candidate) => candidate.relativePath === 'caches/modules-2/files-2.1/example.jar',
+    );
+    expect(precondition?.acceptablePreviousSnapshots).toHaveLength(2);
+
+    await applyMergedDeltaPlan(plan, targetGradleUserHome);
+    await expect(
+      readFile(path.join(targetGradleUserHome, 'caches/modules-2/files-2.1/example.jar'), 'utf8'),
+    ).resolves.toBe('shared-after');
+  });
+
+  it('accepts different previous states for a shared deletion', async () => {
+    const packageA = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker A',
+      async (home) => {
+        await rm(path.join(home, 'wrapper/dists/gradle-8.10/bin.zip'));
+      },
+    );
+    const packageB = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker B',
+      async (home) => {
+        await rm(path.join(home, 'wrapper/dists/gradle-8.10/bin.zip'));
+      },
+      async (home) => {
+        await writeGradleFile(home, 'wrapper/dists/gradle-8.10/bin.zip', 'alternate-delete-me');
+      },
+    );
+    const targetGradleUserHome = await createGradleUserHome(
+      temporaryDirectories,
+      'buildish-mammoth-cache-compatible-deletions-',
+    );
+    await seedBaseGradleUserHome(targetGradleUserHome);
+    await writeGradleFile(
+      targetGradleUserHome,
+      'wrapper/dists/gradle-8.10/bin.zip',
+      'alternate-delete-me',
+    );
+
+    const result = await applyMergedDeltaPlan(
+      mergeDeltaArtifactPackages([packageA, packageB]),
+      targetGradleUserHome,
+    );
+
+    expect(result.deletedCount).toBe(1);
+    await expect(
+      stat(path.join(targetGradleUserHome, 'wrapper/dists/gradle-8.10/bin.zip')),
+    ).rejects.toThrow();
+  });
+
+  it("does not inherit a losing duplicate-path winner's previous state", async () => {
+    const packageA = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker A',
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'after-a');
+        const target = path.join(home, 'caches/modules-2/files-2.1/example.jar');
+        await utimes(
+          target,
+          new Date('2026-03-25T12:00:02.000Z'),
+          new Date('2026-03-25T12:00:02.000Z'),
+        );
+      },
+    );
+    const packageB = await createDownloadedPackage(
+      temporaryDirectories,
+      'Worker B',
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'after-b');
+        const target = path.join(home, 'caches/modules-2/files-2.1/example.jar');
+        await utimes(
+          target,
+          new Date('2026-03-25T12:00:06.000Z'),
+          new Date('2026-03-25T12:00:06.000Z'),
+        );
+      },
+      async (home) => {
+        await writeGradleFile(home, 'caches/modules-2/files-2.1/example.jar', 'alternate-before');
+      },
+    );
+    const targetGradleUserHome = await createGradleUserHome(
+      temporaryDirectories,
+      'buildish-mammoth-cache-losing-precondition-',
+    );
+    await seedBaseGradleUserHome(targetGradleUserHome);
+
+    await expect(
+      applyMergedDeltaPlan(
+        mergeDeltaArtifactPackages([packageA, packageB], {
+          allowDuplicateDependentDeltaPaths: true,
+        }),
+        targetGradleUserHome,
+      ),
+    ).rejects.toThrow(/does not match its desired state or any accepted previous state/u);
+  });
+
   it('fails hard when dependent deltas change the same file to different content', async () => {
     const packageA = await createDownloadedPackage(
       temporaryDirectories,
@@ -289,12 +467,14 @@ async function createDownloadedPackage(
   temporaryDirectories: Set<string>,
   jobName: string,
   mutateGradleUserHome: (gradleUserHome: string) => Promise<void>,
+  prepareBase: (gradleUserHome: string) => Promise<void> = async () => {},
 ): Promise<DownloadedDeltaArtifactPackage> {
   const gradleUserHome = await createGradleUserHome(
     temporaryDirectories,
     'buildish-mammoth-cache-worker-',
   );
   await seedBaseGradleUserHome(gradleUserHome);
+  await prepareBase(gradleUserHome);
   const cacheModel = createFixtureCacheModel(gradleUserHome);
   const previousManifest = await captureCacheManifest(cacheModel);
 
