@@ -82,9 +82,7 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
 
 ## Delta artifact not found by aggregator
 
-**Symptom:** The aggregator's finalize step fails with a message like
-`Artifact 'buildish-mammoth-cache-delta-worker_a-run-…' not found` or
-`Expected exactly one artifact … but found 0`.
+**Symptom:** The aggregator's prepare step fails with `Dependent delta artifact discovery failed`.
 
 **Diagnostic steps:**
 
@@ -96,8 +94,8 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
 2. **Check whether the worker's finalize step actually ran.** If the worker build failed and the
    step running the action was skipped or the post-action hook was suppressed, no delta artifact
    was uploaded. The aggregator must still run (`if: always()` or equivalent) to clean up; it
-   will report a clear error for the missing artifact rather than silently producing a broken
-   cache.
+   will report every missing or invalid configured worker rather than silently producing a broken
+   cache. A successful writable worker uploads an explicit envelope even when it made no changes.
 
 3. **Check for matrix job names with special characters.** Matrix dimension values such as
    `ubuntu-latest / Java 21` contain spaces and slashes that are sanitized when constructing

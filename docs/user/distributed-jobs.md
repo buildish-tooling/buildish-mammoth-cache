@@ -187,9 +187,14 @@ before the aggregator starts its finalize step.
 **Workers do not need the aggregator in their `needs`.** Workers are independent of each other;
 only the aggregator depends on all workers.
 
-**Re-runs work correctly.** A delta artifact is identified by job name, run ID, _and_ run attempt
-number. If a worker is re-run, its new artifact supersedes the old one and the aggregator picks
-up the fresh artifact automatically.
+**Re-runs work correctly.** For each worker, the aggregator selects the highest available producer
+attempt that is not newer than its own attempt. A full rerun uses every new worker envelope; a
+failed-job rerun safely mixes rerun workers with retained earlier attempts; and an aggregator-only
+rerun reuses retained worker envelopes. Selection never crosses workflow run IDs.
+
+**A successful writable worker always uploads one envelope.** This includes workers that changed no
+managed cache files: their explicit empty envelope is proof of participation and is distinct from a
+missing or failed worker.
 
 ## Using a config file
 

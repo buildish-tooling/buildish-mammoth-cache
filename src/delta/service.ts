@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -38,17 +38,23 @@ import type {
   WorkflowArtifactBackend,
   WorkflowArtifactDescriptor,
 } from './backend';
+import {
+  createDeltaArtifactNamePrefix,
+  DELTA_ARTIFACT_RESOURCE_LIMITS,
+  resolveDeltaArtifactResourceLimits,
+  type DeltaArtifactResourceLimitOptions,
+  type DeltaArtifactResourceLimits,
+} from './discovery';
 import { z } from 'zod';
 
 import { validateNormalizedRelativePosixPath } from '../util/paths';
 import { parseSerializedJson, parseWithZod } from '../util/serialization';
 
 /** Schema version embedded in every delta artifact package metadata file. Increment on breaking format changes. */
-export const DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION = 1;
+export const DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION = 2;
 /** Sentinel value used in place of the absolute cache root path inside portable delta manifests. */
 export const PORTABLE_CACHE_ROOT = '<portable-cache-root>';
 
-const DELTA_ARTIFACT_NAME_PREFIX = 'buildish-mammoth-cache-delta';
 const DELTA_PACKAGE_METADATA_FILE = 'delta-package.json';
 const DELTA_PACKAGE_MANIFEST_FILE = 'delta-manifest.json';
 const DELTA_PACKAGE_PAYLOAD_DIRECTORY = 'payload';
@@ -60,6 +66,16 @@ const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
  * Back-compat alias for the provider-neutral artifact descriptor.
  */
 export type { WorkflowArtifactDescriptor };
+export {
+  createDeltaArtifactNamePrefix,
+  DELTA_ARTIFACT_RESOURCE_LIMITS,
+  selectDeltaArtifactsForProducerJobs,
+} from './discovery';
+export type {
+  DeltaArtifactResourceLimitOptions,
+  DeltaArtifactResourceLimits,
+  SelectedDeltaArtifact,
+} from './discovery';
 
 // ---------------------------------------------------------------------------
 // Zod schemas — define once, derive both the runtime validator and the TS type
@@ -79,16 +95,56 @@ const sha256Schema = z
   .regex(LOWERCASE_SHA256_PATTERN, 'Must be a lowercase hex SHA-256 digest');
 
 const producerSchema = z.object({
-  repository: z.string(),
-  workflowName: z.string(),
-  jobName: z.string(),
+  repository: z.string().min(1),
+  workflowName: z.string().min(1),
+  jobName: z.string().min(1),
   runId: z.number().int().nonnegative().nullable(),
   runAttempt: z.number().int().nonnegative().nullable(),
-  runnerOs: z.string(),
-  runnerArch: z.string(),
-  safeRefName: z.string(),
-  cacheKey: z.string(),
+  sourceRevision: z.string().min(1).max(256).nullable(),
+  runnerOs: z.string().min(1),
+  runnerArch: z.string().min(1),
+  safeRefName: z.string().min(1),
+  defaultBranch: z.string().min(1),
 });
+
+const cacheIdentitySchema = z
+  .object({
+    familyKey: z.string().min(1),
+    refLineagePrefix: z.string().min(1),
+    restoredGenerationKey: z.string().min(1).nullable(),
+    preBuildManifestDigest: sha256Schema,
+    partitionFingerprint: z.string().min(1),
+    partitionIds: z.array(z.string().min(1)).min(1),
+  })
+  .superRefine((identity, ctx) => {
+    if (
+      !identity.refLineagePrefix.startsWith(`${identity.familyKey}-ref-`) ||
+      !identity.refLineagePrefix.endsWith('-gen-')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['refLineagePrefix'],
+        message: 'Ref lineage must belong to the declared cache family',
+      });
+    }
+    if (
+      identity.restoredGenerationKey !== null &&
+      !identity.restoredGenerationKey.startsWith(`${identity.familyKey}-ref-`)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['restoredGenerationKey'],
+        message: 'Restored generation must belong to the declared cache family',
+      });
+    }
+    if (new Set(identity.partitionIds).size !== identity.partitionIds.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['partitionIds'],
+        message: 'Ordered partition identifiers must be unique',
+      });
+    }
+  });
 
 const payloadEntrySchema = z.object({
   relativePath: packageRelativePathSchema,
@@ -124,6 +180,7 @@ const deltaArtifactPackageMetadataSchema = z.object({
     ),
   createdAt: z.string(),
   producer: producerSchema,
+  cacheIdentity: cacheIdentitySchema,
   deltaManifestPath: packageRelativePathSchema,
   deltaManifestSha256: sha256Schema,
   payloadEntries: payloadEntriesSchema,
@@ -145,6 +202,12 @@ export type DeltaArtifactPayloadEntry = z.infer<typeof payloadEntrySchema>;
  * Top-level metadata file stored alongside each staged delta artifact package.
  */
 export type DeltaArtifactPackageMetadata = z.infer<typeof deltaArtifactPackageMetadataSchema>;
+
+/** Prepare-phase identity that cannot be reconstructed from a delta manifest alone. */
+export interface DeltaEnvelopeLifecycleIdentity {
+  readonly restoredGenerationKey: string | null;
+  readonly preBuildManifestDigest: string;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -177,6 +240,8 @@ export interface UploadedDeltaArtifactPackage {
 export interface DownloadedDeltaArtifactPackage {
   readonly artifact: WorkflowArtifactDescriptor;
   readonly downloadDirectory: string;
+  /** Outer temporary directory to remove after use; may differ from the extracted package root. */
+  readonly temporaryDirectory?: string;
   readonly metadata: DeltaArtifactPackageMetadata;
   readonly deltaManifest: CacheDeltaManifest;
 }
@@ -189,6 +254,8 @@ export interface StageDeltaArtifactPackageOptions {
   readonly parentDirectory?: string;
   /** Explicit artifact name override. Defaults to the deterministic name derived from job metadata. */
   readonly artifactName?: string;
+  /** Exact prepare-phase base and digest identity embedded in the v2 envelope. */
+  readonly lifecycleIdentity: DeltaEnvelopeLifecycleIdentity;
 }
 
 /**
@@ -204,23 +271,22 @@ export interface UploadDeltaArtifactPackageOptions {
 /**
  * Optional overrides used when downloading and verifying a delta artifact package.
  */
-export interface DownloadDeltaArtifactPackageOptions extends ArtifactLookupOptions {
+export interface DownloadDeltaArtifactPackageOptions
+  extends ArtifactLookupOptions, DeltaArtifactResourceLimitOptions {
   /** Parent directory beneath which a temporary extraction directory should be created. */
   readonly parentDirectory?: string;
+  /** Expected current-run and selected-producer identity validated after extraction. */
+  readonly expectedIdentity?: ExpectedDeltaArtifactIdentity;
 }
 
-/**
- * Creates the deterministic artifact-name prefix used to locate one worker delta by job identity.
- */
-export function createDeltaArtifactNamePrefix(
-  jobName: string,
-  runId: number | null,
-  runAttempt: number | null,
-): string {
-  const sanitizedJobName = sanitizeArtifactToken(jobName, 'job name', 48);
-  const runSegment = runId === null ? 'run-unknown' : `run-${runId}`;
-  const attemptSegment = runAttempt === null ? 'attempt-unknown' : `attempt-${runAttempt}`;
-  return `${DELTA_ARTIFACT_NAME_PREFIX}-${sanitizedJobName}-${runSegment}-${attemptSegment}-`;
+/** Context against which a selected envelope is validated after download. */
+export interface ExpectedDeltaArtifactIdentity {
+  readonly repository: string;
+  readonly workflowName: string;
+  readonly runId: number | null;
+  readonly producerJobName: string;
+  readonly producerAttempt: number | null;
+  readonly sourceRevision: string | null;
 }
 
 /**
@@ -237,8 +303,10 @@ export function createDeltaArtifactName(
 ): string {
   const portableManifest = createPortableDeltaManifest(deltaManifest);
   const deltaDigest = sha256Hex(serializeCacheDeltaManifest(portableManifest)).slice(0, 12);
-  const cacheDigest = sha256Hex(cacheModel.cacheKey).slice(0, 12);
-  const artifactName = `${createDeltaArtifactNamePrefix(ciContext.jobName, ciContext.runId, ciContext.runAttempt)}${cacheDigest}-${deltaDigest}`;
+  const familyDigest = sha256Hex(cacheModel.cacheFamilyKey).slice(0, 12);
+  const attemptSegment =
+    ciContext.runAttempt === null ? 'attempt-unknown' : `attempt-${ciContext.runAttempt}`;
+  const artifactName = `${createDeltaArtifactNamePrefix(ciContext.jobName, ciContext.runId)}${attemptSegment}-${familyDigest}-${deltaDigest}`;
 
   if (!ARTIFACT_NAME_PATTERN.test(artifactName)) {
     throw new Error(`Derived artifact name '${artifactName}' contains unsupported characters.`);
@@ -258,66 +326,82 @@ export async function stageDeltaArtifactPackage(
   ciContext: CiJobContext,
   cacheModel: CacheModel,
   deltaManifest: CacheDeltaManifest,
-  options: StageDeltaArtifactPackageOptions = {},
+  options: StageDeltaArtifactPackageOptions,
 ): Promise<StagedDeltaArtifactPackage> {
   const stagingParent = options.parentDirectory ?? os.tmpdir();
   const stagingDirectory = await mkdtemp(
     path.join(stagingParent, 'buildish-mammoth-cache-delta-artifact-'),
   );
   const rootDirectory = stagingDirectory;
-  const artifactName =
-    options.artifactName ?? createDeltaArtifactName(ciContext, cacheModel, deltaManifest);
-  const portableDeltaManifest = createPortableDeltaManifest(deltaManifest);
-  const serializedPortableDeltaManifest = serializeCacheDeltaManifest(portableDeltaManifest);
-  const deltaManifestSha256 = sha256Hex(serializedPortableDeltaManifest);
-  const deltaManifestPath = path.join(rootDirectory, DELTA_PACKAGE_MANIFEST_FILE);
-  const metadataPath = path.join(rootDirectory, DELTA_PACKAGE_METADATA_FILE);
-  const payloadDirectory = path.join(rootDirectory, DELTA_PACKAGE_PAYLOAD_DIRECTORY);
 
-  if (!ARTIFACT_NAME_PATTERN.test(artifactName)) {
-    throw new Error(
-      `Artifact name '${artifactName}' contains unsupported characters. Allowed: letters, numbers, dot, underscore, dash.`,
-    );
+  try {
+    const portableDeltaManifest = createPortableDeltaManifest(deltaManifest);
+    const serializedPortableDeltaManifest = serializeCacheDeltaManifest(portableDeltaManifest);
+    const deltaManifestSha256 = sha256Hex(serializedPortableDeltaManifest);
+    const artifactName =
+      options.artifactName ?? createDeltaArtifactName(ciContext, cacheModel, deltaManifest);
+    const deltaManifestPath = path.join(rootDirectory, DELTA_PACKAGE_MANIFEST_FILE);
+    const metadataPath = path.join(rootDirectory, DELTA_PACKAGE_METADATA_FILE);
+    const payloadDirectory = path.join(rootDirectory, DELTA_PACKAGE_PAYLOAD_DIRECTORY);
+    if (!ARTIFACT_NAME_PATTERN.test(artifactName)) {
+      throw new Error(
+        `Artifact name '${artifactName}' contains unsupported characters. Allowed: letters, numbers, dot, underscore, dash.`,
+      );
+    }
+    await mkdir(payloadDirectory, { recursive: true });
+
+    const payloadEntries = await stagePayloadEntries(deltaManifest, payloadDirectory);
+    const lifecycleIdentity = options.lifecycleIdentity;
+    const metadata: DeltaArtifactPackageMetadata = {
+      schemaVersion: DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION,
+      artifactType: 'buildish-mammoth-cache-delta',
+      artifactName,
+      createdAt: new Date().toISOString(),
+      producer: {
+        repository: ciContext.repository,
+        workflowName: ciContext.workflowName,
+        jobName: ciContext.jobName,
+        runId: ciContext.runId,
+        runAttempt: ciContext.runAttempt,
+        sourceRevision: ciContext.sourceRevision ?? null,
+        runnerOs: ciContext.runnerOs,
+        runnerArch: ciContext.runnerArch,
+        safeRefName: ciContext.safeRefName,
+        defaultBranch: ciContext.defaultBranch,
+      },
+      cacheIdentity: {
+        familyKey: cacheModel.cacheFamilyKey,
+        refLineagePrefix: cacheModel.currentRefLineagePrefix,
+        restoredGenerationKey: lifecycleIdentity.restoredGenerationKey,
+        preBuildManifestDigest: lifecycleIdentity.preBuildManifestDigest,
+        partitionFingerprint: cacheModel.partitionFingerprint,
+        partitionIds: cacheModel.partitions.map((partition) => partition.id),
+      },
+      deltaManifestPath: DELTA_PACKAGE_MANIFEST_FILE,
+      deltaManifestSha256,
+      payloadEntries,
+    };
+
+    parseWithZod(deltaArtifactPackageMetadataSchema, metadata, 'delta artifact metadata');
+    await writeFile(deltaManifestPath, serializedPortableDeltaManifest, 'utf8');
+    await writeFile(metadataPath, `${JSON.stringify(metadata)}\n`, 'utf8');
+
+    return {
+      artifactName,
+      stagingDirectory,
+      rootDirectory,
+      files: (await listRelativeRegularFiles(rootDirectory)).map((relativePath) =>
+        path.join(rootDirectory, relativePath),
+      ),
+      metadataPath,
+      deltaManifestPath,
+      metadata,
+      deltaManifest: portableDeltaManifest,
+    };
+  } catch (error) {
+    await rm(stagingDirectory, { recursive: true, force: true });
+    throw error;
   }
-  await mkdir(payloadDirectory, { recursive: true });
-
-  const payloadEntries = await stagePayloadEntries(deltaManifest, payloadDirectory);
-  const metadata: DeltaArtifactPackageMetadata = {
-    schemaVersion: DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION,
-    artifactType: 'buildish-mammoth-cache-delta',
-    artifactName,
-    createdAt: new Date().toISOString(),
-    producer: {
-      repository: ciContext.repository,
-      workflowName: ciContext.workflowName,
-      jobName: ciContext.jobName,
-      runId: ciContext.runId,
-      runAttempt: ciContext.runAttempt,
-      runnerOs: ciContext.runnerOs,
-      runnerArch: ciContext.runnerArch,
-      safeRefName: ciContext.safeRefName,
-      cacheKey: cacheModel.cacheKey,
-    },
-    deltaManifestPath: DELTA_PACKAGE_MANIFEST_FILE,
-    deltaManifestSha256,
-    payloadEntries,
-  };
-
-  await writeFile(deltaManifestPath, serializedPortableDeltaManifest, 'utf8');
-  await writeFile(metadataPath, `${JSON.stringify(metadata)}\n`, 'utf8');
-
-  return {
-    artifactName,
-    stagingDirectory,
-    rootDirectory,
-    files: (await listRelativeRegularFiles(rootDirectory)).map((relativePath) =>
-      path.join(rootDirectory, relativePath),
-    ),
-    metadataPath,
-    deltaManifestPath,
-    metadata,
-    deltaManifest: portableDeltaManifest,
-  };
 }
 
 /**
@@ -347,37 +431,6 @@ export async function uploadDeltaArtifactPackage(
 }
 
 /**
- * Locates the single delta artifact produced by one worker job in one distributed execution.
- */
-export async function findDeltaArtifactByProducerJob(
-  artifactBackend: WorkflowArtifactBackend,
-  producerJobName: string,
-  runId: number | null,
-  runAttempt: number | null,
-  options: ArtifactLookupOptions = {},
-): Promise<WorkflowArtifactDescriptor> {
-  assertArtifactLookupScopeSupport(artifactBackend, options.scope, 'artifact lookup');
-  const expectedPrefix = createDeltaArtifactNamePrefix(producerJobName, runId, runAttempt);
-  const matches = (
-    await artifactBackend.listArtifacts({ latest: true, scope: options.scope })
-  ).filter((artifact) => artifact.name.startsWith(expectedPrefix));
-
-  if (matches.length === 0) {
-    throw new Error(
-      `No delta artifact found for job '${producerJobName}' with prefix '${expectedPrefix}'.`,
-    );
-  }
-
-  if (matches.length > 1) {
-    throw new Error(
-      `Multiple delta artifacts matched job '${producerJobName}' with prefix '${expectedPrefix}'. Distributed jobs must use unique producer job names.`,
-    );
-  }
-
-  return matches[0];
-}
-
-/**
  * Downloads an artifact by descriptor, verifies the reported content hash when available, and
  * validates the package.
  */
@@ -391,27 +444,60 @@ export async function downloadAndVerifyDeltaArtifactPackage(
   const downloadDirectory = await mkdtemp(
     path.join(parentDirectory, 'buildish-mammoth-cache-delta-download-'),
   );
-  const downloadResult = await artifactBackend.downloadArtifact(artifact.id, {
-    path: downloadDirectory,
-    expectedHash: artifact.digest ?? undefined,
-    scope: options.scope,
-  });
+  try {
+    const limits = resolveDeltaArtifactResourceLimits(options.resourceLimits);
+    if (artifact.size > limits.selectedArtifactSizeBytes) {
+      throw new Error(
+        `Artifact '${artifact.name}' is ${artifact.size} bytes, exceeding the ${limits.selectedArtifactSizeBytes}-byte download limit.`,
+      );
+    }
+    const downloadResult = await artifactBackend.downloadArtifact(artifact.id, {
+      path: downloadDirectory,
+      expectedHash: artifact.digest ?? undefined,
+      scope: options.scope,
+    });
 
-  if (downloadResult.digestMismatch) {
-    throw new Error(`Downloaded artifact '${artifact.name}' did not match the expected hash.`);
+    if (downloadResult.digestMismatch) {
+      throw new Error(`Downloaded artifact '${artifact.name}' did not match the expected hash.`);
+    }
+    assertDownloadPathWithinTemporaryDirectory(downloadDirectory, downloadResult.downloadPath);
+
+    const verified = await verifyExtractedDeltaArtifactPackage(
+      downloadResult.downloadPath,
+      artifact.name,
+      { resourceLimits: limits },
+    );
+    if (options.expectedIdentity) {
+      assertExpectedDeltaArtifactIdentity(verified.metadata, options.expectedIdentity);
+    }
+
+    return {
+      artifact,
+      downloadDirectory: downloadResult.downloadPath,
+      temporaryDirectory: downloadDirectory,
+      metadata: verified.metadata,
+      deltaManifest: verified.deltaManifest,
+    };
+  } catch (error) {
+    await rm(downloadDirectory, { recursive: true, force: true });
+    throw error;
   }
+}
 
-  const verified = await verifyExtractedDeltaArtifactPackage(
-    downloadResult.downloadPath,
-    artifact.name,
-  );
-
-  return {
-    artifact,
-    downloadDirectory: downloadResult.downloadPath,
-    metadata: verified.metadata,
-    deltaManifest: verified.deltaManifest,
-  };
+function assertDownloadPathWithinTemporaryDirectory(
+  temporaryDirectory: string,
+  downloadPath: string,
+): void {
+  const relativePath = path.relative(path.resolve(temporaryDirectory), path.resolve(downloadPath));
+  if (
+    relativePath.startsWith(`..${path.sep}`) ||
+    relativePath === '..' ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error(
+      'Artifact backend returned a download path outside the requested temporary directory.',
+    );
+  }
 }
 
 function assertArtifactRetentionSupport(
@@ -445,11 +531,19 @@ function assertArtifactLookupScopeSupport(
 export async function verifyExtractedDeltaArtifactPackage(
   extractedDirectory: string,
   expectedArtifactName?: string,
+  options: DeltaArtifactResourceLimitOptions = {},
 ): Promise<{
   readonly metadata: DeltaArtifactPackageMetadata;
   readonly deltaManifest: CacheDeltaManifest;
 }> {
-  const actualFiles = await listRelativeRegularFiles(extractedDirectory);
+  const limits = resolveDeltaArtifactResourceLimits(options.resourceLimits);
+  const packageLayout = await inspectPackageLayout(extractedDirectory, limits);
+  if (packageLayout.totalSizeBytes > limits.expandedPackageSizeBytes) {
+    throw new Error(
+      `Expanded delta artifact is ${packageLayout.totalSizeBytes} bytes, exceeding the ${limits.expandedPackageSizeBytes}-byte limit.`,
+    );
+  }
+  const actualFiles = packageLayout.relativePaths;
   const metadataPath = path.join(extractedDirectory, DELTA_PACKAGE_METADATA_FILE);
   const metadata = deserializeDeltaArtifactPackageMetadata(await readFile(metadataPath, 'utf8'));
 
@@ -474,6 +568,23 @@ export async function verifyExtractedDeltaArtifactPackage(
   const deltaManifest = deserializeCacheDeltaManifest(serializedDeltaManifest);
   if (deltaManifest.cacheRoot !== PORTABLE_CACHE_ROOT) {
     throw new Error('Downloaded delta artifact must use the portable cache root sentinel.');
+  }
+
+  const expectedName = createDeltaArtifactNameFromMetadata(metadata);
+  if (metadata.artifactName !== expectedName) {
+    throw new Error(
+      `Delta artifact metadata name '${metadata.artifactName}' does not match its producer, attempt, family, and manifest digests; expected '${expectedName}'.`,
+    );
+  }
+
+  const manifestEntryCount = deltaManifest.partitions.reduce(
+    (count, partition) => count + partition.entries.length,
+    0,
+  );
+  if (manifestEntryCount > limits.manifestEntries) {
+    throw new Error(
+      `Delta manifest contains ${manifestEntryCount} entries, exceeding the ${limits.manifestEntries}-entry limit.`,
+    );
   }
 
   const expectedPayloads = collectExpectedPayloadSnapshots(deltaManifest);
@@ -554,6 +665,39 @@ export async function verifyExtractedDeltaArtifactPackage(
     metadata,
     deltaManifest,
   };
+}
+
+function assertExpectedDeltaArtifactIdentity(
+  metadata: DeltaArtifactPackageMetadata,
+  expected: ExpectedDeltaArtifactIdentity,
+): void {
+  const actual = metadata.producer;
+  const mismatches: string[] = [];
+  if (actual.repository !== expected.repository) mismatches.push('repository');
+  if (actual.workflowName !== expected.workflowName) mismatches.push('workflow');
+  if (actual.runId !== expected.runId) mismatches.push('run ID');
+  if (actual.jobName !== expected.producerJobName) mismatches.push('producer job');
+  if (actual.runAttempt !== expected.producerAttempt) mismatches.push('producer attempt');
+  if (expected.sourceRevision !== null && actual.sourceRevision !== expected.sourceRevision) {
+    mismatches.push('source revision');
+  }
+  if (mismatches.length > 0) {
+    throw new Error(
+      `Delta artifact '${metadata.artifactName}' does not match the selected execution identity: ${mismatches.join(', ')}.`,
+    );
+  }
+}
+
+function createDeltaArtifactNameFromMetadata(metadata: DeltaArtifactPackageMetadata): string {
+  const attemptSegment =
+    metadata.producer.runAttempt === null
+      ? 'attempt-unknown'
+      : `attempt-${metadata.producer.runAttempt}`;
+  return (
+    `${createDeltaArtifactNamePrefix(metadata.producer.jobName, metadata.producer.runId)}` +
+    `${attemptSegment}-${sha256Hex(metadata.cacheIdentity.familyKey).slice(0, 12)}-` +
+    metadata.deltaManifestSha256.slice(0, 12)
+  );
 }
 
 /**
@@ -725,15 +869,27 @@ function assertStatMatchesSnapshot(
 }
 
 async function listRelativeRegularFiles(rootDirectory: string): Promise<readonly string[]> {
-  const relativePaths: string[] = [];
-  await walkDirectory(rootDirectory, '', relativePaths);
-  return relativePaths.sort((left, right) => left.localeCompare(right));
+  return (await inspectPackageLayout(rootDirectory, DELTA_ARTIFACT_RESOURCE_LIMITS)).relativePaths;
+}
+
+async function inspectPackageLayout(
+  rootDirectory: string,
+  limits: DeltaArtifactResourceLimits,
+): Promise<{
+  readonly relativePaths: readonly string[];
+  readonly totalSizeBytes: number;
+}> {
+  const collector = { relativePaths: [] as string[], totalSizeBytes: 0 };
+  await walkDirectory(rootDirectory, '', collector, limits);
+  collector.relativePaths.sort((left, right) => left.localeCompare(right));
+  return collector;
 }
 
 async function walkDirectory(
   absoluteDirectory: string,
   relativeDirectory: string,
-  collector: string[],
+  collector: { relativePaths: string[]; totalSizeBytes: number },
+  limits: DeltaArtifactResourceLimits,
 ): Promise<void> {
   const entries = await readdir(absoluteDirectory, { withFileTypes: true });
   entries.sort((left, right) => left.name.localeCompare(right.name));
@@ -747,7 +903,7 @@ async function walkDirectory(
     }
 
     if (entry.isDirectory()) {
-      await walkDirectory(childAbsolutePath, childRelativePath, collector);
+      await walkDirectory(childAbsolutePath, childRelativePath, collector, limits);
       continue;
     }
 
@@ -757,7 +913,14 @@ async function walkDirectory(
       );
     }
 
-    collector.push(childRelativePath);
+    const fileStat = await lstat(childAbsolutePath);
+    collector.totalSizeBytes += fileStat.size;
+    if (collector.totalSizeBytes > limits.expandedPackageSizeBytes) {
+      throw new Error(
+        `Expanded delta artifact exceeds the ${limits.expandedPackageSizeBytes}-byte limit.`,
+      );
+    }
+    collector.relativePaths.push(childRelativePath);
   }
 }
 
@@ -779,27 +942,6 @@ function resolveArtifactPackagePath(rootDirectory: string, relativePath: string)
     validatePackageRelativePath(relativePath, 'artifact package relative path'),
     `Artifact package path '${relativePath}' escapes the extracted root directory.`,
   );
-}
-
-function sanitizeArtifactToken(token: string, label: string, maxLength = 64): string {
-  const trimmed = token.trim();
-  if (trimmed.length === 0) {
-    throw new Error(`Artifact ${label} must not be empty.`);
-  }
-
-  const sanitized = trimmed
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/gu, '-')
-    .replace(/-+/gu, '-')
-    .replace(/^-|-$/gu, '')
-    .slice(0, maxLength)
-    .replace(/^-|-$/gu, '');
-
-  if (sanitized.length === 0) {
-    throw new Error(`Artifact ${label} did not contain any supported characters.`);
-  }
-
-  return sanitized;
 }
 
 function validatePackageRelativePath(relativePath: string, label: string): string {

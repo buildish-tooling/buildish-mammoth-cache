@@ -71,6 +71,7 @@ describe('prepare entrypoint', () => {
         jobName: 'test',
         runId: 123,
         runAttempt: 1,
+        sourceRevision: null,
         tempDirectory: '/tmp',
         workspace: '/workspace',
         actionPath: null,

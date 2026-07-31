@@ -159,6 +159,7 @@ export function createGitHubContext(options: GitHubContextOptions = {}): CiJobCo
     jobName: options.githubJobNameInput?.trim() || env.GITHUB_JOB?.trim() || 'unknown-job',
     runId: parseOptionalNumber(env.GITHUB_RUN_ID),
     runAttempt: parseOptionalNumber(env.GITHUB_RUN_ATTEMPT),
+    sourceRevision: env.GITHUB_SHA?.trim() || null,
     tempDirectory: normalizeOptionalPath(env.RUNNER_TEMP),
     workspace: normalizeWorkspace(env.GITHUB_WORKSPACE),
     actionPath: normalizeOptionalPath(env.GITHUB_ACTION_PATH),
@@ -350,7 +351,7 @@ function parseOptionalNumber(value: string | undefined): number | null {
   }
 
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function sanitizeRefName(refName: string): string {

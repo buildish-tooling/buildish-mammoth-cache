@@ -29,9 +29,10 @@ the build (via `captureCacheManifest`), computes the diff, compresses the change
 uploads the result as a CI artifact. The aggregator then downloads every worker's artifact,
 merges the diffs, and writes the combined set of files into its own local cache.
 
-All of this lives in `src/delta/service.ts` (staging, uploading, finding, downloading) and
-`src/delta/apply.ts` (merging and applying). The shared bootstrap/finalize phases call these
-functions at the right points in the two-phase lifecycle.
+This is split across `src/delta/discovery.ts` (bounded rerun selection), `src/delta/service.ts`
+(staging, upload, download, and package verification), and `src/delta/apply.ts` (merge and apply).
+The shared prepare/finalize phases call these functions at the right points in the two-phase
+lifecycle.
 
 ---
 
@@ -40,18 +41,17 @@ functions at the right points in the two-phase lifecycle.
 Every delta artifact gets a deterministic name derived from job metadata and content:
 
 ```
-buildish-mammoth-cache-delta-{sanitized-job-name}-run-{runId}-attempt-{runAttempt}-{cacheKeyDigest12}-{deltaManifestDigest12}
+buildish-mammoth-cache-delta-{sanitized-job-name}-run-{runId}-attempt-{runAttempt}-{familyDigest12}-{deltaManifestDigest12}
 ```
 
-- **`sanitized-job-name`** — the producer's CI job name, restricted to `[A-Za-z0-9._-]` and
-  truncated at 48 characters. Spaces, slashes, and other characters from matrix job names are
-  replaced with underscores.
+- **`sanitized-job-name`** — a readable 24-character slug followed by an 8-character digest of
+  the producer's exact CI job name. The digest keeps distinct long or similarly sanitized job
+  names from sharing a discovery prefix.
 - **`run-{runId}` / `attempt-{runAttempt}`** — the CI run ID and attempt number, which scope
   every artifact to a single workflow execution. Re-runs produce new artifacts with an
   incremented attempt number and do not collide with the previous run.
-- **`{cacheKeyDigest12}`** — first 12 hex characters of the SHA-256 of the full cache key.
-  Ensures that an artifact built with one cache key is never matched by a query for a different
-  key.
+- **`{familyDigest12}`** — first 12 hex characters of the SHA-256 of the action-owned cache
+  family. The complete family and lineage remain in the validated envelope.
 - **`{deltaManifestDigest12}`** — first 12 hex characters of the SHA-256 of the portable delta
   manifest JSON. Makes the name content-addressable: identical builds produce identical names,
   different builds produce different names.
@@ -59,10 +59,11 @@ buildish-mammoth-cache-delta-{sanitized-job-name}-run-{runId}-attempt-{runAttemp
 The full name must match `^[A-Za-z0-9._-]{1,128}$` — the character set accepted by
 `@actions/artifact`.
 
-The **aggregator discovery** step only needs the prefix
-`buildish-mammoth-cache-delta-{sanitized-job-name}-run-{runId}-attempt-{runAttempt}-` to find
-exactly one artifact per worker job. If zero or more than one artifact matches, an error is
-thrown rather than proceeding with ambiguous state.
+The stable discovery prefix ends after `run-{runId}-`. The aggregator lists all artifacts for the
+current run once and, for each configured worker, selects the highest producer attempt not greater
+than its own attempt. This supports full reruns, failed-job reruns that mix old and new worker
+attempts, and aggregator-only reruns. Two artifacts for the same worker and attempt are ambiguous
+and fail aggregation. Artifacts from another run ID are never searched.
 
 ---
 
@@ -71,11 +72,11 @@ thrown rather than proceeding with ambiguous state.
 Each delta artifact is a flat directory uploaded as a single CI artifact. It always contains
 exactly three kinds of entries:
 
-| Path                  | Description                                                                                                                                                          |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `delta-package.json`  | Top-level metadata: schema version, artifact type tag, producer job context, cache key, SHA-256 of the manifest, and one `payloadEntries` record per changed file.   |
-| `delta-manifest.json` | The portable cache delta manifest (see below).                                                                                                                       |
-| `payload/{uuid}`      | One file per changed cache entry. The filename is a random UUID — never the original cache-relative path — so the archive cannot be used for path-traversal attacks. |
+| Path                     | Description                                                                                                                                                                      |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `delta-package.json`     | Version 2 envelope: producer/run/source identity, runner and ref identity, cache family/lineage/base/digest identity, partition identity, manifest digest, and payload metadata. |
+| `delta-manifest.json`    | The portable cache delta manifest (see below).                                                                                                                                   |
+| `payload/{sequence}.bin` | One file per changed cache entry. Generated sequential names never reuse the original cache-relative path.                                                                       |
 
 No other files are permitted. The download-and-verify step (`verifyExtractedDeltaArtifactPackage`)
 checks that the set of actual files on disk matches the declared set exactly, before any content
@@ -104,12 +105,18 @@ prevent path traversal.
 Before any file is written to the cache, the download step verifies each payload file
 independently:
 
-1. The artifact digest reported by the CI artifact service is checked (when available).
-2. `delta-package.json` is read and parsed against the Zod schema.
-3. `delta-manifest.json` is hashed; its SHA-256 must match `deltaManifestSha256` in the metadata.
-4. Every payload file listed in `payloadEntries` is hashed; each digest must match
+1. Discovery bounds total current-run metadata, candidates per worker, and selected compressed
+   artifact size.
+2. The artifact digest reported by the CI artifact service is checked (when available).
+3. Expanded package size and manifest entry count are bounded before use.
+4. `delta-package.json` is parsed against the Zod schema and its name, repository, workflow, run,
+   producer job/attempt, and source revision (when available) are checked against selection.
+5. Cache family, ref lineage, ref/default branch, runner, partition fingerprint, and ordered
+   partition IDs must match the aggregator.
+6. `delta-manifest.json` is hashed; its SHA-256 must match `deltaManifestSha256` in the metadata.
+7. Every payload file listed in `payloadEntries` is hashed; each digest must match
    `contentSha256`, and the file size must match `size`.
-5. No extra files may be present beyond what is declared in the metadata.
+8. No extra files may be present beyond what is declared in the metadata.
 
 If any check fails the entire artifact is rejected with a descriptive error before the merge
 step starts.
@@ -118,7 +125,8 @@ step starts.
 
 ## Merge algorithm
 
-The aggregator downloads all worker artifacts in parallel and then merges them into a single
+The aggregator first selects every required worker artifact, then downloads and verifies them
+without mutating the cache, and finally merges them into a single
 `MergedDeltaPlan` (`mergeDeltaArtifactPackages` in `src/delta/apply.ts`).
 
 The merge is per-partition and per-relative-path:
@@ -155,8 +163,19 @@ content varies only by timestamp).
 
 ## Schema versioning
 
-`DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION` (currently `1`) is embedded in every
-`delta-package.json`. The Zod validator uses `z.literal(1)` for `schemaVersion`, so a package
+`DELTA_ARTIFACT_PACKAGE_SCHEMA_VERSION` (currently `2`) is embedded in every
+`delta-package.json`. The Zod validator requires that exact version, so a package
 produced by a future version of Mammoth Cache that increments this field will be rejected
 cleanly rather than silently misinterpreted. Increment the constant and update the schema only
 when the format changes in a backwards-incompatible way.
+
+## Resource contract and cleanup
+
+The v2 exchange fails before cache mutation when a run exposes more than 1,000 artifact metadata
+records, one configured worker has more than 100 candidate envelopes, a selected artifact reports
+more than 2 GiB provider-reported size, an extracted package exceeds 4 GiB, or a delta manifest exceeds
+200,000 entries. These are action-level availability limits in addition to provider limits.
+
+Workers upload one envelope even when the delta is empty. An empty envelope proves that the worker
+completed successfully; a missing envelope remains a hard aggregation failure. Staging and download
+temporary directories are removed on success and on validation, download, or packaging failure.

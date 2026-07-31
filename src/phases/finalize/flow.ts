@@ -54,11 +54,10 @@ const DELTA_ARTIFACT_RETENTION_DAYS = 7;
  * `status` describes why the artifact was or was not uploaded:
  * - `not-distributed-worker` — job mode is not `distributed-worker`
  * - `read-only` — action is in read-only mode
- * - `no-changes` — diff between pre- and post-build manifests was empty
  * - `uploaded` — delta artifact was successfully packaged and uploaded
  */
 export interface FinalizeDeltaArtifactResult {
-  readonly status: 'not-distributed-worker' | 'read-only' | 'no-changes' | 'uploaded';
+  readonly status: 'not-distributed-worker' | 'read-only' | 'uploaded';
   readonly addedCount: number;
   readonly modifiedCount: number;
   readonly deletedCount: number;
@@ -68,6 +67,11 @@ export interface FinalizeDeltaArtifactResult {
   /** Provider artifact identifier; `null` when `status` is not `uploaded`. */
   readonly artifactId: number | null;
   readonly artifactSizeBytes: number | null;
+  readonly producerAttempt: number | null;
+  readonly restoredGenerationKey: string | null;
+  readonly preBuildManifestDigest: string | null;
+  /** Whether the uploaded envelope explicitly proves successful participation with no changes. */
+  readonly emptyEnvelope: boolean;
   readonly message: string;
 }
 
@@ -279,6 +283,9 @@ function reconcileCacheLifecycle(
   if (lifecycleRecord.currentRefLineagePrefix !== cacheModel.currentRefLineagePrefix) {
     mismatches.push('current ref lineage');
   }
+  if (lifecycleRecord.sourceRevision !== (bootstrap.ciContext.sourceRevision ?? null)) {
+    mismatches.push('source revision');
+  }
   if (
     JSON.stringify(lifecycleRecord.fallbackRefLineagePrefixes) !==
     JSON.stringify(cacheModel.fallbackRefLineagePrefixes)
@@ -387,6 +394,10 @@ async function uploadFinalizeArtifact(
       artifactName: null,
       artifactId: null,
       artifactSizeBytes: null,
+      producerAttempt: null,
+      restoredGenerationKey: null,
+      preBuildManifestDigest: null,
+      emptyEnvelope: false,
       ...counts,
       message: `Delta artifact upload skipped because only distributed-worker jobs publish delta artifacts; current mode is '${bootstrap.config.jobMode}'.`,
     };
@@ -398,20 +409,12 @@ async function uploadFinalizeArtifact(
       artifactName: null,
       artifactId: null,
       artifactSizeBytes: null,
+      producerAttempt: null,
+      restoredGenerationKey: null,
+      preBuildManifestDigest: null,
+      emptyEnvelope: false,
       ...counts,
       message: 'Delta artifact upload skipped because read-only mode is enabled.',
-    };
-  }
-
-  if (counts.totalChangedCount === 0) {
-    return {
-      status: 'no-changes',
-      artifactName: null,
-      artifactId: null,
-      artifactSizeBytes: null,
-      ...counts,
-      message:
-        'Delta artifact upload skipped because no cache changes were detected after the build.',
     };
   }
 
@@ -421,11 +424,18 @@ async function uploadFinalizeArtifact(
     jobName: lifecycleRecord.executionIdentity.jobName,
     runId: lifecycleRecord.executionIdentity.runId,
     runAttempt: lifecycleRecord.executionIdentity.runAttempt,
+    sourceRevision: lifecycleRecord.sourceRevision,
   };
   const stagedPackage = await stageDeltaArtifactPackage(
     deltaArtifactExecutionContext,
     bootstrap.cacheModel!,
     deltaManifest,
+    {
+      lifecycleIdentity: {
+        restoredGenerationKey: lifecycleRecord.restoreResult.matchedKey,
+        preBuildManifestDigest: lifecycleRecord.preBuildManifestDigest,
+      },
+    },
   );
 
   try {
@@ -437,11 +447,14 @@ async function uploadFinalizeArtifact(
       artifactName: uploadedPackage.artifact.name,
       artifactId: uploadedPackage.artifact.id,
       artifactSizeBytes: uploadedPackage.artifact.size,
+      producerAttempt: lifecycleRecord.executionIdentity.runAttempt,
+      restoredGenerationKey: lifecycleRecord.restoreResult.matchedKey,
+      preBuildManifestDigest: lifecycleRecord.preBuildManifestDigest,
+      emptyEnvelope: counts.totalChangedCount === 0,
       ...counts,
       message:
         `Uploaded delta artifact '${uploadedPackage.artifact.name}' ` +
-        `with ${counts.addedCount} added, ${counts.modifiedCount} modified, ` +
-        `${counts.deletedCount} deleted cache path(s); ` +
+        `${counts.totalChangedCount === 0 ? 'as an explicit empty envelope' : `with ${counts.addedCount} added, ${counts.modifiedCount} modified, ${counts.deletedCount} deleted cache path(s)`}; ` +
         `unconsumed artifacts expire after ${DELTA_ARTIFACT_RETENTION_DAYS} day(s).`,
     };
   } finally {
@@ -571,6 +584,15 @@ export function createFinalizeActionSummaryLines(status: FinalizeActionStatus): 
           ? [
               `- Published generation: ${escapeSummaryText(saveResult.generationKey)}`,
               `- Published cache ID: ${saveResult.cacheId ?? 'not reported'}`,
+            ]
+          : []),
+        ...(status.deltaArtifactResult?.status === 'uploaded'
+          ? [
+              `- Delta artifact: ${escapeSummaryText(status.deltaArtifactResult.artifactName ?? 'unknown')}${status.deltaArtifactResult.emptyEnvelope ? ' (empty envelope)' : ''}`,
+              `- Delta producer attempt: ${status.deltaArtifactResult.producerAttempt ?? 'unknown'}`,
+              `- Delta restored base: ${escapeSummaryText(status.deltaArtifactResult.restoredGenerationKey ?? 'none')}`,
+              `- Delta pre-build digest: ${escapeSummaryText(status.deltaArtifactResult.preBuildManifestDigest?.slice(0, 12) ?? 'unknown')}`,
+              `- Delta changes: ${status.deltaArtifactResult.addedCount} added, ${status.deltaArtifactResult.modifiedCount} modified, ${status.deltaArtifactResult.deletedCount} deleted`,
             ]
           : []),
       ]
@@ -834,7 +856,7 @@ function createFinalizeCacheStatistics(
       ? summarizeManifest(cacheModel, preBuildManifest)
       : null;
   const deltaArtifact =
-    deltaArtifactResult.status === 'uploaded' || deltaArtifactResult.status === 'no-changes'
+    deltaArtifactResult.status === 'uploaded'
       ? summarizeDeltaPayload(cacheModel, deltaManifest)
       : null;
   const uploadedBaseCache =

@@ -67,6 +67,7 @@ const baseCiContext: CiJobContext = {
   jobName: 'check',
   runId: 123,
   runAttempt: 1,
+  sourceRevision: null,
   tempDirectory: null,
   workspace: '/workspace',
   actionPath: '/workspace',

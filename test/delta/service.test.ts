@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { cp } from 'node:fs/promises';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -25,15 +25,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   PORTABLE_CACHE_ROOT,
   createDeltaArtifactName,
+  createDeltaArtifactNamePrefix,
   deserializeDeltaArtifactPackageMetadata,
   downloadAndVerifyDeltaArtifactPackage,
-  findDeltaArtifactByProducerJob,
+  selectDeltaArtifactsForProducerJobs,
   stageDeltaArtifactPackage,
   type WorkflowArtifactDescriptor,
   uploadDeltaArtifactPackage,
   verifyExtractedDeltaArtifactPackage,
 } from '../../src/delta/service';
-import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
+import {
+  calculateCanonicalCacheManifestDigest,
+  captureCacheManifest,
+  computeCacheDelta,
+} from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { NormalizedGradleConfig } from '../../src/config/types';
@@ -84,7 +89,7 @@ describe('artifact exchange service', () => {
     );
 
     expect(artifactName).toMatch(
-      /^buildish-mammoth-cache-delta-gradle-worker-run-12345-attempt-2-[a-f0-9]{12}-[a-f0-9]{12}$/u,
+      /^buildish-mammoth-cache-delta-gradle-worker-[a-f0-9]{8}-run-12345-attempt-2-[a-f0-9]{12}-[a-f0-9]{12}$/u,
     );
     expect(artifactName).toBe(
       createDeltaArtifactName(createFixtureCiContext(), cacheModel, deltaManifest),
@@ -122,6 +127,7 @@ describe('artifact exchange service', () => {
     const deltaManifest = computeCacheDelta(previousManifest, currentManifest);
 
     const stagedPackage = await stageDeltaArtifactPackage(ciContext, cacheModel, deltaManifest, {
+      lifecycleIdentity: createTestLifecycleIdentity(previousManifest),
       parentDirectory: await createTempDirectory(
         temporaryDirectories,
         'buildish-mammoth-cache-stage-parent-',
@@ -141,12 +147,12 @@ describe('artifact exchange service', () => {
     const serializedMetadata = await readFile(stagedPackage.metadataPath, 'utf8');
     const metadata = deserializeDeltaArtifactPackageMetadata(serializedMetadata);
     expect(metadata.artifactName).toBe(stagedPackage.artifactName);
-    expect(metadata.producer.cacheKey).toBe(cacheModel.cacheKey);
+    expect(metadata.cacheIdentity.familyKey).toBe(cacheModel.cacheFamilyKey);
     const rawMetadata = JSON.parse(serializedMetadata) as {
       producer: Record<string, unknown>;
     };
     expect(Object.keys(rawMetadata.producer).sort()).toEqual([
-      'cacheKey',
+      'defaultBranch',
       'jobName',
       'repository',
       'runAttempt',
@@ -154,6 +160,7 @@ describe('artifact exchange service', () => {
       'runnerArch',
       'runnerOs',
       'safeRefName',
+      'sourceRevision',
       'workflowName',
     ]);
     expect(rawMetadata.producer).not.toHaveProperty('platform');
@@ -163,12 +170,12 @@ describe('artifact exchange service', () => {
       await createTempDirectory(temporaryDirectories, 'buildish-mammoth-cache-artifact-store-'),
     );
     const uploadedPackage = await uploadDeltaArtifactPackage(fakeApi, stagedPackage);
-    const locatedArtifact = await findDeltaArtifactByProducerJob(
+    const [selectedArtifact] = await selectDeltaArtifactsForProducerJobs(
       fakeApi,
-      ciContext.jobName,
-      ciContext.runId,
-      ciContext.runAttempt,
+      [ciContext.jobName],
+      ciContext,
     );
+    const locatedArtifact = selectedArtifact!.artifact;
     expect(locatedArtifact.id).toBe(uploadedPackage.artifact.id);
 
     const downloadedPackage = await downloadAndVerifyDeltaArtifactPackage(
@@ -185,6 +192,117 @@ describe('artifact exchange service', () => {
     expect(downloadedPackage.deltaManifest.cacheRoot).toBe(PORTABLE_CACHE_ROOT);
     expect(downloadedPackage.metadata.deltaManifestSha256).toBe(metadata.deltaManifestSha256);
     expect(downloadedPackage.metadata.payloadEntries).toEqual(metadata.payloadEntries);
+  });
+
+  it.each([
+    {
+      label: 'full rerun',
+      currentAttempt: 2,
+      attempts: { 'worker-a': [1, 2], 'worker-b': [1, 2] },
+      expected: [2, 2],
+    },
+    {
+      label: 'failed-job rerun',
+      currentAttempt: 2,
+      attempts: { 'worker-a': [1, 2], 'worker-b': [1] },
+      expected: [2, 1],
+    },
+    {
+      label: 'aggregator-only rerun',
+      currentAttempt: 3,
+      attempts: { 'worker-a': [1, 2], 'worker-b': [1] },
+      expected: [2, 1],
+    },
+  ])(
+    'selects deterministic envelopes for a $label',
+    async ({ currentAttempt, attempts, expected }) => {
+      const artifacts = Object.entries(attempts).flatMap(([jobName, jobAttempts], jobIndex) =>
+        jobAttempts.map((attempt, attemptIndex) =>
+          createSelectionArtifact(jobName, 12345, attempt, jobIndex * 10 + attemptIndex),
+        ),
+      );
+      artifacts.push(createSelectionArtifact('worker-a', 12345, currentAttempt + 1, 99));
+
+      const selected = await selectDeltaArtifactsForProducerJobs(
+        createListingArtifactBackend(artifacts),
+        ['worker-a', 'worker-b'],
+        {
+          repository: 'buildish-tooling/buildish',
+          workflowName: 'CI',
+          runId: 12345,
+          runAttempt: currentAttempt,
+          sourceRevision: '0123456789abcdef0123456789abcdef01234567',
+        },
+      );
+
+      expect(selected.map(({ producerAttempt }) => producerAttempt)).toEqual(expected);
+    },
+  );
+
+  it('rejects duplicate artifacts for the same worker attempt as ambiguous', async () => {
+    const artifacts = [
+      createSelectionArtifact('worker-a', 12345, 2, 1),
+      createSelectionArtifact('worker-a', 12345, 2, 2),
+    ];
+
+    await expect(
+      selectDeltaArtifactsForProducerJobs(createListingArtifactBackend(artifacts), ['worker-a'], {
+        repository: 'buildish-tooling/buildish',
+        workflowName: 'CI',
+        runId: 12345,
+        runAttempt: 2,
+        sourceRevision: null,
+      }),
+    ).rejects.toThrow(/ambiguous artifacts for attempt 2/u);
+  });
+
+  it('reports every missing or malformed configured worker in one discovery failure', async () => {
+    const malformed = {
+      ...createSelectionArtifact('worker-a', 12345, 1, 1),
+      name: `${createDeltaArtifactNamePrefix('worker-a', 12345)}not-an-envelope`,
+    };
+
+    await expect(
+      selectDeltaArtifactsForProducerJobs(
+        createListingArtifactBackend([malformed]),
+        ['worker-a', 'worker-b'],
+        {
+          repository: 'buildish-tooling/buildish',
+          workflowName: 'CI',
+          runId: 12345,
+          runAttempt: 1,
+          sourceRevision: null,
+        },
+      ),
+    ).rejects.toThrow(/worker-a[\s\S]*worker-b/u);
+  });
+
+  it('enforces discovery metadata, candidate, and selected-size bounds before download', async () => {
+    const artifact = createSelectionArtifact('worker-a', 12345, 1, 1, 11);
+    const backend = createListingArtifactBackend([artifact]);
+    const context = {
+      repository: 'buildish-tooling/buildish',
+      workflowName: 'CI',
+      runId: 12345,
+      runAttempt: 1,
+      sourceRevision: null,
+    } as const;
+
+    await expect(
+      selectDeltaArtifactsForProducerJobs(backend, ['worker-a'], context, {
+        resourceLimits: { totalRunArtifacts: 0 },
+      }),
+    ).rejects.toThrow(/delta discovery limit of 0/u);
+    await expect(
+      selectDeltaArtifactsForProducerJobs(backend, ['worker-a'], context, {
+        resourceLimits: { candidatesPerWorker: 0 },
+      }),
+    ).rejects.toThrow(/per-worker limit of 0/u);
+    await expect(
+      selectDeltaArtifactsForProducerJobs(backend, ['worker-a'], context, {
+        resourceLimits: { selectedArtifactSizeBytes: 10 },
+      }),
+    ).rejects.toThrow(/exceeding the 10-byte limit/u);
   });
 
   it('rejects retention overrides when the artifact backend does not support them', async () => {
@@ -243,13 +361,24 @@ describe('artifact exchange service', () => {
     };
 
     await expect(
-      findDeltaArtifactByProducerJob(unsupportedArtifactBackend, 'worker-a', 123, 1, {
-        scope: {
-          token: 'test-token',
-          runId: 456,
+      selectDeltaArtifactsForProducerJobs(
+        unsupportedArtifactBackend,
+        ['worker-a'],
+        {
           repository: 'example/project',
+          workflowName: 'CI',
+          runId: 123,
+          runAttempt: 1,
+          sourceRevision: null,
         },
-      }),
+        {
+          scope: {
+            token: 'test-token',
+            runId: 456,
+            repository: 'example/project',
+          },
+        },
+      ),
     ).rejects.toThrow(/does not support cross-execution scope/u);
   });
 
@@ -380,6 +509,107 @@ describe('artifact exchange service', () => {
     ).rejects.toThrow(/Artifact packages must not contain symbolic links/u);
   });
 
+  it('enforces expanded-package and manifest-entry limits before package use', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+
+    await expect(
+      verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, undefined, {
+        resourceLimits: { expandedPackageSizeBytes: 0 },
+      }),
+    ).rejects.toThrow(/Expanded delta artifact exceeds the 0-byte limit/u);
+    await expect(
+      verifyExtractedDeltaArtifactPackage(stagedPackage.rootDirectory, undefined, {
+        resourceLimits: { manifestEntries: 0 },
+      }),
+    ).rejects.toThrow(/exceeding the 0-entry limit/u);
+  });
+
+  it('removes its temporary directory when downloaded envelope validation fails', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+    const fakeApi = new FakeArtifactApi(
+      await createTempDirectory(temporaryDirectories, 'buildish-mammoth-cache-cleanup-store-'),
+    );
+    const uploaded = await uploadDeltaArtifactPackage(fakeApi, stagedPackage);
+    const downloadParent = await createTempDirectory(
+      temporaryDirectories,
+      'buildish-mammoth-cache-cleanup-parent-',
+    );
+
+    await expect(
+      downloadAndVerifyDeltaArtifactPackage(fakeApi, uploaded.artifact, {
+        parentDirectory: downloadParent,
+        expectedIdentity: {
+          repository: stagedPackage.metadata.producer.repository,
+          workflowName: stagedPackage.metadata.producer.workflowName,
+          runId: stagedPackage.metadata.producer.runId,
+          producerJobName: stagedPackage.metadata.producer.jobName,
+          producerAttempt: stagedPackage.metadata.producer.runAttempt,
+          sourceRevision: 'different-revision',
+        },
+      }),
+    ).rejects.toThrow(/source revision/u);
+    await expect(readdir(downloadParent)).resolves.toEqual([]);
+  });
+
+  it('rejects every selected producer execution-identity mismatch', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+    const fakeApi = new FakeArtifactApi(
+      await createTempDirectory(temporaryDirectories, 'buildish-mammoth-cache-identity-store-'),
+    );
+    const uploaded = await uploadDeltaArtifactPackage(fakeApi, stagedPackage);
+    const producer = stagedPackage.metadata.producer;
+    const expectedIdentity = {
+      repository: producer.repository,
+      workflowName: producer.workflowName,
+      runId: producer.runId,
+      producerJobName: producer.jobName,
+      producerAttempt: producer.runAttempt,
+      sourceRevision: producer.sourceRevision,
+    };
+    const mismatches = [
+      { expected: { ...expectedIdentity, repository: 'other/repository' }, label: 'repository' },
+      { expected: { ...expectedIdentity, workflowName: 'Other' }, label: 'workflow' },
+      { expected: { ...expectedIdentity, runId: 999 }, label: 'run ID' },
+      { expected: { ...expectedIdentity, producerJobName: 'other-worker' }, label: 'producer job' },
+      { expected: { ...expectedIdentity, producerAttempt: 99 }, label: 'producer attempt' },
+      {
+        expected: { ...expectedIdentity, sourceRevision: 'different-revision' },
+        label: 'source revision',
+      },
+    ] as const;
+
+    for (const mismatch of mismatches) {
+      await expect(
+        downloadAndVerifyDeltaArtifactPackage(fakeApi, uploaded.artifact, {
+          expectedIdentity: mismatch.expected,
+        }),
+      ).rejects.toThrow(mismatch.label);
+    }
+  });
+
+  it('rejects backend download paths outside the requested temporary directory', async () => {
+    const stagedPackage = await createStagedDeltaFixture(temporaryDirectories);
+    const artifact = { id: 1, name: stagedPackage.artifactName, size: 0, digest: null };
+    const baseBackend = createListingArtifactBackend([artifact]);
+    const backend: WorkflowArtifactBackend = {
+      ...baseBackend,
+      async downloadArtifact() {
+        return { downloadPath: stagedPackage.rootDirectory, digestMismatch: false };
+      },
+    };
+    const downloadParent = await createTempDirectory(
+      temporaryDirectories,
+      'buildish-mammoth-cache-outside-path-',
+    );
+
+    await expect(
+      downloadAndVerifyDeltaArtifactPackage(backend, artifact, {
+        parentDirectory: downloadParent,
+      }),
+    ).rejects.toThrow(/outside the requested temporary directory/u);
+    await expect(readdir(downloadParent)).resolves.toEqual([]);
+  });
+
   it('fails staging when source files drift after the delta manifest was captured', async () => {
     const gradleUserHome = await createTempDirectory(
       temporaryDirectories,
@@ -408,16 +638,60 @@ describe('artifact exchange service', () => {
       'after-but-different',
     );
 
+    const stagingParent = await createTempDirectory(
+      temporaryDirectories,
+      'buildish-mammoth-cache-drift-parent-',
+    );
     await expect(
       stageDeltaArtifactPackage(createFixtureCiContext(), cacheModel, deltaManifest, {
-        parentDirectory: await createTempDirectory(
-          temporaryDirectories,
-          'buildish-mammoth-cache-drift-parent-',
-        ),
+        lifecycleIdentity: createTestLifecycleIdentity(previousManifest),
+        parentDirectory: stagingParent,
       }),
     ).rejects.toThrow(/captured manifest snapshot|content drift/u);
+    await expect(readdir(stagingParent)).resolves.toEqual([]);
   });
 });
+
+function createSelectionArtifact(
+  jobName: string,
+  runId: number,
+  attempt: number,
+  unique: number,
+  size = 0,
+): WorkflowArtifactDescriptor {
+  return {
+    id: unique + 1,
+    name:
+      `${createDeltaArtifactNamePrefix(jobName, runId)}attempt-${attempt}-` +
+      `${unique.toString(16).padStart(12, '0')}-` +
+      `${(unique + 1).toString(16).padStart(12, '0')}`,
+    size,
+    digest: null,
+  };
+}
+
+function createListingArtifactBackend(
+  artifacts: readonly WorkflowArtifactDescriptor[],
+): WorkflowArtifactBackend {
+  return {
+    capabilities: STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
+    async listArtifacts(): Promise<readonly WorkflowArtifactDescriptor[]> {
+      return artifacts;
+    },
+    async uploadArtifact(): Promise<never> {
+      throw new Error('uploadArtifact should not be called during discovery');
+    },
+    async getArtifact(): Promise<never> {
+      throw new Error('getArtifact should not be called during discovery');
+    },
+    async downloadArtifact(): Promise<never> {
+      throw new Error('downloadArtifact should not be called during discovery');
+    },
+    async deleteArtifact(): Promise<never> {
+      throw new Error('deleteArtifact should not be called during discovery');
+    },
+  };
+}
 
 class FakeArtifactApi implements WorkflowArtifactBackend {
   readonly capabilities = STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES;
@@ -520,11 +794,21 @@ async function createStagedDeltaFixture(temporaryDirectories: Set<string>) {
   const deltaManifest = computeCacheDelta(previousManifest, currentManifest);
 
   return stageDeltaArtifactPackage(createFixtureCiContext(), cacheModel, deltaManifest, {
+    lifecycleIdentity: createTestLifecycleIdentity(previousManifest),
     parentDirectory: await createTempDirectory(
       temporaryDirectories,
       'buildish-mammoth-cache-fixture-parent-',
     ),
   });
+}
+
+function createTestLifecycleIdentity(
+  previousManifest: Parameters<typeof calculateCanonicalCacheManifestDigest>[0],
+) {
+  return {
+    restoredGenerationKey: null,
+    preBuildManifestDigest: calculateCanonicalCacheManifestDigest(previousManifest),
+  };
 }
 
 function createFixtureCacheModel(gradleUserHome: string): CacheModel {
@@ -570,6 +854,7 @@ function createFixtureCiContext(): CiJobContext {
     jobName: 'Gradle Worker',
     runId: 12345,
     runAttempt: 2,
+    sourceRevision: '0123456789abcdef0123456789abcdef01234567',
     tempDirectory: null,
     workspace: '/tmp/workspace',
     actionPath: null,

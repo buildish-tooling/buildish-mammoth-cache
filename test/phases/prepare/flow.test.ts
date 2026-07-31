@@ -26,6 +26,7 @@ import {
   type WorkflowArtifactDescriptor,
 } from '../../../src/delta/service';
 import {
+  calculateCanonicalCacheManifestDigest,
   captureCacheManifest,
   computeCacheDelta,
   deserializeCacheManifest,
@@ -297,7 +298,7 @@ describe('executePrepareAction', () => {
     });
   });
 
-  it('rejects dependent delta artifacts whose producer cache key does not match the current job', async () => {
+  it('rejects dependent delta artifacts whose cache family does not match the current job', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
       const wrapperJarBytes = Buffer.from('existing-wrapper-jar');
@@ -331,7 +332,7 @@ describe('executePrepareAction', () => {
         runAttempt: 2,
         relativePath: 'caches/modules-2/files-2.1/example/module.bin',
         contents: 'from-worker-delta',
-        overrideCacheKey: 'mismatched-cache-key',
+        overrideCacheFamilyKey: 'mismatched-cache-family',
       });
 
       await expect(
@@ -396,7 +397,7 @@ describe('executePrepareAction', () => {
             },
           })),
         }),
-      ).rejects.toThrow(/targets cache key 'mismatched-cache-key'/);
+      ).rejects.toThrow(/does not match the aggregator's cache family/u);
     });
   });
 
@@ -1166,7 +1167,7 @@ async function stageWorkerDeltaArtifact(
     readonly modifiedAt?: Date;
     readonly runnerOs?: string;
     readonly runnerArch?: string;
-    readonly overrideCacheKey?: string;
+    readonly overrideCacheFamilyKey?: string;
   },
 ): Promise<void> {
   const workerGradleHome = path.join(workspace, `${options.jobName}-gradle-home`);
@@ -1195,8 +1196,20 @@ async function stageWorkerDeltaArtifact(
       options.runnerOs ?? 'linux',
       options.runnerArch ?? 'x64',
     ),
-    options.overrideCacheKey ? { ...cacheModel, cacheKey: options.overrideCacheKey } : cacheModel,
+    options.overrideCacheFamilyKey
+      ? {
+          ...cacheModel,
+          cacheFamilyKey: options.overrideCacheFamilyKey,
+          currentRefLineagePrefix: `${options.overrideCacheFamilyKey}-ref-main-test-gen-`,
+        }
+      : cacheModel,
     deltaManifest,
+    {
+      lifecycleIdentity: {
+        restoredGenerationKey: null,
+        preBuildManifestDigest: calculateCanonicalCacheManifestDigest(previousManifest),
+      },
+    },
   );
 
   await artifactApi.uploadArtifact(
@@ -1267,6 +1280,7 @@ function createCiContext(
     jobName,
     runId,
     runAttempt,
+    sourceRevision: null,
     tempDirectory: null,
     workspace,
     actionPath: null,
@@ -1460,6 +1474,7 @@ function createMinimalPrepareBootstrapExecution(): BootstrapExecution {
       jobName: 'build',
       runId: 1,
       runAttempt: 1,
+      sourceRevision: null,
       tempDirectory: '/tmp',
       workspace: '/workspace',
       actionPath: null,

@@ -72,16 +72,16 @@ graph TD
 
 A CI adapter must supply implementations of five interfaces before calling into the shared core:
 
-| Interface                 | Defined in             | Purpose                                                  |
-| ------------------------- | ---------------------- | -------------------------------------------------------- |
-| `HostReporter`            | `src/host/types.ts`    | Write log lines and group markers to the CI log          |
-| `HostStateStore`          | `src/host/types.ts`    | Persist and retrieve cross-phase state                   |
-| `HostInputSource`         | `src/host/types.ts`    | Read action inputs from the CI environment               |
-| `HostOutputSink`          | `src/host/types.ts`    | Write action outputs back to the CI environment          |
-| `ReportSink`              | `src/host/types.ts`    | Write job summaries / reports                            |
-| `BaseCacheBackend`        | `src/cache/backend.ts` | Save and restore the base cache                          |
-| `WorkflowArtifactBackend` | `src/delta/backend.ts` | Upload, list, and download delta artifact packages       |
-| `CiPlatformAdapter`       | `src/ci/types.ts`      | Expose `CiJobContext` (job name, run ID, execution URLs) |
+| Interface                 | Defined in             | Purpose                                                                     |
+| ------------------------- | ---------------------- | --------------------------------------------------------------------------- |
+| `HostReporter`            | `src/host/types.ts`    | Write log lines and group markers to the CI log                             |
+| `HostStateStore`          | `src/host/types.ts`    | Persist and retrieve cross-phase state                                      |
+| `HostInputSource`         | `src/host/types.ts`    | Read action inputs from the CI environment                                  |
+| `HostOutputSink`          | `src/host/types.ts`    | Write action outputs back to the CI environment                             |
+| `ReportSink`              | `src/host/types.ts`    | Write job summaries / reports                                               |
+| `BaseCacheBackend`        | `src/cache/backend.ts` | Save and restore the base cache                                             |
+| `WorkflowArtifactBackend` | `src/delta/backend.ts` | Upload, list, and download delta artifact packages                          |
+| `CiPlatformAdapter`       | `src/ci/types.ts`      | Expose `CiJobContext` (job/run identity and source revision when available) |
 
 The shared core receives these as plain dependency-injection arguments. No global state; no
 environment variable reads after the adapter layer.

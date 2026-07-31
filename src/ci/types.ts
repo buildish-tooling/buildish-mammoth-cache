@@ -63,6 +63,8 @@ export interface CiJobContext {
   readonly runId: number | null;
   /** Numeric retry/attempt count for the current provider run/execution, or `null` when unavailable. */
   readonly runAttempt: number | null;
+  /** Immutable source revision for the execution, or `null` when the provider does not expose one. */
+  readonly sourceRevision: string | null;
   /** Absolute provider-managed temp directory for the current job, or `null` when unavailable. */
   readonly tempDirectory: string | null;
   /** Absolute workspace directory for the current job. */

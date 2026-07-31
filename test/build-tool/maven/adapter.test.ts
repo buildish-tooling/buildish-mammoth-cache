@@ -56,6 +56,7 @@ const STUB_CI_CONTEXT: CiJobContext = {
   jobName: 'build',
   runId: 1,
   runAttempt: 1,
+  sourceRevision: null,
   tempDirectory: null,
   workspace: '/workspace',
   actionPath: null,

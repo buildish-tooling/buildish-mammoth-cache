@@ -35,7 +35,11 @@ import {
   stageDeltaArtifactPackage,
 } from '../../src/delta/service';
 import { applyMergedDeltaPlan, mergeDeltaArtifactPackages } from '../../src/delta/apply';
-import { captureCacheManifest, computeCacheDelta } from '../../src/cache/manifest';
+import {
+  calculateCanonicalCacheManifestDigest,
+  captureCacheManifest,
+  computeCacheDelta,
+} from '../../src/cache/manifest';
 import { createCachePartitions, type CacheModel } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { NormalizedGradleConfig } from '../../src/config/types';
@@ -303,6 +307,10 @@ async function createDownloadedPackage(
     cacheModel,
     deltaManifest,
     {
+      lifecycleIdentity: {
+        restoredGenerationKey: null,
+        preBuildManifestDigest: calculateCanonicalCacheManifestDigest(previousManifest),
+      },
       parentDirectory: await createTempDirectory(
         temporaryDirectories,
         'buildish-mammoth-cache-stage-parent-',
@@ -376,6 +384,7 @@ function createFixtureCiContext(jobName: string): CiJobContext {
     jobName,
     runId: 12345,
     runAttempt: 2,
+    sourceRevision: null,
     tempDirectory: null,
     workspace: '/tmp/workspace',
     actionPath: null,

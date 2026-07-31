@@ -26,7 +26,11 @@ import {
   stageDeltaArtifactPackage,
   type WorkflowArtifactDescriptor,
 } from '../../../src/delta/service';
-import { captureCacheManifest, computeCacheDelta } from '../../../src/cache/manifest';
+import {
+  calculateCanonicalCacheManifestDigest,
+  captureCacheManifest,
+  computeCacheDelta,
+} from '../../../src/cache/manifest';
 import { createCacheModel, type CacheModel } from '../../../src/cache/model';
 import {
   createFinalizeActionLogLines,
@@ -201,7 +205,7 @@ describe('executeFinalizeAction', () => {
       expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
       expect(summaryText).toContain('Gradle builds');
       expect(summaryText).not.toContain('<summary>Cache details</summary>');
-      expect(summaryText).not.toContain('Delta artifact');
+      expect(summaryText).toContain('Delta artifact');
       expect(summary.writeCalls).toBe(0);
       await rm(downloaded.downloadDirectory, { recursive: true, force: true });
     });
@@ -254,7 +258,7 @@ describe('executeFinalizeAction', () => {
         expect.objectContaining({
           status: 'uploaded',
           artifactName: expect.stringMatching(
-            /^buildish-mammoth-cache-delta-worker_a-run-101-attempt-2-/u,
+            /^buildish-mammoth-cache-delta-worker_a-[a-f0-9]{8}-run-101-attempt-2-/u,
           ),
         }),
       );
@@ -335,7 +339,7 @@ describe('executeFinalizeAction', () => {
       expect(summaryContent).toContain('Gradle 8\\.14\\.3 / Java 21\\.0\\.4');
       expect(summaryContent).not.toContain('<summary>Cache details</summary>');
       expect(summaryContent).not.toContain('Pulled base cache');
-      expect(summaryContent).not.toContain('Delta artifact');
+      expect(summaryContent).toContain('Delta artifact');
       expect(summaryContent).not.toContain('Uploaded base cache');
       expect(summaryContent).not.toContain('manifest-derived, uncompressed content sizes');
       expect(summaryContent).not.toContain('### Warnings');
@@ -866,7 +870,8 @@ describe('executeFinalizeAction', () => {
       expect(status.cacheGcResult).toBeNull();
       expect(status.deltaArtifactResult).toEqual(
         expect.objectContaining({
-          status: 'no-changes',
+          status: 'uploaded',
+          emptyEnvelope: true,
           totalChangedCount: 0,
         }),
       );
@@ -937,7 +942,7 @@ describe('executeFinalizeAction', () => {
     });
   });
 
-  it('skips distributed-worker artifact upload when no cache changes were detected', async () => {
+  it('uploads an explicit empty distributed-worker envelope when no cache changes were detected', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
       const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
@@ -968,7 +973,8 @@ describe('executeFinalizeAction', () => {
 
       expect(status.deltaArtifactResult).toEqual(
         expect.objectContaining({
-          status: 'no-changes',
+          status: 'uploaded',
+          emptyEnvelope: true,
           addedCount: 0,
           modifiedCount: 0,
           deletedCount: 0,
@@ -977,10 +983,10 @@ describe('executeFinalizeAction', () => {
       );
       const summaryText = createFinalizeActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
-      expect(summaryText).not.toContain('Delta artifact');
+      expect(summaryText).toContain('Delta artifact');
       expect(summaryText).not.toContain('Post-build cache delta');
       expect(summary.writeCalls).toBe(0);
-      await expect(artifactApi.listArtifacts()).resolves.toHaveLength(0);
+      await expect(artifactApi.listArtifacts()).resolves.toHaveLength(1);
     });
   });
 
@@ -1161,6 +1167,7 @@ function createTestCiContext(workspace: string) {
     jobName: 'worker-build',
     runId: 101,
     runAttempt: 2,
+    sourceRevision: null,
     tempDirectory: path.join(workspace, 'runner-temp'),
     workspace,
     actionPath: null,
@@ -1552,12 +1559,19 @@ async function stageWorkerArtifactForCleanup(
       jobName,
       runId: 101,
       runAttempt: 2,
+      sourceRevision: null,
       tempDirectory: path.join(workspace, 'runner-temp'),
       workspace,
       actionPath: null,
     },
     cacheModel,
     deltaManifest,
+    {
+      lifecycleIdentity: {
+        restoredGenerationKey: null,
+        preBuildManifestDigest: calculateCanonicalCacheManifestDigest(previousManifest),
+      },
+    },
   );
   await artifactApi.uploadArtifact(
     stagedPackage.artifactName,
@@ -1607,6 +1621,7 @@ function createMinimalBootstrapExecution(): BootstrapExecution {
       jobName: 'build',
       runId: 1,
       runAttempt: 1,
+      sourceRevision: null,
       tempDirectory: '/tmp',
       workspace: '/workspace',
       actionPath: null,

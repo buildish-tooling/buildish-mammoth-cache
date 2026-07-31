@@ -62,6 +62,7 @@ function createTestContext(tempDirectory: string | null): CiJobContext {
     jobName: 'check',
     runId: null,
     runAttempt: null,
+    sourceRevision: null,
     tempDirectory,
     workspace: '/workspace',
     actionPath: null,

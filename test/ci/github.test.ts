@@ -25,6 +25,18 @@ import { createGitHubBaseCacheBackend } from '../../src/ci/github/cache';
 import { createGitHubReportSink, type SummaryWriter } from '../../src/ci/github/report-sink';
 
 describe('createGitHubContext', () => {
+  it('treats unsafe or non-integral run identity values as unavailable', () => {
+    const context = createGitHubContext({
+      env: {
+        GITHUB_RUN_ID: '9007199254740992',
+        GITHUB_RUN_ATTEMPT: '1.5',
+      },
+    });
+
+    expect(context.runId).toBeNull();
+    expect(context.runAttempt).toBeNull();
+  });
+
   it('resolves push refs from branch refs', () => {
     const context = createGitHubContext({
       env: {
@@ -33,6 +45,7 @@ describe('createGitHubContext', () => {
         GITHUB_REPOSITORY: 'buildish-tooling/buildish',
         GITHUB_WORKFLOW: 'CI',
         GITHUB_JOB: 'check',
+        GITHUB_SHA: '0123456789abcdef0123456789abcdef01234567',
         RUNNER_OS: 'Linux',
         RUNNER_ARCH: 'X64',
       },
@@ -45,6 +58,7 @@ describe('createGitHubContext', () => {
     expect(context.safeRefName).toBe('feature-cache-improvements');
     expect(context.runnerOs).toBe('linux');
     expect(context.runnerArch).toBe('x64');
+    expect(context.sourceRevision).toBe('0123456789abcdef0123456789abcdef01234567');
     expect(context.tempDirectory).toBeNull();
   });
 

@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import {
   downloadAndVerifyDeltaArtifactPackage,
-  findDeltaArtifactByProducerJob,
+  selectDeltaArtifactsForProducerJobs,
   type DownloadedDeltaArtifactPackage,
 } from '../../delta/service';
 import {
@@ -161,7 +161,7 @@ export async function executePrepareAction(
         runId: bootstrap.ciContext.runId,
         runAttempt: bootstrap.ciContext.runAttempt,
       },
-      sourceRevision: null,
+      sourceRevision: bootstrap.ciContext.sourceRevision ?? null,
       dependentDelta: dependentDeltaResult
         ? {
             requestedJobs: [...dependentDeltaResult.requestedJobs],
@@ -207,19 +207,28 @@ async function applyDependentJobDeltas(
   }
 
   const artifactBackend = resolveArtifactBackend(dependencies);
-  const downloadedPackages = await Promise.all(
-    requestedJobs.map(async (jobName) => {
-      const artifact = await findDeltaArtifactByProducerJob(
-        artifactBackend,
-        jobName,
-        bootstrap.ciContext.runId,
-        bootstrap.ciContext.runAttempt,
-      );
-      return await downloadAndVerifyDeltaArtifactPackage(artifactBackend, artifact);
-    }),
+  const selectedArtifacts = await selectDeltaArtifactsForProducerJobs(
+    artifactBackend,
+    requestedJobs,
+    bootstrap.ciContext,
   );
+  const downloadedPackages: DownloadedDeltaArtifactPackage[] = [];
 
   try {
+    for (const selected of selectedArtifacts) {
+      downloadedPackages.push(
+        await downloadAndVerifyDeltaArtifactPackage(artifactBackend, selected.artifact, {
+          expectedIdentity: {
+            repository: bootstrap.ciContext.repository,
+            workflowName: bootstrap.ciContext.workflowName,
+            runId: bootstrap.ciContext.runId,
+            producerJobName: selected.producerJobName,
+            producerAttempt: selected.producerAttempt,
+            sourceRevision: bootstrap.ciContext.sourceRevision ?? null,
+          },
+        }),
+      );
+    }
     assertCompatibleDependentDeltaArtifacts(downloadedPackages, bootstrap);
     const plan = mergeDeltaArtifactPackages(downloadedPackages, {
       allowDuplicateDependentDeltaPaths: bootstrap.config.allowDuplicateDependentDeltaPaths,
@@ -245,7 +254,7 @@ function assertCompatibleDependentDeltaArtifacts(
   downloadedPackages: readonly DownloadedDeltaArtifactPackage[],
   bootstrap: BootstrapExecution,
 ): void {
-  const currentCacheKey = bootstrap.cacheModel?.cacheKey;
+  const cacheModel = bootstrap.cacheModel;
   const currentRunner = `${bootstrap.ciContext.runnerOs}/${bootstrap.ciContext.runnerArch}`;
 
   for (const artifactPackage of downloadedPackages) {
@@ -254,9 +263,19 @@ function assertCompatibleDependentDeltaArtifacts(
       producer.runnerOs === bootstrap.ciContext.runnerOs &&
       producer.runnerArch === bootstrap.ciContext.runnerArch
     ) {
-      if (currentCacheKey && producer.cacheKey !== currentCacheKey) {
+      const cacheIdentity = artifactPackage.metadata.cacheIdentity;
+      const expectedPartitionIds = cacheModel?.partitions.map((partition) => partition.id) ?? [];
+      if (
+        cacheModel &&
+        (cacheIdentity.familyKey !== cacheModel.cacheFamilyKey ||
+          cacheIdentity.refLineagePrefix !== cacheModel.currentRefLineagePrefix ||
+          cacheIdentity.partitionFingerprint !== cacheModel.partitionFingerprint ||
+          JSON.stringify(cacheIdentity.partitionIds) !== JSON.stringify(expectedPartitionIds) ||
+          producer.safeRefName !== bootstrap.ciContext.safeRefName ||
+          producer.defaultBranch !== bootstrap.ciContext.defaultBranch)
+      ) {
         throw new Error(
-          `Dependent delta artifact '${artifactPackage.artifact.name}' from job '${producer.jobName}' targets cache key '${producer.cacheKey}', but the current job expects '${currentCacheKey}'. Distributed delta reuse requires identical cache key inputs, partition layout, and runner selection.`,
+          `Dependent delta artifact '${artifactPackage.artifact.name}' from job '${producer.jobName}' does not match the aggregator's cache family, ref lineage, partition layout, or ref identity.`,
         );
       }
       continue;
@@ -351,7 +370,10 @@ async function cleanupDownloadedPackages(
 ): Promise<void> {
   await Promise.all(
     downloadedPackages.map(async (artifactPackage) => {
-      await rm(artifactPackage.downloadDirectory, { recursive: true, force: true });
+      await rm(artifactPackage.temporaryDirectory ?? artifactPackage.downloadDirectory, {
+        recursive: true,
+        force: true,
+      });
     }),
   );
 }
