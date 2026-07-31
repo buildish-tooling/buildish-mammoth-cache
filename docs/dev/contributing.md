@@ -158,11 +158,14 @@ Create `src/build-tool/sbt/adapter.ts` and implement every method of the interfa
 Create `src/build-tool/sbt/config.ts` following the pattern of `gradle/config.ts` or
 `maven/config.ts`. The config module is responsible for:
 
-- Defining the raw input schema (using the shared `sharedActionInputSchema` as a base).
-- Normalizing raw string inputs into a typed `NormalizedSbtConfig`.
-- Normalizing the cache namespace prefix and cache root path; shared code owns the family,
-  lineage, and generation structure.
-- Wiring the `buildToolAdapterFactory` that the phases call.
+- Defining `RawSbtActionInputs` and `NormalizedSbtConfig` by extending the shared types in
+  `src/config/types.ts`.
+- Adding the tool and its inputs to `src/config/public-contract.ts`, including each allowed
+  config-file value representation, and to the typed tool/input mapping in `src/config/inputs.ts`.
+- Delegating raw reads and config-file overlay to `src/config/inputs.ts` and shared normalization to
+  `src/config/normalize.ts`.
+- Normalizing only sbt-specific values, such as its cache root. Shared code owns cache namespace,
+  family, lineage, generation, cleanup, and distributed-job settings.
 
 ### 3. Create CI entry-point files
 

@@ -121,8 +121,10 @@ Config-file values (workspace-relative .yml / .json / .yaml)
 Built-in defaults
 ```
 
-Validation is performed after merging all layers using the tool-specific normalizer
-(`src/build-tool/gradle/config.ts` or `src/build-tool/maven/config.ts`).
+`src/config/inputs.ts` reads the canonical public contract, validates and overlays the optional
+config file, and preserves direct-input precedence. `src/config/normalize.ts` validates shared
+values before the tool-specific normalizer (`src/build-tool/gradle/config.ts` or
+`src/build-tool/maven/config.ts`) handles only its additional fields.
 If any value is invalid, the action fails at bootstrap before touching the cache or wrappers.
 
 ## Cache model

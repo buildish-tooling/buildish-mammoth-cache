@@ -17,22 +17,15 @@
 /**
  * Gradle-specific action input reading, config-file resolution, and config normalization.
  *
- * Shared parsing utilities live in `../../config/config-helpers`; this module adds the
- * Gradle-only logic (wrapper selection, GRADLE_USER_HOME resolution, setup-java gating,
- * and the Gradle-specific config-file key set).
+ * Shared input loading and normalization live in `../../config/inputs` and
+ * `../../config/normalize`; this module retains wrapper selection, GRADLE_USER_HOME resolution,
+ * and setup-java gating.
  */
 
-import { readFile, realpath } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parse as parseYaml } from 'yaml';
 
-import { parseSerializedJson } from '../../util/serialization';
 import {
-  CACHE_SCHEMA_VERSION,
-  CACHE_GC_MODES,
-  JOB_MODES,
-  RESTORE_CLEANUP_MODES,
   type NormalizedGradleConfig,
   type RawGradleActionInputs,
   type WrapperSelectionMode,
@@ -42,19 +35,10 @@ import {
   type NormalizeActionConfigOptions,
   type ResolveActionInputsFromConfigFileOptions,
 } from '../../config/types';
-import {
-  parseBooleanInput,
-  parseEnumInput,
-  parseListInput,
-  validateNamedValue,
-} from '../../util/action-input';
-import {
-  normalizeRelativePath,
-  parseCachePartitionsInput,
-  validateCacheKeyPrefix,
-} from '../../config/shared';
-import { recordReadOnlyInputSource, resolveReadOnlyInput } from '../../config/input-provenance';
-import { getConfigFileInput, getPublicActionInputName } from '../../config/public-contract';
+import { parseBooleanInput, parseListInput } from '../../util/action-input';
+import { normalizeRelativePath } from '../../config/shared';
+import { readActionInputs, resolveActionInputsFromConfigFile } from '../../config/inputs';
+import { normalizeSharedActionConfig } from '../../config/normalize';
 
 export type {
   InputProvider,
@@ -72,30 +56,7 @@ const EXPLICIT_PATH_GLOB_PATTERN = /[*?[\]{}!]/;
  * Reads every Gradle action input exactly once and returns the raw string values.
  */
 export function readGradleActionInputs(inputProvider: InputProvider): RawGradleActionInputs {
-  const read = (property: Parameters<typeof getPublicActionInputName>[1]): string =>
-    inputProvider.getInput(getPublicActionInputName('gradle', property), {
-      trimWhitespace: true,
-    });
-  return {
-    configFile: read('configFile'),
-    baseDirectory: read('baseDirectory'),
-    cacheEnabled: read('cacheEnabled'),
-    readOnly: read('readOnly'),
-    jobMode: read('jobMode'),
-    dependentJobs: read('dependentJobs'),
-    allowDuplicateDependentDeltaPaths: read('allowDuplicateDependentDeltaPaths'),
-    cacheKeyPrefix: read('cacheKeyPrefix'),
-    cachePartitions: read('cachePartitions'),
-    processAllWrapperFiles: read('processAllWrapperFiles'),
-    wrapperPropertiesGlob: read('wrapperPropertiesGlob'),
-    wrapperPropertiesFiles: read('wrapperPropertiesFiles'),
-    cleanupEnabled: read('cleanupEnabled'),
-    restoreCleanupMode: read('restoreCleanupMode'),
-    cacheGcMode: read('cacheGcMode'),
-    cacheGcOlderThanDays: read('cacheGcOlderThanDays'),
-    gradleUserHome: read('gradleUserHome'),
-    setupJava: read('setupJava'),
-  };
+  return readActionInputs('gradle', inputProvider);
 }
 
 /**
@@ -108,36 +69,7 @@ export async function resolveGradleActionInputsFromConfigFile(
   directInputs: RawGradleActionInputs,
   options: ResolveActionInputsFromConfigFileOptions,
 ): Promise<RawGradleActionInputs> {
-  const configFile = directInputs.configFile.trim();
-  if (configFile.length === 0) return directInputs;
-
-  const normalizedConfigFile = normalizeRelativePath(configFile, 'config-file');
-  if (normalizedConfigFile === '.') {
-    throw new Error(
-      'config-file must point to a .json, .yml, or .yaml file inside the repository workspace.',
-    );
-  }
-
-  const configFilePath = await resolveConfigFilePath(
-    options.workspace,
-    normalizedConfigFile,
-    options,
-  );
-  const contents = await readConfigFileContents(configFilePath, normalizedConfigFile, options);
-  const fileInputs = serializeConfigFileInputs(
-    parseConfigFileContents(contents, normalizedConfigFile),
-    normalizedConfigFile,
-  );
-  const resolvedInputs = overlayConfiguredInputs(fileInputs, directInputs);
-  recordReadOnlyInputSource(
-    resolvedInputs,
-    directInputs.readOnly.length > 0
-      ? 'direct'
-      : fileInputs.readOnly.length > 0
-        ? 'config-file'
-        : 'unset',
-  );
-  return resolvedInputs;
+  return resolveActionInputsFromConfigFile('gradle', directInputs, options);
 }
 
 /**
@@ -147,54 +79,25 @@ export function normalizeGradleActionConfig(
   rawInputs: RawGradleActionInputs,
   options: NormalizeActionConfigOptions,
 ): NormalizedGradleConfig {
-  const baseDirectory = normalizeRelativePath(rawInputs.baseDirectory || '.', 'base-directory');
-  const cacheEnabled = parseBooleanInput(rawInputs.cacheEnabled || 'true', 'cache-enabled');
-  const jobMode = parseEnumInput(rawInputs.jobMode || 'standalone', JOB_MODES, 'job-mode');
-  const dependentJobs = parseListInput(rawInputs.dependentJobs).map((jobName) =>
-    validateNamedValue(jobName, 'dependent-jobs'),
-  );
-  const allowDuplicateDependentDeltaPaths = parseBooleanInput(
-    rawInputs.allowDuplicateDependentDeltaPaths || 'false',
-    'allow-duplicate-dependent-delta-paths',
-  );
-  const cacheKeyPrefix = validateCacheKeyPrefix(
-    rawInputs.cacheKeyPrefix || 'buildish-mammoth-cache-',
-  );
-  const cachePartitions = parseCachePartitionsInput(rawInputs.cachePartitions);
+  const sharedConfig = normalizeSharedActionConfig(rawInputs, options);
   const processAllWrapperFiles = parseBooleanInput(
     rawInputs.processAllWrapperFiles || 'false',
     'process-all-wrapper-files',
   );
   const explicitWrapperPropertiesFiles = parseListInput(rawInputs.wrapperPropertiesFiles).map(
-    (filePath) => resolveWrapperPropertiesPath(baseDirectory, filePath),
+    (filePath) => resolveWrapperPropertiesPath(sharedConfig.baseDirectory, filePath),
   );
   const wrapperSelectionMode = determineWrapperSelectionMode(
     processAllWrapperFiles,
     explicitWrapperPropertiesFiles.length,
   );
   const wrapperPropertiesGlob = resolveGlobPattern(
-    baseDirectory,
+    sharedConfig.baseDirectory,
     rawInputs.wrapperPropertiesGlob || '**/gradle/wrapper/gradle-wrapper.properties',
   );
-  const cleanupEnabled = parseBooleanInput(rawInputs.cleanupEnabled || 'true', 'cleanup-enabled');
-  const restoreCleanupMode = parseEnumInput(
-    rawInputs.restoreCleanupMode || 'none',
-    RESTORE_CLEANUP_MODES,
-    'restore-cleanup-mode',
-  );
-  const cacheGcMode = parseEnumInput(
-    rawInputs.cacheGcMode || 'timestamp',
-    CACHE_GC_MODES,
-    'cache-gc-mode',
-  );
-  const cacheGcOlderThanDays = parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14');
-  const readOnly = resolveReadOnlyInput(rawInputs, rawInputs.readOnly, options.ciContext);
   const gradleUserHome = normalizeGradleUserHome(rawInputs.gradleUserHome, options.env);
   const setupJava = parseBooleanInput(rawInputs.setupJava || 'false', 'setup-java');
 
-  if (dependentJobs.length > 0 && jobMode === 'standalone') {
-    throw new Error('dependent-jobs can only be used with distributed job modes.');
-  }
   if (setupJava) {
     throw new Error(
       'setup-java=true is not supported in v1. Run actions/setup-java before this action instead.',
@@ -202,27 +105,14 @@ export function normalizeGradleActionConfig(
   }
 
   return {
-    phase: options.phase,
-    baseDirectory,
-    cacheEnabled,
-    readOnly,
-    jobMode,
-    dependentJobs,
-    allowDuplicateDependentDeltaPaths,
-    cacheKeyPrefix,
-    cachePartitions,
-    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
+    ...sharedConfig,
     wrapperSelectionMode,
     wrapperPropertiesGlob,
     defaultWrapperPropertiesFile: joinWithinBaseDirectory(
-      baseDirectory,
+      sharedConfig.baseDirectory,
       'gradle/wrapper/gradle-wrapper.properties',
     ),
     wrapperPropertiesFiles: explicitWrapperPropertiesFiles,
-    cleanupEnabled,
-    restoreCleanupMode,
-    cacheGcMode,
-    cacheGcOlderThanDays,
     gradleUserHome,
   };
 }
@@ -230,282 +120,6 @@ export function normalizeGradleActionConfig(
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
-
-function createEmptyRawGradleActionInputs(): RawGradleActionInputs {
-  return {
-    configFile: '',
-    baseDirectory: '',
-    cacheEnabled: '',
-    readOnly: '',
-    jobMode: '',
-    dependentJobs: '',
-    allowDuplicateDependentDeltaPaths: '',
-    cacheKeyPrefix: '',
-    cachePartitions: '',
-    processAllWrapperFiles: '',
-    wrapperPropertiesGlob: '',
-    wrapperPropertiesFiles: '',
-    cleanupEnabled: '',
-    restoreCleanupMode: '',
-    cacheGcMode: '',
-    cacheGcOlderThanDays: '',
-    gradleUserHome: '',
-    setupJava: '',
-  };
-}
-
-async function resolveConfigFilePath(
-  workspace: string,
-  normalizedConfigFile: string,
-  options: ResolveActionInputsFromConfigFileOptions,
-): Promise<string> {
-  const realpathImpl = options.realpathImpl ?? realpath;
-  const workspaceRealPath = await resolveRealPath(realpathImpl, workspace, 'workspace');
-  const candidatePath = path.resolve(workspaceRealPath, normalizedConfigFile);
-  const configFileRealPath = await resolveRealPath(
-    realpathImpl,
-    candidatePath,
-    `config-file '${normalizedConfigFile}'`,
-  );
-  if (!isPathInside(workspaceRealPath, configFileRealPath)) {
-    throw new Error(
-      `config-file '${normalizedConfigFile}' must stay within the repository workspace after symlink resolution.`,
-    );
-  }
-  return configFileRealPath;
-}
-
-async function resolveRealPath(
-  realpathImpl: typeof realpath,
-  targetPath: string,
-  label: string,
-): Promise<string> {
-  try {
-    return await realpathImpl(targetPath);
-  } catch (error: unknown) {
-    throw new Error(
-      `Could not resolve ${label}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-async function readConfigFileContents(
-  configFilePath: string,
-  normalizedConfigFile: string,
-  options: ResolveActionInputsFromConfigFileOptions,
-): Promise<string> {
-  const readFileImpl = options.readFileImpl ?? readFile;
-  try {
-    const contents = await readFileImpl(configFilePath, 'utf8');
-    return contents.replace(/^\uFEFF/u, '');
-  } catch (error: unknown) {
-    throw new Error(
-      `Could not read config-file '${normalizedConfigFile}': ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-function parseConfigFileContents(
-  contents: string,
-  normalizedConfigFile: string,
-): Record<string, unknown> {
-  const extension = path.posix.extname(normalizedConfigFile).toLowerCase();
-  let parsed: unknown;
-  switch (extension) {
-    case '.json':
-      parsed = parseSerializedJson(contents, `config-file '${normalizedConfigFile}'`);
-      break;
-    case '.yaml':
-    case '.yml':
-      try {
-        parsed = parseYaml(contents, {
-          strict: true,
-          stringKeys: true,
-          uniqueKeys: true,
-          merge: false,
-          maxAliasCount: 0,
-          prettyErrors: true,
-        });
-      } catch (error: unknown) {
-        throw new Error(
-          `Could not parse config-file '${normalizedConfigFile}': ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-      break;
-    default:
-      throw new Error(
-        `config-file '${normalizedConfigFile}' must use a .json, .yml, or .yaml extension.`,
-      );
-  }
-  return validateRecord(parsed, `config-file '${normalizedConfigFile}'`);
-}
-
-function validateRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${label} must be an object.`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function validateString(value: unknown, label: string): string {
-  if (typeof value !== 'string') throw new Error(`${label} must be a string.`);
-  return value;
-}
-
-function validateArray(value: unknown, label: string): readonly unknown[] {
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
-  return value;
-}
-
-function serializeConfigFileInputs(
-  values: Record<string, unknown>,
-  normalizedConfigFile: string,
-): RawGradleActionInputs {
-  const inputs: Record<keyof RawGradleActionInputs, string> = createEmptyRawGradleActionInputs();
-  for (const [key, value] of Object.entries(values)) {
-    getConfigFileInput('gradle', key);
-    switch (key) {
-      case 'config-file':
-        throw new Error(
-          `config-file '${normalizedConfigFile}' must not contain nested config-file entries.`,
-        );
-      case 'base-directory':
-        inputs.baseDirectory = serializeStringConfigValue(value, key);
-        break;
-      case 'cache-enabled':
-        inputs.cacheEnabled = serializeBooleanLikeConfigValue(value, key);
-        break;
-      case 'read-only':
-        inputs.readOnly = serializeBooleanLikeConfigValue(value, key);
-        break;
-      case 'job-mode':
-        inputs.jobMode = serializeStringConfigValue(value, key);
-        break;
-      case 'dependent-jobs':
-        inputs.dependentJobs = serializeListLikeConfigValue(value, key);
-        break;
-      case 'allow-duplicate-dependent-delta-paths':
-        inputs.allowDuplicateDependentDeltaPaths = serializeBooleanLikeConfigValue(value, key);
-        break;
-      case 'cache-key-prefix':
-        inputs.cacheKeyPrefix = serializeStringConfigValue(value, key);
-        break;
-      case 'cache-partitions':
-        inputs.cachePartitions = serializeStructuredConfigValue(value, key);
-        break;
-      case 'process-all-wrapper-files':
-        inputs.processAllWrapperFiles = serializeBooleanLikeConfigValue(value, key);
-        break;
-      case 'wrapper-properties-glob':
-        inputs.wrapperPropertiesGlob = serializeStringConfigValue(value, key);
-        break;
-      case 'wrapper-properties-files':
-        inputs.wrapperPropertiesFiles = serializeListLikeConfigValue(value, key);
-        break;
-      case 'cleanup-enabled':
-        inputs.cleanupEnabled = serializeBooleanLikeConfigValue(value, key);
-        break;
-      case 'restore-cleanup-mode':
-        inputs.restoreCleanupMode = serializeStringConfigValue(value, key);
-        break;
-      case 'cache-gc-mode':
-        inputs.cacheGcMode = serializeStringConfigValue(value, key);
-        break;
-      case 'cache-gc-older-than-days':
-        inputs.cacheGcOlderThanDays = serializeNumberLikeConfigValue(value, key);
-        break;
-      case 'gradle-user-home':
-        inputs.gradleUserHome = serializeStringConfigValue(value, key);
-        break;
-      case 'setup-java':
-        inputs.setupJava = serializeBooleanLikeConfigValue(value, key);
-        break;
-      default:
-        throw new Error(
-          `config-file '${normalizedConfigFile}' contains unsupported key '${key}'. Use the same kebab-case names as action inputs.`,
-        );
-    }
-  }
-  return inputs;
-}
-
-function serializeStringConfigValue(value: unknown, label: string): string {
-  return validateString(value, label).trim();
-}
-
-function serializeBooleanLikeConfigValue(value: unknown, label: string): string {
-  return typeof value === 'boolean' ? String(value) : serializeStringConfigValue(value, label);
-}
-
-function serializeNumberLikeConfigValue(value: unknown, label: string): string {
-  return typeof value === 'number' ? String(value) : serializeStringConfigValue(value, label);
-}
-
-function parseCacheGcOlderThanDays(input: string): number {
-  const value = Number(input.trim());
-  if (!Number.isFinite(value) || value < 2) {
-    throw new Error('cache-gc-older-than-days must be a number greater than or equal to 2.');
-  }
-  return value;
-}
-
-function serializeListLikeConfigValue(value: unknown, label: string): string {
-  if (typeof value === 'string') return value.trim();
-  return validateArray(value, label)
-    .map((entry, index) => validateString(entry, `${label} entry ${index}`).trim())
-    .filter((entry) => entry.length > 0)
-    .join('\n');
-}
-
-function serializeStructuredConfigValue(value: unknown, label: string): string {
-  if (typeof value === 'string') return value.trim();
-  try {
-    return JSON.stringify(value);
-  } catch (error: unknown) {
-    throw new Error(
-      `Could not serialize ${label} from config-file: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-function overlayConfiguredInputs(
-  fileInputs: RawGradleActionInputs,
-  directInputs: RawGradleActionInputs,
-): RawGradleActionInputs {
-  return {
-    configFile: directInputs.configFile,
-    baseDirectory: directInputs.baseDirectory || fileInputs.baseDirectory,
-    cacheEnabled: directInputs.cacheEnabled || fileInputs.cacheEnabled,
-    readOnly: directInputs.readOnly || fileInputs.readOnly,
-    jobMode: directInputs.jobMode || fileInputs.jobMode,
-    dependentJobs: directInputs.dependentJobs || fileInputs.dependentJobs,
-    allowDuplicateDependentDeltaPaths:
-      directInputs.allowDuplicateDependentDeltaPaths ||
-      fileInputs.allowDuplicateDependentDeltaPaths,
-    cacheKeyPrefix: directInputs.cacheKeyPrefix || fileInputs.cacheKeyPrefix,
-    cachePartitions: directInputs.cachePartitions || fileInputs.cachePartitions,
-    processAllWrapperFiles:
-      directInputs.processAllWrapperFiles || fileInputs.processAllWrapperFiles,
-    wrapperPropertiesGlob: directInputs.wrapperPropertiesGlob || fileInputs.wrapperPropertiesGlob,
-    wrapperPropertiesFiles:
-      directInputs.wrapperPropertiesFiles || fileInputs.wrapperPropertiesFiles,
-    cleanupEnabled: directInputs.cleanupEnabled || fileInputs.cleanupEnabled,
-    restoreCleanupMode: directInputs.restoreCleanupMode || fileInputs.restoreCleanupMode,
-    cacheGcMode: directInputs.cacheGcMode || fileInputs.cacheGcMode,
-    cacheGcOlderThanDays: directInputs.cacheGcOlderThanDays || fileInputs.cacheGcOlderThanDays,
-    gradleUserHome: directInputs.gradleUserHome || fileInputs.gradleUserHome,
-    setupJava: directInputs.setupJava || fileInputs.setupJava,
-  };
-}
-
-function isPathInside(parentPath: string, childPath: string): boolean {
-  const relativePath = path.relative(parentPath, childPath);
-  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
-}
 
 function determineWrapperSelectionMode(
   processAllWrapperFiles: boolean,

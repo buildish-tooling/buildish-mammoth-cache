@@ -39,15 +39,39 @@ export type RawActionInputProperty =
   | 'setupJava'
   | 'mavenUserHome';
 
-/** One canonical action input declaration used by metadata, readers, config files, and docs. */
-export interface PublicActionInputContract {
+/** Supported representations for values read from a JSON or YAML config file. */
+export type ConfigFileValueKind = 'string' | 'boolean' | 'number' | 'list' | 'structured';
+
+interface PublicActionInputContractBase {
   readonly name: string;
-  readonly property: RawActionInputProperty | null;
   readonly tools: readonly ActionBuildTool[];
   readonly default?: string;
-  readonly configFile: 'allowed' | 'nested-forbidden' | 'direct-only';
   readonly description: string;
 }
+
+/** One canonical action input declaration used by metadata, readers, config files, and docs. */
+export type PublicActionInputContract = PublicActionInputContractBase &
+  (
+    | {
+        readonly property: RawActionInputProperty;
+        readonly configFile: 'allowed';
+        readonly configFileValueKind: ConfigFileValueKind;
+      }
+    | {
+        readonly property: 'configFile';
+        readonly configFile: 'nested-forbidden';
+      }
+    | {
+        readonly property: null;
+        readonly configFile: 'direct-only';
+      }
+  );
+
+/** Canonical input declarations that may be named by repository config files. */
+export type ConfigFileActionInputContract = Extract<
+  PublicActionInputContract,
+  { readonly configFile: 'allowed' | 'nested-forbidden' }
+>;
 
 /** One canonical prepare output declaration shared by both action variants. */
 export interface PublicActionOutputContract {
@@ -74,6 +98,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: '.',
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description:
       'Repository-relative project base directory. Rooted paths and paths that escape the workspace are rejected.',
   },
@@ -83,6 +108,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: 'true',
     configFile: 'allowed',
+    configFileValueKind: 'boolean',
     description: 'Enables cache orchestration. Accepted values: true or false.',
   },
   {
@@ -90,6 +116,7 @@ export const PUBLIC_ACTION_INPUTS = [
     property: 'readOnly',
     tools: BOTH,
     configFile: 'allowed',
+    configFileValueKind: 'boolean',
     description:
       'Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor.',
   },
@@ -99,6 +126,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: 'standalone',
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description:
       'Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.',
   },
@@ -107,6 +135,7 @@ export const PUBLIC_ACTION_INPUTS = [
     property: 'dependentJobs',
     tools: BOTH,
     configFile: 'allowed',
+    configFileValueKind: 'list',
     description:
       'Comma- or newline-separated worker job names consumed by a distributed aggregator.',
   },
@@ -116,6 +145,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: 'false',
     configFile: 'allowed',
+    configFileValueKind: 'boolean',
     description:
       'Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.',
   },
@@ -125,6 +155,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: 'buildish-mammoth-cache-',
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description:
       'Namespace prefix for action-owned cache families; build, runner, partition, ref-lineage, and generation identity are appended automatically.',
   },
@@ -133,6 +164,7 @@ export const PUBLIC_ACTION_INPUTS = [
     property: 'cachePartitions',
     tools: BOTH,
     configFile: 'allowed',
+    configFileValueKind: 'structured',
     description:
       'JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.',
   },
@@ -142,6 +174,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: 'true',
     configFile: 'allowed',
+    configFileValueKind: 'boolean',
     description: 'Enables restore cleanup and timestamp garbage collection.',
   },
   {
@@ -150,6 +183,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: 'none',
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description: 'Restore-time cleanup mode: none or prune-managed.',
   },
   {
@@ -158,6 +192,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: 'timestamp',
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description: 'Pre-save managed-cache garbage collection mode: off or timestamp.',
   },
   {
@@ -166,6 +201,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: BOTH,
     default: '14',
     configFile: 'allowed',
+    configFileValueKind: 'number',
     description: 'Age threshold for timestamp garbage collection. Must be at least 2 days.',
   },
   {
@@ -218,6 +254,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: GRADLE,
     default: 'false',
     configFile: 'allowed',
+    configFileValueKind: 'boolean',
     description:
       'Processes every matching Gradle wrapper properties file. Cannot be combined with wrapper-properties-files.',
   },
@@ -227,6 +264,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: GRADLE,
     default: '**/gradle/wrapper/gradle-wrapper.properties',
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description: 'Repository-relative Gradle wrapper properties discovery glob.',
   },
   {
@@ -234,6 +272,7 @@ export const PUBLIC_ACTION_INPUTS = [
     property: 'wrapperPropertiesFiles',
     tools: GRADLE,
     configFile: 'allowed',
+    configFileValueKind: 'list',
     description:
       'Comma- or newline-separated explicit Gradle wrapper properties files relative to base-directory.',
   },
@@ -242,6 +281,7 @@ export const PUBLIC_ACTION_INPUTS = [
     property: 'gradleUserHome',
     tools: GRADLE,
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description: 'Gradle user home to manage. The current version accepts only the runner default.',
   },
   {
@@ -250,6 +290,7 @@ export const PUBLIC_ACTION_INPUTS = [
     tools: GRADLE,
     default: 'false',
     configFile: 'allowed',
+    configFileValueKind: 'boolean',
     description:
       'Reserved compatibility flag. The current version rejects true; run actions/setup-java first.',
   },
@@ -258,6 +299,7 @@ export const PUBLIC_ACTION_INPUTS = [
     property: 'mavenUserHome',
     tools: MAVEN,
     configFile: 'allowed',
+    configFileValueKind: 'string',
     description:
       'Absolute or working-directory-relative Maven user home to manage, including repository/ and wrapper/dists/; defaults to MAVEN_USER_HOME or ~/.m2.',
   },
@@ -339,7 +381,7 @@ export function getPublicActionInput(
 export function getConfigFileInput(
   buildTool: ActionBuildTool,
   name: string,
-): PublicActionInputContract {
+): ConfigFileActionInputContract {
   const input = getPublicActionInputs(buildTool).find((candidate) => candidate.name === name);
   if (!input || input.configFile === 'direct-only') {
     if (name === 'github-token') {

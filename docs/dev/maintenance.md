@@ -105,13 +105,16 @@ the default blank value disables both requested caching and setup-node's automat
 ## Public action contract
 
 `src/config/public-contract.ts` is the typed source of truth for public input names, applicability,
-defaults, config-file permission, descriptions, and prepare outputs. Runtime readers resolve names
-through that contract, and config-file parsing checks its allowlist before serializing values.
+defaults, config-file permission and value representation, descriptions, and prepare outputs.
+`src/config/inputs.ts` reads and overlays raw inputs through that contract, while
+`src/config/normalize.ts` owns normalization shared by all build tools. Tool adapters retain only
+tool-specific normalization.
 
 When adding or changing an input or output:
 
 1. Update the typed contract.
-2. Update normalization or output value creation as needed.
+2. Select the config-file value representation when the input is file-configurable, then update
+   shared or tool-specific normalization as needed.
 3. Refresh the matching action descriptor and the generated contract block in
    `docs/user/configuration.md`.
 4. Add detailed prose or examples when the compact contract description is not sufficient.

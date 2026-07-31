@@ -111,6 +111,19 @@ describe('canonical public action contract', () => {
           .sort(),
       );
     });
+
+    it(`maps every ${buildTool} raw property exactly once`, () => {
+      const contractProperties = getPublicActionInputs(buildTool).flatMap((input) =>
+        input.property === null ? [] : [input.property],
+      );
+      const rawInputs =
+        buildTool === 'gradle'
+          ? readGradleActionInputs({ getInput: () => '' })
+          : readMavenActionInputs({ getInput: () => '' });
+
+      expect(new Set(contractProperties).size).toBe(contractProperties.length);
+      expect(Object.keys(rawInputs).sort()).toEqual([...contractProperties].sort());
+    });
   }
 });
 
