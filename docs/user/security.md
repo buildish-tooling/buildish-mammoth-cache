@@ -22,18 +22,16 @@ limitations under the License.
 
 ## GitHub Actions permissions
 
-The minimum required token permissions depend on the job mode and read-only setting.
+Ordinary standalone and same-run distributed workflows need only the permissions required by their
+other steps. The examples use `contents: read` for `actions/checkout`; cache restore/save and
+same-run delta artifact upload/list/download/delete use GitHub-provided, job-scoped Actions runtime
+credentials rather than the workflow's `GITHUB_TOKEN`. Do not grant `actions: write` for those
+operations—it is broader than this action needs.
 
-| Scenario                | `actions` | `contents` |
-| ----------------------- | --------- | ---------- |
-| Standalone, cache write | `write`   | `read`     |
-| Standalone, read-only   | `read`    | `read`     |
-| Distributed, writable   | `write`   | `read`     |
-| Distributed, read-only  | `read`    | `read`     |
-| Cache disabled          | none      | `read`     |
-
-`actions: write` is required to save cache entries and to upload or download workflow artifacts used
-by the distributed delta exchange. `contents: read` is required for workspace checkout.
+Explicit cross-run or cross-repository artifact lookup is a separate API boundary and is not used by
+the current ordinary workflow contract. Such a feature requires a token with access to the target
+run/repository and must document its `actions` permission at that point. Likewise, grant additional
+permissions only when another workflow step or an authenticated GitHub API request requires them.
 
 Read-only workers upload no envelopes. Read-only aggregators do not contact the artifact backend at
 all: their dependent-delta result is `skipped-read-only`. When possible, skip the aggregator job on

@@ -78,7 +78,6 @@ jobs:
   worker-a:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -94,7 +93,6 @@ jobs:
   worker-b:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -112,7 +110,6 @@ jobs:
     if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -133,7 +130,6 @@ jobs:
   worker-a:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -149,7 +145,6 @@ jobs:
   worker-b:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -167,7 +162,6 @@ jobs:
     if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd

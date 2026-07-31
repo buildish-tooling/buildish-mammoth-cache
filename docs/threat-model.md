@@ -145,7 +145,7 @@ Reachability preconditions per component:
 - The runner filesystem enforces normal process permissions, symlink behavior, `O_EXCL`, `rename`, `lstat`, `realpath`, and temporary-directory semantics. _(inferred)_
 - Runner filesystem access-time behavior is platform-specific and may be stale, deferred, coalesced, or disabled; timestamp cache GC treats timestamps as best-effort freshness signals, not precise usage proof. _(documented)_
 - The action runs as a single Node process per action invocation; separate parallel jobs communicate only through cache/artifact backends, not shared memory. _(inferred)_
-- Cache and artifact service permissions follow the workflow's declared `permissions`. The action cannot grant itself permissions that the workflow did not provide. _(inferred)_
+- Cache and same-run artifact service access uses GitHub-provided, job-scoped Actions runtime credentials. Declared `GITHUB_TOKEN` permissions separately govern authenticated GitHub API calls and explicit cross-run/repository artifact lookup. _(documented)_
 
 Concurrency assumptions:
 
@@ -228,7 +228,7 @@ Per-parameter trust table:
 | GitHub env          | `GITHUB_TOKEN`                                                                     | Trusted runner secret                                                                         | Grant least privilege through workflow `permissions`. _(inferred)_                                                                                           |
 | Workspace           | `gradle-wrapper.properties`                                                        | Yes for repository contributors                                                               | Treat changes to wrapper properties as code changes; run with strict validation. _(documented)_                                                              |
 | Build cache root    | Managed cache files                                                                | Yes, via build steps and restored cache/artifacts                                             | Do not store secrets in managed partitions. _(documented)_                                                                                                   |
-| Artifact backend    | Delta artifact metadata/payload                                                    | Potentially attacker-controlled by jobs with artifact write access in same run                | Restrict artifact write permissions and configure `dependent-jobs` accurately. _(inferred)_                                                                  |
+| Artifact backend    | Delta artifact metadata/payload                                                    | Potentially attacker-controlled by jobs able to publish artifacts in the same run             | Restrict writable job topology and configure `dependent-jobs` accurately. _(inferred)_                                                                       |
 | Network             | Wrapper checksum/signature/JAR bodies                                              | Untrusted until validated                                                                     | Rely on HTTPS, checksum, and signature verification; do not disable them for untrusted code. _(documented)_                                                  |
 
 Size, shape, and rate assumptions:
@@ -324,7 +324,7 @@ Well-known attack classes left to the caller:
 Operators and workflow authors must:
 
 - Pin the action reference to a reviewed commit or release appropriate for their repository policy. _(inferred)_
-- Use least-privilege GitHub `permissions`; grant `actions: write` only where cache/artifact operations require it. _(documented)_
+- Use least-privilege GitHub `permissions`; ordinary cache and same-run artifact operations do not require `actions: write`. Grant `actions` access only at an explicit GitHub API or cross-execution boundary that documents the need. _(documented)_
 - Do not expose write-capable cache operation to untrusted pull-request code; preserve default PR read-only behavior unless the risk is explicitly accepted. _(documented)_
 - Ensure reusable workflows pass the original caller's event name, ref name, and default branch when needed, so read-only behavior and cache lineages reflect the caller. _(documented)_
 - Keep distributed worker job names unique and configure aggregator `needs` to include every worker. _(documented)_

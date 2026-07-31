@@ -51,7 +51,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -105,7 +104,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd

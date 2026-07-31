@@ -64,8 +64,9 @@ commit SHA:
 > snapshots waste storage and can undo the managed state assembled by distributed jobs. Use
 > `actions/setup-java` for JDK installation only, as the examples above show.
 
-`actions: write` is required so the action can save cache entries and exchange delta artifacts.
-See [Security](../security/) for the full permissions breakdown.
+Cache and same-run delta artifact operations use job-scoped Actions runtime credentials, so they do
+not require `actions: write`. The examples grant only `contents: read` for checkout. See
+[Security](../security/) for the full permissions boundary.
 
 The action defaults to **read-only** on `pull_request` and `pull_request_target` events, so
 cache writes from untrusted forks are automatically suppressed. Repository config can make this
@@ -80,7 +81,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -99,7 +99,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd

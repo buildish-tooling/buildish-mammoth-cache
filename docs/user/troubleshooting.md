@@ -127,8 +127,10 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
    retained earlier envelopes. Duplicate artifacts for the same worker attempt are rejected as
    ambiguous instead of being selected arbitrarily.
 
-6. **Confirm `actions: write` permission is set on writable worker jobs.** Without this permission the
-   worker cannot upload the artifact and the aggregator will not find it.
+6. **Check that the job is running on GitHub Actions with runtime artifact service variables.**
+   Same-run worker upload and aggregator discovery use GitHub-provided Actions runtime credentials,
+   not `actions: write`. If this is a nonstandard runner environment, inspect the first artifact
+   client error rather than broadening `GITHUB_TOKEN` permissions.
 
 ---
 
