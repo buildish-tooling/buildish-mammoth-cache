@@ -63,7 +63,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `wrapper-properties-files`              | Gradle        | `event-dependent or unset`                    | yes         | Comma- or newline-separated explicit Gradle wrapper properties files relative to base-directory.                                                                             |
 | `gradle-user-home`                      | Gradle        | `event-dependent or unset`                    | yes         | Gradle user home to manage. The current version accepts only the runner default.                                                                                             |
 | `setup-java`                            | Gradle        | `false`                                       | yes         | Reserved compatibility flag. The current version rejects true; run actions/setup-java first.                                                                                 |
-| `maven-local-repository`                | Maven         | `event-dependent or unset`                    | yes         | Absolute or working-directory-relative Maven local repository to manage; defaults to MAVEN_USER_HOME or ~/.m2.                                                               |
+| `maven-user-home`                       | Maven         | `event-dependent or unset`                    | yes         | Absolute or working-directory-relative Maven user home to manage, including repository/ and wrapper/dists/; defaults to MAVEN_USER_HOME or ~/.m2.                            |
 
 ### Canonical output matrix
 
@@ -315,12 +315,14 @@ summary and finalize log report the exact key only after a successful publicatio
 
 ## Maven-only inputs
 
-### `maven-local-repository`
+### `maven-user-home`
 
 - Default: `$MAVEN_USER_HOME` when set, otherwise `$HOME/.m2`
 - Accepts an absolute path or a path resolved from the action process working directory.
-- Operators are responsible for ensuring a custom path contains only intended Maven cache state
-  and is not shared across trust zones.
+- The managed root contains both the Maven local repository at `repository/` and Maven Wrapper
+  distributions at `wrapper/dists/`; do not pass the `repository/` directory itself.
+- Operators are responsible for ensuring a custom user home contains only intended Maven cache
+  state and is not shared across trust zones.
 
 ---
 

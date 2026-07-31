@@ -61,7 +61,7 @@ export class MavenBuildToolAdapter implements BuildToolAdapter {
   }
 
   getCacheRoot(): string {
-    return this.#config.mavenLocalRepository;
+    return this.#config.mavenUserHome;
   }
 
   getBuiltInPartitionPresets(): readonly BuiltInCachePartitionPreset[] {

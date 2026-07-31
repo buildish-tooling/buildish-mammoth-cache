@@ -83,8 +83,8 @@ inputs:
   github-default-branch:
     description: Optional repository default-branch override for reusable workflows.
     required: false
-  maven-local-repository:
-    description: Absolute or working-directory-relative Maven local repository to manage; defaults to MAVEN_USER_HOME or ~/.m2.
+  maven-user-home:
+    description: Absolute or working-directory-relative Maven user home to manage, including repository/ and wrapper/dists/; defaults to MAVEN_USER_HOME or ~/.m2.
     required: false
 outputs:
   cache-family-key:

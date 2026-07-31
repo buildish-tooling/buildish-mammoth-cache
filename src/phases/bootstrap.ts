@@ -113,7 +113,7 @@ export interface BootstrapDependencies {
    * Factory that constructs the active build tool adapter.
    *
    * The factory receives no arguments; all tool-specific config (e.g. `gradleUserHome`,
-   * `mavenLocalRepository`, wrapper settings) is captured inside the factory closure together with
+   * `mavenUserHome`, wrapper settings) is captured inside the factory closure together with
    * any adapter-level test overrides (e.g. `fetchImpl`, `verifyWrapperSignature` for Gradle).
    */
   readonly buildToolAdapterFactory: () => BuildToolAdapter;

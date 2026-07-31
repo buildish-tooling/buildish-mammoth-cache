@@ -37,7 +37,7 @@ export type RawActionInputProperty =
   | 'wrapperPropertiesFiles'
   | 'gradleUserHome'
   | 'setupJava'
-  | 'mavenLocalRepository';
+  | 'mavenUserHome';
 
 /** One canonical action input declaration used by metadata, readers, config files, and docs. */
 export interface PublicActionInputContract {
@@ -254,12 +254,12 @@ export const PUBLIC_ACTION_INPUTS = [
       'Reserved compatibility flag. The current version rejects true; run actions/setup-java first.',
   },
   {
-    name: 'maven-local-repository',
-    property: 'mavenLocalRepository',
+    name: 'maven-user-home',
+    property: 'mavenUserHome',
     tools: MAVEN,
     configFile: 'allowed',
     description:
-      'Absolute or working-directory-relative Maven local repository to manage; defaults to MAVEN_USER_HOME or ~/.m2.',
+      'Absolute or working-directory-relative Maven user home to manage, including repository/ and wrapper/dists/; defaults to MAVEN_USER_HOME or ~/.m2.',
   },
 ] as const satisfies readonly PublicActionInputContract[];
 

@@ -91,7 +91,7 @@ describe('readMavenActionInputs', () => {
       'restore-cleanup-mode': 'none',
       'cache-gc-mode': 'timestamp',
       'cache-gc-older-than-days': '14',
-      'maven-local-repository': '/custom/m2',
+      'maven-user-home': '/custom/m2',
     });
     const inputs = readMavenActionInputs(provider);
 
@@ -104,13 +104,13 @@ describe('readMavenActionInputs', () => {
     expect(inputs.restoreCleanupMode).toBe('none');
     expect(inputs.cacheGcMode).toBe('timestamp');
     expect(inputs.cacheGcOlderThanDays).toBe('14');
-    expect(inputs.mavenLocalRepository).toBe('/custom/m2');
+    expect(inputs.mavenUserHome).toBe('/custom/m2');
   });
 
   it('returns empty strings for absent inputs', () => {
     const inputs = readMavenActionInputs(makeInputProvider());
     expect(inputs.configFile).toBe('');
-    expect(inputs.mavenLocalRepository).toBe('');
+    expect(inputs.mavenUserHome).toBe('');
   });
 });
 
@@ -130,7 +130,7 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
     await withWorkspace(
       {
         '.github/maven-cache.yml':
-          'cache-enabled: false\nread-only: true\nmaven-local-repository: /from-file/m2\n',
+          'cache-enabled: false\nread-only: true\nmaven-user-home: /from-file/m2\n',
       },
       async (workspace) => {
         const resolved = await resolveMavenActionInputsFromConfigFile(
@@ -144,7 +144,7 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
         );
         expect(resolved.cacheEnabled).toBe('false'); // from file
         expect(resolved.readOnly).toBe('false'); // direct input wins
-        expect(resolved.mavenLocalRepository).toBe('/from-file/m2'); // from file
+        expect(resolved.mavenUserHome).toBe('/from-file/m2'); // from file
       },
     );
   });
@@ -194,6 +194,18 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
           { workspace },
         ),
       ).rejects.toThrow(/unsupported key/u);
+    });
+  });
+
+  it('rejects the obsolete maven-local-repository config key', async () => {
+    const json = JSON.stringify({ 'maven-local-repository': '/some/path' });
+    await withWorkspace({ 'cfg.json': json }, async (workspace) => {
+      await expect(
+        resolveMavenActionInputsFromConfigFile(
+          readMavenActionInputs(makeInputProvider({ 'config-file': 'cfg.json' })),
+          { workspace },
+        ),
+      ).rejects.toThrow(/unsupported key 'maven-local-repository'/u);
     });
   });
 
@@ -440,7 +452,7 @@ describe('normalizeMavenActionConfig', () => {
     expect(config.restoreCleanupMode).toBe('none');
     expect(config.cacheGcMode).toBe('timestamp');
     expect(config.cacheGcOlderThanDays).toBe(14);
-    expect(config.mavenLocalRepository).toBe(path.join(os.homedir(), '.m2'));
+    expect(config.mavenUserHome).toBe(path.join(os.homedir(), '.m2'));
   });
 
   it('defaults to read-only on pull_request events', () => {
@@ -485,24 +497,54 @@ describe('normalizeMavenActionConfig', () => {
     });
   });
 
-  it('uses MAVEN_USER_HOME env var as the default local repository', () => {
+  it('uses MAVEN_USER_HOME as the default Maven user home', () => {
     const raw = readMavenActionInputs(makeInputProvider());
     const config = normalizeMavenActionConfig(raw, {
       phase: 'prepare',
       ciContext: STUB_CI_CONTEXT,
       env: { MAVEN_USER_HOME: '/custom/home/.m2' },
     });
-    expect(config.mavenLocalRepository).toBe('/custom/home/.m2');
+    expect(config.mavenUserHome).toBe('/custom/home/.m2');
   });
 
-  it('accepts an explicit absolute maven-local-repository input', () => {
-    const absPath = path.join(os.homedir(), 'custom-repo');
-    const raw = readMavenActionInputs(makeInputProvider({ 'maven-local-repository': absPath }));
+  it('accepts an explicit absolute maven-user-home input', () => {
+    const absPath = path.join(os.homedir(), 'custom-maven-home');
+    const raw = readMavenActionInputs(makeInputProvider({ 'maven-user-home': absPath }));
+    const config = normalizeMavenActionConfig(raw, {
+      phase: 'prepare',
+      ciContext: STUB_CI_CONTEXT,
+      env: { MAVEN_USER_HOME: '/ignored/environment/home' },
+    });
+    expect(config.mavenUserHome).toBe(absPath);
+  });
+
+  it('resolves a relative maven-user-home from the process working directory', () => {
+    const raw = readMavenActionInputs(makeInputProvider({ 'maven-user-home': '.cache/maven' }));
     const config = normalizeMavenActionConfig(raw, {
       phase: 'prepare',
       ciContext: STUB_CI_CONTEXT,
     });
-    expect(config.mavenLocalRepository).toBe(absPath);
+    expect(config.mavenUserHome).toBe(path.resolve('.cache/maven'));
+  });
+
+  it('treats a blank MAVEN_USER_HOME as unset', () => {
+    const raw = readMavenActionInputs(makeInputProvider());
+    const config = normalizeMavenActionConfig(raw, {
+      phase: 'prepare',
+      ciContext: STUB_CI_CONTEXT,
+      env: { MAVEN_USER_HOME: '   ' },
+    });
+    expect(config.mavenUserHome).toBe(path.join(os.homedir(), '.m2'));
+  });
+
+  it('resolves a relative MAVEN_USER_HOME from the process working directory', () => {
+    const raw = readMavenActionInputs(makeInputProvider());
+    const config = normalizeMavenActionConfig(raw, {
+      phase: 'prepare',
+      ciContext: STUB_CI_CONTEXT,
+      env: { MAVEN_USER_HOME: '.cache/maven-from-env' },
+    });
+    expect(config.mavenUserHome).toBe(path.resolve('.cache/maven-from-env'));
   });
 
   it('accepts a custom cache-key-prefix', () => {

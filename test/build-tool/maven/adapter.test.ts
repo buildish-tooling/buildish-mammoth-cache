@@ -38,7 +38,7 @@ function makeConfig(overrides: Partial<NormalizedMavenConfig> = {}): NormalizedM
     restoreCleanupMode: 'none',
     cacheGcMode: 'off',
     cacheGcOlderThanDays: 14,
-    mavenLocalRepository: path.join(os.homedir(), '.m2'),
+    mavenUserHome: path.join(os.homedir(), '.m2'),
     ...overrides,
   };
 }
@@ -74,10 +74,10 @@ describe('MavenBuildToolAdapter', () => {
   });
 
   describe('getCacheRoot', () => {
-    it('returns the configured mavenLocalRepository', () => {
-      const customRepo = '/opt/ci/m2';
-      const adapter = new MavenBuildToolAdapter(makeConfig({ mavenLocalRepository: customRepo }));
-      expect(adapter.getCacheRoot()).toBe(customRepo);
+    it('returns the configured mavenUserHome', () => {
+      const customUserHome = '/opt/ci/m2';
+      const adapter = new MavenBuildToolAdapter(makeConfig({ mavenUserHome: customUserHome }));
+      expect(adapter.getCacheRoot()).toBe(customUserHome);
     });
 
     it('defaults to the home-directory .m2 path', () => {

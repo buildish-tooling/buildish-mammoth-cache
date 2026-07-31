@@ -48,9 +48,10 @@ For Gradle the action caches `GRADLE_USER_HOME` and additionally:
 
 ### Maven
 
-For Maven the action caches the local repository (`~/.m2` by default, or the path set by
-`maven-local-repository`). No wrapper provisioning is performed — Maven's own bootstrap is
-handled by the runner environment or `actions/setup-java`.
+For Maven the action caches the Maven user home (`~/.m2` by default, or the path set by
+`maven-user-home`), including the local repository under `repository/` and Maven Wrapper downloads
+under `wrapper/dists/`. No wrapper provisioning is performed — Maven's own bootstrap is handled by
+the runner environment or `actions/setup-java`.
 
 ## Quick start
 

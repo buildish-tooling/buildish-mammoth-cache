@@ -160,11 +160,11 @@ export interface RawGradleActionInputs extends RawSharedActionInputs {
  */
 export interface RawMavenActionInputs extends RawSharedActionInputs {
   /**
-   * Raw `maven-local-repository` input.
+   * Raw `maven-user-home` input.
    *
    * Empty string later defaults to `${user.home}/.m2`.
    */
-  readonly mavenLocalRepository: string;
+  readonly mavenUserHome: string;
 }
 
 /** @deprecated Use {@link RawGradleActionInputs} instead. */
@@ -283,12 +283,12 @@ export interface NormalizedGradleConfig extends NormalizedActionConfig {
  */
 export interface NormalizedMavenConfig extends NormalizedActionConfig {
   /**
-   * Absolute path to the Maven local repository root (the `.m2` directory).
+   * Absolute path to the Maven user home (the `.m2` directory).
    *
-   * Defaults to `${user.home}/.m2`.  May be overridden via the `maven-local-repository` action
-   * input or the `MAVEN_USER_HOME` environment variable.
+   * Defaults to `${user.home}/.m2`. May be overridden via the `maven-user-home` action input or the
+   * `MAVEN_USER_HOME` environment variable.
    */
-  readonly mavenLocalRepository: string;
+  readonly mavenUserHome: string;
 }
 
 // ---------------------------------------------------------------------------

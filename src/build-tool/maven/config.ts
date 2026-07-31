@@ -18,7 +18,7 @@
  * Maven-specific action input reading, config-file resolution, and config normalization.
  *
  * Shared parsing utilities live in `../../config/config-helpers`; this module adds the
- * Maven-only logic (MAVEN_USER_HOME / maven-local-repository resolution and the
+ * Maven-only logic (MAVEN_USER_HOME / maven-user-home resolution and the
  * Maven-specific config-file key set).
  */
 
@@ -83,7 +83,7 @@ export function readMavenActionInputs(inputProvider: InputProvider): RawMavenAct
     restoreCleanupMode: read('restoreCleanupMode'),
     cacheGcMode: read('cacheGcMode'),
     cacheGcOlderThanDays: read('cacheGcOlderThanDays'),
-    mavenLocalRepository: read('mavenLocalRepository'),
+    mavenUserHome: read('mavenUserHome'),
   };
 }
 
@@ -162,10 +162,7 @@ export function normalizeMavenActionConfig(
   );
   const cacheGcOlderThanDays = parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14');
   const readOnly = resolveReadOnlyInput(rawInputs, rawInputs.readOnly, options.ciContext);
-  const mavenLocalRepository = normalizeMavenLocalRepository(
-    rawInputs.mavenLocalRepository,
-    options.env,
-  );
+  const mavenUserHome = normalizeMavenUserHome(rawInputs.mavenUserHome, options.env);
 
   if (dependentJobs.length > 0 && jobMode === 'standalone') {
     throw new Error('dependent-jobs can only be used with distributed job modes.');
@@ -186,7 +183,7 @@ export function normalizeMavenActionConfig(
     restoreCleanupMode,
     cacheGcMode,
     cacheGcOlderThanDays,
-    mavenLocalRepository,
+    mavenUserHome,
   };
 }
 
@@ -195,18 +192,12 @@ export function normalizeMavenActionConfig(
 // ---------------------------------------------------------------------------
 
 /**
- * Resolves the Maven local repository path from input and environment, defaulting to `~/.m2`.
+ * Resolves the Maven user home from input and environment, defaulting to `~/.m2`.
  */
-function normalizeMavenLocalRepository(input: string, env: NodeJS.ProcessEnv | undefined): string {
-  const trimmed = input.trim();
-  if (trimmed.length === 0) {
-    return env?.MAVEN_USER_HOME ?? path.join(os.homedir(), '.m2');
-  }
-  const resolved = path.resolve(trimmed);
-  if (!path.isAbsolute(resolved)) {
-    throw new Error('maven-local-repository must resolve to an absolute path.');
-  }
-  return resolved;
+function normalizeMavenUserHome(input: string, env: NodeJS.ProcessEnv | undefined): string {
+  const configuredPath =
+    input.trim() || env?.MAVEN_USER_HOME?.trim() || path.join(os.homedir(), '.m2');
+  return path.resolve(configuredPath);
 }
 
 async function resolveMavenConfigFilePath(
@@ -346,8 +337,8 @@ function serializeMavenConfigFileInputs(
       case 'cache-gc-older-than-days':
         inputs.cacheGcOlderThanDays = serializeMavenNumberLikeValue(value, key);
         break;
-      case 'maven-local-repository':
-        inputs.mavenLocalRepository = serializeMavenStringValue(value, key);
+      case 'maven-user-home':
+        inputs.mavenUserHome = serializeMavenStringValue(value, key);
         break;
       default:
         throw new Error(
@@ -378,7 +369,7 @@ function overlayMavenConfiguredInputs(
     restoreCleanupMode: directInputs.restoreCleanupMode || fileInputs.restoreCleanupMode,
     cacheGcMode: directInputs.cacheGcMode || fileInputs.cacheGcMode,
     cacheGcOlderThanDays: directInputs.cacheGcOlderThanDays || fileInputs.cacheGcOlderThanDays,
-    mavenLocalRepository: directInputs.mavenLocalRepository || fileInputs.mavenLocalRepository,
+    mavenUserHome: directInputs.mavenUserHome || fileInputs.mavenUserHome,
   };
 }
 
@@ -397,7 +388,7 @@ function createEmptyRawMavenActionInputs(): Record<keyof RawMavenActionInputs, s
     restoreCleanupMode: '',
     cacheGcMode: '',
     cacheGcOlderThanDays: '',
-    mavenLocalRepository: '',
+    mavenUserHome: '',
   };
 }
 
