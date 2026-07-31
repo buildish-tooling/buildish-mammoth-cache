@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const exactSemverPattern =
-  /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+  /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$/u;
 
 export function parseNpmPackageManager(packageManager) {
   if (typeof packageManager !== 'string' || !packageManager.startsWith('npm@')) {
@@ -32,6 +32,11 @@ export function parseNpmPackageManager(packageManager) {
   }
 
   const version = packageManager.slice('npm@'.length);
+  if (version.includes('+')) {
+    throw new Error(
+      'packageManager npm versions with build metadata or Corepack integrity hashes are not supported; select the exact registry version only.',
+    );
+  }
   if (!exactSemverPattern.test(version)) {
     throw new Error(
       `packageManager must use an exact npm semantic version; received ${JSON.stringify(packageManager)}.`,
@@ -49,7 +54,21 @@ export function parsePackageJsonNpmVersion(packageJsonText) {
       cause: error,
     });
   }
+  if (typeof packageJson !== 'object' || packageJson === null || Array.isArray(packageJson)) {
+    throw new Error('package.json must contain a JSON object while resolving the npm version.');
+  }
   return parseNpmPackageManager(packageJson.packageManager);
+}
+
+async function readPackageJsonFile(packageJsonPath) {
+  try {
+    return await fs.readFile(packageJsonPath, 'utf8');
+  } catch (error) {
+    throw new Error(
+      `Could not read package.json from ${JSON.stringify(packageJsonPath)} while resolving the npm version.`,
+      { cause: error },
+    );
+  }
 }
 
 async function readStandardInput() {
@@ -62,7 +81,7 @@ async function readStandardInput() {
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.length === 0) {
-    const packageJsonText = await fs.readFile('package.json', 'utf8');
+    const packageJsonText = await readPackageJsonFile('package.json');
     console.log(parsePackageJsonNpmVersion(packageJsonText));
     return;
   }
@@ -83,7 +102,7 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   const packageJsonText =
-    value === '-' ? await readStandardInput() : await fs.readFile(value, 'utf8');
+    value === '-' ? await readStandardInput() : await readPackageJsonFile(value);
   console.log(parsePackageJsonNpmVersion(packageJsonText));
 }
 

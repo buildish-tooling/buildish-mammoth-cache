@@ -91,6 +91,17 @@ Results are uploaded to the repository's **Security → Code scanning** tab as S
 requires `security-events: write` permission, which is scoped to the job rather than the
 workflow to follow least-privilege practice.
 
+## CI Node.js and npm setup helper
+
+`.github/actions/setup-node-npm` is an internal composite action for workflows in this repository.
+Callers must check out the repository first because the helper resolves the npm version through
+`scripts/resolve-npm-version.mjs` in the current workspace.
+
+The `cache` input is explicit: a package-manager name such as `npm` enables setup-node caching, while
+the default blank value disables both requested caching and setup-node's automatic inference from
+`package.json#packageManager`. Keep both setup-node branches aligned and update
+`test/setup-node-npm-action.test.ts` whenever the helper contract changes.
+
 ## Public action contract
 
 `src/config/public-contract.ts` is the typed source of truth for public input names, applicability,

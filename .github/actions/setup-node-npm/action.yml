@@ -15,8 +15,8 @@
 
 name: Set Up Node.js And npm
 description: >-
-  Set up the repository's Node.js version and provision the exact npm version
-  selected by package.json. Callers must run actions/checkout first.
+  Internal repository helper that sets up Node.js and provisions the exact npm
+  version selected by package.json. Callers must run actions/checkout first.
 
 inputs:
   node-version:
@@ -36,7 +36,9 @@ inputs:
     required: false
     default: package.json
   cache:
-    description: Package manager cache handled by actions/setup-node.
+    description: >-
+      Package manager cache handled by actions/setup-node. Leave blank to
+      disable explicit and automatically inferred package manager caching.
     required: false
     default: ''
   cache-dependency-path:
@@ -54,6 +56,7 @@ runs:
         node-version-file: ${{ inputs.node-version-file }}
         cache: ${{ inputs.cache }}
         cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        package-manager-cache: ${{ inputs.cache != '' }}
 
     - name: Set up explicit Node.js version
       if: inputs.node-version != ''
@@ -62,6 +65,7 @@ runs:
         node-version: ${{ inputs.node-version }}
         cache: ${{ inputs.cache }}
         cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        package-manager-cache: ${{ inputs.cache != '' }}
 
     - id: npm-version
       name: Resolve npm version
