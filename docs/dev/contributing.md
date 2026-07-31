@@ -160,7 +160,8 @@ Create `src/build-tool/sbt/config.ts` following the pattern of `gradle/config.ts
 
 - Defining the raw input schema (using the shared `sharedActionInputSchema` as a base).
 - Normalizing raw string inputs into a typed `NormalizedSbtConfig`.
-- Computing the cache key prefix and the cache root path.
+- Normalizing the cache namespace prefix and cache root path; shared code owns the family,
+  lineage, and generation structure.
 - Wiring the `buildToolAdapterFactory` that the phases call.
 
 ### 3. Create CI entry-point files

@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CACHE_MANIFEST_SCHEMA_VERSION,
+  calculateCanonicalCacheManifestDigest,
   captureCacheMetadataSnapshot,
   captureCacheManifest,
   computeCacheDelta,
@@ -344,6 +345,49 @@ describe('deserializeCacheManifest', () => {
   });
 });
 
+describe('calculateCanonicalCacheManifestDigest', () => {
+  const manifest = makeManifest([
+    {
+      partitionId: 'modules',
+      entries: [makeEntry('caches/example.bin', 'a'.repeat(64))],
+    },
+  ]);
+
+  it('ignores machine-specific roots and access-time-only changes', () => {
+    const relocated: CacheManifest = {
+      ...manifest,
+      cacheRoot: '/different/runner/cache',
+      partitions: manifest.partitions.map((partition) => ({
+        ...partition,
+        entries: partition.entries.map((entry) => ({ ...entry, atimeMs: entry.atimeMs + 99_000 })),
+      })),
+    };
+
+    expect(calculateCanonicalCacheManifestDigest(relocated)).toBe(
+      calculateCanonicalCacheManifestDigest(manifest),
+    );
+  });
+
+  it.each([
+    ['content', { contentSha256: 'b'.repeat(64) }],
+    ['size', { size: 11 }],
+    ['mode', { mode: 0o100600 }],
+    ['mtime', { mtimeMs: 2_000 }],
+  ])('changes when material %s state changes', (_label, entryOverride) => {
+    const changed: CacheManifest = {
+      ...manifest,
+      partitions: manifest.partitions.map((partition) => ({
+        ...partition,
+        entries: partition.entries.map((entry) => ({ ...entry, ...entryOverride })),
+      })),
+    };
+
+    expect(calculateCanonicalCacheManifestDigest(changed)).not.toBe(
+      calculateCanonicalCacheManifestDigest(manifest),
+    );
+  });
+});
+
 async function withGradleUserHome(run: (gradleUserHome: string) => Promise<void>): Promise<void> {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-manifest-'));
   const gradleUserHome = path.join(tempRoot, '.gradle');
@@ -386,7 +430,12 @@ function createTestCacheModel(
   return {
     buildToolId: adapter.getBuildToolId(),
     cacheRoot: gradleUserHome,
-    cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
+    cacheFamilyKey: 'test-family',
+    currentRefToken: 'main-aaaaaaaaaaaa',
+    currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
+    fallbackRefLineagePrefixes: [],
+    plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
+    cacheKey: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',
@@ -409,7 +458,12 @@ function createOverlappingCacheModel(gradleUserHome: string): CacheModel {
   return {
     buildToolId: 'gradle',
     cacheRoot: gradleUserHome,
-    cacheKey: 'overlap',
+    cacheFamilyKey: 'overlap-family',
+    currentRefToken: 'main-aaaaaaaaaaaa',
+    currentRefLineagePrefix: 'overlap-family-ref-main-aaaaaaaaaaaa-gen-',
+    fallbackRefLineagePrefixes: [],
+    plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
+    cacheKey: 'overlap-family-ref-main-aaaaaaaaaaaa-gen-',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',

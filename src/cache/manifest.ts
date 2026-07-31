@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { createHash } from 'node:crypto';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -358,6 +359,32 @@ export function serializeCacheManifest(manifest: CacheManifest): string {
  */
 export function serializeCacheDeltaManifest(deltaManifest: CacheDeltaManifest): string {
   return `${JSON.stringify(deltaManifest)}\n`;
+}
+
+/**
+ * Calculates the portable material-state digest used in immutable generation keys.
+ *
+ * Access time and the machine-specific absolute cache root are intentionally excluded. Partition
+ * and entry order are retained because validated manifests already require deterministic ordering.
+ */
+export function calculateCanonicalCacheManifestDigest(manifest: CacheManifest): string {
+  const canonicalManifest = {
+    schemaVersion: manifest.schemaVersion,
+    buildToolId: manifest.buildToolId,
+    cacheRoot: '$CACHE_ROOT',
+    partitions: manifest.partitions.map((partition) => ({
+      partitionId: partition.partitionId,
+      entries: partition.entries.map((entry) => ({
+        relativePath: entry.relativePath,
+        contentSha256: entry.contentSha256,
+        size: entry.size,
+        mode: entry.mode,
+        mtimeMs: entry.mtimeMs,
+      })),
+    })),
+  };
+
+  return createHash('sha256').update(JSON.stringify(canonicalManifest)).digest('hex');
 }
 
 /**

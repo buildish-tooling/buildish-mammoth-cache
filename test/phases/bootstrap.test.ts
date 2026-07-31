@@ -57,10 +57,9 @@ const config: NormalizedGradleConfig = {
   jobMode: 'standalone',
   dependentJobs: [],
   allowDuplicateDependentDeltaPaths: false,
-  cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
-  cacheKeyTemplate: null,
+  cacheKeyPrefix: 'buildish-mammoth-cache-',
   cachePartitions: [],
-  cacheSchemaVersion: 1,
+  cacheSchemaVersion: 2,
   wrapperSelectionMode: 'default',
   wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
   defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -163,7 +162,14 @@ const toolProvisioning: BuildToolProvisioning = {
 const cacheModel: CacheModel = {
   buildToolId: 'gradle',
   cacheRoot: '/home/runner/.gradle',
-  cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
+  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
+  currentRefToken: 'main-aaaaaaaaaaaa',
+  currentRefLineagePrefix:
+    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
+  fallbackRefLineagePrefixes: [],
+  plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
+  cacheKey:
+    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
   javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',
@@ -201,10 +207,12 @@ const cacheModel: CacheModel = {
 
 const restoreResult: BaseCacheRestoreResult = {
   operation: 'restore',
-  status: 'exact-hit',
-  cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
-  matchedKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
-  restoreKeys: ['buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-'],
+  status: 'current-lineage-hit',
+  cacheFamilyKey: cacheModel.cacheFamilyKey,
+  currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
+  matchedKey: `${cacheModel.currentRefLineagePrefix}run-122-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb`,
+  matchedLineagePrefix: cacheModel.currentRefLineagePrefix,
+  restoreCandidates: [{ lineage: 'current-ref', keyPrefix: cacheModel.currentRefLineagePrefix }],
   paths: [
     '/home/runner/.gradle/caches/modules-*/files-*/**',
     '!/home/runner/.gradle/**/configuration-cache/**',
@@ -212,8 +220,7 @@ const restoreResult: BaseCacheRestoreResult = {
     '!/home/runner/.gradle/caches/*/cc-keystore',
     '!/home/runner/.gradle/caches/modules-*/metadata-*/**',
   ],
-  message:
-    "Base cache restore hit exact key 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main'.",
+  message: `Base cache restore reused current-ref generation '${cacheModel.currentRefLineagePrefix}run-122-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb'.`,
 };
 
 describe('bootstrap helpers', () => {
@@ -252,7 +259,7 @@ describe('bootstrap helpers', () => {
       ),
     ).join('\n');
 
-    expect(summaryText).toContain('- Base cache restore: exact-hit');
+    expect(summaryText).toContain('- Base cache restore: current-lineage-hit');
     expect(summaryText).toContain('- Tool provisioning: 1 ready (1 downloaded, 0 reused)');
     expect(summaryText).toContain('<summary>Execution context</summary>');
     expect(summaryText).toContain('- Cache partitions: 1');
@@ -260,8 +267,8 @@ describe('bootstrap helpers', () => {
     expect(summaryText).toContain('<summary>Tool provisioning</summary>');
     expect(summaryText).toContain('<table>');
     expect(summaryText).toContain('gradle/wrapper/gradle-wrapper.properties');
-    expect(summaryText).toMatch(
-      /- Cache key: buildish\\-mammoth\\-gradle\\-cache\\-1\\-21\\-linux\\-x64\\-feedcafe1234abcd\\-main/u,
+    expect(summaryText).toContain(
+      '- Cache family: buildish\\-mammoth\\-cache\\-gradle\\-v2\\-21\\-linux\\-x64\\-feedcafe1234abcd',
     );
   });
 
@@ -285,14 +292,14 @@ describe('bootstrap helpers', () => {
     expect(logText).toContain(
       'Bootstrap: Prepared prepare phase for push on main in standalone mode.',
     );
-    expect(logText).toContain('Base cache restore: exact-hit.');
+    expect(logText).toContain('Base cache restore: current-lineage-hit.');
     expect(logText).toContain('Tool provisioning: 1 ready (1 downloaded, 0 reused).');
     expect(logText).toContain("Execution context: workflow 'CI', job 'check', event 'push'");
     expect(logText).toContain("GitHub input 'github-token' present: yes.");
     expect(logText).toContain("GitHub environment 'GITHUB_TOKEN' available: yes.");
     expect(logText).toContain("GitHub input 'github-job-check-run-id': 987654321.");
     expect(logText).toContain(
-      'Cache key: buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main; Java major: 21; cache partitions: 1.',
+      `Cache family: ${cacheModel.cacheFamilyKey}; current ref lineage: ${cacheModel.currentRefLineagePrefix}; Java major: 21; cache partitions: 1.`,
     );
     expect(logText).toContain("Downloaded 'gradle/wrapper/gradle-wrapper.properties' (8.14.0).");
   });
@@ -309,7 +316,7 @@ describe('bootstrap helpers', () => {
         return true;
       },
       async restoreCache(_paths: string[], primaryKey: string): Promise<string | undefined> {
-        return primaryKey;
+        return `${primaryKey}run-122-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb`;
       },
       async saveCache(): Promise<number> {
         throw new Error('saveCache should not be called during main bootstrap');
@@ -395,10 +402,10 @@ describe('bootstrap helpers', () => {
       });
 
       expect(status.message).toBe('Prepared prepare phase for push on main in standalone mode.');
-      expect(status.cacheModel?.cacheKey).toMatch(
-        /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-main$/,
+      expect(status.cacheModel?.currentRefLineagePrefix).toMatch(
+        /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
       );
-      expect(status.baseCacheResult?.status).toBe('exact-hit');
+      expect(status.baseCacheResult?.status).toBe('current-lineage-hit');
       expect(status.toolProvisioning.items).toHaveLength(1);
       expect(status.ciDiagnosticsLines).toEqual([
         "GitHub input 'github-token' present: yes.",

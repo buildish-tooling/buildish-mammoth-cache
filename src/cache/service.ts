@@ -17,10 +17,9 @@
 import type { NormalizedActionConfig } from '../config/types';
 import type { BaseCacheBackend } from './backend';
 
-import { DEFAULT_CACHE_KEY_TEMPLATE, type CacheModel } from './model';
+import type { CacheGeneration, CacheModel } from './model';
 
 const FINALIZE_ARMED_STATE = 'buildish-mammoth-cache-base-cache-armed';
-const REF_NAME_PLACEHOLDER = '${refName}';
 
 /**
  * Injectable dependencies for the base cache service.
@@ -30,11 +29,18 @@ export interface BaseCacheServiceDependencies {
   readonly cacheBackend: BaseCacheBackend;
 }
 
+/** Ordered semantic lookup candidate for one immutable cache lineage. */
+export interface CacheRestoreCandidate {
+  /** Relationship between this lineage and the current execution. */
+  readonly lineage: 'current-ref' | 'default-branch';
+  /** Prefix whose newest immutable generation should be restored. */
+  readonly keyPrefix: string;
+}
+
 /**
  * Result of restoring the base cache before the workflow's Gradle work begins.
  *
- * `status` distinguishes exact reuse of the primary key from broader prefix fallback so later
- * orchestration can make policy decisions without reinterpreting raw backend return values.
+ * `status` identifies which semantic lineage supplied the restored immutable generation.
  */
 export interface BaseCacheRestoreResult {
   /** Discriminator for bootstrap consumers; always `restore` for this result shape. */
@@ -45,16 +51,20 @@ export interface BaseCacheRestoreResult {
    * Valid values:
    * - `feature-unavailable`: cache backend unavailable in this environment
    * - `miss`: no cache matched
-   * - `exact-hit`: exact primary key match restored
-   * - `partial-hit`: a prefix restore key matched instead of the primary key
+   * - `current-lineage-hit`: newest current-ref generation restored
+   * - `fallback-lineage-hit`: newest default-branch generation restored
    */
-  readonly status: 'feature-unavailable' | 'miss' | 'exact-hit' | 'partial-hit';
-  /** Primary cache key derived for the current job. */
-  readonly cacheKey: string;
+  readonly status: 'feature-unavailable' | 'miss' | 'current-lineage-hit' | 'fallback-lineage-hit';
+  /** Compatibility family used by every lookup candidate. */
+  readonly cacheFamilyKey: string;
+  /** Current-ref lineage prefix supplied as the primary lookup candidate. */
+  readonly currentRefLineagePrefix: string;
   /** Key actually restored by the active cache backend, if any. */
   readonly matchedKey: string | null;
-  /** Prefix fallback keys attempted after the primary key miss. */
-  readonly restoreKeys: readonly string[];
+  /** Semantic lineage prefix that matched, if any. */
+  readonly matchedLineagePrefix: string | null;
+  /** Ordered semantic lookup candidates supplied to the backend. */
+  readonly restoreCandidates: readonly CacheRestoreCandidate[];
   /** Ordered cache path list passed to the active cache backend, including negated excludes. */
   readonly paths: readonly string[];
   /** Human-readable summary suitable for logs and job summaries. */
@@ -90,8 +100,8 @@ export interface BaseCacheSaveResult {
     | 'missing-paths'
     | 'saved'
     | 'not-saved';
-  /** Primary cache key that the finalize phase attempted, or would have attempted, to save. */
-  readonly cacheKey: string;
+  /** Immutable generation key attempted by finalize, or `null` when save eligibility failed first. */
+  readonly generationKey: string | null;
   /** Cache identifier returned by the active backend when a new entry is successfully created. */
   readonly cacheId: number | null;
   /** Ordered cache path list passed to the active cache backend, including negated excludes. */
@@ -113,35 +123,17 @@ export function createBaseCachePaths(cacheModel: CacheModel): readonly string[] 
   return [...cacheModel.includePaths, ...cacheModel.excludePaths.map((pattern) => `!${pattern}`)];
 }
 
-/**
- * Derives restore-key prefixes for the branch fallback when the configured template supports it.
- *
- * We only generate a restore prefix when `refName` is the final placeholder in the template. That
- * keeps prefix matching predictable and avoids accidentally widening the fallback scope for more complex
- * custom templates.
- */
-export function createBaseCacheRestoreKeys(
-  config: NormalizedActionConfig,
+/** Creates the ordered current-ref and default-branch lineage lookup candidates. */
+export function createBaseCacheRestoreCandidates(
   cacheModel: CacheModel,
-): readonly string[] {
-  const template = config.cacheKeyTemplate ?? DEFAULT_CACHE_KEY_TEMPLATE;
-  const refPlaceholderCount = template.split(REF_NAME_PLACEHOLDER).length - 1;
-
-  if (refPlaceholderCount === 0) {
-    return [];
-  }
-
-  if (refPlaceholderCount !== 1 || !template.endsWith(REF_NAME_PLACEHOLDER)) {
-    return [];
-  }
-
-  const restoreKeyPrefix = renderCacheKeyTemplate(
-    template.slice(0, -REF_NAME_PLACEHOLDER.length),
-    config,
-    cacheModel,
-  );
-
-  return restoreKeyPrefix.length === 0 ? [] : [restoreKeyPrefix];
+): readonly CacheRestoreCandidate[] {
+  return [
+    { lineage: 'current-ref', keyPrefix: cacheModel.currentRefLineagePrefix },
+    ...cacheModel.fallbackRefLineagePrefixes.map((keyPrefix): CacheRestoreCandidate => ({
+      lineage: 'default-branch',
+      keyPrefix,
+    })),
+  ];
 }
 
 /**
@@ -151,64 +143,75 @@ export function createBaseCacheRestoreKeys(
  * only delegates exceptional behavior to the active backend when restore itself fails.
  */
 export async function restoreBaseCache(
-  config: NormalizedActionConfig,
   cacheModel: CacheModel,
   dependencies: BaseCacheServiceDependencies,
 ): Promise<BaseCacheRestoreResult> {
   const { cacheBackend } = dependencies;
   const paths = createBaseCachePaths(cacheModel);
-  const restoreKeys = cacheBackend.capabilities.supportsRestoreKeys
-    ? createBaseCacheRestoreKeys(config, cacheModel)
-    : [];
+  const restoreCandidates = createBaseCacheRestoreCandidates(cacheModel);
+  const featureAvailable = cacheBackend.isFeatureAvailable();
 
-  if (!cacheBackend.isFeatureAvailable()) {
+  if (!featureAvailable || !cacheBackend.capabilities.supportsNewestPrefixRestore) {
     return {
       operation: 'restore',
       status: 'feature-unavailable',
-      cacheKey: cacheModel.cacheKey,
+      cacheFamilyKey: cacheModel.cacheFamilyKey,
+      currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
       matchedKey: null,
-      restoreKeys,
+      matchedLineagePrefix: null,
+      restoreCandidates,
       paths,
-      message: 'Base cache restore skipped because the cache backend is unavailable.',
+      message: !featureAvailable
+        ? 'Base cache restore skipped because the cache backend is unavailable.'
+        : 'Base cache restore skipped because the cache backend does not support newest-prefix restore.',
     };
   }
 
-  const matchedKey = await cacheBackend.restoreCache([...paths], cacheModel.cacheKey, [
-    ...restoreKeys,
-  ]);
+  const [primaryCandidate, ...fallbackCandidates] = restoreCandidates;
+  const matchedKey = await cacheBackend.restoreCache(
+    [...paths],
+    primaryCandidate.keyPrefix,
+    fallbackCandidates.map((candidate) => candidate.keyPrefix),
+  );
 
   if (!matchedKey) {
     return {
       operation: 'restore',
       status: 'miss',
-      cacheKey: cacheModel.cacheKey,
+      cacheFamilyKey: cacheModel.cacheFamilyKey,
+      currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
       matchedKey: null,
-      restoreKeys,
+      matchedLineagePrefix: null,
+      restoreCandidates,
       paths,
-      message: `Base cache restore missed for key '${cacheModel.cacheKey}'.`,
+      message: `Base cache restore missed for current lineage '${cacheModel.currentRefLineagePrefix}'.`,
     };
   }
 
-  if (matchedKey === cacheModel.cacheKey) {
-    return {
-      operation: 'restore',
-      status: 'exact-hit',
-      cacheKey: cacheModel.cacheKey,
-      matchedKey,
-      restoreKeys,
-      paths,
-      message: `Base cache restore hit exact key '${matchedKey}'.`,
-    };
+  const matchedCandidate = restoreCandidates.find(
+    (candidate) =>
+      matchedKey.startsWith(candidate.keyPrefix) && matchedKey.length > candidate.keyPrefix.length,
+  );
+  if (!matchedCandidate) {
+    throw new Error(
+      `Cache backend returned key '${matchedKey}' outside the requested cache lineages.`,
+    );
   }
 
   return {
     operation: 'restore',
-    status: 'partial-hit',
-    cacheKey: cacheModel.cacheKey,
+    status:
+      matchedCandidate.lineage === 'current-ref' ? 'current-lineage-hit' : 'fallback-lineage-hit',
+    cacheFamilyKey: cacheModel.cacheFamilyKey,
+    currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
     matchedKey,
-    restoreKeys,
+    matchedLineagePrefix: matchedCandidate.keyPrefix,
+    restoreCandidates,
     paths,
-    message: `Base cache restore reused prefix-matched key '${matchedKey}'.`,
+    message:
+      matchedCandidate.lineage === 'current-ref'
+        ? `Base cache restore reused current-ref generation '${matchedKey}'.`
+        : `Base cache restore reused default-branch generation '${matchedKey}'.`,
   };
 }
 
@@ -221,6 +224,7 @@ export async function restoreBaseCache(
 export async function saveBaseCache(
   config: NormalizedActionConfig,
   cacheModel: CacheModel,
+  createGeneration: () => CacheGeneration | Promise<CacheGeneration>,
   postActionArmed: boolean,
   dependencies: BaseCacheServiceDependencies,
 ): Promise<BaseCacheSaveResult> {
@@ -229,7 +233,7 @@ export async function saveBaseCache(
   if (!postActionArmed) {
     return createSaveResult(
       'not-armed',
-      cacheModel.cacheKey,
+      null,
       paths,
       'Base cache save skipped because the main action phase did not arm post-save state.',
     );
@@ -238,7 +242,7 @@ export async function saveBaseCache(
   if (config.readOnly) {
     return createSaveResult(
       'read-only',
-      cacheModel.cacheKey,
+      null,
       paths,
       'Base cache save skipped because read-only mode is enabled.',
     );
@@ -247,7 +251,7 @@ export async function saveBaseCache(
   if (config.jobMode === 'distributed-worker') {
     return createSaveResult(
       'distributed-worker',
-      cacheModel.cacheKey,
+      null,
       paths,
       'Base cache save skipped for distributed-worker mode.',
     );
@@ -257,7 +261,7 @@ export async function saveBaseCache(
   if (!cacheBackend.isFeatureAvailable()) {
     return createSaveResult(
       'feature-unavailable',
-      cacheModel.cacheKey,
+      null,
       paths,
       'Base cache save skipped because the cache backend is unavailable.',
     );
@@ -266,21 +270,23 @@ export async function saveBaseCache(
   if (!cacheBackend.capabilities.supportsExplicitSave) {
     return createSaveResult(
       'feature-unavailable',
-      cacheModel.cacheKey,
+      null,
       paths,
       'Base cache save skipped because the cache backend does not support explicit save operations.',
     );
   }
 
+  const generation = await createGeneration();
+  assertGenerationMatchesModel(generation, cacheModel);
   let cacheId: number;
 
   try {
-    cacheId = await cacheBackend.saveCache([...paths], cacheModel.cacheKey);
+    cacheId = await cacheBackend.saveCache([...paths], generation.key);
   } catch (error) {
     if (cacheBackend.isMissingPathsError(error)) {
       return createSaveResult(
         'missing-paths',
-        cacheModel.cacheKey,
+        generation.key,
         paths,
         'Base cache save skipped because none of the configured cache paths exist yet.',
       );
@@ -292,18 +298,18 @@ export async function saveBaseCache(
   if (cacheId > 0) {
     return createSaveResult(
       'saved',
-      cacheModel.cacheKey,
+      generation.key,
       paths,
-      `Base cache saved under key '${cacheModel.cacheKey}' (cache ID ${cacheId}).`,
+      `Base cache saved under immutable generation key '${generation.key}' (cache ID ${cacheId}).`,
       cacheId,
     );
   }
 
   return createSaveResult(
     'not-saved',
-    cacheModel.cacheKey,
+    generation.key,
     paths,
-    `Base cache save did not create a new cache entry for key '${cacheModel.cacheKey}'.`,
+    `Base cache save did not create a new cache entry for generation key '${generation.key}'.`,
   );
 }
 
@@ -324,29 +330,9 @@ export function isBaseCacheFinalizeArmed(getState: (name: string) => string): bo
   return getState(FINALIZE_ARMED_STATE) === 'true';
 }
 
-function renderCacheKeyTemplate(
-  template: string,
-  config: NormalizedActionConfig,
-  cacheModel: CacheModel,
-): string {
-  const placeholderValues: Record<string, string> = {
-    cacheKeyPrefix: config.cacheKeyPrefix,
-    schemaVersion: String(config.cacheSchemaVersion),
-    partitionFingerprint: cacheModel.partitionFingerprint,
-    javaMajor: String(cacheModel.javaMajor),
-    runnerOs: cacheModel.runnerOs,
-    runnerArch: cacheModel.runnerArch,
-    refName: cacheModel.safeRefName,
-  };
-
-  return template.replaceAll(/\$\{([A-Za-z0-9]+)\}/g, (match, placeholderName: string) => {
-    return placeholderValues[placeholderName] ?? match;
-  });
-}
-
 function createSaveResult(
   status: BaseCacheSaveResult['status'],
-  cacheKey: string,
+  generationKey: string | null,
   paths: readonly string[],
   message: string,
   cacheId: number | null = null,
@@ -354,9 +340,24 @@ function createSaveResult(
   return {
     operation: 'save',
     status,
-    cacheKey,
+    generationKey,
     cacheId,
     paths,
     message,
   };
+}
+
+function assertGenerationMatchesModel(generation: CacheGeneration, cacheModel: CacheModel): void {
+  if (
+    !/^[a-f0-9]{64}$/u.test(generation.contentDigest) ||
+    generation.cacheFamilyKey !== cacheModel.cacheFamilyKey ||
+    generation.lineagePrefix !== cacheModel.currentRefLineagePrefix ||
+    generation.generationId !== cacheModel.plannedGenerationId ||
+    generation.key !==
+      `${cacheModel.currentRefLineagePrefix}${generation.generationId}-${generation.contentDigest.slice(0, 12)}`
+  ) {
+    throw new Error(
+      'Cache generation does not belong to the current cache family and ref lineage.',
+    );
+  }
 }

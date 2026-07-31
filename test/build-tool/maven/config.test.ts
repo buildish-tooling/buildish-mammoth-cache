@@ -85,7 +85,6 @@ describe('readMavenActionInputs', () => {
       'dependent-jobs': '',
       'allow-duplicate-dependent-delta-paths': 'false',
       'cache-key-prefix': 'my-prefix-',
-      'cache-key-template': '',
       'cache-partitions': '',
       'cleanup-enabled': 'true',
       'restore-cleanup-mode': 'none',
@@ -212,7 +211,6 @@ describe('resolveMavenActionInputsFromConfigFile', () => {
       '  - worker-a',
       '  - worker-b',
       'cache-key-prefix: my-maven-prefix-',
-      'cache-key-template: "{{hashFiles(\'**/*.xml\')}}"',
       'cache-partitions: "[]"',
       'restore-cleanup-mode: prune-managed',
       '',
@@ -437,10 +435,9 @@ describe('normalizeMavenActionConfig', () => {
     expect(config.readOnly).toBe(false);
     expect(config.jobMode).toBe('standalone');
     expect(config.dependentJobs).toEqual([]);
-    expect(config.cacheKeyPrefix).toBe('buildish-mammoth-maven-cache-');
-    expect(config.cacheKeyTemplate).toBeNull();
+    expect(config.cacheKeyPrefix).toBe('buildish-mammoth-cache-');
     expect(config.cachePartitions).toEqual([]);
-    expect(config.cacheSchemaVersion).toBe(1);
+    expect(config.cacheSchemaVersion).toBe(2);
     expect(config.cleanupEnabled).toBe(true);
     expect(config.restoreCleanupMode).toBe('none');
     expect(config.cacheGcMode).toBe('timestamp');

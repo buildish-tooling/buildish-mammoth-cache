@@ -29,6 +29,7 @@ import { parse as parseYaml } from 'yaml';
 
 import { parseSerializedJson } from '../../util/serialization';
 import {
+  CACHE_SCHEMA_VERSION,
   CACHE_GC_MODES,
   JOB_MODES,
   RESTORE_CLEANUP_MODES,
@@ -51,12 +52,9 @@ import {
   normalizeRelativePath,
   parseCachePartitionsInput,
   validateCacheKeyPrefix,
-  validateCacheKeyTemplate,
 } from '../../config/shared';
 
 export type { NormalizeActionConfigOptions, ResolveActionInputsFromConfigFileOptions };
-
-const CACHE_SCHEMA_VERSION = 1;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -78,7 +76,6 @@ export function readMavenActionInputs(inputProvider: InputProvider): RawMavenAct
       { trimWhitespace: true },
     ),
     cacheKeyPrefix: inputProvider.getInput('cache-key-prefix', { trimWhitespace: true }),
-    cacheKeyTemplate: inputProvider.getInput('cache-key-template', { trimWhitespace: true }),
     cachePartitions: inputProvider.getInput('cache-partitions', { trimWhitespace: true }),
     cleanupEnabled: inputProvider.getInput('cleanup-enabled', { trimWhitespace: true }),
     restoreCleanupMode: inputProvider.getInput('restore-cleanup-mode', { trimWhitespace: true }),
@@ -143,9 +140,8 @@ export function normalizeMavenActionConfig(
     'allow-duplicate-dependent-delta-paths',
   );
   const cacheKeyPrefix = validateCacheKeyPrefix(
-    rawInputs.cacheKeyPrefix || 'buildish-mammoth-maven-cache-',
+    rawInputs.cacheKeyPrefix || 'buildish-mammoth-cache-',
   );
-  const cacheKeyTemplate = validateCacheKeyTemplate(rawInputs.cacheKeyTemplate);
   const cachePartitions = parseCachePartitionsInput(rawInputs.cachePartitions);
   const cleanupEnabled = parseBooleanInput(rawInputs.cleanupEnabled || 'true', 'cleanup-enabled');
   const restoreCleanupMode = parseEnumInput(
@@ -181,7 +177,6 @@ export function normalizeMavenActionConfig(
     dependentJobs,
     allowDuplicateDependentDeltaPaths,
     cacheKeyPrefix,
-    cacheKeyTemplate,
     cachePartitions,
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     cleanupEnabled,
@@ -332,9 +327,6 @@ function serializeMavenConfigFileInputs(
       case 'cache-key-prefix':
         inputs.cacheKeyPrefix = serializeMavenStringValue(value, key);
         break;
-      case 'cache-key-template':
-        inputs.cacheKeyTemplate = serializeMavenStringValue(value, key);
-        break;
       case 'cache-partitions':
         inputs.cachePartitions = serializeMavenStructuredValue(value, key);
         break;
@@ -381,7 +373,6 @@ function overlayMavenConfiguredInputs(
       directInputs.allowDuplicateDependentDeltaPaths ||
       fileInputs.allowDuplicateDependentDeltaPaths,
     cacheKeyPrefix: directInputs.cacheKeyPrefix || fileInputs.cacheKeyPrefix,
-    cacheKeyTemplate: directInputs.cacheKeyTemplate || fileInputs.cacheKeyTemplate,
     cachePartitions: directInputs.cachePartitions || fileInputs.cachePartitions,
     cleanupEnabled: directInputs.cleanupEnabled || fileInputs.cleanupEnabled,
     restoreCleanupMode: directInputs.restoreCleanupMode || fileInputs.restoreCleanupMode,
@@ -402,7 +393,6 @@ function createEmptyRawMavenActionInputs(): Record<keyof RawMavenActionInputs, s
     dependentJobs: '',
     allowDuplicateDependentDeltaPaths: '',
     cacheKeyPrefix: '',
-    cacheKeyTemplate: '',
     cachePartitions: '',
     cleanupEnabled: '',
     restoreCleanupMode: '',

@@ -46,8 +46,8 @@ export function createGitHubBaseCacheBackend(
     isFeatureAvailable(): boolean {
       return cacheBackend.isFeatureAvailable();
     },
-    async restoreCache(paths: string[], primaryKey: string, restoreKeys?: string[]) {
-      return await cacheBackend.restoreCache(paths, primaryKey, restoreKeys);
+    async restoreCache(paths: string[], primaryKeyPrefix: string, fallbackKeyPrefixes?: string[]) {
+      return await cacheBackend.restoreCache(paths, primaryKeyPrefix, fallbackKeyPrefixes);
     },
     async saveCache(paths: string[], key: string) {
       return await cacheBackend.saveCache(paths, key);

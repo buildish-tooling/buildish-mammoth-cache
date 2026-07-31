@@ -42,8 +42,8 @@ export const BASE_CACHE_RESTORE_RESULT_STATE = 'buildish-mammoth-cache-base-cach
 const BASE_CACHE_RESTORE_STATUSES = [
   'feature-unavailable',
   'miss',
-  'exact-hit',
-  'partial-hit',
+  'current-lineage-hit',
+  'fallback-lineage-hit',
 ] as const;
 const PRE_BUILD_CACHE_MANIFEST_FILE = 'pre-build-cache-manifest.json';
 
@@ -60,9 +60,16 @@ const persistedExecutionIdentitySchema = z.object({
 const baseCacheRestoreResultSchema = z.object({
   operation: z.literal('restore'),
   status: z.enum(BASE_CACHE_RESTORE_STATUSES),
-  cacheKey: z.string().min(1),
+  cacheFamilyKey: z.string().min(1),
+  currentRefLineagePrefix: z.string().min(1),
   matchedKey: z.string().min(1).nullable(),
-  restoreKeys: z.array(z.string().min(1)),
+  matchedLineagePrefix: z.string().min(1).nullable(),
+  restoreCandidates: z.array(
+    z.object({
+      lineage: z.enum(['current-ref', 'default-branch']),
+      keyPrefix: z.string().min(1),
+    }),
+  ),
   paths: z.array(z.string().min(1)),
   message: z.string().min(1),
 });

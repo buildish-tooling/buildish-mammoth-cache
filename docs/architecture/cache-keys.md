@@ -1,7 +1,7 @@
 ---
-title: Cache Key Generation
+title: Cache Generations and Restore Lineages
 weight: 30
-description: How primary cache keys and restore keys are constructed, and how the restore-key fallback sequence works.
+description: How compatible cache families, ref lineages, and immutable generations are constructed and restored.
 ---
 
 <!--
@@ -20,56 +20,72 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-## Primary cache key
+## Identity model
 
-The primary key uniquely identifies the expected exact cache state for a build. It is computed from
-the rendered `cache-key-template`, which defaults to:
+Mammoth Cache separates three concepts that a single stable key cannot represent safely on an
+immutable backend:
 
-```
-${cacheKeyPrefix}-v${schemaVersion}-${partitionFingerprint}-${javaMajor}-${runnerOs}-${runnerArch}-${refName}
-```
-
-| Placeholder               | Value                                                                                                                           |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `${cacheKeyPrefix}`       | `cache-key-prefix` input (default: tool-specific — `buildish-mammoth-gradle-cache-` or `buildish-mammoth-maven-cache-`)         |
-| `${schemaVersion}`        | Internal cache schema version bump (per-tool constant in `src/build-tool/gradle/config.ts` or `src/build-tool/maven/config.ts`) |
-| `${partitionFingerprint}` | 16-character SHA-256 digest of the full ordered partition layout                                                                |
-| `${javaMajor}`            | Major Java version reported by `java -version`                                                                                  |
-| `${runnerOs}`             | OS identifier from the CI environment                                                                                           |
-| `${runnerArch}`           | Architecture identifier from the CI environment                                                                                 |
-| `${refName}`              | Git ref name (e.g. `main`, `refs/pull/42/merge`)                                                                                |
-
-A custom `cache-key-template` must include `${partitionFingerprint}`. This is enforced at
-configuration load time so that changing the active partition layout always produces a new cache key.
-
-## Restore keys
-
-When the primary key misses, the action attempts restore-key prefix lookups in order from most to
-least specific. The restore key sequence is derived from the primary key by dropping one suffix at
-a time:
-
-```mermaid
-flowchart LR
-    A["Primary key lookup\n(exact)"]
-    B["Restore key 1\nStrips refName"]
-    C["Restore key 2\nStrips arch"]
-    D["Restore key 3\nStrips OS"]
-    E["Cold start\n(no restore)"]
-
-    A -- exact hit --> DONE1[Restore exact cache]
-    A -- miss --> B
-    B -- prefix hit --> DONE2[Restore partial cache]
-    B -- miss --> C
-    C -- prefix hit --> DONE2
-    C -- miss --> D
-    D -- prefix hit --> DONE2
-    D -- miss --> E
+```text
+cache family
+  + ref lineage
+    + immutable generation
 ```
 
-This sequence means that a PR branch can fall back to a cache entry from `main` on the same runner
-type, and a new runner architecture can fall back to an older entry from the same OS. The narrower
-the match, the better — a `partial-hit` restore still gives the build a warm cache, but a later
-save will likely update it.
+A default generation key has this conceptual shape:
+
+```text
+buildish-mammoth-cache-{tool}-v{schema}-{java}-{os}-{arch}-{partitionFingerprint}
+  -ref-{readableRefSlug}-{refDigest12}
+  -gen-{runIdentity}-{contentDigest12}
+```
+
+The action owns every compatibility and lifecycle segment. `cache-key-prefix` changes only the
+leading namespace; arbitrary key templates are not supported.
+
+## Cache family
+
+The family identifies states that are structurally compatible. It always includes:
+
+- the build tool (`gradle` or `maven`);
+- the internal cache schema version;
+- detected Java major (`0` when Java is unavailable);
+- runner OS and architecture;
+- the 16-character partition fingerprint.
+
+The default namespace prefix is `buildish-mammoth-cache-` for both actions. The build-tool segment
+is action-owned, so a custom prefix cannot make Gradle and Maven families collide.
+
+## Ref lineage
+
+A ref lineage is a sequence of immutable generations for one family and ref. Ref tokens contain a
+readable slug and a 12-character SHA-256 prefix computed from the trimmed raw ref before lossy
+slugging. Distinct refs therefore remain distinct even if punctuation replacement, case folding, or
+truncation gives them the same readable slug.
+
+Restore lookup is intentionally narrow:
+
+1. restore the newest generation under the current ref lineage;
+2. if the current ref differs from the default branch, restore the newest default-branch
+   generation;
+3. otherwise report a miss.
+
+OS, architecture, Java, build tool, schema, and partition dimensions are never dropped during
+fallback.
+
+For pull-request events, the resolved ref is the base ref and cache operation remains read-only by
+default.
+
+## Immutable generation
+
+Every save uses a new generation key. The generation suffix combines a bounded writer identity
+(workflow run, attempt, and job digest) with the first 12 characters of the canonical full-manifest
+SHA-256 digest.
+
+The canonical digest includes build tool, ordered partitions, relative path, content SHA-256, size,
+mode, and modification time. It excludes access time and the machine-specific absolute cache root.
+
+Generation keys are never overwritten. On the next run, newest-prefix lookup restores the most
+recent accessible generation in the selected lineage.
 
 ## Partition fingerprint
 
@@ -82,74 +98,47 @@ changes whenever:
 - The include or exclude globs for any active partition change.
 - The global `HARD_CACHE_EXCLUDE_GLOBS` list changes.
 
-Because the fingerprint is part of the default key template, layout changes automatically create a
-new cache key lineage without requiring a manual schema version bump.
-
-## Custom key templates
-
-If the built-in restore-key sequence does not match your workflow topology, you can specify a
-custom `cache-key-template`. The template may reference only the placeholders listed above.
-`${partitionFingerprint}` is required. All other placeholders are optional.
-
-Example — single-OS project wanting broader cross-ref fallback:
-
-```
-${cacheKeyPrefix}-v${schemaVersion}-${partitionFingerprint}-${javaMajor}-${refName}
-```
-
-This drops the OS and arch components, so a `main` cache entry can be used as a fallback for any
-OS/arch combination, which may or may not be appropriate depending on whether your build produces
-platform-specific artifacts inside the build tool cache directory.
-
----
+Because the fingerprint is part of the action-owned family, layout changes automatically create a
+new family without requiring a manual schema version bump.
 
 ## Rationale for each key component
 
-Understanding _why_ each component is in the default key helps you decide whether to keep or
-drop it in a custom template.
+These dimensions are mandatory because omitting one can mix incompatible cache state.
 
-**`${cacheKeyPrefix}`**
+**Namespace prefix**
 Namespaces the cache so that unrelated workflows or projects that share a cache backend do not
-collide. The default prefix includes the tool name (`buildish-mammoth-gradle-cache-` or
-`buildish-mammoth-maven-cache-`), which also prevents a Gradle cache from being mistaken for a
-Maven cache. If you run multiple independent build jobs in the same repository and want them to
-share a common base cache, give them the same prefix — but be aware that they must also agree
-on partition layout (otherwise the fingerprint will differ and they will each keep their own
-lineage).
+collide. GitHub additionally scopes caches to a repository. Jobs that should share a family must use
+the same prefix and partition policy.
 
-**`${schemaVersion}`**
+**Schema version**
 An internal counter that is incremented whenever the structure of what gets cached changes in a
 way that could cause a stale restore to break a build (for example, if a previously cached file
-is now in a different location). This is distinct from the `${partitionFingerprint}`: the schema
+is now in a different location). This is distinct from the partition fingerprint: the schema
 version protects against internal format changes that users do not control; the fingerprint
 protects against user-controlled partition changes.
 
-**`${partitionFingerprint}`**
+**Partition fingerprint**
 Ensures that adding, removing, or adjusting a cache partition immediately produces a new key
 lineage rather than restoring an entry that was built with a different partition layout and might
 therefore contain stale or missing files. See the [Partition fingerprint](#partition-fingerprint)
 section above.
 
-**`${javaMajor}`**
+**Java major**
 Gradle and Maven both compile plugin code and resolve version constraints with the active JVM.
 The internal format of some cached artifacts (for example, Gradle's daemon registry or certain
 build tool resolver caches) can differ across major Java versions. Separating the cache by major
 version avoids subtle compatibility problems when a project is built with Java 17 one day and
 Java 21 the next.
 
-**`${runnerOs}` and `${runnerArch}`**
+**Runner OS and architecture**
 Native binaries, platform-specific ZIP distributions, and OS-dependent path separators all mean
 that a Gradle or Maven cache populated on Linux is unsafe to restore on macOS or Windows.
-Separating by OS and architecture keeps the cache coherent. If your project has a single-OS
-matrix and you know nothing in the cache directory is platform-specific, dropping these
-components from a custom template widens the restore key fallback without risk.
+Separating by OS and architecture keeps the cache coherent.
 
-**`${refName}`**
+**Ref token**
 Branch-scoped caching prevents long-lived topic branches from polluting the `main` cache, and
 prevents ephemeral PR branches from over-writing the default-branch baseline. The default
-restore key sequence falls back from the exact `${refName}` match to progressively broader
-prefixes, so PR branches can warm-start from the latest `main` entry without ever saving back
-to it.
+restore sequence permits only the explicit default-branch fallback.
 
 ---
 
@@ -157,25 +146,18 @@ to it.
 
 A few patterns that commonly affect hit rates in practice:
 
-**Matrix jobs** — each matrix dimension that produces different cached content should be
-reflected in the key. If you have a Java-version matrix and the two JVM versions would produce
-incompatible entries, keep `${javaMajor}`. If the versions are compatible and you want cache
-sharing across them, drop it from a custom template.
+**Matrix jobs** — Java, OS, architecture, and partition differences automatically create separate
+families. Independent jobs share only when every mandatory dimension matches.
 
-**PR-branch caching** — the default restore key sequence lets PR branches inherit the latest
-`main` entry as a partial hit. On the first PR build the restore gives a warm but stale cache;
-Mammoth Cache then saves the updated entry scoped to the PR's ref. Subsequent builds on the
-same PR hit the PR-scoped entry exactly. When the PR is merged, `main` builds save a fresh
-entry that in turn warms the next PR.
+**PR-branch caching** — the default lineage lookup lets PR branches inherit the latest
+default-branch generation. Read-only PR builds do not publish generations unless a trusted workflow
+operator deliberately changes that policy.
 
-**Re-runs and attempt number** — the primary cache key does not include the run ID or attempt
-number. This means a re-run on the same branch with the same partition layout gets the same
-primary key and hits the same cache entry. The delta-exchange protocol (see
-[Delta Exchange Protocol](../delta-protocol/)) does include the attempt number in artifact
-names, which prevents a re-run from colliding with a previous run's artifacts.
+**Re-runs and attempt number** — restore searches the same lineage, while a writable rerun receives
+a distinct generation identity. The delta-exchange protocol (see
+[Delta Exchange Protocol](../delta-protocol/)) also includes attempt identity in artifact names.
 
 **Cold starts** — a cold start (no entry at any restore key depth) means the build downloads
-everything from the network. On the next run the primary key saves a full cache entry and
-subsequent runs hit exactly. The restore key sequence can shorten how often a project goes cold:
-a new branch that shares `${partitionFingerprint}`, `${javaMajor}`, and runner identity with
-`main` will always find at least one restore key entry.
+everything from the network. A successful writable finalize publishes the first immutable
+generation. A new branch with the same family can warm-start from the newest accessible
+default-branch generation.

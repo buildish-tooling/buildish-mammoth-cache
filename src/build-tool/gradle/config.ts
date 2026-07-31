@@ -29,6 +29,7 @@ import { parse as parseYaml } from 'yaml';
 
 import { parseSerializedJson } from '../../util/serialization';
 import {
+  CACHE_SCHEMA_VERSION,
   CACHE_GC_MODES,
   JOB_MODES,
   RESTORE_CLEANUP_MODES,
@@ -52,7 +53,6 @@ import {
   normalizeRelativePath,
   parseCachePartitionsInput,
   validateCacheKeyPrefix,
-  validateCacheKeyTemplate,
 } from '../../config/shared';
 
 export type {
@@ -62,7 +62,6 @@ export type {
 };
 
 const EXPLICIT_PATH_GLOB_PATTERN = /[*?[\]{}!]/;
-const CACHE_SCHEMA_VERSION = 1;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -84,7 +83,6 @@ export function readGradleActionInputs(inputProvider: InputProvider): RawGradleA
       { trimWhitespace: true },
     ),
     cacheKeyPrefix: inputProvider.getInput('cache-key-prefix', { trimWhitespace: true }),
-    cacheKeyTemplate: inputProvider.getInput('cache-key-template', { trimWhitespace: true }),
     cachePartitions: inputProvider.getInput('cache-partitions', { trimWhitespace: true }),
     processAllWrapperFiles: inputProvider.getInput('process-all-wrapper-files', {
       trimWhitespace: true,
@@ -158,9 +156,8 @@ export function normalizeGradleActionConfig(
     'allow-duplicate-dependent-delta-paths',
   );
   const cacheKeyPrefix = validateCacheKeyPrefix(
-    rawInputs.cacheKeyPrefix || 'buildish-mammoth-gradle-cache-',
+    rawInputs.cacheKeyPrefix || 'buildish-mammoth-cache-',
   );
-  const cacheKeyTemplate = validateCacheKeyTemplate(rawInputs.cacheKeyTemplate);
   const cachePartitions = parseCachePartitionsInput(rawInputs.cachePartitions);
   const processAllWrapperFiles = parseBooleanInput(
     rawInputs.processAllWrapperFiles || 'false',
@@ -214,7 +211,6 @@ export function normalizeGradleActionConfig(
     dependentJobs,
     allowDuplicateDependentDeltaPaths,
     cacheKeyPrefix,
-    cacheKeyTemplate,
     cachePartitions,
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     wrapperSelectionMode,
@@ -246,7 +242,6 @@ function createEmptyRawGradleActionInputs(): RawGradleActionInputs {
     dependentJobs: '',
     allowDuplicateDependentDeltaPaths: '',
     cacheKeyPrefix: '',
-    cacheKeyTemplate: '',
     cachePartitions: '',
     processAllWrapperFiles: '',
     wrapperPropertiesGlob: '',
@@ -399,9 +394,6 @@ function serializeConfigFileInputs(
       case 'cache-key-prefix':
         inputs.cacheKeyPrefix = serializeStringConfigValue(value, key);
         break;
-      case 'cache-key-template':
-        inputs.cacheKeyTemplate = serializeStringConfigValue(value, key);
-        break;
       case 'cache-partitions':
         inputs.cachePartitions = serializeStructuredConfigValue(value, key);
         break;
@@ -500,7 +492,6 @@ function overlayConfiguredInputs(
       directInputs.allowDuplicateDependentDeltaPaths ||
       fileInputs.allowDuplicateDependentDeltaPaths,
     cacheKeyPrefix: directInputs.cacheKeyPrefix || fileInputs.cacheKeyPrefix,
-    cacheKeyTemplate: directInputs.cacheKeyTemplate || fileInputs.cacheKeyTemplate,
     cachePartitions: directInputs.cachePartitions || fileInputs.cachePartitions,
     processAllWrapperFiles:
       directInputs.processAllWrapperFiles || fileInputs.processAllWrapperFiles,

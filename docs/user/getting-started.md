@@ -59,10 +59,9 @@ commit SHA:
 
 > [!WARNING]
 > Do not set `cache: gradle` or `cache: maven` on `actions/setup-java` when using this action.
-> Both would cache the same directory independently. `setup-java`'s last-write-wins save at the
-> end of the job would overwrite this action's carefully computed delta, wasting cache storage and
-> defeating the distributed merge in multi-job builds. Use `actions/setup-java` for JDK
-> installation only, as the examples above show.
+> Both would restore and save the same directory through independent cache lifecycles. The competing
+> snapshots waste storage and can undo the managed state assembled by distributed jobs. Use
+> `actions/setup-java` for JDK installation only, as the examples above show.
 
 `actions: write` is required so the action can save cache entries and exchange delta artifacts.
 See [Security](../security/) for the full permissions breakdown.

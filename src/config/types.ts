@@ -40,6 +40,9 @@ export const JOB_MODES = ['standalone', 'distributed-worker', 'distributed-aggre
  */
 export type JobMode = (typeof JOB_MODES)[number];
 
+/** Internal base-cache identity schema. Bump whenever compatibility semantics change. */
+export const CACHE_SCHEMA_VERSION = 2;
+
 /**
  * How wrapper property files should be selected after input normalization.
  */
@@ -92,22 +95,6 @@ export interface ConfiguredCachePartitionInput {
 }
 
 /**
- * Restricted placeholder names accepted by the cache key template input.
- *
- * Keeping this list centralized makes it harder to accidentally widen the user-facing
- * templating surface without updating validation and tests together.
- */
-export const CACHE_KEY_TEMPLATE_PLACEHOLDERS = [
-  'cacheKeyPrefix',
-  'schemaVersion',
-  'partitionFingerprint',
-  'javaMajor',
-  'runnerOs',
-  'runnerArch',
-  'refName',
-] as const;
-
-/**
  * Shared raw string inputs read directly from the CI platform input API.
  *
  * This shape intentionally preserves the stringly-typed external contract before the
@@ -134,10 +121,8 @@ export interface RawSharedActionInputs {
   readonly dependentJobs: string;
   /** Raw `allow-duplicate-dependent-delta-paths` input. Empty string later defaults to `'false'`. */
   readonly allowDuplicateDependentDeltaPaths: string;
-  /** Raw `cache-key-prefix` input. Empty string uses the tool-specific default prefix. */
+  /** Raw `cache-key-prefix` input. Empty string uses the shared default namespace prefix. */
   readonly cacheKeyPrefix: string;
-  /** Raw `cache-key-template` input. Empty string later means “use the built-in template”. */
-  readonly cacheKeyTemplate: string;
   /** Raw JSON array of built-in partition overrides and custom partition definitions. */
   readonly cachePartitions: string;
   /** Raw `cleanup-enabled` input. Empty string later defaults to `'true'`. */
@@ -236,17 +221,9 @@ export interface NormalizedActionConfig {
   /**
    * Stable cache-key prefix.
    *
-   * Defaults to `buildish-mammoth-gradle-cache-` and must match the repository's prefix validation rules.
+   * Defaults to `buildish-mammoth-cache-` and must match the repository's prefix validation rules.
    */
   readonly cacheKeyPrefix: string;
-  /**
-   * Optional custom cache-key template.
-   *
-   * Defaults to `null`, which means the built-in default template is used. Custom templates must
-   * include `${partitionFingerprint}` so cache keys do not collide across different cache layouts.
-   */
-  readonly cacheKeyTemplate: string | null;
-
   /**
    * Normalized built-in partition overrides and custom partition definitions.
    *

@@ -73,19 +73,13 @@ inputs:
     default: 'false'
   cache-key-prefix:
     description: >-
-      Prefix used for generated cache keys. Must start with an alphanumeric
+      Namespace prefix used for action-generated cache families. The action
+      always appends build tool, schema, Java, runner, partition, ref-lineage,
+      and immutable-generation identity. Must start with an alphanumeric
       character and then use only letters, numbers, dot, underscore, and dash.
-      Default: `buildish-mammoth-gradle-cache-`.
+      Default: `buildish-mammoth-cache-`.
     required: false
-    default: buildish-mammoth-gradle-cache-
-  cache-key-template:
-    description: >-
-      Optional restricted cache key template. Supported placeholders:
-      `${cacheKeyPrefix}`, `${schemaVersion}`, `${partitionFingerprint}`,
-      `${javaMajor}`, `${runnerOs}`, `${runnerArch}`, and `${refName}`.
-      Custom templates must include `${partitionFingerprint}` so different cache
-      partition layouts do not share the same cache key.
-    required: false
+    default: buildish-mammoth-cache-
   cache-partitions:
     description: >-
       Optional JSON array of cache partition overrides and custom partitions.
@@ -99,8 +93,8 @@ inputs:
       `caches/journal-1/**` are always enforced. Active built-ins keep a
       deterministic order, custom partitions are appended after them, and if two
       partitions match the same file the manifest capture fails. The resolved
-      layout feeds `${partitionFingerprint}`, so changing partition layout also
-      changes the base cache key.
+      layout feeds the action-owned partition fingerprint, so changing partition
+      layout also changes the cache family.
     required: false
   cache-gc-mode:
     description: >-

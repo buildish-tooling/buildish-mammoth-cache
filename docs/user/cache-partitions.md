@@ -20,10 +20,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-The action splits the build tool's cache directory into logical **partitions** — independently
-versioned slices of the cache keyed and saved separately. This keeps entries lean, avoids
-cross-contamination between unrelated file sets, and lets you enable, disable, or replace
-individual partitions without invalidating the rest.
+The action splits the build tool's cache directory into logical **partitions**. Partitions define
+which files are captured, compared, cleaned, and reported together inside one complete immutable
+cache generation. They keep unrelated file sets and ownership rules explicit; they are not saved as
+separate backend entries.
 
 ## Built-in partitions
 
@@ -60,8 +60,8 @@ Built-in partitions for both tools keep a deterministic order. Custom partitions
 the active built-ins in the order supplied by `cache-partitions`.
 
 The resolved partition order plus each partition's include/exclude set is hashed into
-`partitionFingerprint`, which is part of the base cache key. Changing the active partition layout
-produces a different cache key lineage.
+`partitionFingerprint`, which is part of the cache family. Changing the active partition layout
+produces a different family and therefore starts a cold lineage for the complete managed state.
 
 ## Include and exclude semantics
 
@@ -138,7 +138,7 @@ Examples:
 ```
 
 This example: overrides `modules`, disables `kotlin-dsl`, and adds a custom partition. The
-`partitionFingerprint` changes, so it uses a different base cache key than the default layout.
+`partitionFingerprint` changes, so it uses a different cache family than the default layout.
 
 ## Timestamp garbage collection
 

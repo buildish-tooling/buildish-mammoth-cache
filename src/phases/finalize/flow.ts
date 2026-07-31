@@ -25,8 +25,12 @@ import {
 } from '../bootstrap';
 import { collectTimestampCacheGarbage, type TimestampCacheGcResult } from '../../cache/gc';
 import type { CacheDeltaManifest, CacheManifest } from '../../cache/manifest';
-import { captureCacheManifest, computeCacheDelta } from '../../cache/manifest';
-import type { CacheModel } from '../../cache/model';
+import {
+  calculateCanonicalCacheManifestDigest,
+  captureCacheManifest,
+  computeCacheDelta,
+} from '../../cache/manifest';
+import { createCacheGeneration, type CacheModel } from '../../cache/model';
 import {
   isBaseCacheFinalizeArmed,
   saveBaseCache,
@@ -225,7 +229,7 @@ export async function executeFinalizeAction(
   const currentManifest = await captureCacheManifest(bootstrap.cacheModel);
   const deltaManifest = computeCacheDelta(preBuildManifest, currentManifest);
   const deltaArtifactResult = await uploadFinalizeArtifact(deltaManifest, bootstrap, dependencies);
-  const baseCacheSaveResult = await saveFinalizeBaseCache(bootstrap, dependencies);
+  const baseCacheSaveResult = await saveFinalizeBaseCache(bootstrap, dependencies, currentManifest);
   const finalizedBootstrap = withBaseCacheResult(bootstrap, baseCacheSaveResult);
 
   const status = {
@@ -284,14 +288,20 @@ async function maybeCollectCacheGarbage(
 async function saveFinalizeBaseCache(
   bootstrap: BootstrapExecution,
   dependencies: FinalizeActionDependencies,
+  currentManifest?: CacheManifest,
 ): Promise<BaseCacheOperationResult | null> {
-  if (!bootstrap.cacheModel) {
+  const cacheModel = bootstrap.cacheModel;
+  if (!cacheModel) {
     return null;
   }
 
   return await saveBaseCache(
     bootstrap.config,
-    bootstrap.cacheModel,
+    cacheModel,
+    async () => {
+      const manifest = currentManifest ?? (await captureCacheManifest(cacheModel));
+      return createCacheGeneration(cacheModel, calculateCanonicalCacheManifestDigest(manifest));
+    },
     isBaseCacheFinalizeArmed(dependencies.runtimeHost.getState),
     {
       cacheBackend: dependencies.cacheBackend,
@@ -620,7 +630,7 @@ function describeCacheGcSummary(result: TimestampCacheGcResult | null): string {
 function createExecutionContextLogLines(status: FinalizeActionStatus): readonly string[] {
   return [
     `Post-action detail: ${status.message}`,
-    `Post-action cache context: cache key '${status.bootstrap.cacheModel?.cacheKey ?? 'disabled'}', Java major '${status.bootstrap.cacheModel?.javaMajor ?? 'n/a'}', cache partitions ${status.bootstrap.cacheModel?.partitions.length ?? 0}.`,
+    `Post-action cache context: family '${status.bootstrap.cacheModel?.cacheFamilyKey ?? 'disabled'}', current ref lineage '${status.bootstrap.cacheModel?.currentRefLineagePrefix ?? 'disabled'}', Java major '${status.bootstrap.cacheModel?.javaMajor ?? 'n/a'}', cache partitions ${status.bootstrap.cacheModel?.partitions.length ?? 0}.`,
   ];
 }
 
@@ -735,8 +745,8 @@ function createFinalizeCacheStatistics(
   baseCacheSaveResult: BootstrapExecution['baseCacheResult'],
 ): FinalizeCacheStatistics {
   const pulledBaseCache =
-    baseCacheRestoreResult?.status === 'exact-hit' ||
-    baseCacheRestoreResult?.status === 'partial-hit'
+    baseCacheRestoreResult?.status === 'current-lineage-hit' ||
+    baseCacheRestoreResult?.status === 'fallback-lineage-hit'
       ? summarizeManifest(cacheModel, preBuildManifest)
       : null;
   const deltaArtifact =

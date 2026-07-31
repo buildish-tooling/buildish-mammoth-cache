@@ -303,6 +303,35 @@ describe('createGitHubBaseCacheBackend', () => {
     saveCache: async () => 0,
   };
 
+  it('forwards ordered lineage prefixes to the toolkit cache lookup', async () => {
+    const calls: Array<{
+      readonly paths: string[];
+      readonly primaryKeyPrefix: string;
+      readonly fallbackKeyPrefixes: string[] | undefined;
+    }> = [];
+    const backend = createGitHubBaseCacheBackend({
+      isFeatureAvailable: () => true,
+      async restoreCache(paths, primaryKeyPrefix, fallbackKeyPrefixes) {
+        calls.push({ paths, primaryKeyPrefix, fallbackKeyPrefixes });
+        return `${primaryKeyPrefix}run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb`;
+      },
+      saveCache: async () => 0,
+    });
+
+    const matchedKey = await backend.restoreCache(['/tmp/cache'], 'family-ref-current-gen-', [
+      'family-ref-main-gen-',
+    ]);
+
+    expect(calls).toEqual([
+      {
+        paths: ['/tmp/cache'],
+        primaryKeyPrefix: 'family-ref-current-gen-',
+        fallbackKeyPrefixes: ['family-ref-main-gen-'],
+      },
+    ]);
+    expect(matchedKey).toBe('family-ref-current-gen-run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb');
+  });
+
   describe('isMissingPathsError', () => {
     it('returns true for the known path-validation error message emitted by @actions/cache', () => {
       const backend = createGitHubBaseCacheBackend(stubBackend);

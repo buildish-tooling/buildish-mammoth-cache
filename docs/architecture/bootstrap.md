@@ -66,7 +66,8 @@ flowchart TD
 
 **`executePrepareAction()`** (`src/phases/prepare/flow.ts`):
 
-1. Calls `restoreBaseCache()` which classifies the restore outcome (miss / partial-hit / exact-hit).
+1. Calls `restoreBaseCache()` which classifies the outcome as a miss, current-lineage hit, or
+   default-branch fallback hit.
 2. If restore-cleanup mode is `prune-managed`, deletes managed files and re-restores.
 3. Arms the finalize phase via `armBaseCacheFinalize()` (writes a state flag so the finalize phase
    knows a restore was attempted).
@@ -128,8 +129,10 @@ whole phase. It encapsulates:
 
 - The resolved build tool cache root path (e.g. `GRADLE_USER_HOME` for Gradle, `~/.m2` for Maven).
 - The active partition list with their computed include/exclude globs.
-- The rendered primary cache key.
-- The ordered restore key sequence.
+- The action-owned compatibility family key.
+- The collision-resistant current ref token and lineage prefix.
+- The ordered default-branch fallback lineage, when applicable.
+- The planned immutable generation identifier.
 - The computed `partitionFingerprint`.
 
 The `CacheModel` is intentionally immutable after construction so that both phases see exactly the

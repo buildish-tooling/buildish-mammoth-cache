@@ -27,7 +27,7 @@ import * as path from 'node:path';
 
 import { isAbsolutePosixOrWindowsPath, normalizeUserSuppliedRelativePath } from '../util/paths';
 import { parseSerializedJson } from '../util/serialization';
-import { CACHE_KEY_TEMPLATE_PLACEHOLDERS, type ConfiguredCachePartitionInput } from './types';
+import type { ConfiguredCachePartitionInput } from './types';
 
 // ---------------------------------------------------------------------------
 // Private constants
@@ -36,7 +36,6 @@ import { CACHE_KEY_TEMPLATE_PLACEHOLDERS, type ConfiguredCachePartitionInput } f
 const CACHE_KEY_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const CACHE_PARTITION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 const UNSUPPORTED_GLOB_TOKENS_PATTERN = /[?[\]{}!]/u;
-const MAX_TEMPLATE_LENGTH = 200;
 
 // ---------------------------------------------------------------------------
 // Exported domain validators
@@ -53,40 +52,6 @@ export function validateCacheKeyPrefix(input: string): string {
   if (!CACHE_KEY_PREFIX_PATTERN.test(trimmed)) {
     throw new Error(
       'cache-key-prefix must start with an alphanumeric character and only contain letters, numbers, dot, underscore, and dash.',
-    );
-  }
-  return trimmed;
-}
-
-/**
- * Validates the optional cache key template against the supported placeholder set.
- *
- * Returns `null` for empty inputs (the normalizer will fall back to the default template).
- *
- * @throws {Error} When the template is too long, uses an unsupported placeholder, contains
- *   unsafe literal characters, or omits the mandatory `${partitionFingerprint}` placeholder.
- */
-export function validateCacheKeyTemplate(input: string): string | null {
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return null;
-  if (trimmed.length > MAX_TEMPLATE_LENGTH) {
-    throw new Error(`cache-key-template must be at most ${MAX_TEMPLATE_LENGTH} characters.`);
-  }
-  const allowedPlaceholders = new Set<string>(CACHE_KEY_TEMPLATE_PLACEHOLDERS);
-  for (const match of trimmed.matchAll(/\$\{([A-Za-z0-9]+)\}/g)) {
-    if (!allowedPlaceholders.has(match[1])) {
-      throw new Error(`cache-key-template uses unsupported placeholder '${match[1]}'.`);
-    }
-  }
-  const literalPortion = trimmed.replace(/\$\{([A-Za-z0-9]+)\}/g, '');
-  if (!/^[A-Za-z0-9._:-]*$/.test(literalPortion)) {
-    throw new Error(
-      'cache-key-template may only contain supported placeholders and the literal characters A-Z, a-z, 0-9, dot, underscore, colon, and dash.',
-    );
-  }
-  if (!trimmed.includes('${partitionFingerprint}')) {
-    throw new Error(
-      'cache-key-template must include ${partitionFingerprint} so different cache partition layouts do not share the same cache key.',
     );
   }
   return trimmed;

@@ -146,7 +146,7 @@ describe('post-action state helpers', () => {
       savedState.set.bind(savedState),
     );
 
-    expect(savedState.get(BASE_CACHE_RESTORE_RESULT_STATE)).toContain('exact-hit');
+    expect(savedState.get(BASE_CACHE_RESTORE_RESULT_STATE)).toContain('current-lineage-hit');
     expect(
       getPersistedBaseCacheRestoreResult((name: string) => savedState.get(name) ?? ''),
     ).toEqual(SAMPLE_BASE_CACHE_RESTORE_RESULT);
@@ -216,10 +216,19 @@ const SAMPLE_MANIFEST: CacheManifest = {
 
 const SAMPLE_BASE_CACHE_RESTORE_RESULT: BaseCacheRestoreResult = {
   operation: 'restore',
-  status: 'exact-hit',
-  cacheKey: 'buildish-cache-main-linux',
-  matchedKey: 'buildish-cache-main-linux',
-  restoreKeys: ['buildish-cache-main-linux', 'buildish-cache-main'],
+  status: 'current-lineage-hit',
+  cacheFamilyKey: 'buildish-cache-family',
+  currentRefLineagePrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
+  matchedKey:
+    'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb',
+  matchedLineagePrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
+  restoreCandidates: [
+    { lineage: 'current-ref', keyPrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-' },
+    {
+      lineage: 'default-branch',
+      keyPrefix: 'buildish-cache-family-ref-trunk-bbbbbbbbbbbb-gen-',
+    },
+  ],
   paths: ['/tmp/workspace/.gradle/caches'],
   message: 'Restored cache using exact key hit.',
 };

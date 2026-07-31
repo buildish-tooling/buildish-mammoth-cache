@@ -53,27 +53,26 @@ sequenceDiagram
 State is passed between the two phases using the CI runtime state store (on GitHub Actions this is
 `@actions/core` `saveState` / `getState`). The key state values are:
 
-| State key                                 | Set by                  | Read by    | Purpose                                                   |
-| ----------------------------------------- | ----------------------- | ---------- | --------------------------------------------------------- |
-| `buildish-mammoth-cache-base-cache-armed` | `prepare` after restore | `finalize` | Gate on whether a save should be attempted                |
-| pre-build manifest blob                   | `prepare`               | `finalize` | Delta computation between pre- and post-build snapshots   |
-| base cache restore result                 | `prepare`               | `finalize` | Lets `finalize` know whether the restore was an exact-hit |
-| consumed delta artifact names             | `prepare`               | `finalize` | Used when cleaning up consumed worker delta artifacts     |
+| State key                                 | Set by                  | Read by    | Purpose                                                  |
+| ----------------------------------------- | ----------------------- | ---------- | -------------------------------------------------------- |
+| `buildish-mammoth-cache-base-cache-armed` | `prepare` after restore | `finalize` | Gate on whether a save should be attempted               |
+| pre-build manifest blob                   | `prepare`               | `finalize` | Delta computation between pre- and post-build snapshots  |
+| base cache restore result                 | `prepare`               | `finalize` | Records the matched immutable generation and ref lineage |
+| consumed delta artifact names             | `prepare`               | `finalize` | Used when cleaning up consumed worker delta artifacts    |
 
 ## Base cache restore
 
 `restoreBaseCache()` classifies the restore outcome into one of four statuses:
 
-| Status                | Meaning                                                                        |
-| --------------------- | ------------------------------------------------------------------------------ |
-| `feature-unavailable` | The cache backend is not available (e.g. not a supported CI environment)       |
-| `miss`                | No cache entry matched the primary key or any restore-key prefix               |
-| `exact-hit`           | The primary key matched an existing entry exactly                              |
-| `partial-hit`         | A restore-key prefix matched a cache entry from a different ref or earlier run |
+| Status                 | Meaning                                                                 |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `feature-unavailable`  | Backend unavailable or lacks newest-prefix restore                      |
+| `miss`                 | No generation matched the current or default-branch lineage             |
+| `current-lineage-hit`  | The newest accessible current-ref generation was restored               |
+| `fallback-lineage-hit` | The current lineage missed and the newest default-branch generation hit |
 
-Both `exact-hit` and `partial-hit` restore cache content to the build tool cache root. A
-`partial-hit` restore does not suppress a later save — it is expected that the build will add or
-modify files relative to the older cache snapshot.
+Both hit statuses restore a complete immutable generation to the build tool cache root. A later
+writable save uses a new generation key; it never attempts to overwrite the restored entry.
 
 ## Base cache save gating
 
@@ -90,10 +89,11 @@ flowchart TD
     D -- No --> Z4[skip: feature-unavailable]
     D -- Yes --> E{backend supports explicit save?}
     E -- No --> Z5[skip: feature-unavailable]
-    E -- Yes --> F[saveCache]
-    F -- paths don't exist --> Z6[skip: missing-paths]
-    F -- cacheId > 0 --> Z7[saved]
-    F -- cacheId <= 0 --> Z8[not-saved]
+    E -- Yes --> F[derive manifest digest + immutable generation key]
+    F --> G[saveCache]
+    G -- paths don't exist --> Z6[skip: missing-paths]
+    G -- cacheId > 0 --> Z7[saved]
+    G -- cacheId <= 0 --> Z8[not-saved]
 ```
 
 Distributed worker jobs skip the base cache save intentionally: they only upload a delta artifact
@@ -127,11 +127,11 @@ Operators can disable this behavior with `cache-gc-mode: off` or increase
 This opt-in mode deletes managed files immediately after a base cache restore so the build starts
 from a clean slice of the cache:
 
-1. Detect whether the restore was a hit (`exact-hit` or `partial-hit`).
+1. Detect whether the restore was a hit (`current-lineage-hit` or `fallback-lineage-hit`).
 2. If no hit, skip cleanup and proceed normally.
 3. If a hit, delete every file currently matched by the active partition include globs within
    the build tool cache root. Files outside the managed partition space are left untouched.
-4. Re-restore the base cache using the same key and paths.
+4. Re-restore using the same ordered lineage candidates and paths.
 5. If the follow-up restore misses, the action fails rather than starting the build with a
    partially pruned managed cache space.
 

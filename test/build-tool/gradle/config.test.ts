@@ -246,7 +246,8 @@ describe('normalizeActionConfig', () => {
       readOnly: false,
       jobMode: 'standalone',
       allowDuplicateDependentDeltaPaths: false,
-      cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
+      cacheKeyPrefix: 'buildish-mammoth-cache-',
+      cacheSchemaVersion: 2,
       cachePartitions: [],
       restoreCleanupMode: 'none',
       cacheGcMode: 'timestamp',
@@ -327,23 +328,6 @@ describe('normalizeActionConfig', () => {
         },
       ),
     ).toThrow(/cache-gc-older-than-days/u);
-  });
-
-  it('rejects custom cache-key templates without partitionFingerprint', () => {
-    expect(() =>
-      normalizeActionConfig(
-        readActionInputs(
-          createInputProvider({
-            'cache-key-template': '${cacheKeyPrefix}${schemaVersion}-${javaMajor}-${refName}',
-          }),
-        ),
-        {
-          phase: 'prepare',
-          ciContext: baseCiContext,
-          env: {},
-        },
-      ),
-    ).toThrow(/must include \$\{partitionFingerprint\}/);
   });
 
   it('rejects cache partition include globs that do not end in /**', () => {

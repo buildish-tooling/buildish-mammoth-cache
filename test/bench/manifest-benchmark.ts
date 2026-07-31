@@ -210,7 +210,12 @@ function createBenchmarkCacheModel(gradleUserHome: string): CacheModel {
   return {
     buildToolId: adapter.getBuildToolId(),
     cacheRoot: gradleUserHome,
-    cacheKey: 'benchmark-cache-key',
+    cacheFamilyKey: 'benchmark-family',
+    currentRefToken: 'benchmark-aaaaaaaaaaaa',
+    currentRefLineagePrefix: 'benchmark-family-ref-benchmark-aaaaaaaaaaaa-gen-',
+    fallbackRefLineagePrefixes: [],
+    plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
+    cacheKey: 'benchmark-family-ref-benchmark-aaaaaaaaaaaa-gen-',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',

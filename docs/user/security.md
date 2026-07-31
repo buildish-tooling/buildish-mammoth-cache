@@ -110,11 +110,11 @@ because all PR builds fall back to it via the restore key chain.
 
 #### Residual risks
 
-- **Cache entries are not content-addressed at restore time.** GitHub's cache backend matches
-  entries by key string, not by content hash. If a cache entry for a given key was replaced
-  by a malicious actor who has write access to the repository, there is no mechanism to detect
-  the substitution at restore time. This is a fundamental property of the underlying
-  `@actions/cache` service.
+- **Cache entries are not verified against their generation digest at restore time.** GitHub's
+  cache backend selects entries by key prefix and creation time. A malicious actor with cache-write
+  access can publish a newer generation in a compatible lineage, and the action does not rehash the
+  restored archive before use. This is a fundamental limitation of the underlying `@actions/cache`
+  service.
 - **Third-party plugin JARs are not re-verified after the initial build.** Once a plugin JAR is
   cached, subsequent restores trust the cache entry. A poisoned entry that replaces a legitimate
   plugin JAR will execute on the next build without further verification. Mitigate this by
@@ -122,7 +122,8 @@ because all PR builds fall back to it via the restore key chain.
   `read-only: true` on jobs where cache freshness is not required.
 - **`main` branch cache affects all subsequent workflows.** A single poisoned save to the
   default-branch cache lineage propagates to every future build on that branch until a clean
-  entry overwrites it. Treat cache write access with the same sensitivity as push access.
+  generation becomes the newest entry. Treat cache write access with the same sensitivity as push
+  access.
 
 ### Hard cache safety exclusions
 

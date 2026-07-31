@@ -270,7 +270,7 @@ describe('executePrepareAction', () => {
       );
       expect(createPrepareActionOutputs(status)).toEqual({
         'cache-key': expect.stringMatching(
-          /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-main$/,
+          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
         ),
         'base-cache-restore-status': 'miss',
         'java-major': '21',
@@ -493,7 +493,7 @@ describe('executePrepareAction', () => {
       expect(summaryText).toContain('- Pre-build manifest: persisted');
       expect(createPrepareActionOutputs(status)).toEqual({
         'cache-key': expect.stringMatching(
-          /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-main$/,
+          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
         ),
         'base-cache-restore-status': 'miss',
         'java-major': '21',
@@ -975,7 +975,7 @@ describe('executePrepareAction', () => {
         'utf8',
       );
 
-      // The first restoreCache call (bootstrap restore) returns the primary key → exact-hit,
+      // The first restoreCache call returns the current lineage → current-lineage-hit,
       // which arms the prune-managed path.  The second call (re-restore after pruning) returns
       // undefined → miss, which must cause executePrepareAction to reject rather than silently
       // continue with a partially pruned cache root.
@@ -987,7 +987,9 @@ describe('executePrepareAction', () => {
         },
         async restoreCache(_paths: string[], primaryKey: string): Promise<string | undefined> {
           restoreCallCount += 1;
-          return restoreCallCount === 1 ? primaryKey : undefined;
+          return restoreCallCount === 1
+            ? `${primaryKey}run-100-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb`
+            : undefined;
         },
         async saveCache(): Promise<number> {
           throw new Error('saveCache should not be called during main action flow');
@@ -1212,10 +1214,9 @@ function createTestConfig(gradleUserHome: string): NormalizedGradleConfig {
     jobMode: 'standalone',
     dependentJobs: [],
     allowDuplicateDependentDeltaPaths: false,
-    cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
-    cacheKeyTemplate: null,
+    cacheKeyPrefix: 'buildish-mammoth-cache-',
     cachePartitions: [],
-    cacheSchemaVersion: 1,
+    cacheSchemaVersion: 2,
     wrapperSelectionMode: 'default',
     wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
     defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -1268,7 +1269,9 @@ function createCacheApi(
     },
     async restoreCache(_paths: string[], primaryKey: string): Promise<string | undefined> {
       await options.onRestore?.();
-      return options.matchedKeyMode === 'primary' ? primaryKey : undefined;
+      return options.matchedKeyMode === 'primary'
+        ? `${primaryKey}run-100-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb`
+        : undefined;
     },
     async saveCache(): Promise<number> {
       throw new Error('saveCache should not be called during main action flow');

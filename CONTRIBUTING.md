@@ -42,5 +42,17 @@ gate, and how to add a new build-tool adapter — see the documentation site:
 
 **<https://buildish.org/components/mammoth-cache/development/contributing/>**
 
-The short version: clone the repo, run `nvm install && nvm use`, then `make build` and
-`make check`. See `make help` for all available targets.
+The short version:
+
+```bash
+nvm install
+nvm use
+npm_version="$(node scripts/resolve-npm-version.mjs)"
+if [[ "$(npm --version)" != "$npm_version" ]]; then
+  npm install --global --ignore-scripts --no-audit --no-fund "npm@$npm_version"
+fi
+make build
+make check
+```
+
+See `make help` for all available targets.

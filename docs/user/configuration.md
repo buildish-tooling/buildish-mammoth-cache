@@ -91,23 +91,11 @@ only by the corresponding action and ignored (or rejected) by the other.
 
 ### `cache-key-prefix`
 
-- Default: `buildish-mammoth-gradle-cache-` for Gradle, `buildish-mammoth-maven-cache-` for Maven
+- Default: `buildish-mammoth-cache-`
 - Must start with an alphanumeric character.
 - Remaining characters may only be letters, numbers, `.`, `_`, or `-`.
-
-### `cache-key-template`
-
-- Default: unset
-- Optional restricted template for cache key generation.
-- Supported placeholders:
-  - `${cacheKeyPrefix}`
-  - `${schemaVersion}`
-  - `${partitionFingerprint}`
-  - `${javaMajor}`
-  - `${runnerOs}`
-  - `${runnerArch}`
-  - `${refName}`
-- Custom templates must include `${partitionFingerprint}` so different cache partition layouts do not share the same base cache key.
+- Changes only the namespace prefix. The action always appends build tool, schema, Java, runner,
+  partition, ref-lineage, and immutable-generation identity.
 
 ### `cache-partitions`
 

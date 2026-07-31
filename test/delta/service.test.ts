@@ -539,7 +539,12 @@ function createFixtureCacheModel(gradleUserHome: string): CacheModel {
   return {
     buildToolId: adapter.getBuildToolId(),
     cacheRoot: gradleUserHome,
-    cacheKey: 'buildish-mammoth-gradle-cache-v1:21:linux:x64:main',
+    cacheFamilyKey: 'test-family',
+    currentRefToken: 'main-aaaaaaaaaaaa',
+    currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
+    fallbackRefLineagePrefixes: [],
+    plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
+    cacheKey: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',

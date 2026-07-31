@@ -247,7 +247,8 @@ async function maybePruneManagedFilesAfterRestore(
   if (
     !baseCacheResult ||
     baseCacheResult.operation !== 'restore' ||
-    (baseCacheResult.status !== 'exact-hit' && baseCacheResult.status !== 'partial-hit')
+    (baseCacheResult.status !== 'current-lineage-hit' &&
+      baseCacheResult.status !== 'fallback-lineage-hit')
   ) {
     return {
       mode: 'prune-managed',
@@ -269,10 +270,10 @@ async function maybePruneManagedFilesAfterRestore(
     }),
   );
 
-  const reRestore = await restoreBaseCache(bootstrap.config, bootstrap.cacheModel, dependencies);
+  const reRestore = await restoreBaseCache(bootstrap.cacheModel, dependencies);
   if (
     reRestore.operation !== 'restore' ||
-    (reRestore.status !== 'exact-hit' && reRestore.status !== 'partial-hit')
+    (reRestore.status !== 'current-lineage-hit' && reRestore.status !== 'fallback-lineage-hit')
   ) {
     throw new Error(
       `restore-cleanup-mode=prune-managed deleted ${relativePaths.length} managed file(s), but the follow-up base cache restore did not hit again. Refusing to continue with a partially pruned cache root.`,
@@ -283,7 +284,7 @@ async function maybePruneManagedFilesAfterRestore(
     mode: 'prune-managed',
     status: 'pruned',
     deletedFileCount: relativePaths.length,
-    message: `Pruned ${relativePaths.length} managed file(s) from the active cache partitions and re-restored base cache '${reRestore.matchedKey ?? reRestore.cacheKey}'.`,
+    message: `Pruned ${relativePaths.length} managed file(s) from the active cache partitions and re-restored base cache '${reRestore.matchedKey ?? reRestore.currentRefLineagePrefix}'.`,
   };
 }
 

@@ -223,7 +223,8 @@ export function createBootstrapSummaryLines(status: BootstrapStatus): readonly s
       `- Job mode: ${escapeSummaryText(status.config.jobMode)}`,
       `- Read only: ${status.config.readOnly ? 'yes' : 'no'}`,
       `- Cache enabled: ${status.config.cacheEnabled ? 'yes' : 'no'}`,
-      `- Cache key: ${escapeSummaryText(status.cacheModel?.cacheKey ?? 'disabled')}`,
+      `- Cache family: ${escapeSummaryText(status.cacheModel?.cacheFamilyKey ?? 'disabled')}`,
+      `- Current ref lineage: ${escapeSummaryText(status.cacheModel?.currentRefLineagePrefix ?? 'disabled')}`,
       `- Java major: ${escapeSummaryText(String(status.cacheModel?.javaMajor ?? 'n/a'))}`,
       `- Cache partitions: ${status.cacheModel?.partitions.length ?? 0}`,
       ...(status.baseCacheResult
@@ -253,7 +254,7 @@ export function createBootstrapLogLines(status: BootstrapStatus): readonly strin
 
   if (status.cacheModel) {
     lines.push(
-      `Cache key: ${status.cacheModel.cacheKey}; Java major: ${status.cacheModel.javaMajor}; cache partitions: ${status.cacheModel.partitions.length}.`,
+      `Cache family: ${status.cacheModel.cacheFamilyKey}; current ref lineage: ${status.cacheModel.currentRefLineagePrefix}; Java major: ${status.cacheModel.javaMajor}; cache partitions: ${status.cacheModel.partitions.length}.`,
     );
   }
 
@@ -317,7 +318,7 @@ async function runBaseCachePhase(
   }
 
   if (phase === 'prepare') {
-    const restoreResult = await restoreBaseCache(config, cacheModel, {
+    const restoreResult = await restoreBaseCache(cacheModel, {
       cacheBackend: dependencies.cacheBackend,
     });
 

@@ -38,18 +38,18 @@ a startup error rather than silently broken signature verification.
 
 ## Cache schema version
 
-`cacheSchemaVersion` in `src/config/types.ts` is part of the default cache key template. Bump it
+`CACHE_SCHEMA_VERSION` in `src/config/types.ts` is part of every action-owned cache family. Bump it
 whenever a change to the cache content or partition layout would make an existing base cache entry
 invalid or unsafe to reuse on the next run.
 
-Schema version bumps create a new cache key lineage: existing cache entries from the previous
-version are effectively abandoned and a cold start occurs for all users.
+Schema version bumps create a new cache family: existing lineages from the previous version are
+effectively abandoned and a cold start occurs for all users.
 
 ## Partition fingerprint changes
 
 The `partitionFingerprint` value is a 16-character hex prefix of the SHA-256 of the full ordered
 partition layout (including IDs, includes, excludes, and hard excludes). Any change to the active
-partition set automatically produces a new fingerprint — and therefore a new cache key — without
+partition set automatically produces a new fingerprint — and therefore a new cache family — without
 requiring a manual schema version bump. This covers:
 
 - Enabling or disabling a built-in partition.

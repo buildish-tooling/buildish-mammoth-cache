@@ -27,11 +27,10 @@ even on the same branch with no dependency changes.
 
 **Diagnostic steps:**
 
-1. **Check the restore key shown in the job summary.** The prepare step prints the full primary
-   cache key that was attempted. Paste it into the GitHub Actions cache list
-   (`Settings → Actions → Caches`) and confirm whether a matching entry exists. If it does not
-   exist at all, the primary key was never saved — check whether finalize ran successfully on the
-   previous run.
+1. **Check the family and lineage shown in the job summary.** The prepare step prints the current
+   ref lineage and exact restored generation, when any. Search for the lineage prefix in the GitHub
+   Actions cache list (`Settings → Actions → Caches`). If no generation exists, check whether a
+   writable finalize completed successfully on the previous run.
 
 2. **Check for a changed partition fingerprint.** The fingerprint segment of the cache key is the
    SHA-256 of your partition configuration. Any change to `cache-partitions` — including adding,
@@ -39,15 +38,11 @@ even on the same branch with no dependency changes.
    therefore a new key lineage. This is expected and correct; after the first successful build
    on the new configuration the cache will hit again.
 
-3. **Check whether the Java major version changed.** If `${javaMajor}` is in the key template
-   (the default), switching between Java 17, 21, and 24 produces different keys. Ensure
+3. **Check whether the Java major version changed.** Switching between Java 17, 21, and 24 produces
+   different cache families. Ensure
    `actions/setup-java` uses the same major version on every run.
 
-4. **Check for a volatile custom key template.** If you set `cache-key-template`, verify that
-   the placeholders you chose are stable across runs. A placeholder derived from a Git commit
-   SHA, a timestamp, or a random value will cause a miss on every run.
-
-5. **Check the cache eviction policy.** GitHub Actions caches are evicted after 7 days of
+4. **Check the cache eviction policy.** GitHub Actions caches are evicted after 7 days of
    inactivity and when the total storage cap for the repository is reached. An evicted entry
    looks identical to a new key from the action's perspective.
 

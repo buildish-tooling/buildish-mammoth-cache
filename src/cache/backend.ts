@@ -21,15 +21,15 @@
  * orchestration should depend only on this narrower backend seam.
  */
 export interface BaseCacheBackendCapabilities {
-  /** Whether the backend supports restore-key fallback/prefix matching beyond the exact key. */
-  readonly supportsRestoreKeys: boolean;
+  /** Whether the backend restores the newest matching immutable generation for a key prefix. */
+  readonly supportsNewestPrefixRestore: boolean;
   /** Whether the backend supports explicit save calls from shared post-action logic. */
   readonly supportsExplicitSave: boolean;
 }
 
 /** Capability set for a fully programmatic cache backend such as GitHub Actions cache. */
 export const STANDARD_BASE_CACHE_BACKEND_CAPABILITIES: BaseCacheBackendCapabilities = {
-  supportsRestoreKeys: true,
+  supportsNewestPrefixRestore: true,
   supportsExplicitSave: true,
 };
 
@@ -45,11 +45,11 @@ export interface BaseCacheBackend {
   readonly capabilities: BaseCacheBackendCapabilities;
   /** Reports whether the active cache backend is usable in the current environment. */
   isFeatureAvailable(): boolean;
-  /** Attempts to restore one cache entry for the given exact key and optional prefix keys. */
+  /** Restores the newest entry matching the primary prefix or the first matching fallback prefix. */
   restoreCache(
     paths: string[],
-    primaryKey: string,
-    restoreKeys?: string[],
+    primaryKeyPrefix: string,
+    fallbackKeyPrefixes?: string[],
   ): Promise<string | undefined>;
   /** Attempts to create a new cache entry for the given key. */
   saveCache(paths: string[], key: string): Promise<number>;

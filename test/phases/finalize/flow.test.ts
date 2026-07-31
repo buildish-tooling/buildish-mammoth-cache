@@ -296,10 +296,18 @@ describe('executeFinalizeAction', () => {
       persistBaseCacheRestoreResult(
         {
           operation: 'restore',
-          status: 'exact-hit',
-          cacheKey: 'buildish-cache-main-linux',
-          matchedKey: 'buildish-cache-main-linux',
-          restoreKeys: ['buildish-cache-main-linux'],
+          status: 'current-lineage-hit',
+          cacheFamilyKey: 'buildish-cache-family',
+          currentRefLineagePrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
+          matchedKey:
+            'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb',
+          matchedLineagePrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
+          restoreCandidates: [
+            {
+              lineage: 'current-ref',
+              keyPrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
+            },
+          ],
           paths: [path.join(gradleUserHome, 'caches')],
           message: 'Restored cache using exact key hit.',
         },
@@ -357,7 +365,7 @@ describe('executeFinalizeAction', () => {
         expect.arrayContaining([
           '::group::Buildish Mammoth Cache for Gradle',
           'Bootstrap: Prepared finalize phase for push on main in distributed-worker mode.',
-          'Base cache restore: exact-hit.',
+          'Base cache restore: current-lineage-hit.',
           'Delta artifact: uploaded.',
           'Execution details: https://github.com/buildish-tooling/buildish/actions/runs/101/job/987654321',
           'Cache partition statistics (manifest-derived, uncompressed content sizes):',
@@ -988,7 +996,14 @@ function createTestCacheModel(gradleUserHome: string): CacheModel {
   return {
     buildToolId: gradleAdapter.getBuildToolId(),
     cacheRoot: gradleUserHome,
-    cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
+    cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
+    currentRefToken: 'main-aaaaaaaaaaaa',
+    currentRefLineagePrefix:
+      'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
+    fallbackRefLineagePrefixes: [],
+    plannedGenerationId: 'run-101-attempt-2-job-aaaaaaaaaaaa',
+    cacheKey:
+      'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
     javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',
@@ -1330,9 +1345,13 @@ describe('createFinalizeActionSummaryLines', () => {
       baseCacheRestoreResult: {
         operation: 'restore',
         status: 'feature-unavailable',
-        cacheKey: 'test-key',
+        cacheFamilyKey: 'test-family',
+        currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
         matchedKey: null,
-        restoreKeys: [],
+        matchedLineagePrefix: null,
+        restoreCandidates: [
+          { lineage: 'current-ref', keyPrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-' },
+        ],
         paths: [],
         message: 'Cache backend unavailable.',
       },
@@ -1408,9 +1427,13 @@ describe('createFinalizeActionLogLines', () => {
       baseCacheRestoreResult: {
         operation: 'restore',
         status: 'feature-unavailable',
-        cacheKey: 'test-key',
+        cacheFamilyKey: 'test-family',
+        currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
         matchedKey: null,
-        restoreKeys: [],
+        matchedLineagePrefix: null,
+        restoreCandidates: [
+          { lineage: 'current-ref', keyPrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-' },
+        ],
         paths: [],
         message: 'Cache backend unavailable.',
       },

@@ -15,7 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { CiJobContext } from '../ci';
@@ -24,17 +24,12 @@ import type { ConfiguredCachePartitionInput, NormalizedActionConfig } from '../c
 import { readJavaMajorFromReleaseFile, resolveJavaExecutablePath } from '../util/paths';
 import { buildMinimalChildEnv } from '../util/spawn';
 
-/**
- * Default cache key template used when the `cache-key-template` input is not set.
- *
- * Placeholders are resolved at runtime: `${cacheKeyPrefix}` (user-configurable prefix),
- * `${schemaVersion}` (schema bump counter), `${javaMajor}` (detected Java major version),
- * `${runnerOs}` / `${runnerArch}` (normalized runner platform), `${partitionFingerprint}`
- * (16-char SHA-256 of the active partition layout), and `${refName}` (cache-safe branch slug).
- */
-export const DEFAULT_CACHE_KEY_TEMPLATE =
-  '${cacheKeyPrefix}${schemaVersion}-${javaMajor}-${runnerOs}-${runnerArch}-${partitionFingerprint}-${refName}';
 const CACHE_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,512}$/;
+const GENERATION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
+const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const REF_TOKEN_SLUG_LENGTH = 48;
+const IDENTITY_DIGEST_LENGTH = 12;
+const CONTENT_DIGEST_KEY_LENGTH = 12;
 
 /**
  * Fully derived cache identity and partition metadata for a single job execution.
@@ -44,16 +39,30 @@ const CACHE_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,512}$/;
  */
 export interface CacheModel {
   /**
-   * Fully resolved primary cache key for this job.
+   * Stable action-owned key for structurally compatible cache states.
    *
-   * Must satisfy the cache key constraints enforced by `CACHE_KEY_PATTERN`: only `[A-Za-z0-9._:-]`
-   * characters and a maximum length of 512 characters.
+   * Ref and immutable generation identity are deliberately excluded.
+   */
+  readonly cacheFamilyKey: string;
+  /** Collision-resistant token for the provider-resolved current ref. */
+  readonly currentRefToken: string;
+  /** Prefix used to restore or save immutable generations for the current ref. */
+  readonly currentRefLineagePrefix: string;
+  /** Ordered fallback lineage prefixes, currently limited to the repository default branch. */
+  readonly fallbackRefLineagePrefixes: readonly string[];
+  /** Execution-unique generation identifier derived for this writer invocation. */
+  readonly plannedGenerationId: string;
+  /**
+   * Transitional distributed-delta identity until the v2 envelope adopts explicit family and
+   * lineage fields in Slice 3.
+   *
+   * This value is the current ref lineage prefix and is never a saved cache key.
    */
   readonly cacheKey: string;
   /**
    * The detected Java major version, derived from `$JAVA_HOME/release` or `java -version`.
    *
-   * `null` when Java cannot be located at all; the cache key template renders this as `'0'`
+   * `null` when Java cannot be located at all; the cache family renders this as `'0'`
    * so that jobs where Java is unavailable do not collide with jobs running a real version.
    */
   readonly javaMajor: number | null;
@@ -79,8 +88,8 @@ export interface CacheModel {
   /**
    * Stable digest of the resolved active cache partition layout.
    *
-   * The fingerprint changes when at least one of the active order of partitions, or the includes or excludes change and is
-   * part of the base cache key, so different cache layouts do not collide.
+   * The fingerprint changes when partition order, includes, or excludes change. It is part of the
+   * cache family, so different cache layouts do not collide.
    */
   readonly partitionFingerprint: string;
   /**
@@ -180,6 +189,22 @@ export interface CacheModelOptions {
    * Defaults to `process.env` when omitted.
    */
   readonly env?: NodeJS.ProcessEnv;
+  /** Optional random UUID source used when provider run identity is unavailable. */
+  readonly randomUuid?: () => string;
+}
+
+/** One immutable full-snapshot cache generation ready to be saved. */
+export interface CacheGeneration {
+  /** Cache family shared by compatible generations. */
+  readonly cacheFamilyKey: string;
+  /** Ref lineage under which the generation is published. */
+  readonly lineagePrefix: string;
+  /** Execution-unique writer identifier. */
+  readonly generationId: string;
+  /** Canonical SHA-256 digest of the full post-build manifest. */
+  readonly contentDigest: string;
+  /** Complete immutable backend key. */
+  readonly key: string;
 }
 
 /**
@@ -223,11 +248,34 @@ export async function createCacheModel(
     partitions,
     adapter.getHardCacheExcludeGlobs(),
   );
-  const cacheKey = renderCacheKey(config, ciContext, javaMajor, partitionFingerprint);
+  const buildToolId = adapter.getBuildToolId();
+  const cacheFamilyKey = renderCacheFamilyKey(
+    config,
+    buildToolId,
+    ciContext,
+    javaMajor,
+    partitionFingerprint,
+  );
+  const currentRefToken = createCacheRefToken(ciContext.resolvedRefName);
+  const currentRefLineagePrefix = createCacheRefLineagePrefix(cacheFamilyKey, currentRefToken);
+  const defaultBranchRefToken = createCacheRefToken(ciContext.defaultBranch);
+  const fallbackRefLineagePrefixes =
+    defaultBranchRefToken === currentRefToken
+      ? []
+      : [createCacheRefLineagePrefix(cacheFamilyKey, defaultBranchRefToken)];
+  const plannedGenerationId = createPlannedGenerationId(
+    ciContext,
+    options.randomUuid ?? randomUUID,
+  );
 
   return {
-    cacheKey,
-    buildToolId: adapter.getBuildToolId(),
+    cacheFamilyKey,
+    currentRefToken,
+    currentRefLineagePrefix,
+    fallbackRefLineagePrefixes,
+    plannedGenerationId,
+    cacheKey: currentRefLineagePrefix,
+    buildToolId,
     cacheRoot,
     javaMajor,
     runnerOs: ciContext.runnerOs,
@@ -243,10 +291,11 @@ export async function createCacheModel(
 }
 
 /**
- * Renders the effective cache key from either the restricted user template or the default.
+ * Renders the action-owned compatibility family for immutable cache generations.
  */
-export function renderCacheKey(
+export function renderCacheFamilyKey(
   config: NormalizedActionConfig,
+  buildToolId: string,
   ciContext: CiJobContext,
   javaMajor: number | null,
   partitionFingerprint: string,
@@ -254,30 +303,71 @@ export function renderCacheKey(
   if (javaMajor !== null) {
     validateJavaMajor(javaMajor);
   }
-  const template = config.cacheKeyTemplate ?? DEFAULT_CACHE_KEY_TEMPLATE;
-  const placeholderValues: Record<string, string> = {
-    cacheKeyPrefix: config.cacheKeyPrefix,
-    schemaVersion: String(config.cacheSchemaVersion),
+  const cacheFamilyKey = [
+    `${config.cacheKeyPrefix}${buildToolId}`,
+    `v${config.cacheSchemaVersion}`,
+    javaMajor !== null ? String(javaMajor) : '0',
+    ciContext.runnerOs,
+    ciContext.runnerArch,
     partitionFingerprint,
-    javaMajor: javaMajor !== null ? String(javaMajor) : '0',
-    runnerOs: ciContext.runnerOs,
-    runnerArch: ciContext.runnerArch,
-    refName: ciContext.safeRefName,
-  };
-  const cacheKey = template.replaceAll(
-    /\$\{([A-Za-z0-9]+)\}/g,
-    (match, placeholderName: string) => {
-      return placeholderValues[placeholderName] ?? match;
-    },
-  );
+  ].join('-');
 
-  if (!CACHE_KEY_PATTERN.test(cacheKey)) {
-    throw new Error(
-      'Resolved cache key contains unsupported characters or exceeds the 512 character limit.',
-    );
+  validateCacheKey(cacheFamilyKey, 'cache family key');
+  return cacheFamilyKey;
+}
+
+/**
+ * Creates a readable, collision-resistant cache token for a provider-resolved ref.
+ *
+ * The digest is computed from the trimmed raw ref before lossy slugging, so refs that differ only
+ * by case, punctuation, or content beyond the readable prefix never share a lineage.
+ */
+export function createCacheRefToken(refName: string): string {
+  const normalizedRefName = refName.trim() || 'unknown-ref';
+  const readableSlug = normalizedRefName
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/-+/gu, '-')
+    .replace(/^-|-$/gu, '')
+    .slice(0, REF_TOKEN_SLUG_LENGTH)
+    .replace(/^-|-$/gu, '');
+  const digest = sha256Hex(normalizedRefName).slice(0, IDENTITY_DIGEST_LENGTH);
+
+  return `${readableSlug || 'unknown-ref'}-${digest}`;
+}
+
+/** Creates the immutable-generation prefix for one cache family and ref token. */
+export function createCacheRefLineagePrefix(cacheFamilyKey: string, refToken: string): string {
+  const lineagePrefix = `${cacheFamilyKey}-ref-${refToken}-gen-`;
+  validateCacheKey(lineagePrefix, 'cache ref lineage prefix');
+  return lineagePrefix;
+}
+
+/** Creates the complete immutable cache key for a canonical post-build manifest digest. */
+export function createCacheGeneration(
+  cacheModel: Pick<
+    CacheModel,
+    'cacheFamilyKey' | 'currentRefLineagePrefix' | 'plannedGenerationId'
+  >,
+  contentDigest: string,
+): CacheGeneration {
+  if (!LOWERCASE_SHA256_PATTERN.test(contentDigest)) {
+    throw new Error('Cache generation content digest must be a lowercase SHA-256 value.');
+  }
+  if (!GENERATION_ID_PATTERN.test(cacheModel.plannedGenerationId)) {
+    throw new Error('Cache generation ID contains unsupported characters or is too long.');
   }
 
-  return cacheKey;
+  const key = `${cacheModel.currentRefLineagePrefix}${cacheModel.plannedGenerationId}-${contentDigest.slice(0, CONTENT_DIGEST_KEY_LENGTH)}`;
+  validateCacheKey(key, 'cache generation key');
+
+  return {
+    cacheFamilyKey: cacheModel.cacheFamilyKey,
+    lineagePrefix: cacheModel.currentRefLineagePrefix,
+    generationId: cacheModel.plannedGenerationId,
+    contentDigest,
+    key,
+  };
 }
 
 /**
@@ -477,6 +567,31 @@ function createPartitionFingerprint(
 
 function deduplicatePaths(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
+}
+
+function createPlannedGenerationId(
+  ciContext: CiJobContext,
+  randomUuidSource: () => string,
+): string {
+  if (ciContext.runId === null || ciContext.runAttempt === null) {
+    return `uuid-${randomUuidSource()}`;
+  }
+
+  const jobIdentity = [ciContext.repository, ciContext.workflowName, ciContext.jobName].join('\0');
+  const jobDigest = sha256Hex(jobIdentity).slice(0, IDENTITY_DIGEST_LENGTH);
+  return `run-${ciContext.runId}-attempt-${ciContext.runAttempt}-job-${jobDigest}`;
+}
+
+function validateCacheKey(value: string, label: string): void {
+  if (!CACHE_KEY_PATTERN.test(value)) {
+    throw new Error(
+      `Resolved ${label} contains unsupported characters or exceeds the 512 character limit.`,
+    );
+  }
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function validateJavaMajor(javaMajor: number): void {

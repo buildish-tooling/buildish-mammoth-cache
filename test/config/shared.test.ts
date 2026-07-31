@@ -21,7 +21,6 @@ import {
   normalizeRelativePath,
   parseCachePartitionsInput,
   validateCacheKeyPrefix,
-  validateCacheKeyTemplate,
 } from '../../src/config/shared';
 
 describe('validateCacheKeyPrefix', () => {
@@ -44,46 +43,6 @@ describe('validateCacheKeyPrefix', () => {
     expect(() => validateCacheKeyPrefix('has/slash')).toThrow(/must start with an alphanumeric/u);
     expect(() => validateCacheKeyPrefix('a'.repeat(101))).toThrow(
       /must start with an alphanumeric/u,
-    );
-  });
-});
-
-describe('validateCacheKeyTemplate', () => {
-  it('returns null for an empty or whitespace-only input', () => {
-    expect(validateCacheKeyTemplate('')).toBeNull();
-    expect(validateCacheKeyTemplate('   ')).toBeNull();
-  });
-
-  it('accepts a valid template that includes partitionFingerprint', () => {
-    expect(validateCacheKeyTemplate('${cacheKeyPrefix}-${partitionFingerprint}')).toBe(
-      '${cacheKeyPrefix}-${partitionFingerprint}',
-    );
-    expect(validateCacheKeyTemplate('prefix.${partitionFingerprint}:v1')).toBe(
-      'prefix.${partitionFingerprint}:v1',
-    );
-  });
-
-  it('rejects a template that exceeds the maximum length', () => {
-    // 'a'.repeat(180) = 180 chars, '${partitionFingerprint}' = 23 chars → 203 total > 200
-    const longTemplate = 'a'.repeat(180) + '${partitionFingerprint}';
-    expect(() => validateCacheKeyTemplate(longTemplate)).toThrow(/at most 200 characters/u);
-  });
-
-  it('rejects a template with an unsupported placeholder', () => {
-    expect(() => validateCacheKeyTemplate('${unknown}-${partitionFingerprint}')).toThrow(
-      /unsupported placeholder/u,
-    );
-  });
-
-  it('rejects a template missing the mandatory partitionFingerprint placeholder', () => {
-    expect(() => validateCacheKeyTemplate('${cacheKeyPrefix}-suffix')).toThrow(
-      /must include \$\{partitionFingerprint\}/u,
-    );
-  });
-
-  it('rejects a template with illegal literal characters', () => {
-    expect(() => validateCacheKeyTemplate('prefix<>${partitionFingerprint}')).toThrow(
-      /only contain supported placeholders and the literal characters/u,
     );
   });
 });

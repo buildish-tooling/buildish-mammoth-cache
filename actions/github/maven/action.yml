@@ -69,18 +69,13 @@ inputs:
     default: 'false'
   cache-key-prefix:
     description: >-
-      Prefix used for generated cache keys. Must start with an alphanumeric
+      Namespace prefix used for action-generated cache families. The action
+      always appends build tool, schema, Java, runner, partition, ref-lineage,
+      and immutable-generation identity. Must start with an alphanumeric
       character and then use only letters, numbers, dot, underscore, and dash.
-      Default: `buildish-mammoth-maven-cache-`.
+      Default: `buildish-mammoth-cache-`.
     required: false
-    default: buildish-mammoth-maven-cache-
-  cache-key-template:
-    description: >-
-      Optional restricted cache key template. Supported placeholders:
-      `${cacheKeyPrefix}`, `${schemaVersion}`, `${partitionFingerprint}`,
-      `${javaMajor}`, `${runnerOs}`, `${runnerArch}`, and `${refName}`.
-      Custom templates must include `${partitionFingerprint}`.
-    required: false
+    default: buildish-mammoth-cache-
   cache-partitions:
     description: >-
       Optional JSON array of cache partition overrides and custom partitions.

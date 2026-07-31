@@ -18,12 +18,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createBaseCachePaths,
-  createBaseCacheRestoreKeys,
+  createBaseCacheRestoreCandidates,
   isBaseCacheFinalizeArmed,
   restoreBaseCache,
   saveBaseCache,
 } from '../../src/cache/service';
-import type { CacheModel } from '../../src/cache/model';
+import { createCacheGeneration, type CacheModel } from '../../src/cache/model';
 import type { NormalizedGradleConfig } from '../../src/config/types';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
@@ -38,10 +38,9 @@ const baseConfig: NormalizedGradleConfig = {
   jobMode: 'standalone',
   dependentJobs: [],
   allowDuplicateDependentDeltaPaths: false,
-  cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
-  cacheKeyTemplate: null,
+  cacheKeyPrefix: 'buildish-mammoth-cache-',
   cachePartitions: [],
-  cacheSchemaVersion: 1,
+  cacheSchemaVersion: 2,
   wrapperSelectionMode: 'default',
   wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
   defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -56,7 +55,16 @@ const baseConfig: NormalizedGradleConfig = {
 const cacheModel: CacheModel = {
   buildToolId: 'gradle',
   cacheRoot: '/home/runner/.gradle',
-  cacheKey: 'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-feature-cache-model',
+  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
+  currentRefToken: 'feature-cache-model-111111111111',
+  currentRefLineagePrefix:
+    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-feature-cache-model-111111111111-gen-',
+  fallbackRefLineagePrefixes: [
+    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-222222222222-gen-',
+  ],
+  plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
+  cacheKey:
+    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-feature-cache-model-111111111111-gen-',
   javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',
@@ -69,6 +77,8 @@ const cacheModel: CacheModel = {
     '/home/runner/.gradle/**/*.lock',
   ],
 };
+
+const generation = createCacheGeneration(cacheModel, 'a'.repeat(64));
 
 function createCacheBackend(
   backend: Pick<BaseCacheBackend, 'isFeatureAvailable' | 'restoreCache' | 'saveCache'> &
@@ -94,61 +104,49 @@ describe('createBaseCachePaths', () => {
   });
 });
 
-describe('createBaseCacheRestoreKeys', () => {
-  it('derives a branch-agnostic restore key for the default template', () => {
-    expect(createBaseCacheRestoreKeys(baseConfig, cacheModel)).toEqual([
-      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-',
+describe('createBaseCacheRestoreCandidates', () => {
+  it('orders the current-ref lineage before the default-branch fallback', () => {
+    expect(createBaseCacheRestoreCandidates(cacheModel)).toEqual([
+      { lineage: 'current-ref', keyPrefix: cacheModel.currentRefLineagePrefix },
+      { lineage: 'default-branch', keyPrefix: cacheModel.fallbackRefLineagePrefixes[0] },
     ]);
-  });
-
-  it('omits restore keys when a custom template does not end with refName', () => {
-    expect(
-      createBaseCacheRestoreKeys(
-        {
-          ...baseConfig,
-          cacheKeyTemplate:
-            '${cacheKeyPrefix}${partitionFingerprint}-${refName}-${runnerOs}-${javaMajor}',
-        },
-        cacheModel,
-      ),
-    ).toEqual([]);
   });
 });
 
 describe('restoreBaseCache', () => {
-  it('classifies exact cache hits', async () => {
-    const result = await restoreBaseCache(baseConfig, cacheModel, {
+  it('classifies current-lineage cache hits', async () => {
+    const result = await restoreBaseCache(cacheModel, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
-        restoreCache: async () => cacheModel.cacheKey,
+        restoreCache: async () => generation.key,
         saveCache: async () => 0,
       }),
     });
 
-    expect(result.status).toBe('exact-hit');
-    expect(result.restoreKeys).toEqual([
-      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-',
+    expect(result.status).toBe('current-lineage-hit');
+    expect(result.restoreCandidates).toEqual([
+      { lineage: 'current-ref', keyPrefix: cacheModel.currentRefLineagePrefix },
+      { lineage: 'default-branch', keyPrefix: cacheModel.fallbackRefLineagePrefixes[0] },
     ]);
   });
 
-  it('classifies partial cache hits', async () => {
-    const result = await restoreBaseCache(baseConfig, cacheModel, {
+  it('classifies default-branch fallback hits', async () => {
+    const fallbackGenerationKey = `${cacheModel.fallbackRefLineagePrefixes[0]}run-100-attempt-1-job-bbbbbbbbbbbb-${'b'.repeat(12)}`;
+    const result = await restoreBaseCache(cacheModel, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
-        restoreCache: async () =>
-          'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
+        restoreCache: async () => fallbackGenerationKey,
         saveCache: async () => 0,
       }),
     });
 
-    expect(result.status).toBe('partial-hit');
-    expect(result.matchedKey).toBe(
-      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-main',
-    );
+    expect(result.status).toBe('fallback-lineage-hit');
+    expect(result.matchedKey).toBe(fallbackGenerationKey);
+    expect(result.matchedLineagePrefix).toBe(cacheModel.fallbackRefLineagePrefixes[0]);
   });
 
   it('returns a miss when no base cache is restored', async () => {
-    const result = await restoreBaseCache(baseConfig, cacheModel, {
+    const result = await restoreBaseCache(cacheModel, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
@@ -159,49 +157,107 @@ describe('restoreBaseCache', () => {
     expect(result.status).toBe('miss');
   });
 
-  it('omits restore-key fallbacks when the cache backend does not support them', async () => {
-    let observedRestoreKeys: readonly string[] | undefined;
-
-    const result = await restoreBaseCache(baseConfig, cacheModel, {
+  it('reports unavailable when the backend cannot restore the newest prefix match', async () => {
+    let restoreCalls = 0;
+    const result = await restoreBaseCache(cacheModel, {
       cacheBackend: createCacheBackend(
         {
           isFeatureAvailable: () => true,
-          restoreCache: async (_paths, _primaryKey, restoreKeys) => {
-            observedRestoreKeys = restoreKeys;
+          restoreCache: async () => {
+            restoreCalls += 1;
             return undefined;
           },
           saveCache: async () => 0,
         },
         {
           ...STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-          supportsRestoreKeys: false,
+          supportsNewestPrefixRestore: false,
         },
       ),
     });
 
-    expect(observedRestoreKeys).toEqual([]);
-    expect(result.restoreKeys).toEqual([]);
-    expect(result.status).toBe('miss');
+    expect(restoreCalls).toBe(0);
+    expect(result.status).toBe('feature-unavailable');
+  });
+
+  it('checks backend availability once when restore is unavailable', async () => {
+    let availabilityChecks = 0;
+    const result = await restoreBaseCache(cacheModel, {
+      cacheBackend: createCacheBackend({
+        isFeatureAvailable: () => {
+          availabilityChecks += 1;
+          return false;
+        },
+        restoreCache: async () => undefined,
+        saveCache: async () => 0,
+      }),
+    });
+
+    expect(result.status).toBe('feature-unavailable');
+    expect(availabilityChecks).toBe(1);
+  });
+
+  it('rejects a lineage prefix returned as though it were a saved generation', async () => {
+    await expect(
+      restoreBaseCache(cacheModel, {
+        cacheBackend: createCacheBackend({
+          isFeatureAvailable: () => true,
+          restoreCache: async () => cacheModel.currentRefLineagePrefix,
+          saveCache: async () => 0,
+        }),
+      }),
+    ).rejects.toThrow(/outside the requested cache lineages/u);
   });
 });
 
 describe('saveBaseCache', () => {
+  it('rejects a generation that does not belong to the current writer and lineage', async () => {
+    await expect(
+      saveBaseCache(
+        baseConfig,
+        cacheModel,
+        () => ({ ...generation, generationId: 'run-999-attempt-1-job-bbbbbbbbbbbb' }),
+        true,
+        {
+          cacheBackend: createCacheBackend({
+            isFeatureAvailable: () => true,
+            restoreCache: async () => undefined,
+            saveCache: async () => 77,
+          }),
+        },
+      ),
+    ).rejects.toThrow(/does not belong to the current cache family and ref lineage/u);
+  });
+
   it('skips saving in read-only mode', async () => {
-    const result = await saveBaseCache({ ...baseConfig, readOnly: true }, cacheModel, true, {
-      cacheBackend: createCacheBackend({
-        isFeatureAvailable: () => true,
-        restoreCache: async () => undefined,
-        saveCache: async () => 999,
-      }),
-    });
+    let generationCalls = 0;
+    const result = await saveBaseCache(
+      { ...baseConfig, readOnly: true },
+      cacheModel,
+      () => {
+        generationCalls += 1;
+        return generation;
+      },
+      true,
+      {
+        cacheBackend: createCacheBackend({
+          isFeatureAvailable: () => true,
+          restoreCache: async () => undefined,
+          saveCache: async () => 999,
+        }),
+      },
+    );
 
     expect(result.status).toBe('read-only');
+    expect(result.generationKey).toBeNull();
+    expect(generationCalls).toBe(0);
   });
 
   it('skips saving for distributed workers', async () => {
     const result = await saveBaseCache(
       { ...baseConfig, jobMode: 'distributed-worker' },
       cacheModel,
+      () => generation,
       true,
       {
         cacheBackend: createCacheBackend({
@@ -216,7 +272,7 @@ describe('saveBaseCache', () => {
   });
 
   it('reports saved cache IDs for eligible saves', async () => {
-    const result = await saveBaseCache(baseConfig, cacheModel, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
@@ -231,7 +287,7 @@ describe('saveBaseCache', () => {
   it('skips saving when the cache backend does not support explicit saves', async () => {
     let saveCalls = 0;
 
-    const result = await saveBaseCache(baseConfig, cacheModel, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
       cacheBackend: createCacheBackend(
         {
           isFeatureAvailable: () => true,
@@ -257,7 +313,7 @@ describe('saveBaseCache', () => {
     const missingPathsError = new Error(
       'Path Validation Error: Path(s) specified in the action for caching do(es) not exist, hence no cache is being saved.',
     );
-    const result = await saveBaseCache(baseConfig, cacheModel, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
@@ -276,7 +332,7 @@ describe('saveBaseCache', () => {
   });
 
   it('returns not-saved when the toolkit declines to create a new cache entry', async () => {
-    const result = await saveBaseCache(baseConfig, cacheModel, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
@@ -289,7 +345,7 @@ describe('saveBaseCache', () => {
 
   it('rethrows unrelated save failures', async () => {
     await expect(
-      saveBaseCache(baseConfig, cacheModel, true, {
+      saveBaseCache(baseConfig, cacheModel, () => generation, true, {
         cacheBackend: createCacheBackend({
           isFeatureAvailable: () => true,
           restoreCache: async () => undefined,

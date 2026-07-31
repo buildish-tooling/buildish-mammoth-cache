@@ -17,10 +17,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createCacheGeneration,
   createCacheModel,
   createCachePartitions,
+  createCacheRefToken,
   parseJavaMajor,
-  renderCacheKey,
+  renderCacheFamilyKey,
 } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { CiJobContext } from '../../src/ci/types';
@@ -34,10 +36,9 @@ const baseConfig: NormalizedGradleConfig = {
   jobMode: 'standalone',
   dependentJobs: [],
   allowDuplicateDependentDeltaPaths: false,
-  cacheKeyPrefix: 'buildish-mammoth-gradle-cache-',
-  cacheKeyTemplate: null,
+  cacheKeyPrefix: 'buildish-mammoth-cache-',
   cachePartitions: [],
-  cacheSchemaVersion: 1,
+  cacheSchemaVersion: 2,
   wrapperSelectionMode: 'default',
   wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
   defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
@@ -84,26 +85,45 @@ describe('parseJavaMajor', () => {
   });
 });
 
-describe('renderCacheKey', () => {
-  it('renders the default cache key using the safe ref name', () => {
-    expect(renderCacheKey(baseConfig, baseCiContext, 21, 'feedcafe1234abcd')).toBe(
-      'buildish-mammoth-gradle-cache-1-21-linux-x64-feedcafe1234abcd-feature-cache-model',
+describe('cache identity rendering', () => {
+  it('renders an action-owned cache family without ref or generation identity', () => {
+    expect(renderCacheFamilyKey(baseConfig, 'gradle', baseCiContext, 21, 'feedcafe1234abcd')).toBe(
+      'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
     );
   });
 
-  it('renders a restricted custom template', () => {
-    expect(
-      renderCacheKey(
+  it('keeps lossy slug collisions in different ref lineages', () => {
+    const slashToken = createCacheRefToken('feature/cache');
+    const dashToken = createCacheRefToken('feature-cache');
+
+    expect(slashToken).toMatch(/^feature-cache-[a-f0-9]{12}$/u);
+    expect(dashToken).toMatch(/^feature-cache-[a-f0-9]{12}$/u);
+    expect(slashToken).not.toBe(dashToken);
+  });
+
+  it('creates a generation beneath the current ref lineage', () => {
+    const model = {
+      cacheFamilyKey: 'family',
+      currentRefLineagePrefix: 'family-ref-main-000000000000-gen-',
+      plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
+    };
+
+    expect(createCacheGeneration(model, 'b'.repeat(64)).key).toBe(
+      'family-ref-main-000000000000-gen-run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb',
+    );
+  });
+
+  it('rejects a malformed canonical content digest', () => {
+    expect(() =>
+      createCacheGeneration(
         {
-          ...baseConfig,
-          cacheKeyTemplate:
-            '${cacheKeyPrefix}${runnerOs}:${runnerArch}:${javaMajor}:${partitionFingerprint}:${refName}',
+          cacheFamilyKey: 'family',
+          currentRefLineagePrefix: 'family-ref-main-000000000000-gen-',
+          plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
         },
-        baseCiContext,
-        17,
-        'feedcafe1234abcd',
+        'not-a-sha256',
       ),
-    ).toBe('buildish-mammoth-gradle-cache-linux:x64:17:feedcafe1234abcd:feature-cache-model');
+    ).toThrow(/lowercase SHA-256/u);
   });
 });
 
@@ -213,9 +233,14 @@ describe('createCacheModel', () => {
       env: envWithoutJavaHome,
     });
 
-    expect(cacheModel.cacheKey).toMatch(
-      /^buildish-mammoth-gradle-cache-1-21-linux-x64-[a-f0-9]{16}-feature-cache-model$/,
+    expect(cacheModel.cacheFamilyKey).toMatch(
+      /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}$/u,
     );
+    expect(cacheModel.currentRefLineagePrefix).toMatch(
+      /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-feature-cache-model-[a-f0-9]{12}-gen-$/u,
+    );
+    expect(cacheModel.fallbackRefLineagePrefixes).toHaveLength(1);
+    expect(cacheModel.plannedGenerationId).toMatch(/^run-123-attempt-1-job-[a-f0-9]{12}$/u);
     expect(cacheModel.cacheRoot).toBe('/home/runner/.gradle');
     expect(cacheModel.javaMajor).toBe(21);
     expect(cacheModel.partitionFingerprint).toMatch(/^[a-f0-9]{16}$/);
@@ -248,7 +273,7 @@ describe('createCacheModel', () => {
     expect(captureCommandOutput).not.toHaveBeenCalled();
   });
 
-  it('changes the partition fingerprint and cache key when the partition layout changes', async () => {
+  it('changes the partition fingerprint and cache family when the partition layout changes', async () => {
     const captureCommandOutput = async () => 'openjdk version "21.0.4" 2024-07-16\n';
 
     const defaultModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
@@ -277,10 +302,32 @@ describe('createCacheModel', () => {
       'transforms-metadata',
     );
     expect(customizedModel.partitionFingerprint).not.toBe(defaultModel.partitionFingerprint);
-    expect(customizedModel.cacheKey).not.toBe(defaultModel.cacheKey);
+    expect(customizedModel.cacheFamilyKey).not.toBe(defaultModel.cacheFamilyKey);
   });
 
-  it('sets javaMajor to null and uses 0 in the cache key when no Java runtime is available', async () => {
+  it('uses a supplied UUID seed and omits fallback when the current ref is the default branch', async () => {
+    const cacheModel = await createCacheModel(
+      baseConfig,
+      {
+        ...baseCiContext,
+        resolvedRefName: 'main',
+        safeRefName: 'main',
+        runId: null,
+        runAttempt: null,
+      },
+      gradleAdapter,
+      {
+        captureCommandOutput: async () => 'openjdk version "21.0.4" 2024-07-16\n',
+        env: envWithoutJavaHome,
+        randomUuid: () => '123e4567-e89b-12d3-a456-426614174000',
+      },
+    );
+
+    expect(cacheModel.plannedGenerationId).toBe('uuid-123e4567-e89b-12d3-a456-426614174000');
+    expect(cacheModel.fallbackRefLineagePrefixes).toEqual([]);
+  });
+
+  it('sets javaMajor to null and uses 0 in the cache family when no Java runtime is available', async () => {
     const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
       captureCommandOutput: async () => {
         throw new Error('ENOENT: java not found');
@@ -289,7 +336,7 @@ describe('createCacheModel', () => {
     });
 
     expect(cacheModel.javaMajor).toBeNull();
-    expect(cacheModel.cacheKey).toMatch(/-0-linux-/u);
+    expect(cacheModel.cacheFamilyKey).toMatch(/-v2-0-linux-/u);
   });
 
   it('sets javaMajor to null when java -version exits non-zero', async () => {
@@ -301,6 +348,6 @@ describe('createCacheModel', () => {
     });
 
     expect(cacheModel.javaMajor).toBeNull();
-    expect(cacheModel.cacheKey).toMatch(/-0-linux-/u);
+    expect(cacheModel.cacheFamilyKey).toMatch(/-v2-0-linux-/u);
   });
 });
