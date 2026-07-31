@@ -24,26 +24,25 @@ import {
   type BootstrapDependencies,
 } from '../bootstrap';
 import { collectTimestampCacheGarbage, type TimestampCacheGcResult } from '../../cache/gc';
+import { decideBaseCacheGeneration } from '../../cache/lifecycle';
 import type { CacheDeltaManifest, CacheManifest } from '../../cache/manifest';
 import {
   calculateCanonicalCacheManifestDigest,
   captureCacheManifest,
   computeCacheDelta,
 } from '../../cache/manifest';
-import { createCacheGeneration, type CacheModel } from '../../cache/model';
+import { createCacheGeneration, renderCacheJavaMajor, type CacheModel } from '../../cache/model';
 import {
-  isBaseCacheFinalizeArmed,
   saveBaseCache,
   type BaseCacheOperationResult,
   type BaseCacheRestoreResult,
 } from '../../cache/service';
 import type { BuildReport } from '../../build-tool/types';
-import { createHtmlLink } from '../../util/html';
+import { createHtmlLink, escapeSummaryText } from '../../util/html';
 import {
-  getPersistedBaseCacheRestoreResult,
-  getPersistedDeltaArtifactExecutionIdentity,
-  getPersistedConsumedDeltaArtifactNames,
+  getPersistedCacheLifecycleRecord,
   loadPersistedPreBuildCacheManifest,
+  type PersistedCacheLifecycleRecord,
 } from './state';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
@@ -53,19 +52,13 @@ const DELTA_ARTIFACT_RETENTION_DAYS = 7;
  * Outcome of the delta artifact upload step in the finalize phase.
  *
  * `status` describes why the artifact was or was not uploaded:
- * - `missing-pre-build-manifest` — no pre-build manifest was persisted by the prepare phase
  * - `not-distributed-worker` — job mode is not `distributed-worker`
  * - `read-only` — action is in read-only mode
  * - `no-changes` — diff between pre- and post-build manifests was empty
  * - `uploaded` — delta artifact was successfully packaged and uploaded
  */
 export interface FinalizeDeltaArtifactResult {
-  readonly status:
-    | 'missing-pre-build-manifest'
-    | 'not-distributed-worker'
-    | 'read-only'
-    | 'no-changes'
-    | 'uploaded';
+  readonly status: 'not-distributed-worker' | 'read-only' | 'no-changes' | 'uploaded';
   readonly addedCount: number;
   readonly modifiedCount: number;
   readonly deletedCount: number;
@@ -146,12 +139,16 @@ export async function executeFinalizeAction(
   dependencies: FinalizeActionDependencies,
 ): Promise<FinalizeActionStatus> {
   const logInfo = dependencies.runtimeHost.info;
-  const bootstrap = await bootstrapPhase('finalize', dependencies);
+  const initialBootstrap = await bootstrapPhase('finalize', dependencies);
+  const lifecycleRecord = getPersistedCacheLifecycleRecord(dependencies.runtimeHost.getState);
+  const bootstrap = reconcileCacheLifecycle(initialBootstrap, lifecycleRecord);
   const { workflowRunUrl, jobUrl } = bootstrap.ciExecutionUrls;
-  const baseCacheRestoreResult = getPersistedBaseCacheRestoreResult(
-    dependencies.runtimeHost.getState,
+  const baseCacheRestoreResult = lifecycleRecord?.restoreResult ?? null;
+  const consumedDeltaCleanupResult = await cleanupConsumedDeltaArtifacts(
+    bootstrap,
+    lifecycleRecord,
+    dependencies,
   );
-  const consumedDeltaCleanupResult = await cleanupConsumedDeltaArtifacts(bootstrap, dependencies);
   const buildReport = await bootstrap.buildToolAdapter.collectBuildReport(bootstrap.ciContext);
   const logGroupName = `Buildish Mammoth Cache for ${bootstrap.buildToolAdapter.getName()}`;
 
@@ -179,57 +176,39 @@ export async function executeFinalizeAction(
     return status;
   }
 
+  if (!lifecycleRecord) {
+    throw new Error('Cache lifecycle state is required when finalize has caching enabled.');
+  }
   const preBuildManifest = await loadPersistedPreBuildCacheManifest(
-    dependencies.runtimeHost.getState,
+    lifecycleRecord.preBuildManifestPath,
   );
-  if (preBuildManifest && preBuildManifest.buildToolId !== bootstrap.cacheModel.buildToolId) {
+  if (preBuildManifest.buildToolId !== bootstrap.cacheModel.buildToolId) {
     throw new Error(
       `Cache manifest build tool mismatch: the persisted pre-build manifest was produced by '${preBuildManifest.buildToolId}', but the current action is running as '${bootstrap.cacheModel.buildToolId}'. Cache manifests cannot be shared across different build tools.`,
     );
   }
-  if (!preBuildManifest) {
-    const cacheGcResult = await maybeCollectCacheGarbage(bootstrap);
-    const baseCacheSaveResult = await saveFinalizeBaseCache(bootstrap, dependencies);
-    const finalizedBootstrap = withBaseCacheResult(bootstrap, baseCacheSaveResult);
-    const status = {
-      bootstrap: finalizedBootstrap,
-      baseCacheRestoreResult,
-      cacheGcResult,
-      cacheStatistics: null,
-      consumedDeltaCleanupResult,
-      deltaArtifactResult: {
-        status: 'missing-pre-build-manifest',
-        addedCount: 0,
-        modifiedCount: 0,
-        deletedCount: 0,
-        totalChangedCount: 0,
-        artifactName: null,
-        artifactId: null,
-        artifactSizeBytes: null,
-        message:
-          'Delta artifact upload skipped because no persisted pre-build cache manifest was found in post-action state.',
-      },
-      buildReport,
-      jobUrl,
-      workflowRunUrl,
-      message: 'Finalize execution completed without a persisted pre-build cache manifest.',
-    } satisfies FinalizeActionStatus;
-    const logLines2 = createFinalizeActionLogLines(status);
-    if (logLines2.length > 0) {
-      bootstrap.reportSink.publishLogGroup(logGroupName, logLines2, logInfo);
-    }
-    const summaryLines2 = createFinalizeActionSummaryLines(status);
-    if (summaryLines2.length > 0) {
-      await bootstrap.reportSink.replaceSummary(summaryLines2);
-    }
-    return status;
+  const persistedManifestDigest = calculateCanonicalCacheManifestDigest(preBuildManifest);
+  if (persistedManifestDigest !== lifecycleRecord.preBuildManifestDigest) {
+    throw new Error(
+      'Persisted pre-build cache manifest does not match the digest in cache lifecycle state.',
+    );
   }
 
   const cacheGcResult = await maybeCollectCacheGarbage(bootstrap);
   const currentManifest = await captureCacheManifest(bootstrap.cacheModel);
   const deltaManifest = computeCacheDelta(preBuildManifest, currentManifest);
-  const deltaArtifactResult = await uploadFinalizeArtifact(deltaManifest, bootstrap, dependencies);
-  const baseCacheSaveResult = await saveFinalizeBaseCache(bootstrap, dependencies, currentManifest);
+  const deltaArtifactResult = await uploadFinalizeArtifact(
+    deltaManifest,
+    bootstrap,
+    lifecycleRecord,
+    dependencies,
+  );
+  const baseCacheSaveResult = await saveFinalizeBaseCache(
+    bootstrap,
+    lifecycleRecord,
+    dependencies,
+    currentManifest,
+  );
   const finalizedBootstrap = withBaseCacheResult(bootstrap, baseCacheSaveResult);
 
   const status = {
@@ -268,6 +247,59 @@ export async function executeFinalizeAction(
   return status;
 }
 
+function reconcileCacheLifecycle(
+  bootstrap: BootstrapExecution,
+  lifecycleRecord: PersistedCacheLifecycleRecord | null,
+): BootstrapExecution {
+  const cacheModel = bootstrap.cacheModel;
+  if (!cacheModel) {
+    if (lifecycleRecord) {
+      throw new Error(
+        'Cache lifecycle configuration drift: prepare enabled caching but finalize disabled it.',
+      );
+    }
+    return bootstrap;
+  }
+  if (!lifecycleRecord) {
+    throw new Error(
+      'Cache lifecycle state is missing even though finalize has caching enabled. Refusing to save without validated prepare state.',
+    );
+  }
+
+  const mismatches: string[] = [];
+  if (lifecycleRecord.cacheSchemaVersion !== bootstrap.config.cacheSchemaVersion) {
+    mismatches.push('cache schema version');
+  }
+  if (lifecycleRecord.buildToolId !== cacheModel.buildToolId) {
+    mismatches.push('build tool');
+  }
+  if (lifecycleRecord.cacheFamilyKey !== cacheModel.cacheFamilyKey) {
+    mismatches.push('cache family');
+  }
+  if (lifecycleRecord.currentRefLineagePrefix !== cacheModel.currentRefLineagePrefix) {
+    mismatches.push('current ref lineage');
+  }
+  if (
+    JSON.stringify(lifecycleRecord.fallbackRefLineagePrefixes) !==
+    JSON.stringify(cacheModel.fallbackRefLineagePrefixes)
+  ) {
+    mismatches.push('fallback ref lineages');
+  }
+  if (mismatches.length > 0) {
+    throw new Error(
+      `Cache lifecycle configuration drift between prepare and finalize: ${mismatches.join(', ')}. Refusing to save under inconsistent cache identity.`,
+    );
+  }
+
+  return {
+    ...bootstrap,
+    cacheModel: {
+      ...cacheModel,
+      plannedGenerationId: lifecycleRecord.plannedGenerationId,
+    },
+  };
+}
+
 async function maybeCollectCacheGarbage(
   bootstrap: BootstrapExecution,
 ): Promise<TimestampCacheGcResult | null> {
@@ -287,26 +319,48 @@ async function maybeCollectCacheGarbage(
 
 async function saveFinalizeBaseCache(
   bootstrap: BootstrapExecution,
+  lifecycleRecord: PersistedCacheLifecycleRecord,
   dependencies: FinalizeActionDependencies,
-  currentManifest?: CacheManifest,
+  currentManifest: CacheManifest,
 ): Promise<BaseCacheOperationResult | null> {
   const cacheModel = bootstrap.cacheModel;
   if (!cacheModel) {
     return null;
   }
 
-  return await saveBaseCache(
+  const currentManifestDigest = calculateCanonicalCacheManifestDigest(currentManifest);
+  const generationDecision = decideBaseCacheGeneration({
+    restoreStatus: lifecycleRecord.restoreResult.status,
+    preBuildManifestDigest: lifecycleRecord.preBuildManifestDigest,
+    currentManifestDigest,
+    currentEntryCount: currentManifest.partitions.reduce(
+      (count, partition) => count + partition.entries.length,
+      0,
+    ),
+    dependentMutationCount: lifecycleRecord.dependentDelta?.totalChangedCount ?? 0,
+  });
+  const saveResult = await saveBaseCache(
     bootstrap.config,
     cacheModel,
-    async () => {
-      const manifest = currentManifest ?? (await captureCacheManifest(cacheModel));
-      return createCacheGeneration(cacheModel, calculateCanonicalCacheManifestDigest(manifest));
-    },
-    isBaseCacheFinalizeArmed(dependencies.runtimeHost.getState),
+    () =>
+      generationDecision.required ? createCacheGeneration(cacheModel, currentManifestDigest) : null,
     {
       cacheBackend: dependencies.cacheBackend,
     },
   );
+
+  if (
+    bootstrap.config.jobMode === 'distributed-aggregator' &&
+    !bootstrap.config.readOnly &&
+    generationDecision.required &&
+    saveResult.status !== 'saved'
+  ) {
+    throw new Error(
+      `Distributed aggregation required a durable base-cache generation, but publication ended with '${saveResult.status}': ${saveResult.message}`,
+    );
+  }
+
+  return saveResult;
 }
 
 function withBaseCacheResult(
@@ -322,6 +376,7 @@ function withBaseCacheResult(
 async function uploadFinalizeArtifact(
   deltaManifest: Parameters<typeof stageDeltaArtifactPackage>[2],
   bootstrap: BootstrapExecution,
+  lifecycleRecord: PersistedCacheLifecycleRecord,
   dependencies: FinalizeActionDependencies,
 ): Promise<FinalizeDeltaArtifactResult> {
   const counts = countDeltaEntries(deltaManifest);
@@ -361,17 +416,12 @@ async function uploadFinalizeArtifact(
   }
 
   const artifactBackend = dependencies.artifactBackend;
-  const persistedExecutionIdentity = getPersistedDeltaArtifactExecutionIdentity(
-    dependencies.runtimeHost.getState,
-  );
-  const deltaArtifactExecutionContext = persistedExecutionIdentity
-    ? {
-        ...bootstrap.ciContext,
-        jobName: persistedExecutionIdentity.jobName,
-        runId: persistedExecutionIdentity.runId,
-        runAttempt: persistedExecutionIdentity.runAttempt,
-      }
-    : bootstrap.ciContext;
+  const deltaArtifactExecutionContext = {
+    ...bootstrap.ciContext,
+    jobName: lifecycleRecord.executionIdentity.jobName,
+    runId: lifecycleRecord.executionIdentity.runId,
+    runAttempt: lifecycleRecord.executionIdentity.runAttempt,
+  };
   const stagedPackage = await stageDeltaArtifactPackage(
     deltaArtifactExecutionContext,
     bootstrap.cacheModel!,
@@ -401,26 +451,14 @@ async function uploadFinalizeArtifact(
 
 async function cleanupConsumedDeltaArtifacts(
   bootstrap: BootstrapExecution,
+  lifecycleRecord: PersistedCacheLifecycleRecord | null,
   dependencies: FinalizeActionDependencies,
 ): Promise<FinalizeConsumedDeltaCleanupResult | null> {
   if (bootstrap.config.jobMode !== 'distributed-aggregator') {
     return null;
   }
 
-  let artifactNames: readonly string[];
-  try {
-    artifactNames = getPersistedConsumedDeltaArtifactNames(dependencies.runtimeHost.getState);
-  } catch (error) {
-    return {
-      attemptedArtifactNames: [],
-      deletedArtifactNames: [],
-      warnings: [
-        `Unable to load persisted consumed delta artifact names: ${error instanceof Error ? error.message : String(error)}`,
-      ],
-      message:
-        'Consumed delta artifact cleanup skipped because persisted cleanup state could not be read.',
-    };
-  }
+  const artifactNames = [...new Set(lifecycleRecord?.dependentDelta?.artifactNames ?? [])];
 
   if (artifactNames.length === 0) {
     return {
@@ -515,6 +553,40 @@ export function createFinalizeActionSummaryLines(status: FinalizeActionStatus): 
   const summaryIssues = collectFinalizeActionSummaryIssues(status);
   const overallStatus = determineOverallSummaryStatus(summaryIssues);
   const toolName = status.bootstrap.buildToolAdapter.getName();
+  const cacheModel = status.bootstrap.cacheModel;
+  const saveResult =
+    status.bootstrap.baseCacheResult?.operation === 'save'
+      ? status.bootstrap.baseCacheResult
+      : null;
+  const lifecycleLines = cacheModel
+    ? [
+        '',
+        '### Cache lifecycle',
+        `- Cache family: ${escapeSummaryText(cacheModel.cacheFamilyKey)}`,
+        `- Current ref lineage: ${escapeSummaryText(cacheModel.currentRefLineagePrefix)}`,
+        `- Restore status: ${escapeSummaryText(status.baseCacheRestoreResult?.status ?? 'not evaluated')}`,
+        `- Restored generation: ${escapeSummaryText(status.baseCacheRestoreResult?.matchedKey ?? 'none')}`,
+        `- Save status: ${escapeSummaryText(saveResult?.status ?? 'not evaluated')}`,
+        ...(saveResult?.status === 'saved' && saveResult.generationKey
+          ? [
+              `- Published generation: ${escapeSummaryText(saveResult.generationKey)}`,
+              `- Published cache ID: ${saveResult.cacheId ?? 'not reported'}`,
+            ]
+          : []),
+      ]
+    : [];
+  const issueLines = [
+    ...(summaryIssues.errors.length > 0
+      ? ['', '### Errors', ...summaryIssues.errors.map((issue) => `- ${escapeSummaryText(issue)}`)]
+      : []),
+    ...(summaryIssues.warnings.length > 0
+      ? [
+          '',
+          '### Warnings',
+          ...summaryIssues.warnings.map((warning) => `- ${escapeSummaryText(warning)}`),
+        ]
+      : []),
+  ];
   return [
     `## Buildish Mammoth Cache for ${toolName}`,
     `${getSummaryStatusIcon(overallStatus)} Overall status: ${getSummaryStatusLabel(overallStatus)}`,
@@ -523,6 +595,8 @@ export function createFinalizeActionSummaryLines(status: FinalizeActionStatus): 
       ? `### ${createHtmlLink(status.jobUrl, `${toolName} builds`)}`
       : `### ${toolName} builds`,
     ...status.buildReport.summaryLines,
+    ...lifecycleLines,
+    ...issueLines,
   ];
 }
 
@@ -596,6 +670,20 @@ function createCacheDetailLogLines(status: FinalizeActionStatus): readonly strin
     `Delta artifact: ${status.deltaArtifactResult?.status ?? 'not evaluated'}.`,
   ];
 
+  if (status.baseCacheRestoreResult?.matchedKey) {
+    lines.push(`Restored base cache generation: ${status.baseCacheRestoreResult.matchedKey}.`);
+  }
+
+  const saveResult =
+    status.bootstrap.baseCacheResult?.operation === 'save'
+      ? status.bootstrap.baseCacheResult
+      : null;
+  if (saveResult?.status === 'saved' && saveResult.generationKey) {
+    lines.push(`Published base cache generation: ${saveResult.generationKey}.`);
+  } else if (saveResult?.status === 'failed' && saveResult.generationKey) {
+    lines.push(`Attempted base cache generation: ${saveResult.generationKey}.`);
+  }
+
   if (status.deltaArtifactResult) {
     lines.push(
       `Post-build cache delta: ${status.deltaArtifactResult.addedCount} added, ${status.deltaArtifactResult.modifiedCount} modified, ${status.deltaArtifactResult.deletedCount} deleted.`,
@@ -630,7 +718,7 @@ function describeCacheGcSummary(result: TimestampCacheGcResult | null): string {
 function createExecutionContextLogLines(status: FinalizeActionStatus): readonly string[] {
   return [
     `Post-action detail: ${status.message}`,
-    `Post-action cache context: family '${status.bootstrap.cacheModel?.cacheFamilyKey ?? 'disabled'}', current ref lineage '${status.bootstrap.cacheModel?.currentRefLineagePrefix ?? 'disabled'}', Java major '${status.bootstrap.cacheModel?.javaMajor ?? 'n/a'}', cache partitions ${status.bootstrap.cacheModel?.partitions.length ?? 0}.`,
+    `Post-action cache context: family '${status.bootstrap.cacheModel?.cacheFamilyKey ?? 'disabled'}', current ref lineage '${status.bootstrap.cacheModel?.currentRefLineagePrefix ?? 'disabled'}', Java major '${status.bootstrap.cacheModel ? renderCacheJavaMajor(status.bootstrap.cacheModel.javaMajor) : 'n/a'}', cache partitions ${status.bootstrap.cacheModel?.partitions.length ?? 0}.`,
   ];
 }
 
@@ -643,10 +731,6 @@ function collectFinalizeActionSummaryIssues(status: FinalizeActionStatus): {
 
   if (status.buildReport.anyBuildFailed) {
     errors.push(`One or more ${status.bootstrap.buildToolAdapter.getName()} builds failed.`);
-  }
-
-  if (status.deltaArtifactResult?.status === 'missing-pre-build-manifest') {
-    errors.push(status.deltaArtifactResult.message);
   }
 
   warnings.push(...status.buildReport.warnings);
@@ -867,8 +951,8 @@ function getBaseCacheWarning(
   if (
     result.status === 'feature-unavailable' ||
     result.status === 'missing-paths' ||
-    result.status === 'not-armed' ||
-    result.status === 'not-saved'
+    result.status === 'not-saved' ||
+    result.status === 'failed'
   ) {
     return result.message;
   }

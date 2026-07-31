@@ -80,9 +80,9 @@ describe('immutable cache generation lifecycle', () => {
     );
 
     expect((await restoreBaseCache(baseModel, dependencies)).status).toBe('miss');
-    expect(
-      (await saveBaseCache(config, baseModel, () => generation1, true, dependencies)).status,
-    ).toBe('saved');
+    expect((await saveBaseCache(config, baseModel, () => generation1, dependencies)).status).toBe(
+      'saved',
+    );
 
     const run2Model: CacheModel = {
       ...baseModel,
@@ -96,9 +96,9 @@ describe('immutable cache generation lifecycle', () => {
       run2Model,
       calculateCanonicalCacheManifestDigest(createManifest('b'.repeat(64))),
     );
-    expect(
-      (await saveBaseCache(config, run2Model, () => generation2, true, dependencies)).status,
-    ).toBe('saved');
+    expect((await saveBaseCache(config, run2Model, () => generation2, dependencies)).status).toBe(
+      'saved',
+    );
 
     const run3Restore = await restoreBaseCache(
       {

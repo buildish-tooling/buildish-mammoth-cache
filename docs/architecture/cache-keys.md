@@ -77,7 +77,7 @@ default.
 
 ## Immutable generation
 
-Every save uses a new generation key. The generation suffix combines a bounded writer identity
+Every required save uses a new generation key. The generation suffix combines a bounded writer identity
 (workflow run, attempt, and job digest) with the first 12 characters of the canonical full-manifest
 SHA-256 digest.
 
@@ -86,6 +86,11 @@ mode, and modification time. It excludes access time and the machine-specific ab
 
 Generation keys are never overwritten. On the next run, newest-prefix lookup restores the most
 recent accessible generation in the selected lineage.
+
+Finalize does not create a generation for an unchanged cache hit. It compares the canonical
+pre-build and post-build manifest digests and also accounts for dependent-delta mutations. A
+non-empty restore miss creates the first generation even when the build itself made no subsequent
+change; an empty miss does not create a useless entry.
 
 ## Partition fingerprint
 

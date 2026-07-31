@@ -19,8 +19,6 @@ import type { BaseCacheBackend } from './backend';
 
 import type { CacheGeneration, CacheModel } from './model';
 
-const FINALIZE_ARMED_STATE = 'buildish-mammoth-cache-base-cache-armed';
-
 /**
  * Injectable dependencies for the base cache service.
  */
@@ -84,22 +82,24 @@ export interface BaseCacheSaveResult {
    * Save outcome classification.
    *
    * Valid values:
-   * - `not-armed`: finalize phase was not paired with an armed prepare phase
    * - `read-only`: config forbids writes
    * - `distributed-worker`: worker jobs do not save shared base caches
    * - `feature-unavailable`: cache backend unavailable in this environment
+   * - `not-required`: no material state requires a new immutable generation
    * - `missing-paths`: no configured cache paths currently exist on disk, so save is skipped
    * - `saved`: a new cache entry was created
    * - `not-saved`: the backend ran but did not create a new cache entry
+   * - `failed`: the backend rejected or failed the save operation
    */
   readonly status:
-    | 'not-armed'
     | 'read-only'
     | 'distributed-worker'
     | 'feature-unavailable'
+    | 'not-required'
     | 'missing-paths'
     | 'saved'
-    | 'not-saved';
+    | 'not-saved'
+    | 'failed';
   /** Immutable generation key attempted by finalize, or `null` when save eligibility failed first. */
   readonly generationKey: string | null;
   /** Cache identifier returned by the active backend when a new entry is successfully created. */
@@ -218,26 +218,16 @@ export async function restoreBaseCache(
 /**
  * Saves the base cache from the post-action when the current job mode allows it.
  *
- * Save is intentionally gated behind post-action arming, read-only mode, and job-mode checks, so
- * we avoid introducing duplicate writers or unexpected state changes in distributed execution.
+ * Save is intentionally gated behind read-only mode and job-mode checks. The finalize flow calls
+ * this service only after validating the complete prepare-phase lifecycle record.
  */
 export async function saveBaseCache(
   config: NormalizedActionConfig,
   cacheModel: CacheModel,
-  createGeneration: () => CacheGeneration | Promise<CacheGeneration>,
-  postActionArmed: boolean,
+  createGeneration: () => CacheGeneration | null | Promise<CacheGeneration | null>,
   dependencies: BaseCacheServiceDependencies,
 ): Promise<BaseCacheSaveResult> {
   const paths = createBaseCachePaths(cacheModel);
-
-  if (!postActionArmed) {
-    return createSaveResult(
-      'not-armed',
-      null,
-      paths,
-      'Base cache save skipped because the main action phase did not arm post-save state.',
-    );
-  }
 
   if (config.readOnly) {
     return createSaveResult(
@@ -277,6 +267,14 @@ export async function saveBaseCache(
   }
 
   const generation = await createGeneration();
+  if (!generation) {
+    return createSaveResult(
+      'not-required',
+      null,
+      paths,
+      'Base cache save skipped because the managed state does not require a new immutable generation.',
+    );
+  }
   assertGenerationMatchesModel(generation, cacheModel);
   let cacheId: number;
 
@@ -291,8 +289,12 @@ export async function saveBaseCache(
         'Base cache save skipped because none of the configured cache paths exist yet.',
       );
     }
-
-    throw error;
+    return createSaveResult(
+      'failed',
+      generation.key,
+      paths,
+      `Base cache generation publication failed for '${generation.key}': ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   if (cacheId > 0) {
@@ -311,23 +313,6 @@ export async function saveBaseCache(
     paths,
     `Base cache save did not create a new cache entry for generation key '${generation.key}'.`,
   );
-}
-
-/**
- * Marks the finalize phase as eligible to consider a later base-cache save.
- *
- * Arming happens during the prepare phase after restore/setup work has completed, so the finalize phase can
- * cheaply distinguish a legitimate paired execution from a standalone post-invocation.
- */
-export function armBaseCacheFinalize(saveState: (name: string, value: string) => void): void {
-  saveState(FINALIZE_ARMED_STATE, 'true');
-}
-
-/**
- * Returns whether the finalize phase was armed by the prepare phase for a later base-cache save.
- */
-export function isBaseCacheFinalizeArmed(getState: (name: string) => string): boolean {
-  return getState(FINALIZE_ARMED_STATE) === 'true';
 }
 
 function createSaveResult(

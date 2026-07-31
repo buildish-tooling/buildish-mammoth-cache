@@ -21,8 +21,9 @@ limitations under the License.
 -->
 
 Single-job mode (`job-mode: standalone`, which is the default) is the right choice when your
-workflow runs one build job at a time. The action restores the cache before the build and saves an
-updated cache entry after — only the changed files are written back, keeping entries lean.
+workflow runs one build job at a time. The action restores the newest compatible immutable
+generation before the build and publishes a new complete generation only when managed state
+materially changes.
 
 ## Gradle
 
@@ -39,8 +40,8 @@ sequenceDiagram
     P->>P: provision gradle-wrapper.jar
     P-->>B: hand off
     B-->>F: build complete
-    F->>F: compute delta
-    F->>F: save updated cache entry
+    F->>F: compare material state
+    F->>F: publish complete generation if required
 ```
 
 ### Minimal workflow
@@ -81,8 +82,8 @@ steps:
 
 ## Maven
 
-For Maven the prepare step restores the local repository and the finalize step saves back the
-delta. No wrapper provisioning is performed.
+For Maven the prepare step restores the local repository and finalize publishes a complete new
+generation when the managed repository materially changes. No wrapper provisioning is performed.
 
 ```mermaid
 sequenceDiagram
@@ -93,8 +94,8 @@ sequenceDiagram
     P->>P: restore cache (or cold start)
     P-->>B: hand off
     B-->>F: build complete
-    F->>F: compute delta
-    F->>F: save updated cache entry
+    F->>F: compare material state
+    F->>F: publish complete generation if required
 ```
 
 ### Minimal workflow

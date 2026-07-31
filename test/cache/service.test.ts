@@ -19,7 +19,6 @@ import { describe, expect, it } from 'vitest';
 import {
   createBaseCachePaths,
   createBaseCacheRestoreCandidates,
-  isBaseCacheFinalizeArmed,
   restoreBaseCache,
   saveBaseCache,
 } from '../../src/cache/service';
@@ -211,13 +210,30 @@ describe('restoreBaseCache', () => {
 });
 
 describe('saveBaseCache', () => {
+  it('skips saving when no material generation is required', async () => {
+    let saveCalls = 0;
+    const result = await saveBaseCache(baseConfig, cacheModel, () => null, {
+      cacheBackend: createCacheBackend({
+        isFeatureAvailable: () => true,
+        restoreCache: async () => undefined,
+        saveCache: async () => {
+          saveCalls += 1;
+          return 77;
+        },
+      }),
+    });
+
+    expect(saveCalls).toBe(0);
+    expect(result.status).toBe('not-required');
+    expect(result.generationKey).toBeNull();
+  });
+
   it('rejects a generation that does not belong to the current writer and lineage', async () => {
     await expect(
       saveBaseCache(
         baseConfig,
         cacheModel,
         () => ({ ...generation, generationId: 'run-999-attempt-1-job-bbbbbbbbbbbb' }),
-        true,
         {
           cacheBackend: createCacheBackend({
             isFeatureAvailable: () => true,
@@ -238,7 +254,6 @@ describe('saveBaseCache', () => {
         generationCalls += 1;
         return generation;
       },
-      true,
       {
         cacheBackend: createCacheBackend({
           isFeatureAvailable: () => true,
@@ -258,7 +273,6 @@ describe('saveBaseCache', () => {
       { ...baseConfig, jobMode: 'distributed-worker' },
       cacheModel,
       () => generation,
-      true,
       {
         cacheBackend: createCacheBackend({
           isFeatureAvailable: () => true,
@@ -272,7 +286,7 @@ describe('saveBaseCache', () => {
   });
 
   it('reports saved cache IDs for eligible saves', async () => {
-    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
@@ -287,7 +301,7 @@ describe('saveBaseCache', () => {
   it('skips saving when the cache backend does not support explicit saves', async () => {
     let saveCalls = 0;
 
-    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, {
       cacheBackend: createCacheBackend(
         {
           isFeatureAvailable: () => true,
@@ -313,7 +327,7 @@ describe('saveBaseCache', () => {
     const missingPathsError = new Error(
       'Path Validation Error: Path(s) specified in the action for caching do(es) not exist, hence no cache is being saved.',
     );
-    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
@@ -332,7 +346,7 @@ describe('saveBaseCache', () => {
   });
 
   it('returns not-saved when the toolkit declines to create a new cache entry', async () => {
-    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, true, {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
         restoreCache: async () => undefined,
@@ -343,27 +357,21 @@ describe('saveBaseCache', () => {
     expect(result.status).toBe('not-saved');
   });
 
-  it('rethrows unrelated save failures', async () => {
-    await expect(
-      saveBaseCache(baseConfig, cacheModel, () => generation, true, {
-        cacheBackend: createCacheBackend({
-          isFeatureAvailable: () => true,
-          restoreCache: async () => undefined,
-          saveCache: async () => {
-            throw new Error('boom');
-          },
-        }),
+  it('reports unrelated save failures without claiming the generation was saved', async () => {
+    const result = await saveBaseCache(baseConfig, cacheModel, () => generation, {
+      cacheBackend: createCacheBackend({
+        isFeatureAvailable: () => true,
+        restoreCache: async () => undefined,
+        saveCache: async () => {
+          throw new Error('boom');
+        },
       }),
-    ).rejects.toThrow('boom');
-  });
-});
+    });
 
-describe('isBaseCacheFinalizeArmed', () => {
-  it('detects the saved post-action arm state', () => {
-    expect(
-      isBaseCacheFinalizeArmed((name) =>
-        name === 'buildish-mammoth-cache-base-cache-armed' ? 'true' : '',
-      ),
-    ).toBe(true);
+    expect(result.status).toBe('failed');
+    expect(result.generationKey).toBe(generation.key);
+    expect(result.cacheId).toBeNull();
+    expect(result.message).toContain('publication failed');
+    expect(result.message).toContain('boom');
   });
 });

@@ -46,6 +46,12 @@ even on the same branch with no dependency changes.
    inactivity and when the total storage cap for the repository is reached. An evicted entry
    looks identical to a new key from the action's perspective.
 
+5. **Check the finalize save status.** `not-required` is expected after an unchanged cache hit and
+   means no duplicate immutable generation was written. `failed`, `not-saved`, or `missing-paths`
+   means the summary must not show a published generation; inspect the warning for the backend or
+   path error. Aggregator publication failures fail the job because merged worker state is not yet
+   durable.
+
 ---
 
 ## GitHub Actions cache storage keeps filling up

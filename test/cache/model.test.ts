@@ -23,6 +23,7 @@ import {
   createCacheRefToken,
   parseJavaMajor,
   renderCacheFamilyKey,
+  renderCacheJavaMajor,
 } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { CiJobContext } from '../../src/ci/types';
@@ -336,6 +337,7 @@ describe('createCacheModel', () => {
     });
 
     expect(cacheModel.javaMajor).toBeNull();
+    expect(renderCacheJavaMajor(cacheModel.javaMajor)).toBe('0');
     expect(cacheModel.cacheFamilyKey).toMatch(/-v2-0-linux-/u);
   });
 

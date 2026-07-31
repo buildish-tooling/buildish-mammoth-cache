@@ -20,72 +20,50 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { CACHE_MANIFEST_SCHEMA_VERSION, type CacheManifest } from '../../../src/cache/manifest';
-import type { BaseCacheRestoreResult } from '../../../src/cache/service';
-import type { CiJobContext } from '../../../src/ci/types';
 import {
-  BASE_CACHE_RESTORE_RESULT_STATE,
-  CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
-  DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE,
-  getPersistedBaseCacheRestoreResult,
-  getPersistedConsumedDeltaArtifactNames,
-  getPersistedDeltaArtifactExecutionIdentity,
-  getPersistedPreBuildCacheManifestPath,
+  CACHE_MANIFEST_SCHEMA_VERSION,
+  calculateCanonicalCacheManifestDigest,
+  type CacheManifest,
+} from '../../../src/cache/manifest';
+import type { BaseCacheRestoreResult } from '../../../src/cache/service';
+import {
+  CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
+  CACHE_LIFECYCLE_RECORD_STATE,
+  getPersistedCacheLifecycleRecord,
   loadPersistedPreBuildCacheManifest,
-  persistBaseCacheRestoreResult,
-  persistConsumedDeltaArtifactNames,
-  persistDeltaArtifactExecutionIdentity,
+  persistCacheLifecycleRecord,
   persistPreBuildCacheManifest,
-  PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
+  type PersistedCacheLifecycleRecord,
 } from '../../../src/phases/finalize/state';
 
 describe('post-action state helpers', () => {
   it('persists a pre-build manifest under RUNNER_TEMP and loads it back', async () => {
     await withWorkspace(async (workspace) => {
       const runnerTemp = path.join(workspace, 'runner-temp');
-      const savedState = new Map<string, string>();
-
-      const persisted = await persistPreBuildCacheManifest(
-        SAMPLE_MANIFEST,
-        savedState.set.bind(savedState),
-        {
-          env: { RUNNER_TEMP: runnerTemp },
-        },
-      );
+      const persisted = await persistPreBuildCacheManifest(SAMPLE_MANIFEST, {
+        env: { RUNNER_TEMP: runnerTemp },
+      });
 
       expect(persisted.manifestPath.startsWith(path.resolve(runnerTemp) + path.sep)).toBe(true);
-      expect(savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE)).toBe(persisted.manifestPath);
+      expect(persisted.manifestDigest).toBe(calculateCanonicalCacheManifestDigest(SAMPLE_MANIFEST));
       await expect(readFile(persisted.manifestPath, 'utf8')).resolves.toContain('"cacheRoot"');
-      await expect(
-        loadPersistedPreBuildCacheManifest((name: string) => savedState.get(name) ?? ''),
-      ).resolves.toEqual(SAMPLE_MANIFEST);
+      await expect(loadPersistedPreBuildCacheManifest(persisted.manifestPath)).resolves.toEqual(
+        SAMPLE_MANIFEST,
+      );
     });
   });
 
   it('uses the tempDirectory option when no explicit parentDirectory is provided', async () => {
     await withWorkspace(async (workspace) => {
-      const savedState = new Map<string, string>();
       const tempDirectory = path.join(workspace, 'ci-temp');
-
-      const persisted = await persistPreBuildCacheManifest(
-        SAMPLE_MANIFEST,
-        savedState.set.bind(savedState),
-        { tempDirectory },
-      );
+      const persisted = await persistPreBuildCacheManifest(SAMPLE_MANIFEST, { tempDirectory });
 
       expect(persisted.manifestPath.startsWith(path.resolve(tempDirectory) + path.sep)).toBe(true);
     });
   });
 
-  it('falls back to os.tmpdir() when no parentDirectory, tempDirectory, or RUNNER_TEMP is provided', async () => {
-    const savedState = new Map<string, string>();
-
-    const persisted = await persistPreBuildCacheManifest(
-      SAMPLE_MANIFEST,
-      savedState.set.bind(savedState),
-      {}, // all options absent
-    );
-    // Clean up the file created under the system temp directory.
+  it('falls back to os.tmpdir() when no state parent is configured', async () => {
+    const persisted = await persistPreBuildCacheManifest(SAMPLE_MANIFEST);
     await rm(path.dirname(persisted.manifestPath), { recursive: true, force: true });
 
     expect(persisted.manifestPath.startsWith(os.tmpdir() + path.sep)).toBe(true);
@@ -93,17 +71,11 @@ describe('post-action state helpers', () => {
 
   it('prefers an explicit parent directory over RUNNER_TEMP', async () => {
     await withWorkspace(async (workspace) => {
-      const savedState = new Map<string, string>();
       const parentDirectory = path.join(workspace, 'custom-parent');
-
-      const persisted = await persistPreBuildCacheManifest(
-        SAMPLE_MANIFEST,
-        savedState.set.bind(savedState),
-        {
-          env: { RUNNER_TEMP: path.join(workspace, 'runner-temp') },
-          parentDirectory,
-        },
-      );
+      const persisted = await persistPreBuildCacheManifest(SAMPLE_MANIFEST, {
+        env: { RUNNER_TEMP: path.join(workspace, 'runner-temp') },
+        parentDirectory,
+      });
 
       expect(persisted.manifestPath.startsWith(path.resolve(parentDirectory) + path.sep)).toBe(
         true,
@@ -111,85 +83,88 @@ describe('post-action state helpers', () => {
     });
   });
 
-  it('returns null for blank state and resolves trimmed manifest paths', () => {
-    expect(getPersistedPreBuildCacheManifestPath(() => '   ')).toBeNull();
-    expect(
-      getPersistedPreBuildCacheManifestPath(
-        () => '  relative/post-state/pre-build-cache-manifest.json  ',
-      ),
-    ).toBe(path.resolve('relative/post-state/pre-build-cache-manifest.json'));
+  it('persists and reloads one complete cache lifecycle record', () => {
+    const savedState = new Map<string, string>();
+    const record = createSampleLifecycleRecord();
+
+    persistCacheLifecycleRecord(record, savedState.set.bind(savedState));
+
+    expect(savedState.get(CACHE_LIFECYCLE_RECORD_STATE)).toContain('current-lineage-hit');
+    expect(getPersistedCacheLifecycleRecord((name: string) => savedState.get(name) ?? '')).toEqual(
+      record,
+    );
   });
 
-  it('persists consumed delta artifact names as trimmed unique JSON state', () => {
-    const savedState = new Map<string, string>();
-
-    persistConsumedDeltaArtifactNames(
-      ['artifact-a', 'artifact-b', 'artifact-a'],
-      savedState.set.bind(savedState),
+  it('keeps execution identity and dependent mutation evidence inside the lifecycle record', () => {
+    const record = getPersistedCacheLifecycleRecord(() =>
+      JSON.stringify(createSampleLifecycleRecord()),
     );
 
-    expect(savedState.get(CONSUMED_DELTA_ARTIFACT_NAMES_STATE)).toContain('artifact-a');
-    expect(
-      getPersistedConsumedDeltaArtifactNames((name: string) =>
-        name === CONSUMED_DELTA_ARTIFACT_NAMES_STATE
-          ? '  ["artifact-a", "artifact-b", "artifact-a"]\n '
-          : '',
-      ),
-    ).toEqual(['artifact-a', 'artifact-b']);
-  });
-
-  it('persists and reloads the base cache restore result', () => {
-    const savedState = new Map<string, string>();
-
-    persistBaseCacheRestoreResult(
-      SAMPLE_BASE_CACHE_RESTORE_RESULT,
-      savedState.set.bind(savedState),
-    );
-
-    expect(savedState.get(BASE_CACHE_RESTORE_RESULT_STATE)).toContain('current-lineage-hit');
-    expect(
-      getPersistedBaseCacheRestoreResult((name: string) => savedState.get(name) ?? ''),
-    ).toEqual(SAMPLE_BASE_CACHE_RESTORE_RESULT);
-  });
-
-  it('persists only normalized execution identity for delta artifacts', () => {
-    const savedState = new Map<string, string>();
-
-    persistDeltaArtifactExecutionIdentity(SAMPLE_CI_CONTEXT, savedState.set.bind(savedState));
-
-    expect(savedState.get(DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE)).toBe(
-      '{"jobName":"check","runId":123,"runAttempt":1}\n',
-    );
-    expect(
-      getPersistedDeltaArtifactExecutionIdentity((name: string) => savedState.get(name) ?? ''),
-    ).toEqual({
+    expect(record?.executionIdentity).toEqual({
       jobName: 'check',
       runId: 123,
       runAttempt: 1,
     });
-
-    const parsedState = JSON.parse(
-      savedState.get(DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE) ?? 'null',
-    ) as Record<string, unknown>;
-    expect(Object.keys(parsedState).sort()).toEqual(['jobName', 'runAttempt', 'runId']);
-    expect(parsedState).not.toHaveProperty('platform');
-    expect(parsedState).not.toHaveProperty('provider');
+    expect(record?.dependentDelta).toEqual({
+      requestedJobs: ['worker-a'],
+      artifactNames: ['artifact-a'],
+      addedCount: 1,
+      modifiedCount: 2,
+      deletedCount: 3,
+      totalChangedCount: 6,
+    });
   });
 
-  it('rejects malformed consumed delta artifact state', () => {
-    expect(() => getPersistedConsumedDeltaArtifactNames(() => 'not-json')).toThrow(
+  it('rejects malformed or internally inconsistent lifecycle state', () => {
+    expect(() => getPersistedCacheLifecycleRecord(() => 'not-json')).toThrow(
       /Could not parse serialized/u,
     );
-    expect(() => getPersistedConsumedDeltaArtifactNames(() => '[""]')).toThrow(/Too small/u);
-  });
-
-  it('rejects unsupported base cache restore result state', () => {
     expect(() =>
-      getPersistedBaseCacheRestoreResult(
-        () =>
-          '{"operation":"restore","status":"saved","cacheKey":"cache-key","matchedKey":null,"restoreKeys":[],"paths":["/tmp/.gradle"],"message":"bad"}',
+      getPersistedCacheLifecycleRecord(() =>
+        JSON.stringify({
+          ...createSampleLifecycleRecord(),
+          cacheFamilyKey: 'different-family',
+        }),
       ),
-    ).toThrow(/Invalid base cache restore result state/u);
+    ).toThrow(/Restore result cache family must match/u);
+    expect(() =>
+      getPersistedCacheLifecycleRecord(() =>
+        JSON.stringify({
+          ...createSampleLifecycleRecord(),
+          dependentDelta: {
+            ...createSampleLifecycleRecord().dependentDelta,
+            totalChangedCount: 99,
+          },
+        }),
+      ),
+    ).toThrow(/totalChangedCount must equal/u);
+    expect(() =>
+      getPersistedCacheLifecycleRecord(() =>
+        JSON.stringify({
+          ...createSampleLifecycleRecord(),
+          restoreResult: {
+            ...createSampleLifecycleRecord().restoreResult,
+            status: 'miss',
+          },
+        }),
+      ),
+    ).toThrow(/hit status and matched generation fields must agree/u);
+    expect(() =>
+      getPersistedCacheLifecycleRecord(() =>
+        JSON.stringify({
+          ...createSampleLifecycleRecord(),
+          plannedGenerationId: '../unsupported',
+        }),
+      ),
+    ).toThrow(/Invalid cache lifecycle record state/u);
+    expect(() =>
+      getPersistedCacheLifecycleRecord(() =>
+        JSON.stringify({
+          ...createSampleLifecycleRecord(),
+          preBuildManifestPath: '../relative-manifest.json',
+        }),
+      ),
+    ).toThrow(/manifest path must be absolute/u);
   });
 });
 
@@ -230,26 +205,43 @@ const SAMPLE_BASE_CACHE_RESTORE_RESULT: BaseCacheRestoreResult = {
     },
   ],
   paths: ['/tmp/workspace/.gradle/caches'],
-  message: 'Restored cache using exact key hit.',
+  message: 'Restored current lineage.',
 };
 
-const SAMPLE_CI_CONTEXT: CiJobContext = {
-  eventName: 'push',
-  resolvedRefName: 'main',
-  safeRefName: 'main',
-  runnerOs: 'linux',
-  runnerArch: 'x64',
-  defaultBranch: 'main',
-  isPullRequest: false,
-  repository: 'buildish-tooling/buildish',
-  workflowName: 'CI',
-  jobName: 'check',
-  runId: 123,
-  runAttempt: 1,
-  tempDirectory: null,
-  workspace: '/workspace',
-  actionPath: '/workspace',
-};
+function createSampleLifecycleRecord(): PersistedCacheLifecycleRecord {
+  return {
+    lifecycleSchemaVersion: CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
+    cacheSchemaVersion: 2,
+    buildToolId: 'gradle',
+    cacheFamilyKey: 'buildish-cache-family',
+    currentRefLineagePrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
+    fallbackRefLineagePrefixes: ['buildish-cache-family-ref-trunk-bbbbbbbbbbbb-gen-'],
+    plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
+    restoreResult: {
+      ...SAMPLE_BASE_CACHE_RESTORE_RESULT,
+      restoreCandidates: SAMPLE_BASE_CACHE_RESTORE_RESULT.restoreCandidates.map((candidate) => ({
+        ...candidate,
+      })),
+      paths: [...SAMPLE_BASE_CACHE_RESTORE_RESULT.paths],
+    },
+    preBuildManifestPath: '/tmp/pre-build-cache-manifest.json',
+    preBuildManifestDigest: calculateCanonicalCacheManifestDigest(SAMPLE_MANIFEST),
+    executionIdentity: {
+      jobName: 'check',
+      runId: 123,
+      runAttempt: 1,
+    },
+    sourceRevision: null,
+    dependentDelta: {
+      requestedJobs: ['worker-a'],
+      artifactNames: ['artifact-a'],
+      addedCount: 1,
+      modifiedCount: 2,
+      deletedCount: 3,
+      totalChangedCount: 6,
+    },
+  };
+}
 
 async function withWorkspace(testBody: (workspace: string) => Promise<void>): Promise<void> {
   const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-post-state-'));

@@ -46,9 +46,9 @@ flowchart TD
     D --> E[adapter.provision\ne.g. provisionWrapperJars for Gradle]
     E --> F[executePrepareAction]
     F --> G[restoreBaseCache]
-    G --> H[armBaseCacheFinalize]
+    G --> H[download + apply delta artifacts\nif distributed-aggregator]
     H --> I[capture pre-build manifest]
-    I --> J[download + apply delta artifacts\nif distributed-worker]
+    I --> J[persist validated lifecycle record]
     J --> Z[hand off to build steps]
 ```
 
@@ -69,11 +69,11 @@ flowchart TD
 1. Calls `restoreBaseCache()` which classifies the outcome as a miss, current-lineage hit, or
    default-branch fallback hit.
 2. If restore-cleanup mode is `prune-managed`, deletes managed files and re-restores.
-3. Arms the finalize phase via `armBaseCacheFinalize()` (writes a state flag so the finalize phase
-   knows a restore was attempted).
-4. For `distributed-aggregator` jobs with configured `dependent-jobs`, downloads and applies
+3. For `distributed-aggregator` jobs with configured `dependent-jobs`, downloads and applies
    applicable delta artifact packages.
-5. Captures the pre-build file snapshot (`captureCacheManifest()`).
+4. Captures the pre-build file snapshot (`captureCacheManifest()`).
+5. Persists one validated lifecycle record containing cache identity, restore outcome, generation
+   seed, manifest digest, execution identity, and dependent-delta evidence.
 
 ## Finalize phase
 
@@ -84,8 +84,8 @@ flowchart TD
     C --> D[Build CacheModel]
     D --> E[adapter.provision\ne.g. provisionWrapperJars for Gradle]
     E --> F[executeFinalizeAction]
-    F --> G{isBaseCacheFinalizeArmed?}
-    G -- No --> Z1[skip save]
+    F --> G{validated lifecycle record?}
+    G -- No --> Z1[fail closed]
     G -- Yes --> H[optional timestamp GC]
     H --> I[capture post-build manifest]
     I --> J[computeCacheDelta]
@@ -97,7 +97,7 @@ flowchart TD
 
 **`executeFinalizeAction()`** (`src/phases/finalize/flow.ts`):
 
-1. Loads persisted prepare-phase state, including the pre-build manifest and finalize arm flag.
+1. Loads and validates the complete prepare-phase lifecycle record and its pre-build manifest.
 2. Runs timestamp cache garbage collection for standalone and distributed-aggregator jobs when
    `cache-gc-mode` is `timestamp`.
 3. Captures the post-build file snapshot.

@@ -158,10 +158,18 @@ inputs:
       default branch. Pass `github.event.repository.default_branch` from the caller.
     required: false
 outputs:
-  status:
-    description: One of `hit`, `miss`, or `disabled` describing the main action outcome.
-  restored-key:
-    description: Restored cache key, when a base cache entry was reused.
+  cache-family-key:
+    description: Stable compatibility family shared by structurally compatible cache generations.
+  cache-lineage-prefix:
+    description: Current-ref prefix used to restore the newest immutable cache generation.
+  base-cache-restore-status:
+    description: Classified base-cache restore outcome for the prepare phase.
+  restored-cache-key:
+    description: Exact immutable generation key restored by the prepare phase, when any.
+  read-only:
+    description: Whether cache and delta writes are disabled for this execution.
+  job-mode:
+    description: Effective standalone or distributed job mode.
 runs:
   using: node24
   main: ../../../dist/github/maven/main/index.cjs

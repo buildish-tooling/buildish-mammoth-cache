@@ -34,11 +34,11 @@ import {
   type DeltaApplyResult,
 } from '../../delta/apply';
 import { captureCacheManifest } from '../../cache/manifest';
+import { renderCacheJavaMajor } from '../../cache/model';
 import { restoreBaseCache } from '../../cache/service';
 import {
-  persistBaseCacheRestoreResult,
-  persistConsumedDeltaArtifactNames,
-  persistDeltaArtifactExecutionIdentity,
+  CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
+  persistCacheLifecycleRecord,
   persistPreBuildCacheManifest,
   type PersistedPreBuildCacheManifestState,
 } from '../finalize/state';
@@ -125,26 +125,58 @@ export async function executePrepareAction(
     if (logLines.length > 0) {
       bootstrap.reportSink.publishLogGroup('Buildish prepare execution', logLines, logInfo);
     }
+    await bootstrap.reportSink.replaceSummary(createPrepareActionSummaryLines(status));
     return status;
   }
 
   const restoreCleanupResult = await maybePruneManagedFilesAfterRestore(bootstrap, dependencies);
   const dependentDeltaResult = await applyDependentJobDeltas(bootstrap, dependencies);
-  if (dependentDeltaResult) {
-    persistConsumedDeltaArtifactNames(
-      dependentDeltaResult.downloadedArtifactNames,
-      dependencies.runtimeHost.saveState,
-    );
-  }
-  if (bootstrap.baseCacheResult?.operation === 'restore') {
-    persistBaseCacheRestoreResult(bootstrap.baseCacheResult, dependencies.runtimeHost.saveState);
-  }
-  persistDeltaArtifactExecutionIdentity(bootstrap.ciContext, dependencies.runtimeHost.saveState);
   const manifest = await captureCacheManifest(bootstrap.cacheModel);
-  const preBuildManifestState = await persistPreBuildCacheManifest(
-    manifest,
+  const preBuildManifestState = await persistPreBuildCacheManifest(manifest, {
+    env: dependencies.env,
+    tempDirectory: bootstrap.ciContext.tempDirectory,
+  });
+  const restoreResult = bootstrap.baseCacheResult;
+  if (!restoreResult || restoreResult.operation !== 'restore') {
+    throw new Error('Cache-enabled prepare completed without a base-cache restore result.');
+  }
+  persistCacheLifecycleRecord(
+    {
+      lifecycleSchemaVersion: CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
+      cacheSchemaVersion: bootstrap.config.cacheSchemaVersion,
+      buildToolId: bootstrap.cacheModel.buildToolId,
+      cacheFamilyKey: bootstrap.cacheModel.cacheFamilyKey,
+      currentRefLineagePrefix: bootstrap.cacheModel.currentRefLineagePrefix,
+      fallbackRefLineagePrefixes: [...bootstrap.cacheModel.fallbackRefLineagePrefixes],
+      plannedGenerationId: bootstrap.cacheModel.plannedGenerationId,
+      restoreResult: {
+        ...restoreResult,
+        restoreCandidates: restoreResult.restoreCandidates.map((candidate) => ({ ...candidate })),
+        paths: [...restoreResult.paths],
+      },
+      preBuildManifestPath: preBuildManifestState.manifestPath,
+      preBuildManifestDigest: preBuildManifestState.manifestDigest,
+      executionIdentity: {
+        jobName: bootstrap.ciContext.jobName,
+        runId: bootstrap.ciContext.runId,
+        runAttempt: bootstrap.ciContext.runAttempt,
+      },
+      sourceRevision: null,
+      dependentDelta: dependentDeltaResult
+        ? {
+            requestedJobs: [...dependentDeltaResult.requestedJobs],
+            artifactNames: [...dependentDeltaResult.downloadedArtifactNames],
+            addedCount: dependentDeltaResult.addedCount,
+            modifiedCount: dependentDeltaResult.modifiedCount,
+            deletedCount: dependentDeltaResult.deletedCount,
+            totalChangedCount:
+              dependentDeltaResult.addedCount +
+              dependentDeltaResult.modifiedCount +
+              dependentDeltaResult.deletedCount,
+          }
+        : null,
+    },
     dependencies.runtimeHost.saveState,
-    { env: dependencies.env, tempDirectory: bootstrap.ciContext.tempDirectory },
   );
 
   const status = {
@@ -160,6 +192,7 @@ export async function executePrepareAction(
   if (logLines.length > 0) {
     bootstrap.reportSink.publishLogGroup('Buildish prepare execution', logLines, logInfo);
   }
+  await bootstrap.reportSink.replaceSummary(createPrepareActionSummaryLines(status));
 
   return status;
 }
@@ -331,9 +364,22 @@ async function cleanupDownloadedPackages(
  */
 export function createPrepareActionSummaryLines(status: PrepareActionStatus): readonly string[] {
   const dependentDelta = status.dependentDeltaResult;
+  const cacheModel = status.bootstrap.cacheModel;
+  const restoreResult =
+    status.bootstrap.baseCacheResult?.operation === 'restore'
+      ? status.bootstrap.baseCacheResult
+      : null;
 
   return [
     '## Buildish prepare execution',
+    `- Cache family: ${escapeSummaryText(cacheModel?.cacheFamilyKey ?? 'disabled')}`,
+    `- Current ref lineage: ${escapeSummaryText(cacheModel?.currentRefLineagePrefix ?? 'disabled')}`,
+    `- Fallback ref lineage: ${escapeSummaryText(cacheModel?.fallbackRefLineagePrefixes.join(', ') || 'none')}`,
+    `- Base cache restore: ${escapeSummaryText(restoreResult?.status ?? 'disabled')}`,
+    `- Restored generation: ${escapeSummaryText(restoreResult?.matchedKey ?? 'none')}`,
+    `- Restore origin: ${escapeSummaryText(describeRestoreOrigin(restoreResult))}`,
+    `- Job mode: ${escapeSummaryText(status.bootstrap.config.jobMode)}`,
+    `- Read only: ${status.bootstrap.config.readOnly ? 'yes' : 'no'}`,
     `- Restore cleanup: ${describeRestoreCleanupSummary(status.restoreCleanupResult)}`,
     `- Dependent delta reuse: ${describeDependentDeltaSummary(dependentDelta)}`,
     ...(status.preBuildManifestState
@@ -368,8 +414,13 @@ export function createPrepareActionSummaryLines(status: PrepareActionStatus): re
  * that phase step was actually executed.
  */
 export function createPrepareActionLogLines(status: PrepareActionStatus): readonly string[] {
+  const restoreResult =
+    status.bootstrap.baseCacheResult?.operation === 'restore'
+      ? status.bootstrap.baseCacheResult
+      : null;
   const lines = [
     ...createBootstrapLogLines(status.bootstrap),
+    `Restored cache generation: ${restoreResult?.matchedKey ?? 'none'}; origin: ${describeRestoreOrigin(restoreResult)}.`,
     `Restore cleanup: ${describeRestoreCleanupSummary(status.restoreCleanupResult)}.`,
     `Dependent delta reuse: ${describeDependentDeltaSummary(status.dependentDeltaResult)}.`,
     status.preBuildManifestState
@@ -421,6 +472,15 @@ function describeDependentDeltaSummary(result: PrepareDependentDeltaResult | nul
   return `${result.appliedArtifactCount} artifact(s) from ${result.requestedJobs.length} job(s)`;
 }
 
+function describeRestoreOrigin(
+  result: Extract<BootstrapExecution['baseCacheResult'], { operation: 'restore' }> | null,
+): string {
+  if (!result?.matchedKey) {
+    return 'none';
+  }
+  return result.status === 'current-lineage-hit' ? 'current ref' : 'default branch';
+}
+
 /**
  * Derives the action output key-value map from a completed prepare-phase status.
  *
@@ -429,14 +489,19 @@ function describeDependentDeltaSummary(result: PrepareDependentDeltaResult | nul
  * by the active {@link BuildToolAdapter} via {@link BuildToolProvisioning.additionalOutputs}.
  */
 export function createPrepareActionOutputs(status: PrepareActionStatus): Record<string, string> {
+  const cacheModel = status.bootstrap.cacheModel;
+  const restoreResult =
+    status.bootstrap.baseCacheResult?.operation === 'restore'
+      ? status.bootstrap.baseCacheResult
+      : null;
   return {
     // Generic outputs
-    'cache-key': status.bootstrap.cacheModel?.cacheKey ?? '',
-    'base-cache-restore-status':
-      status.bootstrap.baseCacheResult?.operation === 'restore'
-        ? status.bootstrap.baseCacheResult.status
-        : '',
-    'java-major': status.bootstrap.cacheModel?.javaMajor?.toString() ?? '',
+    'cache-family-key': cacheModel?.cacheFamilyKey ?? '',
+    'cache-lineage-prefix': cacheModel?.currentRefLineagePrefix ?? '',
+    'base-cache-restore-status': restoreResult?.status ?? '',
+    'restored-cache-key': restoreResult?.matchedKey ?? '',
+    'cache-key': cacheModel?.cacheKey ?? '',
+    'java-major': cacheModel ? renderCacheJavaMajor(cacheModel.javaMajor) : '',
     'job-mode': status.bootstrap.config.jobMode,
     'read-only': String(status.bootstrap.config.readOnly),
     'resolved-ref-name': status.bootstrap.ciContext.resolvedRefName,

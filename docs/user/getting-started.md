@@ -27,8 +27,8 @@ runs. On each run it:
 
 1. **Restores** the cache before the build so the build tool finds its dependencies already in
    place.
-2. **Saves** an updated cache entry after the build containing only the files that changed,
-   keeping cache entries lean even on large projects.
+2. **Publishes** a new complete immutable cache generation after a material change. Unchanged hits
+   do not create duplicate entries.
 
 Two job modes are available for both build tools:
 
@@ -127,8 +127,8 @@ sequenceDiagram
     B->>B: build runs …
     B-->>F: job post step
     F->>F: snapshot cache directory (post-build)
-    F->>F: compute delta (post − pre)
-    F->>F: save updated cache entry
+    F->>F: compare material state (post − pre)
+    F->>F: publish complete generation if required
 ```
 
 For distributed multi-job builds, worker jobs upload their delta as a workflow artifact instead of

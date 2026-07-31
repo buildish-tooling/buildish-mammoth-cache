@@ -38,8 +38,8 @@ sequenceDiagram
     R->>P: job starts
     P->>P: bootstrap (config, cache model, adapter provision)
     P->>P: restoreBaseCache()
-    P->>P: armBaseCacheFinalize()
     P->>P: capture pre-build manifest
+    P->>P: persist validated lifecycle record
     P-->>B: hand off to build
     B->>B: build runs …
     B->>F: job post step
@@ -51,14 +51,17 @@ sequenceDiagram
 ```
 
 State is passed between the two phases using the CI runtime state store (on GitHub Actions this is
-`@actions/core` `saveState` / `getState`). The key state values are:
+`@actions/core` `saveState` / `getState`). Cache-enabled prepare persists one validated lifecycle
+record rather than independent identity fragments:
 
-| State key                                 | Set by                  | Read by    | Purpose                                                  |
-| ----------------------------------------- | ----------------------- | ---------- | -------------------------------------------------------- |
-| `buildish-mammoth-cache-base-cache-armed` | `prepare` after restore | `finalize` | Gate on whether a save should be attempted               |
-| pre-build manifest blob                   | `prepare`               | `finalize` | Delta computation between pre- and post-build snapshots  |
-| base cache restore result                 | `prepare`               | `finalize` | Records the matched immutable generation and ref lineage |
-| consumed delta artifact names             | `prepare`               | `finalize` | Used when cleaning up consumed worker delta artifacts    |
+| Cache state                     | Set by    | Read by    | Purpose                                                                      |
+| ------------------------------- | --------- | ---------- | ---------------------------------------------------------------------------- |
+| cache lifecycle record          | `prepare` | `finalize` | Family, lineages, restore result, generation seed, execution, and delta data |
+| record manifest path and digest | `prepare` | `finalize` | Canonical before/after comparison with tamper and drift detection            |
+
+Finalize recomputes the cache model and refuses to write if its schema, build tool, family, or
+lineages differ from the prepare record. A missing or malformed record is also fatal for a
+cache-enabled finalize; the action never guesses a save identity from partial state.
 
 ## Base cache restore
 
@@ -80,7 +83,7 @@ writable save uses a new generation key; it never attempts to overwrite the rest
 
 ```mermaid
 flowchart TD
-    A{postActionArmed?} -- No --> Z1[skip: not-armed]
+    A{validated lifecycle record?} -- No --> Z1[fail closed]
     A -- Yes --> B{readOnly?}
     B -- Yes --> Z2[skip: read-only]
     B -- No --> C{jobMode == distributed-worker?}
@@ -89,15 +92,26 @@ flowchart TD
     D -- No --> Z4[skip: feature-unavailable]
     D -- Yes --> E{backend supports explicit save?}
     E -- No --> Z5[skip: feature-unavailable]
-    E -- Yes --> F[derive manifest digest + immutable generation key]
-    F --> G[saveCache]
-    G -- paths don't exist --> Z6[skip: missing-paths]
-    G -- cacheId > 0 --> Z7[saved]
-    G -- cacheId <= 0 --> Z8[not-saved]
+    E -- Yes --> F{material generation required?}
+    F -- No --> Z6[skip: not-required]
+    F -- Yes --> G[derive immutable generation key + saveCache]
+    G -- paths don't exist --> Z7[skip: missing-paths]
+    G -- backend failure --> Z8[failed]
+    G -- cacheId > 0 --> Z9[saved]
+    G -- cacheId <= 0 --> Z10[not-saved]
 ```
 
 Distributed worker jobs skip the base cache save intentionally: they only upload a delta artifact
 that the aggregator merges. This prevents redundant and conflicting base cache writers.
+
+A writable standalone or aggregator job publishes a generation only when the managed state is
+materially new: a non-empty restore miss, a canonical pre/post manifest difference, or applied
+dependent-delta mutations. An unchanged cache hit returns `not-required` and does not call the
+backend. Empty cold starts are likewise not saved.
+
+Standalone backend failures are prominent warnings so the build result remains usable. Aggregator
+save failures are fatal because the merged distributed result has not become durable. Reports name
+a generation as published only after the backend returns a successful cache ID.
 
 ## Timestamp cache garbage collection
 

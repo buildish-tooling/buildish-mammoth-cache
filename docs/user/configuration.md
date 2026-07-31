@@ -199,6 +199,24 @@ only by the corresponding action and ignored (or rejected) by the other.
 
 ---
 
+## Outputs
+
+Both actions expose the same cache lifecycle outputs after prepare:
+
+| Output                      | Meaning                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `cache-family-key`          | Structural compatibility family, without ref or generation identity             |
+| `cache-lineage-prefix`      | Current-ref prefix used for newest-generation restore                           |
+| `base-cache-restore-status` | `feature-unavailable`, `miss`, `current-lineage-hit`, or `fallback-lineage-hit` |
+| `restored-cache-key`        | Exact immutable generation restored, or an empty string when there was no hit   |
+| `read-only`                 | Effective write policy as `true` or `false`                                     |
+| `job-mode`                  | Effective standalone or distributed mode                                        |
+
+Generation keys are finalize outcomes and are intentionally not planned prepare outputs. The job
+summary and finalize log report the exact key only after a successful publication.
+
+---
+
 ## Gradle-only inputs
 
 ### `github-token`

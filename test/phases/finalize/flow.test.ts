@@ -27,7 +27,7 @@ import {
   type WorkflowArtifactDescriptor,
 } from '../../../src/delta/service';
 import { captureCacheManifest, computeCacheDelta } from '../../../src/cache/manifest';
-import { createCachePartitions, type CacheModel } from '../../../src/cache/model';
+import { createCacheModel, type CacheModel } from '../../../src/cache/model';
 import {
   createFinalizeActionLogLines,
   createFinalizeActionSummaryLines,
@@ -39,12 +39,11 @@ import type { BootstrapExecution } from '../../../src/phases/bootstrap';
 import type { NormalizedActionConfig } from '../../../src/config/types';
 import type { SummaryWriter } from '../../../src/ci/github/report-sink';
 import {
-  DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE,
-  persistBaseCacheRestoreResult,
+  CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
+  getPersistedCacheLifecycleRecord,
+  persistCacheLifecycleRecord,
   persistPreBuildCacheManifest,
-  PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
-  persistDeltaArtifactExecutionIdentity,
-  persistConsumedDeltaArtifactNames,
+  type PersistedCacheLifecycleRecord,
 } from '../../../src/phases/finalize/state';
 import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
@@ -88,21 +87,12 @@ const MOCK_CAPTURE_COMMAND_OUTPUT = async (): Promise<string> =>
   'openjdk version "21.0.4" 2024-07-16\n';
 
 /**
- * Returns the `getState` callback used by most integration tests.
- *
- * The cache-armed sentinel key always returns `'true'` so the finalize phase treats the prepare
- * phase as having completed. All other keys are looked up in `savedState` (defaults to an empty
- * map when omitted — useful for tests that arm the cache but have no prior persisted manifest).
+ * Returns the lifecycle-state callback used by most finalize integration tests.
  */
-function createArmedGetState(
+function createLifecycleGetState(
   savedState: Map<string, string> = new Map(),
 ): (name: string) => string {
-  return (name: string) => {
-    if (name === 'buildish-mammoth-cache-base-cache-armed') {
-      return 'true';
-    }
-    return savedState.get(name) ?? '';
-  };
+  return (name: string) => savedState.get(name) ?? '';
 }
 
 async function createFinalizeActionDependencies(options: {
@@ -177,7 +167,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
           workspace,
@@ -230,16 +220,15 @@ describe('executeFinalizeAction', () => {
         'before',
       );
       await persistPreBuildState(gradleUserHome, savedState, workspace);
-      persistDeltaArtifactExecutionIdentity(
-        {
-          ...createTestCiContext(workspace),
+      replaceLifecycleRecord(savedState, (record) => ({
+        ...record,
+        executionIdentity: {
           jobName: 'worker_a',
           runId: 101,
           runAttempt: 2,
         },
-        (name: string, value: string) => savedState.set(name, value),
-      );
-      expect(savedState.get(DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE)).toBeTruthy();
+      }));
+      expect(getPersistedCacheLifecycleRecord(createLifecycleGetState(savedState))).not.toBeNull();
       await writeGradleFile(
         gradleUserHome,
         'caches/modules-2/files-2.1/org/example/module.bin',
@@ -254,7 +243,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
           workspace,
@@ -293,26 +282,16 @@ describe('executeFinalizeAction', () => {
         'before',
       );
       await persistPreBuildState(gradleUserHome, savedState, workspace);
-      persistBaseCacheRestoreResult(
-        {
-          operation: 'restore',
+      replaceLifecycleRecord(savedState, (record) => ({
+        ...record,
+        restoreResult: {
+          ...record.restoreResult,
           status: 'current-lineage-hit',
-          cacheFamilyKey: 'buildish-cache-family',
-          currentRefLineagePrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
-          matchedKey:
-            'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb',
-          matchedLineagePrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
-          restoreCandidates: [
-            {
-              lineage: 'current-ref',
-              keyPrefix: 'buildish-cache-family-ref-main-aaaaaaaaaaaa-gen-',
-            },
-          ],
-          paths: [path.join(gradleUserHome, 'caches')],
+          matchedKey: `${record.currentRefLineagePrefix}run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb`,
+          matchedLineagePrefix: record.currentRefLineagePrefix,
           message: 'Restored cache using exact key hit.',
         },
-        savedState.set.bind(savedState),
-      );
+      }));
       await writeCapturedBuildResult(path.join(workspace, 'runner-temp'), {
         invocationKey: 'build-1',
         rootProjectName: 'platform',
@@ -336,7 +315,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker', '987654321'),
           info(message: string): void {
             infoMessages.push(message);
@@ -380,6 +359,8 @@ describe('executeFinalizeAction', () => {
   it('falls back to the workflow run URL when the current job URL cannot be resolved', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
       const status = await executeFinalizeAction({
         artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
         cacheBackend: createCacheApi({ saveCache: async () => 0 }),
@@ -387,6 +368,7 @@ describe('executeFinalizeAction', () => {
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: createSummaryCapture().writer,
           workspace,
@@ -432,7 +414,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'build'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('standalone'),
           summaryWriter: summary.writer,
           workspace,
@@ -460,6 +442,264 @@ describe('executeFinalizeAction', () => {
     });
   });
 
+  it('does not publish a duplicate generation for an unchanged current-lineage hit', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      let saveCalls = 0;
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'unchanged',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      replaceLifecycleRecord(savedState, withCurrentLineageHit);
+
+      const status = await executeFinalizeFixture({
+        workspace,
+        gradleUserHome,
+        savedState,
+        jobMode: 'standalone',
+        jobName: 'build',
+        saveCache: async () => {
+          saveCalls += 1;
+          return 77;
+        },
+      });
+
+      expect(saveCalls).toBe(0);
+      expect(status.bootstrap.baseCacheResult).toEqual(
+        expect.objectContaining({ status: 'not-required', generationKey: null }),
+      );
+      expect(createFinalizeActionSummaryLines(status).join('\n')).not.toContain(
+        'Published generation:',
+      );
+    });
+  });
+
+  it('publishes an initial non-empty generation after a restore miss', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      let saveCalls = 0;
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+
+      const status = await executeFinalizeFixture({
+        workspace,
+        gradleUserHome,
+        savedState,
+        jobMode: 'standalone',
+        jobName: 'build',
+        saveCache: async () => {
+          saveCalls += 1;
+          return 78;
+        },
+      });
+
+      expect(saveCalls).toBe(1);
+      expect(status.bootstrap.baseCacheResult).toEqual(
+        expect.objectContaining({ status: 'saved', cacheId: 78 }),
+      );
+    });
+  });
+
+  it('uses the persisted prepare-phase generation seed when publishing', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      replaceLifecycleRecord(savedState, (record) => ({
+        ...record,
+        plannedGenerationId: 'uuid-persisted-prepare-seed',
+      }));
+
+      const status = await executeFinalizeFixture({
+        workspace,
+        gradleUserHome,
+        savedState,
+        jobMode: 'standalone',
+        jobName: 'build',
+        saveCache: async () => 79,
+      });
+
+      expect(status.bootstrap.baseCacheResult).toEqual(
+        expect.objectContaining({
+          status: 'saved',
+          generationKey: expect.stringContaining('-gen-uuid-persisted-prepare-seed-'),
+        }),
+      );
+    });
+  });
+
+  it('rejects prepare/finalize cache-family drift before attempting a save', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      let saveCalls = 0;
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      replaceLifecycleRecord(savedState, (record) => ({
+        ...record,
+        cacheFamilyKey: `${record.cacheFamilyKey}-drifted`,
+        restoreResult: {
+          ...record.restoreResult,
+          cacheFamilyKey: `${record.cacheFamilyKey}-drifted`,
+        },
+      }));
+
+      await expect(
+        executeFinalizeFixture({
+          workspace,
+          gradleUserHome,
+          savedState,
+          jobMode: 'standalone',
+          jobName: 'build',
+          saveCache: async () => {
+            saveCalls += 1;
+            return 80;
+          },
+        }),
+      ).rejects.toThrow(/configuration drift.*cache family/u);
+      expect(saveCalls).toBe(0);
+    });
+  });
+
+  it('rejects a pre-build manifest whose digest no longer matches lifecycle state', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      let saveCalls = 0;
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+      replaceLifecycleRecord(savedState, (record) => ({
+        ...record,
+        preBuildManifestDigest: 'b'.repeat(64),
+      }));
+
+      await expect(
+        executeFinalizeFixture({
+          workspace,
+          gradleUserHome,
+          savedState,
+          jobMode: 'standalone',
+          jobName: 'build',
+          saveCache: async () => {
+            saveCalls += 1;
+            return 81;
+          },
+        }),
+      ).rejects.toThrow(/manifest does not match the digest/u);
+      expect(saveCalls).toBe(0);
+    });
+  });
+
+  it('reports standalone save failures as warnings without claiming publication', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+
+      const status = await executeFinalizeFixture({
+        workspace,
+        gradleUserHome,
+        savedState,
+        jobMode: 'standalone',
+        jobName: 'build',
+        saveCache: async () => {
+          throw new Error('backend unavailable');
+        },
+      });
+
+      expect(status.bootstrap.baseCacheResult).toEqual(
+        expect.objectContaining({ status: 'failed', cacheId: null }),
+      );
+      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
+      const logText = createFinalizeActionLogLines(status).join('\n');
+      expect(summaryText).toContain('⚠️ Overall status: completed with warnings');
+      expect(summaryText).toContain('- Save status: failed');
+      expect(summaryText).toContain('### Warnings');
+      expect(summaryText).toContain('backend unavailable');
+      expect(summaryText).not.toContain('Published generation:');
+      expect(logText).toContain('Attempted base cache generation:');
+      expect(logText).not.toContain('Published base cache generation:');
+    });
+  });
+
+  it('fails an aggregator when its required base-cache publication fails', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+
+      await expect(
+        executeFinalizeFixture({
+          workspace,
+          gradleUserHome,
+          savedState,
+          jobMode: 'distributed-aggregator',
+          jobName: 'aggregate',
+          saveCache: async () => {
+            throw new Error('backend unavailable');
+          },
+        }),
+      ).rejects.toThrow(
+        /publication ended with 'failed'.*publication failed.*backend unavailable/u,
+      );
+    });
+  });
+
+  it('fails an aggregator when the backend declines to create the required generation', async () => {
+    await withWorkspace(async (workspace) => {
+      const gradleUserHome = path.join(workspace, '.gradle');
+      const savedState = new Map<string, string>();
+      await writeGradleFile(
+        gradleUserHome,
+        'caches/modules-2/files-2.1/org/example/module.bin',
+        'initial',
+      );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
+
+      await expect(
+        executeFinalizeFixture({
+          workspace,
+          gradleUserHome,
+          savedState,
+          jobMode: 'distributed-aggregator',
+          jobName: 'aggregate',
+          saveCache: async () => -1,
+        }),
+      ).rejects.toThrow(/publication ended with 'not-saved'/u);
+    });
+  });
+
   it('skips artifact upload for distributed-aggregator jobs and still saves the base cache', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
@@ -481,7 +721,9 @@ describe('executeFinalizeAction', () => {
       );
       await stageWorkerArtifactForCleanup(artifactApi, workspace, 'worker-build');
       const artifactNameToDelete = (await artifactApi.listArtifacts())[0]!.name;
-      persistConsumedDeltaArtifactNames([artifactNameToDelete], savedState.set.bind(savedState));
+      replaceLifecycleRecord(savedState, (record) =>
+        withConsumedArtifacts(record, [artifactNameToDelete]),
+      );
 
       const status = await executeFinalizeAction({
         artifactBackend: artifactApi,
@@ -496,7 +738,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-aggregator'),
           summaryWriter: summary.writer,
           workspace,
@@ -562,7 +804,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'build'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('standalone'),
           summaryWriter: createSummaryCapture().writer,
           workspace,
@@ -614,7 +856,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: createSummaryCapture().writer,
           workspace,
@@ -655,9 +897,12 @@ describe('executeFinalizeAction', () => {
         'caches/modules-2/files-2.1/org/example/module.bin',
         'initial',
       );
+      await persistPreBuildState(gradleUserHome, savedState, workspace);
       await stageWorkerArtifactForCleanup(artifactBackend, workspace, 'worker-a');
       const artifactNameToDelete = (await artifactBackend.listArtifacts())[0]!.name;
-      persistConsumedDeltaArtifactNames([artifactNameToDelete], savedState.set.bind(savedState));
+      replaceLifecycleRecord(savedState, (record) =>
+        withConsumedArtifacts(record, [artifactNameToDelete]),
+      );
 
       const status = await executeFinalizeAction({
         artifactBackend,
@@ -669,7 +914,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-aggregator'),
           summaryWriter: summary.writer,
           workspace,
@@ -714,7 +959,7 @@ describe('executeFinalizeAction', () => {
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
           eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: summary.writer,
           workspace,
@@ -776,7 +1021,7 @@ describe('executeFinalizeAction', () => {
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: createInputProvider('distributed-worker'),
           summaryWriter: createSummaryCapture().writer,
           workspace,
@@ -805,7 +1050,7 @@ describe('executeFinalizeAction', () => {
         env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
         ...(await createFinalizeActionDependencies({
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState: createArmedGetState(savedState),
+          getState: createLifecycleGetState(savedState),
           inputProvider: {
             getInput(name: string): string {
               if (name === 'job-mode') return 'distributed-worker';
@@ -825,29 +1070,27 @@ describe('executeFinalizeAction', () => {
     });
   });
 
-  it('reports missing-pre-build-manifest when cacheModel is set but no manifest was persisted', async () => {
+  it('fails closed when caching is armed without persisted lifecycle state', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
 
       // No persistPreBuildState call — the prepare phase manifest is absent.
-      const status = await executeFinalizeAction({
-        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...(await createFinalizeActionDependencies({
+      await expect(
+        executeFinalizeAction({
+          artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
+          cacheBackend: createCacheApi({ saveCache: async () => 0 }),
+          captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
           env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          // createArmedGetState with an empty map: cache is armed but no manifest persisted.
-          getState: createArmedGetState(),
-          inputProvider: createInputProvider('distributed-worker'),
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({ status: 'missing-pre-build-manifest' }),
-      );
+          ...(await createFinalizeActionDependencies({
+            env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+            // Empty state simulates a finalize invocation without its prepare lifecycle record.
+            getState: createLifecycleGetState(),
+            inputProvider: createInputProvider('distributed-worker'),
+            summaryWriter: createSummaryCapture().writer,
+            workspace,
+          })),
+        }),
+      ).rejects.toThrow(/Cache lifecycle state is missing/u);
     });
   });
 
@@ -959,6 +1202,31 @@ function createCacheApi(options: { readonly saveCache: () => Promise<number> }):
   };
 }
 
+async function executeFinalizeFixture(options: {
+  readonly workspace: string;
+  readonly gradleUserHome: string;
+  readonly savedState: Map<string, string>;
+  readonly jobMode: string;
+  readonly jobName: string;
+  readonly saveCache: () => Promise<number>;
+}): Promise<FinalizeActionStatus> {
+  const env = createTestEnv(options.workspace, options.gradleUserHome, options.jobName);
+  return await executeFinalizeAction({
+    artifactBackend: new FakeArtifactApi(path.join(options.workspace, 'artifact-store')),
+    cacheBackend: createCacheApi({ saveCache: options.saveCache }),
+    captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
+    env,
+    ...(await createFinalizeActionDependencies({
+      env,
+      eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+      getState: createLifecycleGetState(options.savedState),
+      inputProvider: createInputProvider(options.jobMode),
+      summaryWriter: createSummaryCapture().writer,
+      workspace: options.workspace,
+    })),
+  });
+}
+
 function createSummaryCapture(): {
   readonly lines: string[];
   readonly writer: SummaryWriter;
@@ -985,34 +1253,24 @@ function createSummaryCapture(): {
   };
 }
 
-function createTestCacheModel(gradleUserHome: string): CacheModel {
+async function createTestCacheModel(
+  gradleUserHome: string,
+  workspace: string,
+): Promise<CacheModel> {
   const gradleAdapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedGradleConfig);
-  const partitions = createCachePartitions(
-    gradleUserHome,
-    [],
-    gradleAdapter.getBuiltInPartitionPresets(),
-    gradleAdapter.getHardCacheExcludeGlobs(),
+  return await createCacheModel(
+    {
+      cacheKeyPrefix: 'buildish-mammoth-cache-',
+      cacheSchemaVersion: 2,
+      cachePartitions: [],
+    } as unknown as NormalizedActionConfig,
+    createTestCiContext(workspace),
+    gradleAdapter,
+    {
+      captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
+      env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
+    },
   );
-  return {
-    buildToolId: gradleAdapter.getBuildToolId(),
-    cacheRoot: gradleUserHome,
-    cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
-    currentRefToken: 'main-aaaaaaaaaaaa',
-    currentRefLineagePrefix:
-      'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
-    fallbackRefLineagePrefixes: [],
-    plannedGenerationId: 'run-101-attempt-2-job-aaaaaaaaaaaa',
-    cacheKey:
-      'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
-    javaMajor: 21,
-    runnerOs: 'linux',
-    runnerArch: 'x64',
-    safeRefName: 'main',
-    partitionFingerprint: 'feedcafe1234abcd',
-    partitions,
-    includePaths: partitions.flatMap((partition) => partition.absoluteIncludeGlobs),
-    excludePaths: [...new Set(partitions.flatMap((partition) => partition.absoluteExcludeGlobs))],
-  };
 }
 
 async function persistPreBuildState(
@@ -1020,13 +1278,93 @@ async function persistPreBuildState(
   savedState: Map<string, string>,
   workspace: string,
 ): Promise<void> {
-  const manifest = await captureCacheManifest(createTestCacheModel(gradleUserHome));
-  await persistPreBuildCacheManifest(
-    manifest,
-    (name: string, value: string) => savedState.set(name, value),
-    { env: { RUNNER_TEMP: path.join(workspace, 'runner-temp') } },
+  const cacheModel = await createTestCacheModel(gradleUserHome, workspace);
+  const manifest = await captureCacheManifest(cacheModel);
+  const persistedManifest = await persistPreBuildCacheManifest(manifest, {
+    env: { RUNNER_TEMP: path.join(workspace, 'runner-temp') },
+  });
+  persistCacheLifecycleRecord(
+    {
+      lifecycleSchemaVersion: CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
+      cacheSchemaVersion: 2,
+      buildToolId: cacheModel.buildToolId,
+      cacheFamilyKey: cacheModel.cacheFamilyKey,
+      currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
+      fallbackRefLineagePrefixes: [...cacheModel.fallbackRefLineagePrefixes],
+      plannedGenerationId: cacheModel.plannedGenerationId,
+      restoreResult: {
+        operation: 'restore',
+        status: 'miss',
+        cacheFamilyKey: cacheModel.cacheFamilyKey,
+        currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
+        matchedKey: null,
+        matchedLineagePrefix: null,
+        restoreCandidates: [
+          { lineage: 'current-ref', keyPrefix: cacheModel.currentRefLineagePrefix },
+          ...cacheModel.fallbackRefLineagePrefixes.map((keyPrefix) => ({
+            lineage: 'default-branch' as const,
+            keyPrefix,
+          })),
+        ],
+        paths: [...cacheModel.includePaths, ...cacheModel.excludePaths.map((value) => `!${value}`)],
+        message: 'Base cache restore missed.',
+      },
+      preBuildManifestPath: persistedManifest.manifestPath,
+      preBuildManifestDigest: persistedManifest.manifestDigest,
+      executionIdentity: {
+        jobName: 'worker-build',
+        runId: 101,
+        runAttempt: 2,
+      },
+      sourceRevision: null,
+      dependentDelta: null,
+    },
+    savedState.set.bind(savedState),
   );
-  expect(savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE)).toBeTruthy();
+  expect(getPersistedCacheLifecycleRecord(createLifecycleGetState(savedState))).not.toBeNull();
+}
+
+function replaceLifecycleRecord(
+  savedState: Map<string, string>,
+  replace: (record: PersistedCacheLifecycleRecord) => PersistedCacheLifecycleRecord,
+): void {
+  const record = getPersistedCacheLifecycleRecord(createLifecycleGetState(savedState));
+  if (!record) {
+    throw new Error('Expected test lifecycle state to be present.');
+  }
+  persistCacheLifecycleRecord(replace(record), savedState.set.bind(savedState));
+}
+
+function withConsumedArtifacts(
+  record: PersistedCacheLifecycleRecord,
+  artifactNames: readonly string[],
+): PersistedCacheLifecycleRecord {
+  return {
+    ...record,
+    dependentDelta: {
+      requestedJobs: ['worker-a'],
+      artifactNames: [...artifactNames],
+      addedCount: 1,
+      modifiedCount: 0,
+      deletedCount: 0,
+      totalChangedCount: 1,
+    },
+  };
+}
+
+function withCurrentLineageHit(
+  record: PersistedCacheLifecycleRecord,
+): PersistedCacheLifecycleRecord {
+  return {
+    ...record,
+    restoreResult: {
+      ...record.restoreResult,
+      status: 'current-lineage-hit',
+      matchedKey: `${record.currentRefLineagePrefix}run-1-attempt-1-job-test-aaaaaaaaaaaa`,
+      matchedLineagePrefix: record.currentRefLineagePrefix,
+      message: 'Restored current lineage.',
+    },
+  };
 }
 
 async function writeGradleFile(
@@ -1191,7 +1529,7 @@ async function stageWorkerArtifactForCleanup(
     'caches/modules-2/files-2.1/example/module.bin',
     'worker-before',
   );
-  const cacheModel = createTestCacheModel(workerGradleHome);
+  const cacheModel = await createTestCacheModel(workerGradleHome, workspace);
   const previousManifest = await captureCacheManifest(cacheModel);
   await writeGradleFile(
     workerGradleHome,
@@ -1464,23 +1802,24 @@ describe('createFinalizeActionLogLines', () => {
     );
   });
 
-  it('prefixes error messages with "Error:" in the log output', () => {
+  it('prefixes failed base-cache saves with "Warning:" in the log output', () => {
     const status = createMinimalFinalizeStatus({
-      deltaArtifactResult: {
-        status: 'missing-pre-build-manifest',
-        addedCount: 0,
-        modifiedCount: 0,
-        deletedCount: 0,
-        totalChangedCount: 0,
-        artifactName: null,
-        artifactId: null,
-        artifactSizeBytes: null,
-        message: 'Delta artifact upload skipped because no persisted pre-build cache manifest.',
+      bootstrap: {
+        ...createMinimalBootstrapExecution(),
+        baseCacheResult: {
+          operation: 'save',
+          status: 'failed',
+          generationKey: 'test-family-ref-main-gen-run-1-deadbeef',
+          cacheId: null,
+          paths: ['/tmp/cache'],
+          message: 'Base cache generation publication failed: backend unavailable.',
+        },
       },
     });
     const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain('Error:');
-    expect(lines).toContain('❌ Overall status: issues detected');
+    expect(lines).toContain('Warning:');
+    expect(lines).toContain('⚠️ Overall status: completed with warnings');
+    expect(lines).not.toContain('saved under');
   });
 
   it('prefixes warning messages with "Warning:" in the log output', () => {

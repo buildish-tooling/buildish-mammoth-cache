@@ -31,9 +31,10 @@ distributed multi-job topologies.
 
 ## Single-job mode
 
-In the most common setup, the action wraps a single build job: it restores the cache before the
-build and saves an updated cache entry after the build. This avoids re-downloading dependencies on
-every run.
+In the most common setup, the action wraps a single build job: it restores the newest compatible
+immutable generation before the build and publishes a new complete generation after a material
+change. This avoids re-downloading dependencies on every run without creating duplicate entries for
+unchanged runs.
 
 ## Distributed multi-job mode
 

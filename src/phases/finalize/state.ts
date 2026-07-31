@@ -19,26 +19,20 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+  calculateCanonicalCacheManifestDigest,
   deserializeCacheManifest,
   serializeCacheManifest,
   type CacheManifest,
 } from '../../cache/manifest';
-import type { BaseCacheRestoreResult } from '../../cache/service';
-import type { CiJobContext } from '../../ci';
 import { z } from 'zod';
 
+import { isAbsolutePosixOrWindowsPath } from '../../util/paths';
 import { parseSerializedJson, parseWithZod } from '../../util/serialization';
 
-/** CI state key holding the absolute path to the persisted pre-build cache manifest file. */
-export const PRE_BUILD_CACHE_MANIFEST_PATH_STATE = 'buildish-mammoth-cache-pre-build-manifest-path';
-/** CI state key holding a JSON array of consumed delta artifact names to delete in the finalize phase. */
-export const CONSUMED_DELTA_ARTIFACT_NAMES_STATE =
-  'buildish-mammoth-cache-consumed-delta-artifact-names';
-/** CI state key holding the serialized {@link PersistedDeltaArtifactExecutionIdentity} JSON. */
-export const DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE =
-  'buildish-mammoth-cache-delta-artifact-execution-identity';
-/** CI state key holding the serialized {@link BaseCacheRestoreResult} JSON. */
-export const BASE_CACHE_RESTORE_RESULT_STATE = 'buildish-mammoth-cache-base-cache-restore-result';
+/** CI state key holding the complete validated prepare/finalize cache lifecycle record. */
+export const CACHE_LIFECYCLE_RECORD_STATE = 'buildish-mammoth-cache-lifecycle-record';
+/** Schema for the CI-state lifecycle envelope, independent of the cache compatibility schema. */
+export const CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION = 1;
 const BASE_CACHE_RESTORE_STATUSES = [
   'feature-unavailable',
   'miss',
@@ -57,24 +51,128 @@ const persistedExecutionIdentitySchema = z.object({
   runAttempt: z.number().int().nonnegative().nullable(),
 });
 
-const baseCacheRestoreResultSchema = z.object({
-  operation: z.literal('restore'),
-  status: z.enum(BASE_CACHE_RESTORE_STATUSES),
-  cacheFamilyKey: z.string().min(1),
-  currentRefLineagePrefix: z.string().min(1),
-  matchedKey: z.string().min(1).nullable(),
-  matchedLineagePrefix: z.string().min(1).nullable(),
-  restoreCandidates: z.array(
-    z.object({
-      lineage: z.enum(['current-ref', 'default-branch']),
-      keyPrefix: z.string().min(1),
-    }),
-  ),
-  paths: z.array(z.string().min(1)),
-  message: z.string().min(1),
-});
+const baseCacheRestoreResultSchema = z
+  .object({
+    operation: z.literal('restore'),
+    status: z.enum(BASE_CACHE_RESTORE_STATUSES),
+    cacheFamilyKey: z.string().min(1),
+    currentRefLineagePrefix: z.string().min(1),
+    matchedKey: z.string().min(1).nullable(),
+    matchedLineagePrefix: z.string().min(1).nullable(),
+    restoreCandidates: z.array(
+      z.object({
+        lineage: z.enum(['current-ref', 'default-branch']),
+        keyPrefix: z.string().min(1),
+      }),
+    ),
+    paths: z.array(z.string().min(1)),
+    message: z.string().min(1),
+  })
+  .superRefine((value, context) => {
+    const hit = value.status === 'current-lineage-hit' || value.status === 'fallback-lineage-hit';
+    if (hit !== (value.matchedKey !== null && value.matchedLineagePrefix !== null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Restore hit status and matched generation fields must agree.',
+      });
+      return;
+    }
+    if (!value.matchedKey || !value.matchedLineagePrefix) {
+      return;
+    }
 
-const consumedArtifactNamesSchema = z.array(z.string().min(1));
+    const matchedCandidate = value.restoreCandidates.find(
+      (candidate) => candidate.keyPrefix === value.matchedLineagePrefix,
+    );
+    if (
+      !matchedCandidate ||
+      !value.matchedKey.startsWith(value.matchedLineagePrefix) ||
+      value.matchedKey.length === value.matchedLineagePrefix.length
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Matched generation must belong to a requested restore lineage.',
+      });
+    } else if (
+      (value.status === 'current-lineage-hit') !==
+      (matchedCandidate.lineage === 'current-ref')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Restore hit status must identify the matched lineage origin.',
+      });
+    }
+  });
+
+const dependentDeltaStateSchema = z
+  .object({
+    requestedJobs: z.array(z.string().min(1)),
+    artifactNames: z.array(z.string().min(1)),
+    addedCount: z.number().int().nonnegative(),
+    modifiedCount: z.number().int().nonnegative(),
+    deletedCount: z.number().int().nonnegative(),
+    totalChangedCount: z.number().int().nonnegative(),
+  })
+  .superRefine((value, context) => {
+    if (value.totalChangedCount !== value.addedCount + value.modifiedCount + value.deletedCount) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Dependent delta totalChangedCount must equal its per-change counts.',
+      });
+    }
+  });
+
+const cacheLifecycleRecordSchema = z
+  .object({
+    lifecycleSchemaVersion: z.literal(CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION),
+    cacheSchemaVersion: z.number().int().positive(),
+    buildToolId: z.string().min(1),
+    cacheFamilyKey: z.string().min(1),
+    currentRefLineagePrefix: z.string().min(1),
+    fallbackRefLineagePrefixes: z.array(z.string().min(1)).max(1),
+    plannedGenerationId: z.string().regex(/^[A-Za-z0-9._:-]{1,160}$/u),
+    restoreResult: baseCacheRestoreResultSchema,
+    preBuildManifestPath: z
+      .string()
+      .min(1)
+      .refine(isAbsolutePosixOrWindowsPath, 'Pre-build manifest path must be absolute.'),
+    preBuildManifestDigest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u, 'Must be a lowercase hex SHA-256 digest'),
+    executionIdentity: persistedExecutionIdentitySchema,
+    sourceRevision: z.string().min(1).nullable(),
+    dependentDelta: dependentDeltaStateSchema.nullable(),
+  })
+  .superRefine((value, context) => {
+    if (value.restoreResult.cacheFamilyKey !== value.cacheFamilyKey) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Restore result cache family must match the lifecycle cache family.',
+      });
+    }
+    if (value.restoreResult.currentRefLineagePrefix !== value.currentRefLineagePrefix) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Restore result current lineage must match the lifecycle current lineage.',
+      });
+    }
+
+    const expectedCandidates = [
+      { lineage: 'current-ref', keyPrefix: value.currentRefLineagePrefix },
+      ...value.fallbackRefLineagePrefixes.map((keyPrefix) => ({
+        lineage: 'default-branch',
+        keyPrefix,
+      })),
+    ];
+    if (
+      JSON.stringify(value.restoreResult.restoreCandidates) !== JSON.stringify(expectedCandidates)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Restore candidates must match the lifecycle lineage order.',
+      });
+    }
+  });
 
 // ---------------------------------------------------------------------------
 
@@ -86,10 +184,15 @@ export type PersistedDeltaArtifactExecutionIdentity = z.infer<
   typeof persistedExecutionIdentitySchema
 >;
 
+/** Complete validated state shared by cache-enabled prepare and finalize phases. */
+export type PersistedCacheLifecycleRecord = z.infer<typeof cacheLifecycleRecordSchema>;
+
 /** Path metadata returned after writing the pre-build cache manifest to the runner temp directory. */
 export interface PersistedPreBuildCacheManifestState {
   /** Absolute path of the written manifest file. */
   readonly manifestPath: string;
+  /** Canonical material-state digest of the persisted manifest. */
+  readonly manifestDigest: string;
 }
 
 /** Options for {@link persistPreBuildCacheManifest}. */
@@ -109,7 +212,7 @@ export interface LoadPersistedPreBuildCacheManifestOptions {
 }
 
 /**
- * Serialises `manifest` to a temp-directory file and persists the file path in CI state.
+ * Serialises `manifest` to a temp-directory file and returns its path and canonical digest.
  *
  * The file is written to a UUID-suffixed subdirectory inside the resolved parent directory to
  * avoid collisions when multiple action steps share the same temp root.
@@ -118,7 +221,6 @@ export interface LoadPersistedPreBuildCacheManifestOptions {
  */
 export async function persistPreBuildCacheManifest(
   manifest: CacheManifest,
-  saveState: (name: string, value: string) => void,
   options: PersistPreBuildCacheManifestOptions = {},
 ): Promise<PersistedPreBuildCacheManifestState> {
   const parentDirectory = resolveStateParentDirectory(options);
@@ -129,143 +231,60 @@ export async function persistPreBuildCacheManifest(
   const manifestPath = path.join(stateDirectory, PRE_BUILD_CACHE_MANIFEST_FILE);
 
   await writeFile(manifestPath, serializeCacheManifest(manifest), 'utf8');
-  saveState(PRE_BUILD_CACHE_MANIFEST_PATH_STATE, manifestPath);
 
-  return { manifestPath };
+  return {
+    manifestPath,
+    manifestDigest: calculateCanonicalCacheManifestDigest(manifest),
+  };
 }
 
 /**
- * Reads the persisted manifest path from CI state and deserialises the manifest file.
+ * Reads and deserialises the manifest at the validated lifecycle-record path.
  *
- * @returns The deserialised {@link CacheManifest}, or `null` when no path was persisted.
+ * @returns The deserialised {@link CacheManifest}.
  */
 export async function loadPersistedPreBuildCacheManifest(
-  getState: (name: string) => string,
+  manifestPath: string,
   options: LoadPersistedPreBuildCacheManifestOptions = {},
-): Promise<CacheManifest | null> {
-  const manifestPath = getPersistedPreBuildCacheManifestPath(getState);
-  if (!manifestPath) {
-    return null;
-  }
-
+): Promise<CacheManifest> {
   const readFileImpl = options.readFileImpl ?? readFile;
-  return deserializeCacheManifest(await readFileImpl(manifestPath, 'utf8'));
+  return deserializeCacheManifest(await readFileImpl(path.resolve(manifestPath), 'utf8'));
 }
 
 /**
- * Reads the pre-build manifest path from CI state and resolves it to an absolute path.
+ * Validates and persists the complete cache lifecycle record for the finalize phase.
+ */
+export function persistCacheLifecycleRecord(
+  record: PersistedCacheLifecycleRecord,
+  saveState: (name: string, value: string) => void,
+): void {
+  const validatedRecord = parseWithZod(
+    cacheLifecycleRecordSchema,
+    record,
+    'cache lifecycle record',
+  );
+  saveState(CACHE_LIFECYCLE_RECORD_STATE, `${JSON.stringify(validatedRecord)}\n`);
+}
+
+/**
+ * Reads and validates the complete cache lifecycle record from CI state.
  *
- * @returns The resolved absolute path, or `null` when no path was persisted.
- */
-export function getPersistedPreBuildCacheManifestPath(
-  getState: (name: string) => string,
-): string | null {
-  const manifestPath = getState(PRE_BUILD_CACHE_MANIFEST_PATH_STATE).trim();
-  return manifestPath.length > 0 ? path.resolve(manifestPath) : null;
-}
-
-/**
- * Serialises `artifactNames` as a JSON array and writes it to CI state so the finalize phase
- * can delete the consumed delta artifacts after the aggregator has applied them.
- */
-export function persistConsumedDeltaArtifactNames(
-  artifactNames: readonly string[],
-  saveState: (name: string, value: string) => void,
-): void {
-  saveState(CONSUMED_DELTA_ARTIFACT_NAMES_STATE, `${JSON.stringify([...artifactNames])}\n`);
-}
-
-/**
- * Extracts the relevant CI execution identity fields from `ciContext` and persists them as JSON
- * so the finalize phase can look up the correct delta artifact even if the job metadata drifts
- * between the prepare and finalize steps.
- */
-export function persistDeltaArtifactExecutionIdentity(
-  ciContext: CiJobContext,
-  saveState: (name: string, value: string) => void,
-): void {
-  const identity: PersistedDeltaArtifactExecutionIdentity = {
-    jobName: ciContext.jobName,
-    runId: ciContext.runId,
-    runAttempt: ciContext.runAttempt,
-  };
-  saveState(DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE, `${JSON.stringify(identity)}\n`);
-}
-
-/**
- * Serialises the base cache restore result to CI state so the finalize phase can include the
- * restore outcome in its log summary without re-running the restore.
- */
-export function persistBaseCacheRestoreResult(
-  result: BaseCacheRestoreResult,
-  saveState: (name: string, value: string) => void,
-): void {
-  saveState(BASE_CACHE_RESTORE_RESULT_STATE, `${JSON.stringify(result)}\n`);
-}
-
-/**
- * Reads and validates the persisted delta artifact execution identity from CI state.
- *
- * @returns The parsed identity, or `null` when no identity was persisted.
+ * @returns The parsed record, or `null` when prepare did not persist cache lifecycle state.
  * @throws When the persisted state is present but malformed.
  */
-export function getPersistedDeltaArtifactExecutionIdentity(
+export function getPersistedCacheLifecycleRecord(
   getState: (name: string) => string,
-): PersistedDeltaArtifactExecutionIdentity | null {
-  const serializedIdentity = getState(DELTA_ARTIFACT_EXECUTION_IDENTITY_STATE).trim();
-  if (serializedIdentity.length === 0) {
+): PersistedCacheLifecycleRecord | null {
+  const serializedRecord = getState(CACHE_LIFECYCLE_RECORD_STATE).trim();
+  if (serializedRecord.length === 0) {
     return null;
   }
 
   return parseWithZod(
-    persistedExecutionIdentitySchema,
-    parseSerializedJson(serializedIdentity, 'delta artifact execution identity state'),
-    'delta artifact execution identity state',
+    cacheLifecycleRecordSchema,
+    parseSerializedJson(serializedRecord, 'cache lifecycle record state'),
+    'cache lifecycle record state',
   );
-}
-
-/**
- * Reads and validates the persisted base cache restore result from CI state.
- *
- * @returns The parsed {@link BaseCacheRestoreResult}, or `null` when no result was persisted.
- * @throws When the persisted state is present but malformed or contains an unsupported status.
- */
-export function getPersistedBaseCacheRestoreResult(
-  getState: (name: string) => string,
-): BaseCacheRestoreResult | null {
-  const serializedResult = getState(BASE_CACHE_RESTORE_RESULT_STATE).trim();
-  if (serializedResult.length === 0) {
-    return null;
-  }
-
-  return parseWithZod(
-    baseCacheRestoreResultSchema,
-    parseSerializedJson(serializedResult, 'base cache restore result state'),
-    'base cache restore result state',
-  );
-}
-
-/**
- * Reads and validates the persisted list of consumed delta artifact names from CI state.
- *
- * @returns An ordered, deduplicated array of artifact names, or an empty array when none were persisted.
- * @throws When the persisted state is present but not a valid JSON array of strings.
- */
-export function getPersistedConsumedDeltaArtifactNames(
-  getState: (name: string) => string,
-): readonly string[] {
-  const serializedArtifactNames = getState(CONSUMED_DELTA_ARTIFACT_NAMES_STATE).trim();
-  if (serializedArtifactNames.length === 0) {
-    return [];
-  }
-
-  const names = parseWithZod(
-    consumedArtifactNamesSchema,
-    parseSerializedJson(serializedArtifactNames, 'consumed delta artifact names'),
-    'consumed delta artifact names',
-  );
-
-  return [...new Set(names)];
 }
 
 function resolveStateParentDirectory(options: PersistPreBuildCacheManifestOptions): string {

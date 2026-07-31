@@ -300,13 +300,10 @@ export function renderCacheFamilyKey(
   javaMajor: number | null,
   partitionFingerprint: string,
 ): string {
-  if (javaMajor !== null) {
-    validateJavaMajor(javaMajor);
-  }
   const cacheFamilyKey = [
     `${config.cacheKeyPrefix}${buildToolId}`,
     `v${config.cacheSchemaVersion}`,
-    javaMajor !== null ? String(javaMajor) : '0',
+    renderCacheJavaMajor(javaMajor),
     ciContext.runnerOs,
     ciContext.runnerArch,
     partitionFingerprint,
@@ -314,6 +311,16 @@ export function renderCacheFamilyKey(
 
   validateCacheKey(cacheFamilyKey, 'cache family key');
   return cacheFamilyKey;
+}
+
+/** Renders Java compatibility identity consistently across cache keys, outputs, and reports. */
+export function renderCacheJavaMajor(javaMajor: number | null): string {
+  if (javaMajor === null) {
+    return '0';
+  }
+
+  validateJavaMajor(javaMajor);
+  return String(javaMajor);
 }
 
 /**

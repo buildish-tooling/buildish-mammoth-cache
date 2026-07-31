@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-import {
-  armBaseCacheFinalize,
-  restoreBaseCache,
-  type BaseCacheOperationResult,
-} from '../cache/service';
+import { restoreBaseCache, type BaseCacheOperationResult } from '../cache/service';
 import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from '../ci';
-import { createCacheModel, type CacheModel, type CommandOutputCapture } from '../cache/model';
+import {
+  createCacheModel,
+  renderCacheJavaMajor,
+  type CacheModel,
+  type CommandOutputCapture,
+} from '../cache/model';
 import type { NormalizedActionConfig } from '../config/types';
 import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } from '../util/html';
 import type { CoreExecutionPhase } from '../config/types';
@@ -225,7 +226,7 @@ export function createBootstrapSummaryLines(status: BootstrapStatus): readonly s
       `- Cache enabled: ${status.config.cacheEnabled ? 'yes' : 'no'}`,
       `- Cache family: ${escapeSummaryText(status.cacheModel?.cacheFamilyKey ?? 'disabled')}`,
       `- Current ref lineage: ${escapeSummaryText(status.cacheModel?.currentRefLineagePrefix ?? 'disabled')}`,
-      `- Java major: ${escapeSummaryText(String(status.cacheModel?.javaMajor ?? 'n/a'))}`,
+      `- Java major: ${escapeSummaryText(status.cacheModel ? renderCacheJavaMajor(status.cacheModel.javaMajor) : 'n/a')}`,
       `- Cache partitions: ${status.cacheModel?.partitions.length ?? 0}`,
       ...(status.baseCacheResult
         ? [`- Base cache detail: ${escapeSummaryText(status.baseCacheResult.message)}`]
@@ -254,7 +255,7 @@ export function createBootstrapLogLines(status: BootstrapStatus): readonly strin
 
   if (status.cacheModel) {
     lines.push(
-      `Cache family: ${status.cacheModel.cacheFamilyKey}; current ref lineage: ${status.cacheModel.currentRefLineagePrefix}; Java major: ${status.cacheModel.javaMajor}; cache partitions: ${status.cacheModel.partitions.length}.`,
+      `Cache family: ${status.cacheModel.cacheFamilyKey}; current ref lineage: ${status.cacheModel.currentRefLineagePrefix}; Java major: ${renderCacheJavaMajor(status.cacheModel.javaMajor)}; cache partitions: ${status.cacheModel.partitions.length}.`,
     );
   }
 
@@ -322,7 +323,6 @@ async function runBaseCachePhase(
       cacheBackend: dependencies.cacheBackend,
     });
 
-    armBaseCacheFinalize(dependencies.runtimeHost.saveState);
     return restoreResult;
   }
 

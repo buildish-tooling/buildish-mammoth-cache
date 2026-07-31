@@ -55,10 +55,7 @@ import {
   type BaseCacheBackend,
 } from '../../../src/cache/backend';
 import type { SummaryWriter } from '../../../src/ci/github/report-sink';
-import {
-  CONSUMED_DELTA_ARTIFACT_NAMES_STATE,
-  PRE_BUILD_CACHE_MANIFEST_PATH_STATE,
-} from '../../../src/phases/finalize/state';
+import { getPersistedCacheLifecycleRecord } from '../../../src/phases/finalize/state';
 import {
   createTestGitHubProvider,
   createTestGitHubReportSink,
@@ -231,12 +228,15 @@ describe('executePrepareAction', () => {
           'utf8',
         ),
       ).resolves.toBe('from-worker-delta');
-      expect(savedState.get('buildish-mammoth-cache-base-cache-armed')).toBe('true');
-      expect(savedState.get(CONSUMED_DELTA_ARTIFACT_NAMES_STATE)).toContain(
-        'buildish-mammoth-cache-delta-',
+      expect(getPersistedCacheLifecycleRecord((name) => savedState.get(name) ?? '')).not.toBeNull();
+      const lifecycleRecord = getPersistedCacheLifecycleRecord(
+        (name: string) => savedState.get(name) ?? '',
       );
+      expect(lifecycleRecord?.dependentDelta?.artifactNames).toEqual([
+        expect.stringContaining('buildish-mammoth-cache-delta-'),
+      ]);
 
-      const manifestPath = savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE);
+      const manifestPath = lifecycleRecord?.preBuildManifestPath;
       expect(manifestPath).toBeTruthy();
       const persistedManifest = deserializeCacheManifest(await readFile(manifestPath!, 'utf8'));
       expect(
@@ -244,8 +244,8 @@ describe('executePrepareAction', () => {
           .flatMap((partition) => partition.entries)
           .map((entry) => entry.relativePath),
       ).toContain('caches/modules-2/files-2.1/example/module.bin');
-      expect(summary.lines).toEqual([]);
       const summaryText = createPrepareActionSummaryLines(status).join('\n');
+      expect(summary.lines.join('\n')).toBe(summaryText);
       expect(summaryText).toContain('## Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: none');
       expect(summaryText).toContain('- Dependent delta reuse: 1 artifact(s) from 1 job(s)');
@@ -269,10 +269,17 @@ describe('executePrepareAction', () => {
         ]),
       );
       expect(createPrepareActionOutputs(status)).toEqual({
+        'cache-family-key': expect.stringMatching(
+          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}$/u,
+        ),
+        'cache-lineage-prefix': expect.stringMatching(
+          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
+        ),
         'cache-key': expect.stringMatching(
           /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
         ),
         'base-cache-restore-status': 'miss',
+        'restored-cache-key': '',
         'java-major': '21',
         'job-mode': 'distributed-aggregator',
         'read-only': 'false',
@@ -286,7 +293,7 @@ describe('executePrepareAction', () => {
         'downloaded-dependent-artifact-count': '1',
         'job-name': 'aggregate',
       });
-      expect(summary.writeCalls).toBe(0);
+      expect(summary.writeCalls).toBe(1);
     });
   });
 
@@ -483,7 +490,10 @@ describe('executePrepareAction', () => {
 
       expect(status.dependentDeltaResult).toBeNull();
       expect(status.preBuildManifestState).not.toBeNull();
-      expect(savedState.get(PRE_BUILD_CACHE_MANIFEST_PATH_STATE)).toBeTruthy();
+      expect(
+        getPersistedCacheLifecycleRecord((name: string) => savedState.get(name) ?? '')
+          ?.preBuildManifestPath,
+      ).toBeTruthy();
       const summaryText = createPrepareActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Buildish prepare execution');
       expect(summaryText).toContain('- Restore cleanup: none');
@@ -492,10 +502,17 @@ describe('executePrepareAction', () => {
       expect(summaryText).toContain('- Downloaded delta artifacts: 0');
       expect(summaryText).toContain('- Pre-build manifest: persisted');
       expect(createPrepareActionOutputs(status)).toEqual({
+        'cache-family-key': expect.stringMatching(
+          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}$/u,
+        ),
+        'cache-lineage-prefix': expect.stringMatching(
+          /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
+        ),
         'cache-key': expect.stringMatching(
           /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
         ),
         'base-cache-restore-status': 'miss',
+        'restored-cache-key': '',
         'java-major': '21',
         'job-mode': 'standalone',
         'read-only': 'false',
@@ -509,7 +526,7 @@ describe('executePrepareAction', () => {
         'downloaded-dependent-artifact-count': '0',
         'job-name': 'build',
       });
-      expect(summary.writeCalls).toBe(0);
+      expect(summary.writeCalls).toBe(1);
     });
   });
 
@@ -1428,7 +1445,8 @@ function createMinimalPrepareBootstrapExecution(): BootstrapExecution {
       jobMode: 'standalone',
       readOnly: false,
       cacheEnabled: true,
-    } as NormalizedActionConfig,
+      dependentJobs: [],
+    } as unknown as NormalizedActionConfig,
     ciContext: {
       eventName: 'push',
       resolvedRefName: 'main',
@@ -1475,6 +1493,25 @@ function createMinimalPrepareStatus(
     ...overrides,
   };
 }
+
+describe('createPrepareActionOutputs', () => {
+  it('uses the canonical Java 0 identity when Java is unavailable', () => {
+    const bootstrap = createMinimalPrepareBootstrapExecution();
+    const status = createMinimalPrepareStatus({
+      bootstrap: {
+        ...bootstrap,
+        cacheModel: {
+          javaMajor: null,
+          cacheFamilyKey: 'test-family-v2-0-linux-x64-layout',
+          currentRefLineagePrefix: 'test-family-v2-0-linux-x64-layout-ref-main-gen-',
+          cacheKey: 'test-family-v2-0-linux-x64-layout-ref-main-gen-',
+        } as unknown as CacheModel,
+      },
+    });
+
+    expect(createPrepareActionOutputs(status)['java-major']).toBe('0');
+  });
+});
 
 describe('createPrepareActionSummaryLines', () => {
   it('includes the top-level heading', () => {
@@ -1534,7 +1571,12 @@ describe('createPrepareActionSummaryLines', () => {
 
   it('shows "persisted" or "not persisted" for the pre-build manifest line', () => {
     const withManifest = createPrepareActionSummaryLines(
-      createMinimalPrepareStatus({ preBuildManifestState: { manifestPath: '/tmp/manifest.json' } }),
+      createMinimalPrepareStatus({
+        preBuildManifestState: {
+          manifestPath: '/tmp/manifest.json',
+          manifestDigest: 'a'.repeat(64),
+        },
+      }),
     ).join('\n');
     expect(withManifest).toContain('- Pre-build manifest: persisted');
 
@@ -1600,7 +1642,10 @@ describe('createPrepareActionLogLines', () => {
   it('includes the persisted manifest path when preBuildManifestState is set', () => {
     const text = createPrepareActionLogLines(
       createMinimalPrepareStatus({
-        preBuildManifestState: { manifestPath: '/tmp/runner/manifest.json' },
+        preBuildManifestState: {
+          manifestPath: '/tmp/runner/manifest.json',
+          manifestDigest: 'a'.repeat(64),
+        },
       }),
     ).join('\n');
     expect(text).toContain("Persisted pre-build cache manifest to '/tmp/runner/manifest.json'.");

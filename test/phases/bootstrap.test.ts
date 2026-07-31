@@ -414,7 +414,7 @@ describe('bootstrap helpers', () => {
       ]);
       expect(status.ciExecutionUrls).toEqual({ jobUrl: null, workflowRunUrl: null });
       expect(summaryLines).toEqual([]);
-      expect(savedState.get('buildish-mammoth-cache-base-cache-armed')).toBe('true');
+      expect(savedState.size).toBe(0);
       expect(writeCalls).toBe(0);
       await expect(
         readFile(path.join(workspace, 'gradle', 'wrapper', 'gradle-wrapper.jar')),
@@ -466,9 +466,7 @@ describe('bootstrap helpers', () => {
         eventPayload: {
           repository: { default_branch: 'main' },
         },
-        getState(name: string): string {
-          return name === 'buildish-mammoth-cache-base-cache-armed' ? 'true' : '';
-        },
+        getState: () => '',
         summaryWriter,
         workspace,
       });
