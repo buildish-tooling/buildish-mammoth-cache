@@ -333,4 +333,4 @@ jobs:
     # Temporarily disabled while the Buildish repositories remain private.
     if: false
     #if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: buildish-tooling/buildish/.github/workflows/site-publish.yml@main
+    uses: buildish-tooling/buildish/.github/workflows/site-publish.yml@908735b92db971e6bcea1ece6262e55db3b63287 # main
