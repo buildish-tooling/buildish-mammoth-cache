@@ -205,7 +205,7 @@
 This product bundles packages from the source project at https://github.com/actions/toolkit.
 
 * npm package IDs:
-  * @actions/artifact@6.2.1
+  * @actions/artifact@6.3.1
   * @actions/cache@6.2.0
   * @actions/core@3.0.1
   * @actions/exec@3.0.0
