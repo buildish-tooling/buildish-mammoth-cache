@@ -2063,7 +2063,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/nodejs/undici.
 
 * npm package IDs:
-  * undici@6.28.0
+  * undici@6.29.0
 
 Copyright: Copyright (c) Matteo Collina and Undici contributors
 Home page: https://github.com/nodejs/undici
