@@ -677,7 +677,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/colinhacks/zod.
 
 * npm package IDs:
-  * zod@4.4.3
+  * zod@4.6.7
 
 Copyright: Copyright (c) 2025 Colin McDonnell
 Home page: https://github.com/colinhacks/zod
