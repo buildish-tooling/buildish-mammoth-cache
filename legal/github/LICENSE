@@ -741,7 +741,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/eemeli/yaml.
 
 * npm package IDs:
-  * yaml@2.9.0
+  * yaml@2.9.1
 
 Copyright: Copyright Eemeli Aro <eemeli@gmail.com>
 Home page: https://github.com/eemeli/yaml
