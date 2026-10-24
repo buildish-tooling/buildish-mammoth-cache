@@ -15,7 +15,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,11 +89,12 @@ describe('npm version resolver', () => {
     );
   });
 
-  it('resolves the repository default package.json through the CLI', () => {
+  it('resolves the repository default package.json through the CLI', async () => {
+    const packageJson = await readFile(path.join(repositoryRoot, 'package.json'), 'utf8');
     const result = runResolver([]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe('12.0.1');
+    expect(result.stdout.trim()).toBe(parsePackageJsonNpmVersion(packageJson));
     expect(result.stderr).toBe('');
   });
 
