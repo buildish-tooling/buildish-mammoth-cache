@@ -1341,7 +1341,7 @@ License: MIT - https://spdx.org/licenses/MIT.html
 This product bundles packages from the source project at https://github.com/juliangruber/brace-expansion.
 
 * npm package IDs:
-  * brace-expansion@5.0.9
+  * brace-expansion@5.0.10
 
 Copyright: Copyright Julian Gruber <julian@juliangruber.com>; TypeScript port Copyright Isaac Z. Schlueter <i@izs.me>
 Home page: https://github.com/juliangruber/brace-expansion
