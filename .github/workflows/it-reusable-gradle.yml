@@ -111,7 +111,7 @@ jobs:
 
       - name: Prepare Mammoth Cache for Gradle
         id: prepare
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/standalone-round-trip
           cache-key-prefix: it-standalone-${{ github.run_id }}-${{ github.run_attempt }}-
@@ -194,7 +194,7 @@ jobs:
         run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
 
       - name: Prepare Mammoth Cache for Gradle
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
@@ -233,7 +233,7 @@ jobs:
 
       - name: Prepare Mammoth Cache for Gradle
         id: prepare
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/aggregator
           job-mode: distributed-aggregator
@@ -277,7 +277,7 @@ jobs:
         run: bash .github/scripts/stage-fixture.sh duplicate-guard
 
       - name: First action invocation succeeds
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/duplicate-guard
           cache-enabled: false
@@ -294,7 +294,7 @@ jobs:
       - name: Duplicate action invocation is rejected
         id: duplicate_action
         continue-on-error: true
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/duplicate-guard
           cache-enabled: false
@@ -331,7 +331,7 @@ jobs:
         run: bash .github/scripts/stage-fixture.sh pull-request-worker
 
       - name: Prepare Mammoth Cache for Gradle
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/pull-request-worker
           job-mode: distributed-worker
@@ -368,7 +368,7 @@ jobs:
 
       - name: Prepare Mammoth Cache for Gradle
         id: prepare
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/pull-request
           job-mode: distributed-aggregator
@@ -423,7 +423,7 @@ jobs:
         run: bash .github/scripts/stage-fixture.sh cross-platform-${{ matrix.os }}
 
       - name: Prepare Mammoth Cache for Gradle
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/cross-platform-${{ matrix.os }}
           cache-key-prefix: it-cross-platform-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-

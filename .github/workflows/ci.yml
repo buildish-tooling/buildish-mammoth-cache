@@ -118,7 +118,7 @@ jobs:
           cp -R test/fixtures/smoke build/smoke-fixture
 
       - name: Run the local Gradle action
-        uses: $/actions/github/gradle
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by the preceding step
         with:
           base-directory: build/smoke-fixture
 
@@ -153,7 +153,7 @@ jobs:
           cp -R test/fixtures/smoke/maven build/smoke-fixture-maven
 
       - name: Run the local Maven action
-        uses: $/actions/github/maven
+        uses: ./actions/github/maven # zizmor: ignore[self-repository] built by the preceding step
         with:
           base-directory: build/smoke-fixture-maven
 
