@@ -96,6 +96,11 @@ release-legal-incompatible-license-check: sanity-check $(NODE_MODULES_STAMP) ## 
 release-legal-check: sanity-check $(NODE_MODULES_STAMP) ## Verify legal/github/LICENSE and legal/github/NOTICE for the GitHub action distribution.
 	$(NPM) run release-legal:check
 
+release-legal-write: sanity-check $(NODE_MODULES_STAMP) ## Generate legal/github/LICENSE and legal/github/NOTICE for the GitHub action distribution.
+	$(NPM) ci --ignore-scripts
+	$(NPM) run release-legal:write
+	$(NPM) run release-legal:check
+
 smoke-test: build ## Run the bundled-action smoke test against a staged fixture copy.
 	$(NPM) run smoke-test
 
