@@ -219,7 +219,7 @@ jobs:
           )"
           printf 'node_version=%s\n' "$node_version" >> "$GITHUB_OUTPUT"
           printf 'npm_version=%s\n' "$npm_version" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/setup-node-npm
+      - uses: $/.github/actions/setup-node-npm
         with:
           node-version: ${{ steps.source-tool-versions.outputs.node_version }}
           npm-version: ${{ steps.source-tool-versions.outputs.npm_version }}

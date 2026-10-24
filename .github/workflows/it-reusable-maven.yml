@@ -100,14 +100,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up integration test environment
-        uses: ./.github/actions/it-setup
+        uses: $/.github/actions/it-setup
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-standalone-round-trip
 
       - name: Prepare Mammoth Cache for Maven
         id: prepare
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-standalone-round-trip
           cache-key-prefix: it-maven-standalone-${{ github.run_id }}-${{ github.run_attempt }}-
@@ -184,13 +184,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up integration test environment
-        uses: ./.github/actions/it-setup
+        uses: $/.github/actions/it-setup
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
 
       - name: Prepare Mammoth Cache for Maven
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
@@ -222,14 +222,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up integration test environment
-        uses: ./.github/actions/it-setup
+        uses: $/.github/actions/it-setup
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-aggregator
 
       - name: Prepare Mammoth Cache for Maven
         id: prepare
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-aggregator
           job-mode: distributed-aggregator
@@ -271,13 +271,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up integration test environment
-        uses: ./.github/actions/it-setup
+        uses: $/.github/actions/it-setup
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-duplicate-guard
 
       - name: First action invocation succeeds
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-duplicate-guard
           cache-enabled: false
@@ -290,7 +290,7 @@ jobs:
       - name: Duplicate action invocation is rejected
         id: duplicate_action
         continue-on-error: true
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-duplicate-guard
           cache-enabled: false
@@ -320,13 +320,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up integration test environment
-        uses: ./.github/actions/it-setup
+        uses: $/.github/actions/it-setup
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-pull-request-worker
 
       - name: Prepare Mammoth Cache for Maven
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-pull-request-worker
           job-mode: distributed-worker
@@ -356,14 +356,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up integration test environment
-        uses: ./.github/actions/it-setup
+        uses: $/.github/actions/it-setup
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-pull-request
 
       - name: Prepare Mammoth Cache for Maven
         id: prepare
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-pull-request
           job-mode: distributed-aggregator
@@ -406,13 +406,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up integration test environment
-        uses: ./.github/actions/it-setup
+        uses: $/.github/actions/it-setup
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-cross-platform-${{ matrix.os }}
 
       - name: Prepare Mammoth Cache for Maven
-        uses: ./actions/github/maven
+        uses: $/actions/github/maven
         with:
           base-directory: build/integration-fixtures/maven-cross-platform-${{ matrix.os }}
           cache-key-prefix: it-maven-cross-platform-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-
