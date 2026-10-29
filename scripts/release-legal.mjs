@@ -39,7 +39,9 @@ import { build } from 'esbuild';
  * 4. Normalize upstream repository URLs so multiple npm packages from the same
  *    source project can be grouped into one distribution section.
  * 5. Append those grouped sections to the repository-root LICENSE / NOTICE and
- *    write the result under legal/github/.
+ *    write the result under legal/github/. List package names without versions so
+ *    version-only updates do not change the generated files. Keep versions in
+ *    diagnostic package IDs to identify releases with legal blockers.
  * 6. Fail closed when required legal metadata is missing or when a bundled
  *    dependency matches the provisional incompatible-license rules.
  *
@@ -414,9 +416,9 @@ function renderSourceProjectIntro(group) {
 }
 
 export function renderLicenseSection(group) {
-  const lines = [renderSourceProjectIntro(group), '', '* npm package IDs:'];
-  for (const packageId of group.packageIds) {
-    lines.push(`  * ${packageId}`);
+  const lines = [renderSourceProjectIntro(group), '', '* npm packages:'];
+  for (const packageName of group.packageNames) {
+    lines.push(`  * ${packageName}`);
   }
   lines.push(
     '',
@@ -437,10 +439,10 @@ export function renderNoticeSection(group) {
   const lines = [
     `${renderSourceProjectIntro(group)} with the following in its NOTICE file:`,
     '|',
-    '| npm package IDs:',
+    '| npm packages:',
   ];
-  for (const packageId of group.packageIds) {
-    lines.push(`|   * ${packageId}`);
+  for (const packageName of group.packageNames) {
+    lines.push(`|   * ${packageName}`);
   }
   lines.push('|', renderPipedBlock(group.noticeText));
   return lines.join('\n');
@@ -580,6 +582,7 @@ export async function collectPackageInfo(packageRoot) {
     licenseReference: renderLicenseReference(licenseExpression),
     noticeTexts: noticeTexts.map(trimDocumentText).filter(Boolean),
     packageId,
+    packageName: packageJson.name,
     projectHomePage,
     specialHandlingText,
   };
@@ -605,13 +608,13 @@ async function analyzeDistribution() {
         attributionText: packageInfo.attributionText,
         copyright: new Set(),
         licenseReference: packageInfo.licenseReference,
-        packageIds: new Set(),
+        packageNames: new Set(),
         projectHomePage: packageInfo.projectHomePage,
         specialHandlingText: packageInfo.specialHandlingText,
       });
     }
     const licenseGroup = licenseGroups.get(licenseGroupKey);
-    licenseGroup.packageIds.add(packageInfo.packageId);
+    licenseGroup.packageNames.add(packageInfo.packageName);
     if (packageInfo.copyright) {
       licenseGroup.copyright.add(packageInfo.copyright);
     }
@@ -621,11 +624,11 @@ async function analyzeDistribution() {
       if (!noticeGroups.has(noticeGroupKey)) {
         noticeGroups.set(noticeGroupKey, {
           noticeText,
-          packageIds: new Set(),
+          packageNames: new Set(),
           projectHomePage: packageInfo.projectHomePage,
         });
       }
-      noticeGroups.get(noticeGroupKey).packageIds.add(packageInfo.packageId);
+      noticeGroups.get(noticeGroupKey).packageNames.add(packageInfo.packageName);
     }
   }
 
@@ -634,26 +637,34 @@ async function analyzeDistribution() {
       attributionText: group.attributionText,
       copyright: [...group.copyright].sort((left, right) => left.localeCompare(right)).join('; '),
       licenseReference: group.licenseReference,
-      packageIds: [...group.packageIds].sort((left, right) => left.localeCompare(right)),
+      packageNames: [...group.packageNames].sort((left, right) => left.localeCompare(right)),
       projectHomePage: group.projectHomePage,
       specialHandlingText: group.specialHandlingText,
     }))
     .sort((left, right) => {
-      const leftKey = `${left.projectHomePage}\u0001${left.packageIds[0]}`;
-      const rightKey = `${right.projectHomePage}\u0001${right.packageIds[0]}`;
-      return leftKey.localeCompare(rightKey);
+      const leftKey = `${left.projectHomePage}\u0001${left.packageNames[0]}`;
+      const rightKey = `${right.projectHomePage}\u0001${right.packageNames[0]}`;
+      // One package can ship under multiple licenses; keep those sections in a
+      // stable order independent of installed versions and package paths.
+      return (
+        leftKey.localeCompare(rightKey) ||
+        renderLicenseSection(left).localeCompare(renderLicenseSection(right))
+      );
     });
 
   const sortedNoticeGroups = [...noticeGroups.values()]
     .map((group) => ({
       noticeText: group.noticeText,
-      packageIds: [...group.packageIds].sort((left, right) => left.localeCompare(right)),
+      packageNames: [...group.packageNames].sort((left, right) => left.localeCompare(right)),
       projectHomePage: group.projectHomePage,
     }))
     .sort((left, right) => {
-      const leftKey = `${left.projectHomePage}\u0001${left.packageIds[0]}`;
-      const rightKey = `${right.projectHomePage}\u0001${right.packageIds[0]}`;
-      return leftKey.localeCompare(rightKey);
+      const leftKey = `${left.projectHomePage}\u0001${left.packageNames[0]}`;
+      const rightKey = `${right.projectHomePage}\u0001${right.packageNames[0]}`;
+      return (
+        leftKey.localeCompare(rightKey) ||
+        renderNoticeSection(left).localeCompare(renderNoticeSection(right))
+      );
     });
 
   return { issues, licenseGroups: sortedLicenseGroups, noticeGroups: sortedNoticeGroups };

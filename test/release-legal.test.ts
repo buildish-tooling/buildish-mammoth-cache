@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,6 +27,7 @@ import {
   parseMode,
   renderLicenseReference,
   renderLicenseSection,
+  renderNoticeSection,
 } from '../scripts/release-legal.mjs';
 
 describe('release-legal helpers', () => {
@@ -64,7 +68,7 @@ describe('release-legal helpers', () => {
       attributionText: 'MIT License\n\nCopyright (c) 2020 Example Corp.',
       copyright: 'Copyright (c) 2020 Example Corp.',
       licenseReference: 'MIT - https://spdx.org/licenses/MIT.html',
-      packageIds: ['example-a@1.0.0', 'example-b@1.0.0'],
+      packageNames: ['@example/a', 'example-b'],
       projectHomePage: 'https://github.com/example/project',
       specialHandlingText: 'Recovered from upstream provenance evidence.',
     });
@@ -72,7 +76,8 @@ describe('release-legal helpers', () => {
     expect(section).toContain(
       'This product bundles packages from the source project at https://github.com/example/project.',
     );
-    expect(section).toContain('* npm package IDs:');
+    expect(section).toContain('* npm packages:');
+    expect(section).toContain('  * @example/a\n  * example-b');
     expect(section).toContain('Special handling:');
     expect(section).toContain('| Recovered from upstream provenance evidence.');
     expect(section).toContain('| MIT License');
@@ -90,5 +95,66 @@ describe('release-legal helpers', () => {
     expect(packageInfo.issues.map((issue) => issue.code)).not.toContain(
       'MISSING_LICENSE_DECLARATION',
     );
+  });
+
+  it('keeps legal sections stable across version bumps while preserving legal changes', async () => {
+    await mkdir('build', { recursive: true });
+    const packageRoot = await mkdtemp(path.join('build', 'release-legal-test-'));
+    const metadata = {
+      name: '@example/package',
+      license: 'MIT',
+      homepage: 'https://github.com/example/project',
+    };
+    const licenseText = 'MIT License\n\nCopyright (c) 2026 Example Corp.\n';
+    const collectVersion = async (version: string) => {
+      await writeFile(
+        path.join(packageRoot, 'package.json'),
+        JSON.stringify({ ...metadata, version }),
+      );
+      return collectPackageInfo(packageRoot);
+    };
+    const renderSections = (info: Awaited<ReturnType<typeof collectPackageInfo>>) => [
+      renderLicenseSection({ ...info, packageNames: [info.packageName] }),
+      renderNoticeSection({
+        ...info,
+        packageNames: [info.packageName],
+        noticeText: info.noticeTexts.join('\n'),
+      }),
+    ];
+
+    try {
+      await writeFile(path.join(packageRoot, 'LICENSE'), licenseText);
+      await writeFile(path.join(packageRoot, 'NOTICE'), 'Example attribution\n');
+      const before = await collectVersion('1.0.0');
+      const after = await collectVersion('2.0.0');
+
+      expect(before.packageId).toBe('@example/package@1.0.0');
+      expect(after.packageId).toBe('@example/package@2.0.0');
+      expect(after.packageName).toBe('@example/package');
+      expect(renderSections(after)).toEqual(renderSections(before));
+      for (const section of renderSections(after)) {
+        expect(section).toContain('* @example/package');
+        expect(section).not.toContain('@2.0.0');
+      }
+
+      await writeFile(path.join(packageRoot, 'LICENSE'), `${licenseText}Additional terms\n`);
+      const changedLicense = await collectVersion('2.0.0');
+      expect(renderSections(changedLicense)[0]).not.toBe(renderSections(after)[0]);
+
+      await writeFile(path.join(packageRoot, 'NOTICE'), 'Updated attribution\n');
+      const changedNotice = await collectVersion('2.0.0');
+      expect(renderSections(changedNotice)[1]).not.toBe(renderSections(after)[1]);
+
+      metadata.license = 'GPL-3.0-only';
+      const incompatible = await collectVersion('3.0.0');
+      expect(incompatible.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'PROVISIONAL_INCOMPATIBLE_LICENSE',
+          packageId: '@example/package@3.0.0',
+        }),
+      );
+    } finally {
+      await rm(packageRoot, { recursive: true, force: true });
+    }
   });
 });

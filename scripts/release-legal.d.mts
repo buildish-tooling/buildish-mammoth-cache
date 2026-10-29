@@ -28,6 +28,7 @@ export interface ReleaseLegalPackageInfo {
   licenseReference: string;
   noticeTexts: string[];
   packageId: string;
+  packageName: string;
   projectHomePage: string;
   specialHandlingText: string;
 }
@@ -36,7 +37,7 @@ export interface ReleaseLegalSection {
   attributionText: string;
   copyright: string;
   licenseReference: string;
-  packageIds: string[];
+  packageNames: string[];
   projectHomePage: string;
   specialHandlingText?: string;
 }
@@ -48,3 +49,11 @@ export function normalizeProjectUrl(value: unknown): string;
 export function parseMode(argv: string[]): 'check' | 'check-incompatible-licenses' | 'write';
 export function renderLicenseReference(licenseExpression: string): string;
 export function renderLicenseSection(group: ReleaseLegalSection): string;
+
+export interface ReleaseLegalNoticeSection {
+  noticeText: string;
+  packageNames: string[];
+  projectHomePage: string;
+}
+
+export function renderNoticeSection(group: ReleaseLegalNoticeSection): string;

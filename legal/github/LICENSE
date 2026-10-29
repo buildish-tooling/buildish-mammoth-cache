@@ -204,14 +204,14 @@
 
 This product bundles packages from the source project at https://github.com/actions/toolkit.
 
-* npm package IDs:
-  * @actions/artifact@6.3.1
-  * @actions/cache@6.3.0
-  * @actions/core@3.0.1
-  * @actions/exec@3.0.0
-  * @actions/github@9.1.1
-  * @actions/glob@0.7.0
-  * @actions/io@3.0.2
+* npm packages:
+  * @actions/artifact
+  * @actions/cache
+  * @actions/core
+  * @actions/exec
+  * @actions/github
+  * @actions/glob
+  * @actions/io
 
 Copyright: Copyright 2019 GitHub
 Home page: https://github.com/actions/toolkit
@@ -230,9 +230,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/actions/toolkit.
 
-* npm package IDs:
-  * @actions/http-client@3.0.2
-  * @actions/http-client@4.0.1
+* npm packages:
+  * @actions/http-client
 
 Copyright: Copyright (c) GitHub, Inc.
 Home page: https://github.com/actions/toolkit
@@ -263,8 +262,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/archiverjs/archiver-utils.
 
-* npm package IDs:
-  * archiver-utils@5.0.2
+* npm packages:
+  * archiver-utils
 
 Copyright: Copyright (c) 2015 Chris Talkington.
 Home page: https://github.com/archiverjs/archiver-utils
@@ -296,8 +295,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/archiverjs/node-archiver.
 
-* npm package IDs:
-  * archiver@7.0.1
+* npm packages:
+  * archiver
 
 Copyright: Copyright (c) 2012-2014 Chris Talkington, contributors.
 Home page: https://github.com/archiverjs/node-archiver
@@ -329,8 +328,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/archiverjs/node-compress-commons.
 
-* npm package IDs:
-  * compress-commons@6.0.2
+* npm packages:
+  * compress-commons
 
 Copyright: Copyright (c) 2014 Chris Talkington, contributors.
 Home page: https://github.com/archiverjs/node-compress-commons
@@ -362,8 +361,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/archiverjs/node-crc32-stream.
 
-* npm package IDs:
-  * crc32-stream@6.0.0
+* npm packages:
+  * crc32-stream
 
 Copyright: Copyright (c) 2014 Chris Talkington, contributors.
 Home page: https://github.com/archiverjs/node-crc32-stream
@@ -395,8 +394,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/archiverjs/node-zip-stream.
 
-* npm package IDs:
-  * zip-stream@6.0.1
+* npm packages:
+  * zip-stream
 
 Copyright: Copyright (c) 2014 Chris Talkington, contributors.
 Home page: https://github.com/archiverjs/node-zip-stream
@@ -428,8 +427,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/auth0/jwt-decode.
 
-* npm package IDs:
-  * jwt-decode@4.0.0
+* npm packages:
+  * jwt-decode
 
 Copyright: Copyright (c) 2015 Auth0, Inc. <support@auth0.com> (http://auth0.com)
 Home page: https://github.com/auth0/jwt-decode
@@ -460,20 +459,18 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/Azure/azure-sdk-for-js.
 
-* npm package IDs:
-  * @azure/abort-controller@2.2.0
-  * @azure/core-auth@1.11.0
-  * @azure/core-client@1.11.0
-  * @azure/core-http-compat@2.5.0
-  * @azure/core-rest-pipeline@1.23.0
-  * @azure/core-rest-pipeline@1.25.0
-  * @azure/core-tracing@1.4.0
-  * @azure/core-util@1.14.0
-  * @azure/core-xml@1.6.0
-  * @azure/logger@1.4.0
-  * @azure/storage-blob@12.31.0
-  * @azure/storage-blob@12.33.0
-  * @typespec/ts-http-runtime@0.3.8
+* npm packages:
+  * @azure/abort-controller
+  * @azure/core-auth
+  * @azure/core-client
+  * @azure/core-http-compat
+  * @azure/core-rest-pipeline
+  * @azure/core-tracing
+  * @azure/core-util
+  * @azure/core-xml
+  * @azure/logger
+  * @azure/storage-blob
+  * @typespec/ts-http-runtime
 
 Copyright: Copyright (c) Microsoft Corporation.
 Home page: https://github.com/Azure/azure-sdk-for-js
@@ -504,8 +501,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/Azure/azure-sdk-for-js.
 
-* npm package IDs:
-  * @azure/core-lro@2.7.2
+* npm packages:
+  * @azure/core-lro
 
 Copyright: Copyright (c) 2020 Microsoft
 Home page: https://github.com/Azure/azure-sdk-for-js
@@ -536,8 +533,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/Azure/azure-sdk-for-js.
 
-* npm package IDs:
-  * @azure/storage-common@12.4.1
+* npm packages:
+  * @azure/storage-common
 
 Copyright: Copyright (c) 2018 Microsoft
 Home page: https://github.com/Azure/azure-sdk-for-js
@@ -568,8 +565,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/brianloveswords/buffer-crc32.
 
-* npm package IDs:
-  * buffer-crc32@1.0.0
+* npm packages:
+  * buffer-crc32
 
 Copyright: Copyright (c) 2013-2024 Brian J. Brennan
 Home page: https://github.com/brianloveswords/buffer-crc32
@@ -598,8 +595,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/calvinmetcalf/process-nextick-args.
 
-* npm package IDs:
-  * process-nextick-args@2.0.1
+* npm packages:
+  * process-nextick-args
 
 Copyright: # Copyright (c) 2015 Calvin Metcalf
 Home page: https://github.com/calvinmetcalf/process-nextick-args
@@ -628,8 +625,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/caolan/async.
 
-* npm package IDs:
-  * async@3.2.6
+* npm packages:
+  * async
 
 Copyright: Copyright (c) 2010-2018 Caolan McMahon
 Home page: https://github.com/caolan/async
@@ -658,8 +655,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/colinhacks/zod.
 
-* npm package IDs:
-  * zod@4.6.7
+* npm packages:
+  * zod
 
 Copyright: Copyright (c) 2025 Colin McDonnell
 Home page: https://github.com/colinhacks/zod
@@ -690,8 +687,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/debug-js/debug.
 
-* npm package IDs:
-  * debug@4.4.3
+* npm packages:
+  * debug
 
 Copyright: Copyright (c) 2014-2017 TJ Holowaychuk <tj@vision-media.ca>; Copyright (c) 2018-2021 Josh Junon
 Home page: https://github.com/debug-js/debug
@@ -720,8 +717,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/eemeli/yaml.
 
-* npm package IDs:
-  * yaml@2.9.1
+* npm packages:
+  * yaml
 
 Copyright: Copyright Eemeli Aro <eemeli@gmail.com>
 Home page: https://github.com/eemeli/yaml
@@ -744,9 +741,8 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 This product bundles packages from the source project at https://github.com/feross/safe-buffer.
 
-* npm package IDs:
-  * safe-buffer@5.1.2
-  * safe-buffer@5.2.1
+* npm packages:
+  * safe-buffer
 
 Copyright: Copyright (c) Feross Aboukhadijeh
 Home page: https://github.com/feross/safe-buffer
@@ -777,8 +773,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/gr2m/before-after-hook.
 
-* npm package IDs:
-  * before-after-hook@4.0.0
+* npm packages:
+  * before-after-hook
 
 Copyright: Copyright 2018 Gregor Martynus and other contributors.
 Home page: https://github.com/gr2m/before-after-hook
@@ -788,8 +784,8 @@ License: Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
 
 This product bundles packages from the source project at https://github.com/gr2m/universal-user-agent.
 
-* npm package IDs:
-  * universal-user-agent@7.0.3
+* npm packages:
+  * universal-user-agent
 
 Copyright: Copyright (c) 2018-2021, Gregor Martynus (https://github.com/gr2m)
 Home page: https://github.com/gr2m/universal-user-agent
@@ -806,8 +802,8 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 This product bundles packages from the source project at https://github.com/holepunchto/b4a.
 
-* npm package IDs:
-  * b4a@1.8.1
+* npm packages:
+  * b4a
 
 Copyright: Copyright (c) Holepunch
 Home page: https://github.com/holepunchto/b4a
@@ -817,8 +813,8 @@ License: Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
 
 This product bundles packages from the source project at https://github.com/holepunchto/events-universal.
 
-* npm package IDs:
-  * events-universal@1.0.1
+* npm packages:
+  * events-universal
 
 Copyright: Copyright (c) Holepunch
 Home page: https://github.com/holepunchto/events-universal
@@ -828,8 +824,8 @@ License: Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
 
 This product bundles packages from the source project at https://github.com/holepunchto/text-decoder.
 
-* npm package IDs:
-  * text-decoder@1.2.7
+* npm packages:
+  * text-decoder
 
 Copyright: Copyright (c) Holepunch
 Home page: https://github.com/holepunchto/text-decoder
@@ -839,8 +835,8 @@ License: Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
 
 This product bundles packages from the source project at https://github.com/isaacs/core-util-is.
 
-* npm package IDs:
-  * core-util-is@1.0.3
+* npm packages:
+  * core-util-is
 
 Copyright: Copyright Node.js contributors. All rights reserved.
 Home page: https://github.com/isaacs/core-util-is
@@ -869,8 +865,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/isaacs/inherits.
 
-* npm package IDs:
-  * inherits@2.0.4
+* npm packages:
+  * inherits
 
 Copyright: Copyright (c) Isaac Z. Schlueter
 Home page: https://github.com/isaacs/inherits
@@ -895,8 +891,34 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 This product bundles packages from the source project at https://github.com/isaacs/minimatch.
 
-* npm package IDs:
-  * minimatch@10.2.6
+* npm packages:
+  * minimatch
+
+Copyright: Copyright (c) 2011-2023 Isaac Z. Schlueter and Contributors
+Home page: https://github.com/isaacs/minimatch
+License: ISC - https://spdx.org/licenses/ISC.html
+| The ISC License
+|
+| Copyright (c) 2011-2023 Isaac Z. Schlueter and Contributors
+|
+| Permission to use, copy, modify, and/or distribute this software for any
+| purpose with or without fee is hereby granted, provided that the above
+| copyright notice and this permission notice appear in all copies.
+|
+| THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+| WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+| MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+| ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+| WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+| ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+| IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+This product bundles packages from the source project at https://github.com/isaacs/minimatch.
+
+* npm packages:
+  * minimatch
 
 Copyright: Copyright (c) Isaac Z. Schlueter <i@izs.me> (http://blog.izs.me)
 Home page: https://github.com/isaacs/minimatch
@@ -959,37 +981,10 @@ License: BlueOak-1.0.0 - https://spdx.org/licenses/BlueOak-1.0.0.html
 
 --------------------------------------------------------------------------------
 
-This product bundles packages from the source project at https://github.com/isaacs/minimatch.
-
-* npm package IDs:
-  * minimatch@5.1.9
-  * minimatch@9.0.9
-
-Copyright: Copyright (c) 2011-2023 Isaac Z. Schlueter and Contributors
-Home page: https://github.com/isaacs/minimatch
-License: ISC - https://spdx.org/licenses/ISC.html
-| The ISC License
-|
-| Copyright (c) 2011-2023 Isaac Z. Schlueter and Contributors
-|
-| Permission to use, copy, modify, and/or distribute this software for any
-| purpose with or without fee is hereby granted, provided that the above
-| copyright notice and this permission notice appear in all copies.
-|
-| THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-| WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-| MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-| ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-| WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-| ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
-| IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
---------------------------------------------------------------------------------
-
 This product bundles packages from the source project at https://github.com/isaacs/minipass.
 
-* npm package IDs:
-  * minipass@7.1.3
+* npm packages:
+  * minipass
 
 Copyright: Copyright (c) Isaac Z. Schlueter <i@izs.me> (http://blog.izs.me/)
 Home page: https://github.com/isaacs/minipass
@@ -1054,8 +1049,8 @@ License: BlueOak-1.0.0 - https://spdx.org/licenses/BlueOak-1.0.0.html
 
 This product bundles packages from the source project at https://github.com/isaacs/node-glob.
 
-* npm package IDs:
-  * glob@10.5.0
+* npm packages:
+  * glob
 
 Copyright: Copyright (c) 2009-2023 Isaac Z. Schlueter and Contributors
 Home page: https://github.com/isaacs/node-glob
@@ -1080,8 +1075,8 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 This product bundles packages from the source project at https://github.com/isaacs/node-graceful-fs.
 
-* npm package IDs:
-  * graceful-fs@4.2.11
+* npm packages:
+  * graceful-fs
 
 Copyright: Copyright (c) 2011-2022 Isaac Z. Schlueter, Ben Noordhuis, and Contributors
 Home page: https://github.com/isaacs/node-graceful-fs
@@ -1106,8 +1101,8 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 This product bundles packages from the source project at https://github.com/isaacs/node-lru-cache.
 
-* npm package IDs:
-  * lru-cache@10.4.3
+* npm packages:
+  * lru-cache
 
 Copyright: Copyright (c) 2010-2023 Isaac Z. Schlueter and Contributors
 Home page: https://github.com/isaacs/node-lru-cache
@@ -1132,8 +1127,8 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 This product bundles packages from the source project at https://github.com/isaacs/path-scurry.
 
-* npm package IDs:
-  * path-scurry@1.11.1
+* npm packages:
+  * path-scurry
 
 Copyright: Copyright (c) Isaac Z. Schlueter <i@izs.me> (https://blog.izs.me)
 Home page: https://github.com/isaacs/path-scurry
@@ -1198,8 +1193,8 @@ License: BlueOak-1.0.0 - https://spdx.org/licenses/BlueOak-1.0.0.html
 
 This product bundles packages from the source project at https://github.com/Ivan-Korolenko/json-with-bigint.
 
-* npm package IDs:
-  * json-with-bigint@3.5.10
+* npm packages:
+  * json-with-bigint
 
 Copyright: Copyright (c) 2023 Ivan Korolenko
 Home page: https://github.com/Ivan-Korolenko/json-with-bigint
@@ -1230,8 +1225,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/jonschlinkert/normalize-path.
 
-* npm package IDs:
-  * normalize-path@3.0.0
+* npm packages:
+  * normalize-path
 
 Copyright: Copyright (c) 2014-2018, Jon Schlinkert.
 Home page: https://github.com/jonschlinkert/normalize-path
@@ -1262,8 +1257,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/jpommerening/node-lazystream.
 
-* npm package IDs:
-  * lazystream@1.0.1
+* npm packages:
+  * lazystream
 
 Copyright: Copyright (c) 2013 J. Pommerening, contributors.
 Home page: https://github.com/jpommerening/node-lazystream
@@ -1295,8 +1290,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/jshttp/content-type.
 
-* npm package IDs:
-  * content-type@2.0.0
+* npm packages:
+  * content-type
 
 Copyright: Copyright (c) 2015 Douglas Christopher Wilson
 Home page: https://github.com/jshttp/content-type
@@ -1328,8 +1323,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/juliangruber/balanced-match.
 
-* npm package IDs:
-  * balanced-match@4.0.4
+* npm packages:
+  * balanced-match
 
 Copyright: Original code Copyright Julian Gruber <julian@juliangruber.com>; Port to TypeScript Copyright Isaac Z. Schlueter <i@izs.me>
 Home page: https://github.com/juliangruber/balanced-match
@@ -1362,8 +1357,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/juliangruber/brace-expansion.
 
-* npm package IDs:
-  * brace-expansion@5.0.12
+* npm packages:
+  * brace-expansion
 
 Copyright: Copyright Julian Gruber <julian@juliangruber.com>; TypeScript port Copyright Isaac Z. Schlueter <i@izs.me>
 Home page: https://github.com/juliangruber/brace-expansion
@@ -1396,8 +1391,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/juliangruber/isarray.
 
-* npm package IDs:
-  * isarray@1.0.0
+* npm packages:
+  * isarray
 
 Copyright: Copyright (c) 2013 Julian Gruber <julian@juliangruber.com>
 Home page: https://github.com/juliangruber/isarray
@@ -1428,8 +1423,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/koichik/node-tunnel.
 
-* npm package IDs:
-  * tunnel@0.0.6
+* npm packages:
+  * tunnel
 
 Copyright: Copyright (c) 2012 Koichi Kobayashi
 Home page: https://github.com/koichik/node-tunnel
@@ -1460,8 +1455,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/lodash/lodash.
 
-* npm package IDs:
-  * lodash@4.18.1
+* npm packages:
+  * lodash
 
 Copyright: Copyright OpenJS Foundation and other contributors <https://openjsf.org/>; Based on Underscore.js, copyright Jeremy Ashkenas,; Copyright and related rights for sample code are waived via CC0. Sample
 Home page: https://github.com/lodash/lodash
@@ -1518,8 +1513,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/mafintosh/fast-fifo.
 
-* npm package IDs:
-  * fast-fifo@1.3.2
+* npm packages:
+  * fast-fifo
 
 Copyright: Copyright (c) 2019 Mathias Buus
 Home page: https://github.com/mafintosh/fast-fifo
@@ -1550,8 +1545,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/mafintosh/streamx.
 
-* npm package IDs:
-  * streamx@2.28.0
+* npm packages:
+  * streamx
 
 Copyright: Copyright (c) 2019 Mathias Buus
 Home page: https://github.com/mafintosh/streamx
@@ -1582,8 +1577,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/mafintosh/tar-stream.
 
-* npm package IDs:
-  * tar-stream@3.2.0
+* npm packages:
+  * tar-stream
 
 Copyright: Copyright (c) 2014 Mathias Buus
 Home page: https://github.com/mafintosh/tar-stream
@@ -1614,8 +1609,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/mhr3/unzip-stream.
 
-* npm package IDs:
-  * unzip-stream@0.3.4
+* npm packages:
+  * unzip-stream
 
 Copyright: Copyright (c) 2017 Michal Hruby; Copyright (c) 2012 - 2013 Near Infinity Corporation
 Home page: https://github.com/mhr3/unzip-stream
@@ -1646,8 +1641,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/mysticatea/abort-controller.
 
-* npm package IDs:
-  * abort-controller@3.0.0
+* npm packages:
+  * abort-controller
 
 Copyright: Copyright (c) 2017 Toru Nagashima
 Home page: https://github.com/mysticatea/abort-controller
@@ -1678,8 +1673,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/mysticatea/event-target-shim.
 
-* npm package IDs:
-  * event-target-shim@5.0.1
+* npm packages:
+  * event-target-shim
 
 Copyright: Copyright (c) 2015 Toru Nagashima
 Home page: https://github.com/mysticatea/event-target-shim
@@ -1710,8 +1705,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/anynum.
 
-* npm package IDs:
-  * anynum@1.0.1
+* npm packages:
+  * anynum
 
 Copyright: Copyright (c) 2026 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/anynum
@@ -1742,8 +1737,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/fast-xml-builder.
 
-* npm package IDs:
-  * fast-xml-builder@1.3.0
+* npm packages:
+  * fast-xml-builder
 
 Copyright: Copyright (c) 2026 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/fast-xml-builder
@@ -1774,8 +1769,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/fast-xml-parser.
 
-* npm package IDs:
-  * fast-xml-parser@5.10.1
+* npm packages:
+  * fast-xml-parser
 
 Copyright: Copyright (c) 2017 Amit Kumar Gupta
 Home page: https://github.com/NaturalIntelligence/fast-xml-parser
@@ -1806,8 +1801,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/is-unsafe.
 
-* npm package IDs:
-  * is-unsafe@2.0.0
+* npm packages:
+  * is-unsafe
 
 Copyright: Copyright (c) 2026 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/is-unsafe
@@ -1838,8 +1833,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/path-expression-matcher.
 
-* npm package IDs:
-  * path-expression-matcher@1.6.2
+* npm packages:
+  * path-expression-matcher
 
 Copyright: Copyright (c) 2024
 Home page: https://github.com/NaturalIntelligence/path-expression-matcher
@@ -1870,8 +1865,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/strnum.
 
-* npm package IDs:
-  * strnum@2.4.1
+* npm packages:
+  * strnum
 
 Copyright: Copyright (c) 2021 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/strnum
@@ -1902,8 +1897,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/NaturalIntelligence/xml-naming.
 
-* npm package IDs:
-  * xml-naming@0.3.0
+* npm packages:
+  * xml-naming
 
 Copyright: Copyright (c) 2026 Natural Intelligence
 Home page: https://github.com/NaturalIntelligence/xml-naming
@@ -1934,8 +1929,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/nodable/val-parsers.
 
-* npm package IDs:
-  * @nodable/entities@3.0.0
+* npm packages:
+  * @nodable/entities
 
 Copyright: Copyright (c) Amit Gupta (https://solothought.com)
 Home page: https://github.com/nodable/val-parsers
@@ -1966,9 +1961,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/nodejs/readable-stream.
 
-* npm package IDs:
-  * readable-stream@2.3.8
-  * readable-stream@4.7.0
+* npm packages:
+  * readable-stream
 
 Copyright: Copyright Node.js contributors. All rights reserved.; Copyright Joyent, Inc. and other Node contributors. All rights reserved.
 Home page: https://github.com/nodejs/readable-stream
@@ -2025,9 +2019,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/nodejs/string_decoder.
 
-* npm package IDs:
-  * string_decoder@1.1.1
-  * string_decoder@1.3.0
+* npm packages:
+  * string_decoder
 
 Copyright: Copyright Node.js contributors. All rights reserved.; Copyright Joyent, Inc. and other Node contributors. All rights reserved.
 Home page: https://github.com/nodejs/string_decoder
@@ -2084,8 +2077,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/nodejs/undici.
 
-* npm package IDs:
-  * undici@6.29.0
+* npm packages:
+  * undici
 
 Copyright: Copyright (c) Matteo Collina and Undici contributors
 Home page: https://github.com/nodejs/undici
@@ -2116,8 +2109,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/npm/node-semver.
 
-* npm package IDs:
-  * semver@7.8.5
+* npm packages:
+  * semver
 
 Copyright: Copyright (c) Isaac Z. Schlueter and Contributors
 Home page: https://github.com/npm/node-semver
@@ -2142,8 +2135,8 @@ License: ISC - https://spdx.org/licenses/ISC.html
 
 This product bundles packages from the source project at https://github.com/octokit/auth-token.js.
 
-* npm package IDs:
-  * @octokit/auth-token@6.0.0
+* npm packages:
+  * @octokit/auth-token
 
 Copyright: Copyright (c) 2019 Octokit contributors
 Home page: https://github.com/octokit/auth-token.js
@@ -2174,8 +2167,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/core.js.
 
-* npm package IDs:
-  * @octokit/core@7.0.6
+* npm packages:
+  * @octokit/core
 
 Copyright: Copyright (c) 2019 Octokit contributors
 Home page: https://github.com/octokit/core.js
@@ -2206,8 +2199,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/endpoint.js.
 
-* npm package IDs:
-  * @octokit/endpoint@11.0.3
+* npm packages:
+  * @octokit/endpoint
 
 Copyright: Copyright (c) 2018 Octokit contributors
 Home page: https://github.com/octokit/endpoint.js
@@ -2238,8 +2231,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/graphql.js.
 
-* npm package IDs:
-  * @octokit/graphql@9.0.3
+* npm packages:
+  * @octokit/graphql
 
 Copyright: Copyright (c) 2018 Octokit contributors
 Home page: https://github.com/octokit/graphql.js
@@ -2270,8 +2263,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/plugin-paginate-rest.js.
 
-* npm package IDs:
-  * @octokit/plugin-paginate-rest@14.0.0
+* npm packages:
+  * @octokit/plugin-paginate-rest
 
 Copyright: MIT License Copyright (c) 2019 Octokit contributors
 Home page: https://github.com/octokit/plugin-paginate-rest.js
@@ -2288,8 +2281,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/plugin-request-log.js.
 
-* npm package IDs:
-  * @octokit/plugin-request-log@6.0.0
+* npm packages:
+  * @octokit/plugin-request-log
 
 Copyright: MIT License Copyright (c) 2020 Octokit contributors
 Home page: https://github.com/octokit/plugin-request-log.js
@@ -2306,8 +2299,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/plugin-rest-endpoint-methods.js.
 
-* npm package IDs:
-  * @octokit/plugin-rest-endpoint-methods@17.0.0
+* npm packages:
+  * @octokit/plugin-rest-endpoint-methods
 
 Copyright: MIT License Copyright (c) 2019 Octokit contributors
 Home page: https://github.com/octokit/plugin-rest-endpoint-methods.js
@@ -2324,8 +2317,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/plugin-retry.js.
 
-* npm package IDs:
-  * @octokit/plugin-retry@8.1.0
+* npm packages:
+  * @octokit/plugin-retry
 
 Copyright: Copyright (c) 2018 Octokit contributors
 Home page: https://github.com/octokit/plugin-retry.js
@@ -2356,8 +2349,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/request-error.js.
 
-* npm package IDs:
-  * @octokit/request-error@7.1.0
+* npm packages:
+  * @octokit/request-error
 
 Copyright: Copyright (c) 2019 Octokit contributors
 Home page: https://github.com/octokit/request-error.js
@@ -2388,8 +2381,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/octokit/request.js.
 
-* npm package IDs:
-  * @octokit/request@10.0.11
+* npm packages:
+  * @octokit/request
 
 Copyright: Copyright (c) 2018 Octokit contributors
 Home page: https://github.com/octokit/request.js
@@ -2420,8 +2413,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/SGrondin/bottleneck.
 
-* npm package IDs:
-  * bottleneck@2.19.5
+* npm packages:
+  * bottleneck
 
 Copyright: Copyright (c) 2014 Simon Grondin
 Home page: https://github.com/SGrondin/bottleneck
@@ -2451,8 +2444,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/SheetJS/js-crc32.
 
-* npm package IDs:
-  * crc-32@1.2.2
+* npm packages:
+  * crc-32
 
 Copyright: Copyright (C) 2014-present   SheetJS LLC
 Home page: https://github.com/SheetJS/js-crc32
@@ -2462,8 +2455,8 @@ License: Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
 
 This product bundles packages from the source project at https://github.com/shtylman/node-process.
 
-* npm package IDs:
-  * process@0.11.10
+* npm packages:
+  * process
 
 Copyright: Copyright (c) 2013 Roman Shtylman <shtylman@gmail.com>
 Home page: https://github.com/shtylman/node-process
@@ -2495,8 +2488,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/sindresorhus/is-stream.
 
-* npm package IDs:
-  * is-stream@2.0.1
+* npm packages:
+  * is-stream
 
 Copyright: Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
 Home page: https://github.com/sindresorhus/is-stream
@@ -2515,8 +2508,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/substack/js-traverse.
 
-* npm package IDs:
-  * traverse@0.3.9
+* npm packages:
+  * traverse
 
 Copyright: Copyright 2010 James Halliday (mail@substack.net)
 Home page: https://github.com/substack/js-traverse
@@ -2550,8 +2543,8 @@ License: MIT/X11
 
 This product bundles packages from the source project at https://github.com/substack/node-binary.
 
-* npm package IDs:
-  * binary@0.3.0
+* npm packages:
+  * binary
 
 Copyright: Copyright (c) 2010 James Halliday (mail@substack.net)
 Home page: https://github.com/substack/node-binary
@@ -2582,8 +2575,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/substack/node-buffers.
 
-* npm package IDs:
-  * buffers@0.1.1
+* npm packages:
+  * buffers
 
 Copyright: Copyright (c) 2010 James Halliday (mail@substack.net)
 Home page: https://github.com/substack/node-buffers
@@ -2622,8 +2615,8 @@ Special handling:
 
 This product bundles packages from the source project at https://github.com/substack/node-chainsaw.
 
-* npm package IDs:
-  * chainsaw@0.1.0
+* npm packages:
+  * chainsaw
 
 Copyright: Copyright (c) 2010 James Halliday (mail@substack.net)
 Home page: https://github.com/substack/node-chainsaw
@@ -2654,8 +2647,8 @@ License: MIT/X11
 
 This product bundles packages from the source project at https://github.com/substack/node-mkdirp.
 
-* npm package IDs:
-  * mkdirp@0.5.6
+* npm packages:
+  * mkdirp
 
 Copyright: Copyright 2010 James Halliday (mail@substack.net)
 Home page: https://github.com/substack/node-mkdirp
@@ -2686,19 +2679,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/timostamm/protobuf-ts.
 
-* npm package IDs:
-  * @protobuf-ts/runtime-rpc@2.11.1
-
-Copyright: Copyright (c) Timo Stamm <ts@timostamm.com>
-Home page: https://github.com/timostamm/protobuf-ts
-License: Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
-
---------------------------------------------------------------------------------
-
-This product bundles packages from the source project at https://github.com/timostamm/protobuf-ts.
-
-* npm package IDs:
-  * @protobuf-ts/runtime@2.11.1
+* npm packages:
+  * @protobuf-ts/runtime
 
 Copyright: Copyright (c) Timo Stamm <ts@timostamm.com>
 Home page: https://github.com/timostamm/protobuf-ts
@@ -2880,12 +2862,23 @@ License: (Apache-2.0 AND BSD-3-Clause)
 
 --------------------------------------------------------------------------------
 
+This product bundles packages from the source project at https://github.com/timostamm/protobuf-ts.
+
+* npm packages:
+  * @protobuf-ts/runtime-rpc
+
+Copyright: Copyright (c) Timo Stamm <ts@timostamm.com>
+Home page: https://github.com/timostamm/protobuf-ts
+License: Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+
 This product bundles packages from the source project at https://github.com/TooTallNate/proxy-agents.
 
-* npm package IDs:
-  * agent-base@7.1.4
-  * http-proxy-agent@7.0.2
-  * https-proxy-agent@7.0.6
+* npm packages:
+  * agent-base
+  * http-proxy-agent
+  * https-proxy-agent
 
 Copyright: Copyright (c) 2013 Nathan Rajlich <nathan@tootallnate.net>
 Home page: https://github.com/TooTallNate/proxy-agents
@@ -2917,8 +2910,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/TooTallNate/util-deprecate.
 
-* npm package IDs:
-  * util-deprecate@1.0.2
+* npm packages:
+  * util-deprecate
 
 Copyright: Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net>
 Home page: https://github.com/TooTallNate/util-deprecate
@@ -2952,8 +2945,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/vercel/ms.
 
-* npm package IDs:
-  * ms@2.1.3
+* npm packages:
+  * ms
 
 Copyright: Copyright (c) 2020 Vercel, Inc.
 Home page: https://github.com/vercel/ms
@@ -2984,8 +2977,8 @@ License: MIT - https://spdx.org/licenses/MIT.html
 
 This product bundles packages from the source project at https://github.com/Yqnn/node-readdir-glob.
 
-* npm package IDs:
-  * readdir-glob@1.1.3
+* npm packages:
+  * readdir-glob
 
 Copyright: Copyright 2020 Yann Armelin
 Home page: https://github.com/Yqnn/node-readdir-glob
