@@ -42,7 +42,7 @@ concurrency:
 jobs:
   check:
     name: Make check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,7 +89,7 @@ jobs:
 
   smoke-test-gradle:
     name: Run local Gradle action
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,7 +124,7 @@ jobs:
 
   smoke-test-maven:
     name: Run local Maven action
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,7 +160,7 @@ jobs:
   local-integration-tests:
     # Keep real Gradle and Maven builds on the documented Java 21 minimum.
     name: Local integration tests (Java 21)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -238,7 +238,7 @@ jobs:
     # Temporarily disabled because GitHub Advanced Security is unavailable.
     if: false
     #if: github.repository_owner == 'buildish-tooling'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
@@ -263,7 +263,7 @@ jobs:
   zizmor:
     name: Zizmor (GitHub Actions security)
     if: github.repository_owner == 'buildish-tooling'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -291,7 +291,7 @@ jobs:
       - integration-pr-maven
       - codeql
       - zizmor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Assert all required jobs succeeded or were intentionally skipped
         env:
@@ -340,7 +340,7 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
       && false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     steps:
       - name: Dispatch aggregate site publishing

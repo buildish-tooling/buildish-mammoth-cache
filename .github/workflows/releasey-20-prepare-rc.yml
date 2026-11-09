@@ -39,7 +39,7 @@ env:
 
 jobs:
   verify-source-ref-checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       checks: read
       contents: read
@@ -77,7 +77,7 @@ jobs:
 
   resolve-state:
     needs: verify-source-ref-checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       rc_tag: ${{ steps.prepare-rc.outputs.rc_tag }}
       resolved_source_ref: ${{ steps.prepare-rc.outputs.resolved_source_ref }}
@@ -115,7 +115,7 @@ jobs:
 
   prepare-rc-destination:
     needs: resolve-state
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: draft-release-secrets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -139,7 +139,7 @@ jobs:
     needs:
       - resolve-state
       - prepare-rc-destination
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: draft-release-secrets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -181,7 +181,7 @@ jobs:
     needs:
       - resolve-state
       - build-source-rc
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     outputs:
@@ -251,7 +251,7 @@ jobs:
     needs:
       - resolve-state
       - materialize-rc-dist-payload
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -298,7 +298,7 @@ jobs:
       - resolve-state
       - build-source-rc
       - create-rc-materialization-tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -337,7 +337,7 @@ jobs:
     needs:
       - resolve-state
       - sync-draft-github-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     environment: draft-release-secrets

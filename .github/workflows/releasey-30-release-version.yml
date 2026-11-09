@@ -35,7 +35,7 @@ env:
 
 jobs:
   resolve-latest-rc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       selected_rc_tag: ${{ steps.release-version.outputs.selected_rc_tag }}
     steps:
@@ -75,7 +75,7 @@ jobs:
 
   publish-source-release:
     needs: resolve-latest-rc
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: draft-release-secrets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +101,7 @@ jobs:
 
   prune-older-line-releases:
     needs: publish-source-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: draft-release-secrets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -129,7 +129,7 @@ jobs:
     needs:
       - resolve-latest-rc
       - publish-source-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -162,7 +162,7 @@ jobs:
 
   publish-github-action-release:
     needs: create-final-tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -218,7 +218,7 @@ jobs:
 
   update-moving-tags:
     needs: publish-github-action-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -252,7 +252,7 @@ jobs:
       - resolve-latest-rc
       - publish-github-action-release
       - update-moving-tags
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
