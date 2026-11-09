@@ -1348,6 +1348,8 @@ async function createTestCacheModel(
     createCiContext('worker', gradleUserHome, 1, 1, runnerOs, runnerArch),
     new GradleBuildToolAdapter(config),
     {
+      // Use the injected Java version rather than the host's JAVA_HOME/release.
+      env: { JAVA_HOME: '' },
       captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
     },
   );
