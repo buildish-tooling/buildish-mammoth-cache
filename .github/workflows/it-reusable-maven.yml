@@ -89,7 +89,7 @@ jobs:
   maven_standalone_round_trip:
     name: Linux Maven standalone round-trip (offline exact restore)
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -167,7 +167,7 @@ jobs:
   maven_workers:
     name: Linux Maven distributed ${{ matrix.worker.label }} (publish delta artifact)
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -211,7 +211,7 @@ jobs:
     name: Linux Maven distributed aggregator (download+merge worker deltas)
     if: inputs.run-writable-scenarios
     needs: [maven_workers]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -260,7 +260,7 @@ jobs:
   maven_duplicate_invocation_guard:
     name: Linux Maven duplicate invocation guard (same-job safety)
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -309,7 +309,7 @@ jobs:
   maven_pull_request_worker:
     name: Maven pull request distributed worker (no artifact upload)
     if: inputs.run-pr-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -345,7 +345,7 @@ jobs:
     name: Maven pull request aggregator (explicit read-only no-op)
     if: inputs.run-pr-scenarios
     needs: [maven_pull_request_worker]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
