@@ -51,7 +51,7 @@
   "engines": {
     "node": ">=24 <27"
   },
-  "packageManager": "npm@12.2.1",
+  "packageManager": "npm@12.2.2",
   "dependencies": {
     "@actions/artifact": "6.3.1",
     "@actions/cache": "6.3.0",
