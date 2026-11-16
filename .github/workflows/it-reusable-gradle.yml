@@ -93,7 +93,7 @@ jobs:
   standalone_round_trip:
     name: Linux standalone round-trip (offline exact restore)
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -171,7 +171,7 @@ jobs:
   workers:
     name: Linux distributed ${{ matrix.worker.label }} (publish delta artifact)
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -215,7 +215,7 @@ jobs:
     name: Linux distributed aggregator (download+merge worker deltas)
     if: inputs.run-writable-scenarios
     needs: [workers]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -260,7 +260,7 @@ jobs:
   duplicate_invocation_guard:
     name: Linux duplicate invocation guard (same-job safety)
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -314,7 +314,7 @@ jobs:
   pull_request_worker:
     name: Pull request distributed worker (no artifact upload)
     if: inputs.run-pr-scenarios
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
@@ -350,7 +350,7 @@ jobs:
     name: Pull request aggregator (explicit read-only no-op)
     if: inputs.run-pr-scenarios
     needs: [pull_request_worker]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         shell: bash
