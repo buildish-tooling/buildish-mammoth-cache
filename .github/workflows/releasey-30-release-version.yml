@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BUILDISH_RELEASE_TOOLING_REF: main # renovate: datasource=github-releases depName=buildish-tooling/buildish-release-tooling currentValue=v0.0.0
+  BUILDISH_RELEASE_TOOLING_REF: b4542a195705c13c3806ca34fed8e821bedc20c8 # renovate: datasource=github-releases depName=buildish-tooling/buildish-release-tooling currentValue=v0.1.3
   BUILDISH_RELEASE_TOOLING_CHECKOUT_PATH: .buildish-internal/buildish-release-tooling
 
 jobs:
