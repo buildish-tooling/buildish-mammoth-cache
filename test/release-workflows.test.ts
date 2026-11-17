@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 interface Step {
+  id?: string;
   uses?: string;
   run?: string;
   env?: Record<string, string>;
@@ -180,6 +181,42 @@ describe('release workflow policy', () => {
     expect(text).toContain('--no-deps --only-binary=:all:');
     expect(text).toContain('--package-info');
     expect(text).not.toContain('GITHUB_ENV');
+  });
+
+  it('keeps runner-time contexts out of job-level environment expressions', () => {
+    // GitHub's context-availability table excludes these from jobs.<job_id>.env.
+    for (const workflow of [candidate, promotion]) {
+      for (const job of Object.values(workflow.jobs)) {
+        for (const value of Object.values(job.env ?? {})) {
+          expect(value).not.toMatch(/\$\{\{[^}]*\b(?:runner|steps|job|env)\s*\./);
+        }
+      }
+    }
+  });
+
+  it('passes the setup action interpreter output to every installed-tooling caller', () => {
+    const action = parse(
+      readFileSync('.github/actions/setup-release-tooling/action.yml', 'utf8'),
+    ) as { outputs?: { python?: { value: string } } };
+    expect(action.outputs?.python?.value).toBe('${{ steps.install.outputs.python }}');
+    for (const workflow of [candidate, promotion]) {
+      for (const job of Object.values(workflow.jobs)) {
+        expect(job.env?.BUILDISH_RELEASE_TOOLING_PYTHON).toBeUndefined();
+        for (const [index, step] of job.steps.entries()) {
+          if (step.run && /release-tooling\.sh|make release-tooling-qualification/.test(step.run)) {
+            expect(step.env?.BUILDISH_RELEASE_TOOLING_PYTHON).toBe(
+              '${{ steps.tooling.outputs.python }}',
+            );
+            const setup = job.steps.findIndex((previous) =>
+              previous.uses?.endsWith('/setup-release-tooling'),
+            );
+            expect(setup).toBeGreaterThanOrEqual(0);
+            expect(setup).toBeLessThan(index);
+            expect(job.steps[setup].id).toBe('tooling');
+          }
+        }
+      }
+    }
   });
 
   it('all authored workflow shell blocks parse under bash', () => {
