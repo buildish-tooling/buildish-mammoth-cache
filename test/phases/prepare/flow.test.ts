@@ -272,7 +272,9 @@ describe('executePrepareAction', () => {
       expect(summaryText).toContain('- Worker bases differed: no');
       expect(summaryText).toContain('- Selected worker worker\\-build: attempt 2');
       expect(summaryText).toContain('- Delta apply warnings: 0');
-      expect(summaryText).toContain('- Post-job artifact cleanup scheduled: 1');
+      expect(summaryText).toContain(
+        '- Worker envelopes retained for retries until backend expiry or removal: 1',
+      );
       expect(infoMessages).toEqual(
         expect.arrayContaining([
           '::group::Buildish prepare execution',

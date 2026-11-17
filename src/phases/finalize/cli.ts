@@ -43,12 +43,6 @@ export async function runFinalizeExecution(
   if (status.bootstrap.baseCacheResult) {
     runtimeHost.info(status.bootstrap.baseCacheResult.message);
   }
-  if (status.consumedDeltaCleanupResult) {
-    runtimeHost.info(status.consumedDeltaCleanupResult.message);
-    for (const warning of status.consumedDeltaCleanupResult.warnings) {
-      runtimeHost.warning(warning);
-    }
-  }
   if (status.deltaArtifactResult) {
     runtimeHost.info(status.deltaArtifactResult.message);
   }

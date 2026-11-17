@@ -82,23 +82,12 @@ export interface FinalizeActionStatus {
   readonly cacheGcResult: TimestampCacheGcResult | null;
   /** Cache size statistics computed from the post-build manifest; `null` when cache is disabled. */
   readonly cacheStatistics: FinalizeCacheStatistics | null;
-  /** Result of deleting consumed worker delta artifacts; `null` when no artifacts were consumed. */
-  readonly consumedDeltaCleanupResult: FinalizeConsumedDeltaCleanupResult | null;
   /** Result of uploading the worker delta artifact; `null` for non-worker job modes. */
   readonly deltaArtifactResult: FinalizeDeltaArtifactResult | null;
   /** Build report produced by the active build tool adapter after the build completes. */
   readonly buildReport: BuildReport;
   readonly jobUrl: string | null;
   readonly workflowRunUrl: string | null;
-  readonly message: string;
-}
-
-/** Outcome of deleting consumed worker delta artifacts at the end of the aggregator finalize phase. */
-export interface FinalizeConsumedDeltaCleanupResult {
-  readonly attemptedArtifactNames: readonly string[];
-  readonly deletedArtifactNames: readonly string[];
-  /** Non-fatal warnings for artifacts that could not be deleted (e.g. permission errors). */
-  readonly warnings: readonly string[];
   readonly message: string;
 }
 
@@ -172,9 +161,9 @@ export function createFinalizeActionSummaryLines(status: FinalizeActionStatus): 
  * Renders the log-group lines for the finalize phase.
  *
  * Produces a compact machine-readable list of outcomes: bootstrap message, overall status icon,
- * build-report log lines, execution details URL, any errors or warnings, delta-artifact and
- * consumed-delta notes, and the cache key / statistics summary. The finalize flow publishes the
- * returned lines to the CI log group.
+ * build-report log lines, execution details URL, any errors or warnings, delta-artifact details,
+ * and the cache key / statistics summary. The finalize flow publishes the returned lines to the
+ * CI log group.
  */
 export function createFinalizeActionLogLines(status: FinalizeActionStatus): readonly string[] {
   const summaryIssues = collectFinalizeActionSummaryIssues(status);
@@ -207,18 +196,6 @@ export function createFinalizeActionLogLines(status: FinalizeActionStatus): read
       detailParts.push(formatByteCount(status.deltaArtifactResult.artifactSizeBytes));
     }
     lines.push(formatUploadedArtifactLogMessage(detailParts));
-  }
-
-  if (status.consumedDeltaCleanupResult?.attemptedArtifactNames.length) {
-    lines.push(
-      `Attempted cleanup of consumed delta artifacts: ${status.consumedDeltaCleanupResult.attemptedArtifactNames.join(', ')}.`,
-    );
-  }
-
-  if (status.consumedDeltaCleanupResult?.deletedArtifactNames.length) {
-    lines.push(
-      `Deleted consumed delta artifacts: ${status.consumedDeltaCleanupResult.deletedArtifactNames.join(', ')}.`,
-    );
   }
 
   lines.push(...createCacheDetailLogLines(status), ...createExecutionContextLogLines(status));
@@ -255,12 +232,6 @@ function createCacheDetailLogLines(status: FinalizeActionStatus): readonly strin
   if (status.deltaArtifactResult) {
     lines.push(
       `Post-build cache delta: ${status.deltaArtifactResult.addedCount} added, ${status.deltaArtifactResult.modifiedCount} modified, ${status.deltaArtifactResult.deletedCount} deleted.`,
-    );
-  }
-
-  if (status.consumedDeltaCleanupResult) {
-    lines.push(
-      `Consumed delta cleanup: deleted ${status.consumedDeltaCleanupResult.deletedArtifactNames.length} of ${status.consumedDeltaCleanupResult.attemptedArtifactNames.length}.`,
     );
   }
 
@@ -302,7 +273,6 @@ function collectFinalizeActionSummaryIssues(status: FinalizeActionStatus): {
   }
 
   warnings.push(...status.buildReport.warnings);
-  warnings.push(...(status.consumedDeltaCleanupResult?.warnings ?? []));
 
   const restoreWarning = getBaseCacheWarning(status.baseCacheRestoreResult);
   if (restoreWarning) {

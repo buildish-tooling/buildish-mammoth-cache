@@ -28,7 +28,6 @@ import {
 const finalizeFlowMock = vi.hoisted(() => ({
   executeFinalizeAction: vi.fn(async () => ({
     bootstrap: { baseCacheResult: null },
-    consumedDeltaCleanupResult: null,
     deltaArtifactResult: null,
     message: 'Finalize execution completed.',
   })),

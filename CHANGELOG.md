@@ -18,6 +18,11 @@ limitations under the License.
 
 ## Unreleased
 
+- Retain distributed worker envelopes after failed and successful aggregation so aggregator-only
+  retries can recover without rerunning workers. Workers still request seven-day retention, subject
+  to backend expiry or removal and workflow-run deletion. This uses temporary artifact storage;
+  local staging and download directories are still cleaned up.
+
 - Rename verified Gradle wrapper metadata to `gradle-wrapper-<version>.jar.sha256`
   and `gradle-wrapper-<version>.jar.asc`. The checksum filename lets custom launchers
   retain Mammoth's verified wrapper JAR. Scripts consuming the previous

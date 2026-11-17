@@ -39,6 +39,7 @@ import {
   formatByteCount,
   type FinalizeActionStatus,
 } from '../../../src/phases/finalize/flow';
+import { executePrepareAction } from '../../../src/phases/prepare/flow';
 import type { BootstrapExecution } from '../../../src/phases/bootstrap';
 import type { NormalizedActionConfig } from '../../../src/config/types';
 import type { SummaryWriter } from '../../../src/ci/github/report-sink';
@@ -105,6 +106,8 @@ async function createFinalizeActionDependencies(options: {
   readonly summaryWriter: SummaryWriter;
   readonly inputProvider: { getInput(name: string): string };
   readonly getState?: (name: string) => string;
+  readonly saveState?: (name: string, value: string) => void;
+  readonly phase?: 'prepare' | 'finalize';
   readonly info?: (message: string) => void;
   readonly warning?: (message: string) => void;
   readonly adapterOptions?: GradleAdapterOptions;
@@ -115,6 +118,7 @@ async function createFinalizeActionDependencies(options: {
       return options.inputProvider.getInput(name);
     },
     getState: options.getState,
+    saveState: options.saveState,
     info: options.info,
     warning: options.warning,
   });
@@ -128,7 +132,7 @@ async function createFinalizeActionDependencies(options: {
     workspace: options.workspace,
   });
   const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
-    phase: 'finalize',
+    phase: options.phase ?? 'finalize',
     ciContext: ciProvider.context,
     env: options.env,
   });
@@ -143,6 +147,311 @@ async function createFinalizeActionDependencies(options: {
     }),
     buildToolAdapterFactory: () => new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
   };
+}
+
+// These tests run real prepare/apply/finalize with fresh runner state per attempt.
+// GC is disabled to isolate envelope retention from timestamp collection behavior.
+describe('distributed artifact retention lifecycle', () => {
+  for (const failure of ['throw', 'decline', 'before-save'] as const) {
+    it(`recovers on a fresh aggregator after ${failure} publication failure`, async () => {
+      await withWorkspace(async (workspace) => {
+        const fixture = await createRetentionFixture(workspace);
+        await fixture.publishWorkers();
+        const originalArtifacts = await fixture.artifacts.listArtifacts();
+        const failed = await fixture.job('aggregate', 2, true);
+        await failed.prepare();
+        await fixture.assertComplete(failed.home);
+        if (failure === 'before-save') {
+          const record = getPersistedCacheLifecycleRecord(createLifecycleGetState(failed.state))!;
+          await rm(record.preBuildManifestPath);
+        } else {
+          fixture.cache.failure = failure;
+        }
+        await expect(failed.finalize()).rejects.toThrow(
+          failure === 'before-save' ? /ENOENT/u : /Required.*publication/iu,
+        );
+        expect(await fixture.artifacts.listArtifacts()).toEqual(originalArtifacts);
+        expect(fixture.cache.savedKeys).toHaveLength(1); // Only the seeded worker base.
+        await fixture.assertLocalCleanup();
+        await rm(failed.root, { recursive: true, force: true });
+
+        fixture.cache.failure = null;
+        const retry = await fixture.job('aggregate', 3, true);
+        const prepared = await retry.prepare();
+        expect(prepared.dependentDeltaResult).toMatchObject({
+          appliedArtifactCount: 2,
+          addedCount: 1,
+          modifiedCount: 1,
+          deletedCount: 1,
+        });
+        await fixture.assertComplete(retry.home);
+        expect((await retry.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
+        expect(fixture.cache.savedKeys).toHaveLength(2);
+        await fixture.assertDurableComplete();
+        expect(await fixture.artifacts.listArtifacts()).toEqual(originalArtifacts);
+        expect(fixture.artifacts.deletedArtifactNames).toEqual([]);
+        await fixture.assertLocalCleanup();
+      });
+    });
+  }
+
+  it('reapplies retained envelopes idempotently after success and retains them on an unchanged save', async () => {
+    await withWorkspace(async (workspace) => {
+      const fixture = await createRetentionFixture(workspace);
+      await fixture.publishWorkers();
+      const first = await fixture.job('aggregate', 2, true);
+      await first.prepare();
+      expect((await first.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
+      await rm(first.root, { recursive: true, force: true });
+
+      const retry = await fixture.job('aggregate', 3, true);
+      const prepared = await retry.prepare();
+      expect(prepared.bootstrap.baseCacheResult?.status).toBe('current-lineage-hit');
+      expect(prepared.dependentDeltaResult).toMatchObject({
+        appliedArtifactCount: 2,
+        addedCount: 0,
+        modifiedCount: 0,
+        deletedCount: 0,
+        noopCount: 3,
+      });
+      await fixture.assertComplete(retry.home);
+      expect((await retry.finalize()).bootstrap.baseCacheResult).toMatchObject({
+        status: 'not-required',
+      });
+      expect(fixture.cache.savedKeys).toHaveLength(2);
+      expect(await fixture.artifacts.listArtifacts()).toHaveLength(2);
+      expect(fixture.artifacts.deletedArtifactNames).toEqual([]);
+      await fixture.assertLocalCleanup();
+    });
+  });
+
+  it('selects a newer rerun worker alongside a retained older empty worker', async () => {
+    await withWorkspace(async (workspace) => {
+      const fixture = await createRetentionFixture(workspace);
+      await fixture.publishWorkers();
+      const failed = await fixture.job('aggregate', 2, true);
+      await failed.prepare();
+      fixture.cache.failure = 'throw';
+      await expect(failed.finalize()).rejects.toThrow(/publication/iu);
+      await rm(failed.root, { recursive: true, force: true });
+      fixture.cache.failure = null;
+      await fixture.publishChangedWorker(3, 'newer');
+
+      const retry = await fixture.job('aggregate', 3, true);
+      const prepared = await retry.prepare();
+      expect(
+        prepared.dependentDeltaResult?.selectedProducers.map(({ jobName, runAttempt }) => ({
+          jobName,
+          runAttempt,
+        })),
+      ).toEqual([
+        { jobName: 'worker-change', runAttempt: 3 },
+        { jobName: 'worker-empty', runAttempt: 1 },
+      ]);
+      await fixture.assertComplete(retry.home, 'newer');
+      expect((await retry.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
+      await fixture.assertDurableComplete('newer');
+      expect(await fixture.artifacts.listArtifacts()).toHaveLength(3);
+      await fixture.assertLocalCleanup();
+    });
+  });
+
+  it('fails with the missing worker name even when a complete generation can be restored', async () => {
+    await withWorkspace(async (workspace) => {
+      const fixture = await createRetentionFixture(workspace);
+      await fixture.publishWorkers();
+      const first = await fixture.job('aggregate', 2, true);
+      await first.prepare();
+      await first.finalize();
+      await rm(first.root, { recursive: true, force: true });
+      const empty = (await fixture.artifacts.listArtifacts()).find(({ name }) =>
+        name.includes('worker-empty'),
+      )!;
+      await fixture.artifacts.deleteArtifact(empty.name); // Model expiry/removal at the provider.
+      const retry = await fixture.job('aggregate', 3, true);
+      await expect(retry.prepare()).rejects.toThrow(/job 'worker-empty'.*no artifact/u);
+      await fixture.assertComplete(retry.home); // A cache hit is not completion evidence.
+      expect(retry.state.size).toBe(0);
+      expect(fixture.cache.savedKeys).toHaveLength(2);
+      await fixture.assertLocalCleanup();
+    });
+  });
+});
+
+async function createRetentionFixture(workspace: string) {
+  const artifacts = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
+  const cache = new SnapshotCacheBackend(path.join(workspace, 'cache-store'));
+  const temporaryDirectories: string[] = [];
+  const relative = (file: string) => `caches/modules-2/files-2.1/example/${file}.bin`;
+  async function job(name: string, attempt: number, aggregator = false) {
+    const root = path.join(workspace, `${name}-${attempt}`);
+    const home = path.join(root, 'gradle-home');
+    await mkdir(root, { recursive: true });
+    const state = new Map<string, string>();
+    const env = { ...createTestEnv(root, home, name), GITHUB_RUN_ATTEMPT: String(attempt) };
+    const inputs: Record<string, string> = {
+      'job-mode': aggregator
+        ? 'distributed-aggregator'
+        : name === 'seed'
+          ? 'standalone'
+          : 'distributed-worker',
+      'dependent-jobs': aggregator ? 'worker-change,worker-empty' : '',
+      'cleanup-enabled': 'false',
+      'cache-partitions': JSON.stringify([
+        { id: 'modules', includes: ['caches/modules-2/files-2.1/**'] },
+        ...['kotlin-dsl', 'build-cache', 'wrapper-dists'].map((id) => ({ id, includes: [] })),
+      ]),
+    };
+    async function dependencies(phase: 'prepare' | 'finalize') {
+      const deps = await createFinalizeActionDependencies({
+        env,
+        phase,
+        workspace: root,
+        eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
+        getState: createLifecycleGetState(state),
+        saveState: state.set.bind(state),
+        inputProvider: { getInput: (key) => inputs[key] ?? '' },
+        summaryWriter: createSummaryCapture().writer,
+      });
+      return {
+        ...deps,
+        env,
+        artifactBackend: artifacts,
+        cacheBackend: cache,
+        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
+        buildToolAdapterFactory: () => {
+          const adapter = deps.buildToolAdapterFactory();
+          // Provisioning is unrelated to the distributed cache lifecycle under test.
+          adapter.provision = async () => ({ items: [], warnings: [], additionalOutputs: {} });
+          return adapter;
+        },
+        removeTemporaryDirectory: async (directory: string) => {
+          temporaryDirectories.push(directory);
+          await rm(directory, { recursive: true, force: true });
+        },
+      };
+    }
+    return {
+      root,
+      home,
+      state,
+      prepare: async () => executePrepareAction(await dependencies('prepare')),
+      finalize: async () => executeFinalizeAction(await dependencies('finalize')),
+    };
+  }
+  async function assertComplete(home: string, contents = 'changed') {
+    expect(await readFile(path.join(home, relative('added')), 'utf8')).toBe(contents);
+    expect(await readFile(path.join(home, relative('modified')), 'utf8')).toBe(contents);
+    expect(await pathExists(path.join(home, relative('deleted')))).toBe(false);
+  }
+  async function publishChangedWorker(attempt: number, contents = 'changed') {
+    const worker = await job('worker-change', attempt);
+    await worker.prepare();
+    await writeGradleFile(worker.home, relative('added'), contents);
+    await writeGradleFile(worker.home, relative('modified'), contents);
+    // Use exactly representable timestamps across filesystem save/restore copies.
+    for (const file of ['added', 'modified']) {
+      await utimes(path.join(worker.home, relative(file)), 1700000000, 1700000000);
+    }
+    await rm(path.join(worker.home, relative('deleted')));
+    const result = await worker.finalize();
+    expect(result.deltaArtifactResult).toMatchObject({
+      status: 'uploaded',
+      addedCount: 1,
+      modifiedCount: 1,
+      deletedCount: 1,
+    });
+    await rm(worker.root, { recursive: true, force: true });
+  }
+  return {
+    artifacts,
+    cache,
+    job,
+    assertComplete,
+    publishChangedWorker,
+    async publishWorkers() {
+      const seed = await job('seed', 1);
+      await seed.prepare();
+      await writeGradleFile(seed.home, relative('modified'), 'original');
+      await writeGradleFile(seed.home, relative('deleted'), 'original');
+      for (const file of ['modified', 'deleted']) {
+        await utimes(path.join(seed.home, relative(file)), 1700000000, 1700000000);
+      }
+      expect((await seed.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
+      await rm(seed.root, { recursive: true, force: true });
+      await publishChangedWorker(1);
+      const empty = await job('worker-empty', 1);
+      await empty.prepare();
+      expect((await empty.finalize()).deltaArtifactResult).toMatchObject({
+        status: 'uploaded',
+        emptyEnvelope: true,
+      });
+      await rm(empty.root, { recursive: true, force: true });
+      expect(artifacts.uploadRetentionDays).toEqual([7, 7]);
+    },
+    async assertDurableComplete(contents = 'changed') {
+      const reader = await job('reader', 9);
+      const prepared = await reader.prepare();
+      expect(prepared.bootstrap.baseCacheResult?.status).toBe('current-lineage-hit');
+      await assertComplete(reader.home, contents);
+      await rm(reader.root, { recursive: true, force: true });
+    },
+    async assertLocalCleanup() {
+      expect(temporaryDirectories.length).toBeGreaterThan(0);
+      for (const directory of [...temporaryDirectories, ...artifacts.downloadedDirectories]) {
+        expect(await pathExists(directory)).toBe(false);
+      }
+    },
+  };
+}
+
+/** Copies actual managed bytes to durable storage and back onto a fresh runner. */
+class SnapshotCacheBackend implements BaseCacheBackend {
+  readonly capabilities = STANDARD_BASE_CACHE_BACKEND_CAPABILITIES;
+  readonly savedKeys: string[] = [];
+  failure: 'throw' | 'decline' | null = null;
+  constructor(private readonly storageRoot: string) {}
+  isFeatureAvailable() {
+    return true;
+  }
+  isMissingPathsError() {
+    return false;
+  }
+  private managedDirectory(paths: string[]) {
+    // The fixture selects one exact include glob in the modules partition.
+    const includes = paths.filter((value) => !value.startsWith('!'));
+    expect(includes).toHaveLength(1);
+    expect(includes[0]).toMatch(/caches\/modules-2\/files-2\.1\/\*\*$/u);
+    return includes[0]!.slice(0, -3);
+  }
+  async saveCache(paths: string[], key: string) {
+    if (this.failure === 'throw') throw new Error('publication unavailable');
+    if (this.failure === 'decline') return -1;
+    expect(this.savedKeys).not.toContain(key);
+    await mkdir(this.storageRoot, { recursive: true });
+    await cp(
+      this.managedDirectory(paths),
+      path.join(this.storageRoot, String(this.savedKeys.length)),
+      { recursive: true, preserveTimestamps: true },
+    );
+    this.savedKeys.push(key);
+    return this.savedKeys.length;
+  }
+  async restoreCache(paths: string[], primary: string, fallback: string[] = []) {
+    for (const prefix of [primary, ...fallback]) {
+      let index = this.savedKeys.length - 1;
+      while (index >= 0 && !this.savedKeys[index]!.startsWith(prefix)) index -= 1;
+      if (index < 0) continue;
+      const target = this.managedDirectory(paths);
+      await mkdir(path.dirname(target), { recursive: true });
+      await cp(path.join(this.storageRoot, String(index)), target, {
+        recursive: true,
+        preserveTimestamps: true,
+      });
+      return this.savedKeys[index];
+    }
+    return undefined;
+  }
 }
 
 describe('executeFinalizeAction', () => {
@@ -736,10 +1045,10 @@ describe('executeFinalizeAction', () => {
         'caches/modules-2/files-2.1/org/example/module.bin',
         'after',
       );
-      await stageWorkerArtifactForCleanup(artifactApi, workspace, 'worker-build');
-      const artifactNameToDelete = (await artifactApi.listArtifacts())[0]!.name;
+      await stageWorkerArtifact(artifactApi, workspace, 'worker-build');
+      const retainedArtifactName = (await artifactApi.listArtifacts())[0]!.name;
       replaceLifecycleRecord(savedState, (record) =>
-        withConsumedArtifacts(record, [artifactNameToDelete]),
+        withConsumedArtifacts(record, [retainedArtifactName]),
       );
 
       const status = await executeFinalizeAction({
@@ -773,13 +1082,7 @@ describe('executeFinalizeAction', () => {
           totalChangedCount: 1,
         }),
       );
-      expect(status.consumedDeltaCleanupResult).toEqual(
-        expect.objectContaining({
-          attemptedArtifactNames: [artifactNameToDelete],
-          deletedArtifactNames: [artifactNameToDelete],
-          warnings: [],
-        }),
-      );
+      expect(artifactApi.deletedArtifactNames).toEqual([]);
       const summaryText = createFinalizeActionSummaryLines(status).join('\n');
       expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
       expect(summaryText).not.toContain('<summary>Cache details</summary>');
@@ -787,7 +1090,7 @@ describe('executeFinalizeAction', () => {
       expect(summaryText).not.toContain('Delta artifact');
       expect(summaryText).not.toContain('Post-build cache delta');
       expect(summary.writeCalls).toBe(0);
-      await expect(artifactApi.listArtifacts()).resolves.toHaveLength(0);
+      await expect(artifactApi.listArtifacts()).resolves.toHaveLength(1);
     });
   });
 
@@ -932,7 +1235,7 @@ describe('executeFinalizeAction', () => {
     });
   });
 
-  it('skips consumed artifact cleanup when the artifact backend does not support deletion', async () => {
+  it('retains worker envelopes without requiring backend deletion support', async () => {
     await withWorkspace(async (workspace) => {
       const gradleUserHome = path.join(workspace, '.gradle');
       const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
@@ -956,10 +1259,10 @@ describe('executeFinalizeAction', () => {
         'initial',
       );
       await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await stageWorkerArtifactForCleanup(artifactBackend, workspace, 'worker-a');
-      const artifactNameToDelete = (await artifactBackend.listArtifacts())[0]!.name;
+      await stageWorkerArtifact(artifactBackend, workspace, 'worker-a');
+      const retainedArtifactName = (await artifactBackend.listArtifacts())[0]!.name;
       replaceLifecycleRecord(savedState, (record) =>
-        withConsumedArtifacts(record, [artifactNameToDelete]),
+        withConsumedArtifacts(record, [retainedArtifactName]),
       );
 
       const status = await executeFinalizeAction({
@@ -979,17 +1282,8 @@ describe('executeFinalizeAction', () => {
         })),
       });
 
-      expect(status.consumedDeltaCleanupResult).toEqual(
-        expect.objectContaining({
-          attemptedArtifactNames: [artifactNameToDelete],
-          deletedArtifactNames: [],
-          message:
-            'Consumed delta artifact cleanup skipped because the artifact backend does not support deletion.',
-          warnings: [
-            'Consumed delta artifact cleanup skipped because the artifact backend does not support deletion.',
-          ],
-        }),
-      );
+      expect(status.bootstrap.baseCacheResult?.status).toBe('saved');
+      expect(createFinalizeActionLogLines(status).join('\n')).not.toContain('cleanup');
       expect(artifactApi.deletedArtifactNames).toEqual([]);
       await expect(artifactBackend.listArtifacts()).resolves.toHaveLength(1);
     });
@@ -1030,13 +1324,6 @@ describe('executeFinalizeAction', () => {
         })),
       });
 
-      expect(status.consumedDeltaCleanupResult).toEqual({
-        attemptedArtifactNames: [],
-        deletedArtifactNames: [],
-        warnings: [],
-        message:
-          'Consumed delta artifact cleanup skipped because read-only mode disables artifact exchange.',
-      });
       expect(status.bootstrap.baseCacheResult).toEqual(
         expect.objectContaining({ status: 'read-only' }),
       );
@@ -1601,6 +1888,7 @@ class FakeArtifactApi implements WorkflowArtifactBackend {
 
     const parentDirectory = options?.path ?? this.storageRoot;
     const downloadPath = path.join(parentDirectory, `artifact-${artifactId}`);
+    this.downloadedDirectories.push(downloadPath);
     await cp(artifact.directory, downloadPath, { recursive: true });
 
     return {
@@ -1618,14 +1906,17 @@ class FakeArtifactApi implements WorkflowArtifactBackend {
       throw new Error(`Artifact '${name}' not found.`);
     }
     this.artifacts.delete(artifact[0]);
+    await rm(artifact[1].directory, { recursive: true, force: true });
   }
+
+  readonly downloadedDirectories: string[] = [];
 
   readonly uploadRetentionDays: Array<number | null> = [];
 
   readonly deletedArtifactNames: string[] = [];
 }
 
-async function stageWorkerArtifactForCleanup(
+async function stageWorkerArtifact(
   artifactApi: WorkflowArtifactBackend,
   workspace: string,
   jobName: string,
@@ -1751,7 +2042,6 @@ function createMinimalFinalizeStatus(
     baseCacheRestoreResult: null,
     cacheGcResult: null,
     cacheStatistics: null,
-    consumedDeltaCleanupResult: null,
     deltaArtifactResult: null,
     buildReport: {
       anyBuildFailed: false,

@@ -37,7 +37,7 @@ lifecycle.
 
 Read-only execution deliberately does not enter this protocol. Workers upload no envelope, and an
 aggregator returns `skipped-read-only` before obtaining an artifact backend or performing discovery,
-download, validation, merge, apply, or deletion.
+download, validation, merge, or apply.
 
 ---
 
@@ -201,3 +201,15 @@ temporary directories are removed on success and on validation, download, or pac
 Aggregator cleanup uses all-settled semantics so every successfully downloaded sibling gets a
 cleanup attempt. Cleanup failures are reported separately and never replace the primary validation,
 download, packaging, upload, or application error.
+
+Remote worker envelopes are retained after aggregation, including failed publication, successful
+publication, and an unchanged-generation outcome. Finalize never deletes consumed envelopes.
+Workers request seven-day retention; backend expiry/removal, workflow-run deletion, or explicit
+user/administrator removal can end retry availability sooner. Retaining envelopes increases
+artifact storage until removal, but does not retain local staging or download directories.
+
+An aggregator-only retry rediscovers inputs from the same run and validates them through the normal
+prepare lifecycle. Restoring an already published generation permits idempotent reapplication;
+unchanged state needs no new generation. A missing required envelope still fails discovery even on
+a cache hit, because a cached generation is not evidence that the worker completed. Required cache
+publication failures remain fatal so a retry can recover from the retained envelopes.

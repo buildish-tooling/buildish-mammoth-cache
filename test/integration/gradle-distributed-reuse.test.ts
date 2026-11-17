@@ -138,15 +138,11 @@ async function main(): Promise<void> {
       artifactApi,
       cacheBackend,
     );
-    assert.equal(
-      aggregatorFinalizeStatus.consumedDeltaCleanupResult?.deletedArtifactNames.length,
-      2,
-    );
     assert.equal(aggregatorFinalizeStatus.deltaArtifactResult?.status, 'not-distributed-worker');
     assert.equal(
       (await artifactApi.listArtifacts()).length,
-      0,
-      'Expected consumed worker artifacts to be deleted.',
+      2,
+      'Expected worker envelopes to remain available for aggregator retries.',
     );
 
     if (keepStagedRoot) {

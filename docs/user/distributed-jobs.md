@@ -192,10 +192,22 @@ result is the explicit no-op described above.
 **Workers do not need the aggregator in their `needs`.** Workers are independent of each other;
 only the aggregator depends on all workers.
 
-**Re-runs work correctly.** For each worker, the aggregator selects the highest available producer
+**Re-runs reuse retained worker envelopes.** For each worker, the aggregator selects the highest available producer
 attempt that is not newer than its own attempt. A full rerun uses every new worker envelope; a
 failed-job rerun safely mixes rerun workers with retained earlier attempts; and an aggregator-only
 rerun reuses retained worker envelopes. Selection never crosses workflow run IDs.
+
+Mammoth retains worker envelopes after failed and successful aggregation, including when no new
+cache generation is needed. Workers request seven days of artifact retention. Retry availability
+ends when the backend expires or removes the artifacts, the workflow run is deleted, or a user or
+administrator removes them; availability for a full seven days is not guaranteed. Retention uses
+temporary artifact storage until removal. Local staging and download directories are still cleaned
+up after use.
+
+If a required envelope is missing or expired, aggregation fails with the worker name even if a base
+cache was restored. Rerun the affected worker and then the aggregator within the same workflow run.
+A retry that restores the successfully published generation reapplies matching paths as idempotent
+no-ops and does not need another upload when the complete managed state is unchanged.
 
 **A successful writable worker always uploads one envelope.** This includes workers that changed no
 managed cache files: their explicit empty envelope is proof of participation and is distinct from a

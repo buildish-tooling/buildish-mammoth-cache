@@ -499,7 +499,7 @@ export function createPrepareActionSummaryLines(status: PrepareActionStatus): re
                 `- Selected worker ${escapeSummaryText(producer.jobName)}: attempt ${producer.runAttempt ?? 'unknown'}, artifact ${escapeSummaryText(producer.artifactName)}, restored base ${escapeSummaryText(producer.restoredGenerationKey ?? 'none')}, pre-build digest ${escapeSummaryText(producer.preBuildManifestDigest.slice(0, 12))}`,
             ),
             `- Delta apply warnings: ${dependentDelta.warnings.length}`,
-            `- Post-job artifact cleanup scheduled: ${dependentDelta.downloadedArtifactNames.length}`,
+            `- Worker envelopes retained for retries until backend expiry or removal: ${dependentDelta.downloadedArtifactNames.length}`,
           ]
         : []),
       ...(status.restoreCleanupResult

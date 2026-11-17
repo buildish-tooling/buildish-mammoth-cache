@@ -43,7 +43,6 @@ import {
   createFinalizeActionSummaryLines,
   createFinalizeCacheStatistics,
   type FinalizeActionStatus,
-  type FinalizeConsumedDeltaCleanupResult,
   type FinalizeDeltaArtifactResult,
 } from './reporting';
 
@@ -52,7 +51,6 @@ export {
   createFinalizeActionSummaryLines,
   formatByteCount,
   type FinalizeActionStatus,
-  type FinalizeConsumedDeltaCleanupResult,
   type FinalizeDeltaArtifactResult,
 } from './reporting';
 
@@ -62,7 +60,7 @@ const DELTA_ARTIFACT_RETENTION_DAYS = 7;
  * Injectable dependencies for the post (finalize) action flow.
  *
  * Extends {@link BootstrapDependencies} with the artifact backend used to upload worker
- * deltas or clean up consumed aggregator delta artifacts.
+ * delta envelopes.
  */
 export interface FinalizeActionDependencies extends BootstrapDependencies {
   readonly artifactBackend?: WorkflowArtifactBackend;
@@ -73,7 +71,7 @@ export interface FinalizeActionDependencies extends BootstrapDependencies {
 /**
  * Runs the full finalize phase of the action.
  *
- * Sequence: bootstrap → cleanup consumed delta artifacts → load Gradle build report → optional
+ * Sequence: bootstrap → load Gradle build report → optional
  * timestamp cache GC → capture post-build manifest → save base cache (standalone/aggregator) or
  * upload delta artifact (distributed-worker) → publish log group and job summary.
  *
@@ -88,11 +86,6 @@ export async function executeFinalizeAction(
   const bootstrap = reconcileCacheLifecycle(initialBootstrap, lifecycleRecord);
   const { workflowRunUrl, jobUrl } = bootstrap.ciExecutionUrls;
   const baseCacheRestoreResult = lifecycleRecord?.restoreResult ?? null;
-  const consumedDeltaCleanupResult = await cleanupConsumedDeltaArtifacts(
-    bootstrap,
-    lifecycleRecord,
-    dependencies,
-  );
   const buildReport = await bootstrap.buildToolAdapter.collectBuildReport(bootstrap.ciContext);
   const logGroupName = `Buildish Mammoth Cache for ${bootstrap.buildToolAdapter.getName()}`;
 
@@ -102,7 +95,6 @@ export async function executeFinalizeAction(
       baseCacheRestoreResult,
       cacheGcResult: null,
       cacheStatistics: null,
-      consumedDeltaCleanupResult,
       deltaArtifactResult: null,
       buildReport,
       jobUrl,
@@ -168,7 +160,6 @@ export async function executeFinalizeAction(
       deltaArtifactResult,
       baseCacheSaveResult,
     ),
-    consumedDeltaCleanupResult,
     deltaArtifactResult,
     buildReport,
     jobUrl,
@@ -416,79 +407,6 @@ async function uploadFinalizeArtifact(
 
 function describeFinalizeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function cleanupConsumedDeltaArtifacts(
-  bootstrap: BootstrapExecution,
-  lifecycleRecord: PersistedCacheLifecycleRecord | null,
-  dependencies: FinalizeActionDependencies,
-): Promise<FinalizeConsumedDeltaCleanupResult | null> {
-  if (bootstrap.config.jobMode !== 'distributed-aggregator') {
-    return null;
-  }
-
-  if (bootstrap.config.readOnly) {
-    return {
-      attemptedArtifactNames: [],
-      deletedArtifactNames: [],
-      warnings: [],
-      message:
-        'Consumed delta artifact cleanup skipped because read-only mode disables artifact exchange.',
-    };
-  }
-
-  const artifactNames = [...new Set(lifecycleRecord?.dependentDelta?.artifactNames ?? [])];
-
-  if (artifactNames.length === 0) {
-    return {
-      attemptedArtifactNames: [],
-      deletedArtifactNames: [],
-      warnings: [],
-      message:
-        'Consumed delta artifact cleanup skipped because no dependent artifact names were persisted during the prepare phase.',
-    };
-  }
-
-  const artifactBackend = resolveFinalizeArtifactBackend(dependencies);
-  if (!artifactBackend.capabilities.supportsDeletion) {
-    return {
-      attemptedArtifactNames: artifactNames,
-      deletedArtifactNames: [],
-      warnings: [
-        'Consumed delta artifact cleanup skipped because the artifact backend does not support deletion.',
-      ],
-      message:
-        'Consumed delta artifact cleanup skipped because the artifact backend does not support deletion.',
-    };
-  }
-
-  const deleteResults = await Promise.allSettled(
-    artifactNames.map(async (artifactName) => {
-      await artifactBackend.deleteArtifact(artifactName);
-      return artifactName;
-    }),
-  );
-
-  const deletedArtifactNames: string[] = [];
-  const warnings: string[] = [];
-  for (const [index, result] of deleteResults.entries()) {
-    const artifactName = artifactNames[index]!;
-    if (result.status === 'fulfilled') {
-      deletedArtifactNames.push(result.value);
-      continue;
-    }
-
-    warnings.push(
-      `Failed to delete consumed delta artifact '${artifactName}': ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
-    );
-  }
-
-  return {
-    attemptedArtifactNames: artifactNames,
-    deletedArtifactNames,
-    warnings,
-    message: `Consumed delta artifact cleanup deleted ${deletedArtifactNames.length} of ${artifactNames.length} persisted artifact(s).`,
-  };
 }
 
 function resolveFinalizeArtifactBackend(
