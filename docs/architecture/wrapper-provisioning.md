@@ -51,17 +51,17 @@ Validation is static — no network calls are made during this step.
 
 ```mermaid
 flowchart TD
-    A[Read gradle-wrapper.properties] --> B[Is gradle-wrapper.jar present?]
-    B -- Yes --> Z1[Skip download]
-    B -- No --> C[Fetch JAR from\nGradle source tag on GitHub]
-    C --> D[Fetch SHA-256 checksum\nfrom services.gradle.org]
+    A[Read gradle-wrapper.properties] --> B[Fetch expected checksum and signature]
+    B --> C{Existing JAR matches checksum?}
+    C -- Yes --> G[Verify signature against pinned key allowlist]
+    C -- No --> D[Fetch JAR from Gradle source tag on GitHub]
     D --> E{SHA-256 match?}
     E -- No --> FAIL1[Fail: checksum mismatch]
-    E -- Yes --> F[Fetch detached PGP signature\nfrom services.gradle.org]
-    F --> G[Verify signature\nagainst pinned key allowlist]
+    E -- Yes --> G
     G -- Invalid --> FAIL2[Fail: signature invalid]
-    G -- Valid --> H[Write JAR atomically\nvia temp file]
-    H --> Z2[Provisioning complete]
+    G -- Valid --> H[Write downloaded JAR atomically if needed]
+    H --> I[Retain verified checksum and signature files]
+    I --> Z[Provisioning complete]
 ```
 
 ### SHA-256 verification
@@ -103,6 +103,22 @@ and, when configured, the expected signing subkey. Invalid key material fails ve
 
 ## Re-entrant provisioning
 
-If a `gradle-wrapper.jar` already exists at the target path, the action skips download. This means
-provisioning is safe to call multiple times (e.g. when multiple wrapper properties files point to
-the same Gradle version and download the JAR to the same location).
+If a `gradle-wrapper.jar` already exists at the target path, the action skips the JAR download only
+when its bytes match the expected checksum. Matching existing bytes still undergo detached-signature
+verification. A JAR with a different checksum is replaced only after the downloaded bytes pass both
+checksum and signature verification.
+
+After successful verification, the action writes these files beside each wrapper properties file:
+
+- `gradle-wrapper-<distributionVersion>.jar.sha256`
+- `gradle-wrapper-<distributionVersion>.jar.asc`
+
+The checksum file contains the verified lowercase digest followed by a newline. The `.jar.sha256`
+filename lets custom launchers that expect this checksum retain the provisioned JAR. The version
+spelling comes from `distributionUrl`: for example, `8.14` stays `8.14`, even though the JAR is fetched
+from source tag `v8.14.0`. The checksum sidecar supports launcher interoperability; it is not an
+independent trust root.
+
+Re-entrant provisioning recreates missing metadata and repairs stale metadata after verification,
+including when the JAR download is skipped. Each file is written atomically, but the JAR and metadata
+files are not published as one atomic transaction.

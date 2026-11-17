@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -74,6 +76,95 @@ describe('deriveWrapperDownloadPlan', () => {
 });
 
 describe('provisionWrapperJars', () => {
+  it.each(['missing', 'matching', 'mismatched'] as const)(
+    'keeps %s JAR provisioning through the consumer launcher in multiple wrapper directories',
+    async (existingJar) => {
+      await withWorkspace(
+        {
+          'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties(),
+          'nested/gradle/wrapper/gradle-wrapper.properties': validWrapperProperties({
+            distributionUrl: 'https\\://services.gradle.org/distributions/gradle-9.4.1-bin.zip',
+          }),
+        },
+        async (workspace) => {
+          const wrappers = await validateTargetWrapperProperties(
+            { ...baseConfig, wrapperSelectionMode: 'all' },
+            workspace,
+          );
+          expect(wrappers).toHaveLength(2);
+          const jarBytes = Buffer.from('verified launcher fixture jar');
+          const jarSha256 = sha256(jarBytes);
+          for (const wrapper of wrappers) {
+            if (existingJar !== 'missing') {
+              await writeFile(
+                path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper.jar'),
+                existingJar === 'matching' ? jarBytes : Buffer.from('wrong jar'),
+              );
+            }
+          }
+          const verifyWrapperSignature = vi.fn(async () => {});
+          const provisioned = await provisionWrapperJars(wrappers, {
+            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+              const url = String(input);
+              if (url.endsWith('.sha256')) {
+                return new Response(`${jarSha256.toUpperCase()}\n`);
+              }
+              if (url.endsWith('.asc')) {
+                return new Response(TEST_SIGNATURE_ARMORED);
+              }
+              if (url.endsWith('/gradle-wrapper.jar')) {
+                if (existingJar === 'matching') {
+                  throw new Error('Matching JAR must not be downloaded');
+                }
+                return new Response(jarBytes);
+              }
+              throw new Error(`Unexpected fetch URL: ${url}`);
+            },
+            verifyWrapperSignature,
+          });
+          expect(verifyWrapperSignature).toHaveBeenCalledTimes(2);
+          expect(provisioned.map((result) => result.wasDownloaded)).toEqual([
+            existingJar !== 'matching',
+            existingJar !== 'matching',
+          ]);
+          const launcher = path.resolve('test/fixtures/gradle-wrapper/gradlew-include.sh');
+          const runLauncher = (appHome: string) =>
+            promisify(execFile)(
+              'sh',
+              [
+                '-c',
+                'curl() { echo "replacement download attempted" >&2; return 97; }; . "$1"',
+                'launcher-test',
+                launcher,
+              ],
+              { env: { ...process.env, APP_HOME: appHome }, timeout: 5000 },
+            );
+          for (const wrapper of wrappers) {
+            const directory = path.dirname(wrapper.absolutePath);
+            const appHome = path.resolve(directory, '../..');
+            const version = deriveWrapperDownloadPlan(wrapper).distributionVersion;
+            const sidecar = path.join(directory, `gradle-wrapper-${version}.jar.sha256`);
+            await expect(readFile(sidecar, 'utf8')).resolves.toBe(`${jarSha256}\n`);
+            await expect(
+              readFile(path.join(directory, `gradle-wrapper-${version}.jar.asc`), 'utf8'),
+            ).resolves.toBe(TEST_SIGNATURE_ARMORED);
+            await runLauncher(appHome);
+            await expect(readFile(path.join(directory, 'gradle-wrapper.jar'))).resolves.toEqual(
+              jarBytes,
+            );
+
+            // Without the compatibility file the same launcher deletes the JAR and tries curl.
+            await rm(sidecar);
+            await expect(runLauncher(appHome)).rejects.toThrow(/replacement download attempted/);
+            await expect(readFile(path.join(directory, 'gradle-wrapper.jar'))).rejects.toThrow(
+              /ENOENT/,
+            );
+          }
+        },
+      );
+    },
+  );
+
   it('downloads, verifies, and writes the wrapper jar beside the properties file', async () => {
     await withValidatedWrappers(
       {
@@ -127,16 +218,22 @@ describe('provisionWrapperJars', () => {
         ).resolves.toEqual(jarBytes);
         await expect(
           readFile(
-            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.sha256'),
+            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.jar.sha256'),
             'utf8',
           ),
         ).resolves.toBe(`${jarSha256}\n`);
         await expect(
           readFile(
-            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.asc'),
+            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.jar.asc'),
             'utf8',
           ),
         ).resolves.toBe(TEST_SIGNATURE_ARMORED);
+        expect(await readdir(path.dirname(wrapper.absolutePath))).toEqual([
+          'gradle-wrapper-8.14.jar.asc',
+          'gradle-wrapper-8.14.jar.sha256',
+          'gradle-wrapper.jar',
+          'gradle-wrapper.properties',
+        ]);
       },
     );
   });
@@ -201,6 +298,10 @@ describe('provisionWrapperJars', () => {
         'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties(),
       },
       async ([wrapper]) => {
+        await writeFile(
+          path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.jar.sha256'),
+          'stale checksum\n',
+        );
         const jarBytes = Buffer.from('already present wrapper jar');
         const jarSha256 = sha256(jarBytes);
         const verifyWrapperSignature = vi.fn(async () => {});
@@ -243,59 +344,75 @@ describe('provisionWrapperJars', () => {
         );
         await expect(
           readFile(
-            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.sha256'),
+            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.jar.sha256'),
             'utf8',
           ),
         ).resolves.toBe(`${jarSha256}\n`);
         await expect(
           readFile(
-            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.asc'),
+            path.join(path.dirname(wrapper.absolutePath), 'gradle-wrapper-8.14.jar.asc'),
             'utf8',
           ),
         ).resolves.toBe(TEST_SIGNATURE_ARMORED);
+        expect(await readdir(path.dirname(wrapper.absolutePath))).toEqual([
+          'gradle-wrapper-8.14.jar.asc',
+          'gradle-wrapper-8.14.jar.sha256',
+          'gradle-wrapper.jar',
+          'gradle-wrapper.properties',
+        ]);
       },
     );
   });
 
-  it('rejects detached signature verification failures and leaves no temporary files behind', async () => {
-    await withValidatedWrappers(
-      {
-        'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties(),
-      },
-      async ([wrapper]) => {
-        const wrapperDirectory = path.dirname(wrapper.absolutePath);
-        const jarBytes = Buffer.from('verified wrapper jar');
-        const jarSha256 = sha256(jarBytes);
+  it.each([false, true])(
+    'rejects detached signature failures with existing JAR %s and publishes no metadata',
+    async (existingJar) => {
+      await withValidatedWrappers(
+        {
+          'gradle/wrapper/gradle-wrapper.properties': validWrapperProperties(),
+        },
+        async ([wrapper]) => {
+          const wrapperDirectory = path.dirname(wrapper.absolutePath);
+          const jarBytes = Buffer.from('verified wrapper jar');
+          const jarSha256 = sha256(jarBytes);
+          if (existingJar) {
+            await writeFile(path.join(wrapperDirectory, 'gradle-wrapper.jar'), jarBytes);
+          }
 
-        await expect(
-          provisionWrapperJars([wrapper], {
-            fetchImpl: async (input: string | URL | Request): Promise<Response> => {
-              const url = String(input);
+          await expect(
+            provisionWrapperJars([wrapper], {
+              fetchImpl: async (input: string | URL | Request): Promise<Response> => {
+                const url = String(input);
 
-              if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
-                return new Response(`${jarSha256}\n`, { status: 200 });
-              }
+                if (url.endsWith('gradle-8.14-wrapper.jar.sha256')) {
+                  return new Response(`${jarSha256}\n`, { status: 200 });
+                }
 
-              if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
-                return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
-              }
+                if (url.endsWith('gradle-8.14-wrapper.jar.asc')) {
+                  return new Response(TEST_SIGNATURE_ARMORED, { status: 200 });
+                }
 
-              if (url.endsWith('/v8.14.0/gradle/wrapper/gradle-wrapper.jar')) {
-                return new Response(jarBytes, { status: 200 });
-              }
+                if (url.endsWith('/v8.14.0/gradle/wrapper/gradle-wrapper.jar')) {
+                  return new Response(jarBytes, { status: 200 });
+                }
 
-              throw new Error(`Unexpected fetch URL: ${url}`);
-            },
-            verifyWrapperSignature: async () => {
-              throw new Error('detached signature mismatch');
-            },
-          }),
-        ).rejects.toThrow(/detached signature mismatch/);
+                throw new Error(`Unexpected fetch URL: ${url}`);
+              },
+              verifyWrapperSignature: async () => {
+                throw new Error('detached signature mismatch');
+              },
+            }),
+          ).rejects.toThrow(/detached signature mismatch/);
 
-        expect(await readdir(wrapperDirectory)).toEqual(['gradle-wrapper.properties']);
-      },
-    );
-  });
+          expect(await readdir(wrapperDirectory)).toEqual(
+            existingJar
+              ? ['gradle-wrapper.jar', 'gradle-wrapper.properties']
+              : ['gradle-wrapper.properties'],
+          );
+        },
+      );
+    },
+  );
 
   it('retries transient HTTP failures and succeeds on a later attempt', async () => {
     await withValidatedWrappers(

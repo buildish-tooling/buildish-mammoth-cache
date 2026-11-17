@@ -728,12 +728,12 @@ async function retainWrapperMetadataFiles(
 
   await Promise.all([
     placeFileAtomically(
-      path.join(wrapperDirectory, `gradle-wrapper-${distributionVersion}.sha256`),
+      path.join(wrapperDirectory, `gradle-wrapper-${distributionVersion}.jar.sha256`),
       `${expectedWrapperJarSha256}\n`,
-      '.gradle-wrapper-sha256',
+      '.gradle-wrapper-jar-sha256',
     ),
     placeFileAtomically(
-      path.join(wrapperDirectory, `gradle-wrapper-${distributionVersion}.asc`),
+      path.join(wrapperDirectory, `gradle-wrapper-${distributionVersion}.jar.asc`),
       wrapperJarSignature,
       '.gradle-wrapper-signature',
     ),
