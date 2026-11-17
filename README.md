@@ -22,10 +22,11 @@ lightweight local-repository caching for Maven builds. Support for Codeberg/Forg
 is planned for the future.
 
 > [!IMPORTANT]
-> Mammoth Cache is unreleased. The current source tree does not contain the
-> generated action bundles required by `uses:` and therefore is not directly
-> installable as a GitHub Action. The workflow documentation describes the
-> intended contract for development and review, not a currently runnable ref.
+> GitHub Actions require generated executable bundles. Use an exact published
+> release or candidate tag containing `dist/`; ordinary source branches such as
+> `main` omit those bundles and are not directly installable with `uses:`.
+> See [GitHub Releases](https://github.com/buildish-tooling/buildish-mammoth-cache/releases)
+> for available candidates and final releases.
 
 Project documentation lives on the Buildish site:
 

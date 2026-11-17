@@ -53,12 +53,13 @@ For Maven the action caches the Maven user home (`~/.m2` by default, or the path
 under `wrapper/dists/`. No wrapper provisioning is performed — Maven's own bootstrap is handled by
 the runner environment or `actions/setup-java`.
 
-## Planned workflow shape
+## Workflow shape
 
-The examples below document the intended action contract. The current source tree omits the
-generated `dist/` bundles required by GitHub Actions, so no current source ref can be used with
-these snippets. Once the project publishes a reviewed materialized ref, pin that exact immutable
-ref and place the action step _before_ your build invocation.
+The examples below document the action contract. Pin an exact published release or candidate
+ref containing the generated `dist/` bundles, and place the action step _before_ your build
+invocation. Ordinary source branches such as `main` omit those bundles and cannot be used as
+installable action refs. Available candidates and final releases are listed on
+[GitHub Releases](https://github.com/buildish-tooling/buildish-mammoth-cache/releases).
 
 > [!WARNING]
 > Do not set `cache: gradle` or `cache: maven` on `actions/setup-java` when using this action.
