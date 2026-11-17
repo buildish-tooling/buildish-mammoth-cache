@@ -78,7 +78,9 @@ describe('project-state documentation', () => {
     const homepage = await readFile('site/pages/_index.md', 'utf8');
     const todo = await readFile('TODO.md', 'utf8');
 
-    expect(homepage).toMatch(/Pre-release status/u);
+    expect(homepage).not.toMatch(/Pre-release status|does not have a published release yet/u);
+    expect(homepage).toMatch(/\]\(releases\/\d+\.\d+\.\d+\/user\/getting-started\/\)/u);
+    expect(homepage).toContain('kind="docs"');
     expect(homepage).not.toMatch(/Bounded cache growth|Save\\ndelta/u);
     expect(todo).not.toMatch(/Site \+ logo|Create a project-specific logo|Add release workflows/u);
     expect(todo).toMatch(/Adopt the in-development release workflows/u);
