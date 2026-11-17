@@ -84,6 +84,11 @@ async function collectCandidateFiles(repoRoot, relativeDir = '') {
 
     const relativePath = path.posix.join(relativeDir, entry.name);
 
+    // The independent docs branch is not part of this source tree's license scan.
+    if (relativePath === 'docs/releases') {
+      continue;
+    }
+
     if (entry.isDirectory()) {
       files.push(...(await collectCandidateFiles(repoRoot, relativePath)));
       continue;

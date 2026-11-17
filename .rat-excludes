@@ -14,6 +14,7 @@
 # limitations under the License.
 
 .nvmrc
+%regex[docs/releases(?:/.*)?]
 CODE_OF_CONDUCT.md
 .idea/.name
 .idea/copyright/ApacheLicense_v2.xml

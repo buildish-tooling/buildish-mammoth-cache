@@ -14,186 +14,219 @@
  * limitations under the License.
  */
 
-import { access } from 'node:fs/promises';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const SCENARIOS = [
-  {
-    name: 'gradle',
-    bundlePathParts: ['dist', 'github', 'gradle', 'main', 'index.cjs'],
-    fixturePathParts: ['test', 'fixtures', 'smoke'],
-    committedForbiddenPathParts: [
-      'test',
-      'fixtures',
-      'smoke',
-      'gradle',
-      'wrapper',
-      'gradle-wrapper.jar',
-    ],
-  },
-  {
-    name: 'maven',
-    bundlePathParts: ['dist', 'github', 'maven', 'main', 'index.cjs'],
-    fixturePathParts: ['test', 'fixtures', 'smoke', 'maven'],
-  },
-];
+import { validateDistribution } from './validate-distribution.mjs';
 
-async function main() {
-  const repoRoot = process.cwd();
-  const runnerOs = normalizeRunnerOs(process.platform);
-  const runnerArch = normalizeRunnerArch(process.arch);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-  for (const scenario of SCENARIOS) {
-    const bundlePath = path.join(repoRoot, ...scenario.bundlePathParts);
-    const fixturePath = path.join(repoRoot, ...scenario.fixturePathParts);
+async function main(argv = process.argv.slice(2)) {
+  if (argv.length !== 0 && (argv.length !== 2 || argv[0] !== '--distribution-root')) {
+    throw new Error('Usage: node scripts/smoke-test.mjs [--distribution-root <tree>]');
+  }
+  const distribution = await validateDistribution(path.resolve(argv[1] ?? repoRoot));
+  const stagedRoot = await createStagingRoot(distribution.root);
+  try {
+    const actionRoot = path.join(stagedRoot, 'action');
+    for (const file of distribution.files) {
+      const destination = path.join(actionRoot, file);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await cp(path.join(distribution.root, file), destination, { dereference: true });
+    }
 
-    await access(bundlePath).catch(() => {
-      throw new Error(
-        `Missing bundled action entrypoint at '${bundlePath}'. Run 'make build' first.`,
-      );
-    });
-    await access(fixturePath).catch(() => {
-      throw new Error(`Missing smoke fixture directory at '${fixturePath}'.`);
-    });
+    for (const action of distribution.actions) {
+      await runScenario(actionRoot, action, stagedRoot);
+    }
+    console.log('Distribution verified: Gradle and Maven main/post bundles executed in isolation.');
+  } finally {
+    await rm(stagedRoot, { recursive: true, force: true });
+  }
+}
 
-    const buildRoot = path.join(repoRoot, 'build');
-    await mkdir(buildRoot, { recursive: true });
-
-    const stagedRoot = await mkdtemp(path.join(buildRoot, `smoke-fixture-${scenario.name}-`));
-    const fixtureCopyPath = path.join(stagedRoot, path.basename(fixturePath));
-    const homePath = path.join(stagedRoot, 'home');
-    const runnerTempPath = path.join(stagedRoot, 'runner-temp');
-    const summaryFile = path.join(stagedRoot, 'step-summary.md');
-
-    try {
-      await cp(fixturePath, fixtureCopyPath, { recursive: true });
-      await mkdir(homePath, { recursive: true });
-      await mkdir(runnerTempPath, { recursive: true });
-      await writeFile(summaryFile, '', 'utf8');
-
-      const baseDirectory = toPosixPath(path.relative(repoRoot, fixtureCopyPath));
-      const exitCode = await runProcess(process.execPath, [bundlePath], {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          CI: 'true',
-          GITHUB_ACTION: '__run',
-          GITHUB_EVENT_NAME: 'push',
-          GITHUB_REF: 'refs/heads/main',
-          GITHUB_REF_NAME: 'main',
-          GITHUB_REPOSITORY: 'buildish-tooling/buildish',
-          GITHUB_WORKFLOW: 'Local Smoke Test',
-          GITHUB_JOB: `smoke-${scenario.name}`,
-          GITHUB_RUN_ID: '1',
-          GITHUB_RUN_ATTEMPT: '1',
-          GITHUB_WORKSPACE: repoRoot,
-          HOME: homePath,
-          RUNNER_TEMP: runnerTempPath,
-          RUNNER_OS: runnerOs,
-          RUNNER_ARCH: runnerArch,
-          GITHUB_STEP_SUMMARY: summaryFile,
-          'INPUT_BASE-DIRECTORY': baseDirectory,
-          ...createScenarioToolHomeEnv(scenario.name, homePath),
-        },
-      });
-
-      const summary = await readFile(summaryFile, 'utf8').catch(() => '');
-      if (summary.trim().length > 0) {
-        console.log(`--- ${scenario.name} summary ---`);
-        process.stdout.write(summary.endsWith(os.EOL) ? summary : `${summary}${os.EOL}`);
-      }
-
-      if (scenario.committedForbiddenPathParts) {
-        const committedForbiddenPath = path.join(repoRoot, ...scenario.committedForbiddenPathParts);
-        await assertPathDoesNotExist(committedForbiddenPath);
-      }
-
-      process.exitCode = exitCode;
-      if (exitCode !== 0) {
-        return;
-      }
-    } finally {
-      await rm(stagedRoot, { recursive: true, force: true });
+async function createStagingRoot(distributionRoot) {
+  // TMPDIR/TEMP can point inside a checkout, including through a symlink.
+  const temporaryRoot = await realpath(os.tmpdir());
+  for (const tree of [await realpath(repoRoot), distributionRoot]) {
+    const relative = path.relative(tree, temporaryRoot);
+    if (
+      relative === '' ||
+      (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+    ) {
+      throw new Error('Temporary directory must be outside the source and distribution trees.');
     }
   }
+  // --no-global-search-paths does not disable normal CommonJS ancestor lookup.
+  for (let directory = temporaryRoot; ; directory = path.dirname(directory)) {
+    const modules = path.join(directory, 'node_modules');
+    const exists = await stat(modules)
+      .then(() => true)
+      .catch((error) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      });
+    if (exists) {
+      throw new Error(
+        `Temporary directory permits dependency lookup from ${modules}; choose an isolated temporary directory.`,
+      );
+    }
+    if (path.dirname(directory) === directory) break;
+  }
+  return await mkdtemp(path.join(temporaryRoot, 'mammoth-distribution-'));
 }
 
-function toPosixPath(filePath) {
-  return filePath.split(path.sep).join(path.posix.sep);
-}
-
-function createScenarioToolHomeEnv(scenarioName, homePath) {
-  if (scenarioName === 'gradle') {
-    return {
-      GRADLE_USER_HOME: path.join(homePath, '.gradle'),
-    };
-  }
-  if (scenarioName === 'maven') {
-    return {
-      MAVEN_USER_HOME: path.join(homePath, '.m2'),
-    };
-  }
-  throw new Error(`Unsupported smoke-test scenario '${scenarioName}'.`);
-}
-
-function normalizeRunnerOs(platform) {
-  if (platform === 'darwin') {
-    return 'macOS';
-  }
-  if (platform === 'win32') {
-    return 'Windows';
-  }
-  return 'Linux';
-}
-
-function normalizeRunnerArch(arch) {
-  if (arch === 'x64') {
-    return 'X64';
-  }
-  if (arch === 'arm64') {
-    return 'ARM64';
-  }
-  return arch.toUpperCase();
-}
-
-async function assertPathDoesNotExist(filePath) {
-  await access(filePath)
-    .then(() => {
-      throw new Error(`Smoke test must not modify committed fixtures: '${filePath}'.`);
-    })
-    .catch((error) => {
-      if (
-        (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') ||
-        error === undefined
-      ) {
-        return;
-      }
-
-      throw error;
-    });
-}
-
-async function runProcess(command, args, options) {
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: 'inherit',
+async function runScenario(actionRoot, action, stagedRoot) {
+  const scenarioRoot = path.join(stagedRoot, action.name);
+  const workspace = path.join(scenarioRoot, 'workspace');
+  const homePath = path.join(scenarioRoot, 'home');
+  const runnerTemp = path.join(scenarioRoot, 'runner-temp');
+  const fixture = path.join(repoRoot, 'test', 'fixtures', 'smoke');
+  await cp(action.name === 'maven' ? path.join(fixture, 'maven') : fixture, workspace, {
+    recursive: true,
   });
+  await mkdir(homePath, { recursive: true });
+  await mkdir(runnerTemp, { recursive: true });
 
-  return await new Promise((resolve, reject) => {
+  const summaryFile = path.join(scenarioRoot, 'summary.md');
+  const stateFile = path.join(scenarioRoot, 'state.txt');
+  const outputFile = path.join(scenarioRoot, 'output.txt');
+  const envFile = path.join(scenarioRoot, 'env.txt');
+  for (const file of [summaryFile, stateFile, outputFile, envFile]) {
+    await writeFile(file, '', 'utf8');
+  }
+
+  // Do not pass caller credentials, action inputs/state, or Node module overrides.
+  const inherited = Object.fromEntries(
+    [
+      'PATH',
+      'Path',
+      'SystemRoot',
+      'SYSTEMROOT',
+      'ComSpec',
+      'PATHEXT',
+      'JAVA_HOME',
+      'BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND',
+    ]
+      .filter((key) => process.env[key] !== undefined)
+      .map((key) => [key, process.env[key]]),
+  );
+  const env = {
+    ...inherited,
+    CI: 'true',
+    GITHUB_ACTION: '__run',
+    GITHUB_ACTION_PATH: path.join(actionRoot, 'actions', 'github', action.name),
+    GITHUB_EVENT_NAME: 'push',
+    GITHUB_REF: 'refs/heads/main',
+    GITHUB_REF_NAME: 'main',
+    GITHUB_REPOSITORY: 'buildish-tooling/buildish-mammoth-cache',
+    GITHUB_WORKFLOW: 'Local Distribution Check',
+    GITHUB_JOB: `smoke-${action.name}`,
+    GITHUB_RUN_ID: '1',
+    GITHUB_RUN_ATTEMPT: '1',
+    GITHUB_WORKSPACE: workspace,
+    GITHUB_STEP_SUMMARY: summaryFile,
+    GITHUB_STATE: stateFile,
+    GITHUB_OUTPUT: outputFile,
+    GITHUB_ENV: envFile,
+    HOME: homePath,
+    USERPROFILE: homePath,
+    APPDATA: path.join(homePath, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(homePath, 'AppData', 'Local'),
+    XDG_CACHE_HOME: path.join(homePath, '.cache'),
+    TMPDIR: runnerTemp,
+    TEMP: runnerTemp,
+    TMP: runnerTemp,
+    RUNNER_TEMP: runnerTemp,
+    RUNNER_OS:
+      process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : 'Linux',
+    RUNNER_ARCH: process.arch === 'x64' ? 'X64' : process.arch.toUpperCase(),
+    GRADLE_USER_HOME: path.join(homePath, '.gradle'),
+    MAVEN_USER_HOME: path.join(homePath, '.m2'),
+    'INPUT_BASE-DIRECTORY': '.',
+    'INPUT_CACHE-ENABLED': 'false',
+    'INPUT_READ-ONLY': 'true',
+  };
+
+  await runBundle(path.join(actionRoot, action.main), workspace, env);
+  await requireSummary(summaryFile, `${action.name} main`);
+  const outputs = parseFileCommands(await readFile(outputFile, 'utf8'));
+  if (outputs['read-only'] !== 'true' || outputs['job-mode'] !== 'standalone') {
+    throw new Error(`${action.name} main did not emit the expected public outputs.`);
+  }
+
+  const state = Object.fromEntries(
+    Object.entries(parseFileCommands(await readFile(stateFile, 'utf8'))).map(([key, value]) => [
+      `STATE_${key}`,
+      value,
+    ]),
+  );
+  await writeFile(summaryFile, '', 'utf8');
+  await runBundle(path.join(actionRoot, action.post), workspace, {
+    ...env,
+    ...parseFileCommands(await readFile(envFile, 'utf8')),
+    ...state,
+  });
+  // A post bundle which silently skips because state was lost is not success.
+  await requireSummary(summaryFile, `${action.name} post`);
+  console.log(`Verified ${action.name}: ${action.main} and ${action.post}`);
+}
+
+async function requireSummary(file, phase) {
+  if ((await readFile(file, 'utf8')).trim().length === 0) {
+    throw new Error(`${phase} did not produce a job summary.`);
+  }
+}
+
+function parseFileCommands(contents) {
+  const lines = contents.split(/\r?\n/u);
+  const values = {};
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) continue;
+    const equals = line.indexOf('=');
+    const marker = line.indexOf('<<');
+    if (equals > 0 && (marker < 0 || equals < marker)) {
+      values[line.slice(0, equals)] = line.slice(equals + 1);
+    } else if (marker > 0) {
+      const delimiter = line.slice(marker + 2);
+      const start = index + 1;
+      while (index + 1 < lines.length && lines[index + 1] !== delimiter) index += 1;
+      if (!delimiter || index + 1 >= lines.length) {
+        throw new Error('Unterminated GitHub file command in distribution smoke test.');
+      }
+      values[line.slice(0, marker)] = lines.slice(start, index + 1).join('\n');
+      index += 1;
+    } else {
+      throw new Error('Malformed GitHub file command in distribution smoke test.');
+    }
+  }
+  return values;
+}
+
+async function runBundle(bundle, cwd, env) {
+  const child = spawn(process.execPath, ['--no-global-search-paths', bundle], {
+    cwd,
+    env,
+    stdio: 'inherit',
+    timeout: 120_000,
+    killSignal: 'SIGKILL',
+  });
+  await new Promise((resolve, reject) => {
     child.on('error', reject);
     child.on('close', (code, signal) => {
-      if (signal) {
-        reject(new Error(`Process '${command}' terminated by signal ${signal}.`));
-        return;
+      if (code !== 0 || signal) {
+        reject(new Error(`Distribution bundle ${bundle} failed (${signal ?? code}).`));
+      } else {
+        resolve();
       }
-
-      resolve(code ?? 1);
     });
   });
 }
 
-await main();
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});

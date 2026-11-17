@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://buildish.org/components/site-pipeline/schemas/site-pipeline-component-v1.schema.json
+# yaml-language-server: $schema=https://buildish.org/components/site-pipeline/schemas/component-v1.schema.json
 #
 # Copyright 2026 The Buildish Authors
 #
@@ -20,3 +20,9 @@ component:
   displayName: Mammoth Cache for Gradle® and Apache Maven™
 content:
   docsRoot: docs
+artifacts:
+  - key: mammoth-cache
+    displayName: Mammoth Cache for Gradle® and Apache Maven™
+    versioning:
+      developmentRef: main
+      tagPattern: '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'

@@ -1,0 +1,293 @@
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Release Promote Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact final version X.Y.Z
+        required: true
+        type: string
+      candidate_tag:
+        description: Exact approved candidate tag vX.Y.Z-rcN
+        required: true
+        type: string
+      candidate_manifest_digest:
+        description: Independently retained lowercase SHA-256 of candidate-manifest.json
+        required: true
+        type: string
+      approval_reference:
+        description: Public HTTPS maintainer decision approving this exact candidate tag and digest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: buildish-release-${{ github.repository }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-26.04
+    outputs:
+      bundle_digest: ${{ steps.seal.outputs.bundle_digest }}
+      source_commit: ${{ steps.resolve.outputs.source_commit }}
+      materialized_commit: ${{ steps.resolve.outputs.materialized_commit }}
+      final_tag: ${{ steps.resolve.outputs.final_tag }}
+      git_bundle_digest: ${{ steps.resolve.outputs.git_bundle_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/setup-release-tooling
+      - id: resolve
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_MANIFEST_DIGEST: ${{ inputs.candidate_manifest_digest }}
+          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -B buildish-release-tooling/workflow.py preflight promotion
+          mkdir -p "$RUNNER_TEMP/promotion"
+          python3 -B buildish-release-tooling/workflow.py approval "$RUNNER_TEMP/promotion/approval.json"
+          git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          MANIFEST_PATH="$RUNNER_TEMP/candidate-verification.json" \
+            bash buildish-release-tooling/release-tooling.sh verify-github-candidate \
+              --candidate-tag "$CANDIDATE_TAG" --candidate-manifest-digest "$CANDIDATE_MANIFEST_DIGEST" \
+              --candidate-manifest-output "$RUNNER_TEMP/promotion/candidate-manifest.json"
+          python3 -B buildish-release-tooling/workflow.py download "$RUNNER_TEMP/promotion/candidate-manifest.json" \
+            "$CANDIDATE_MANIFEST_DIGEST" "$RUNNER_TEMP/promotion/assets" "$RELEASE_VERSION"
+          MANIFEST_PATH="$RUNNER_TEMP/promotion/promotion-state.json" \
+            bash buildish-release-tooling/release-tooling.sh resolve-promotion \
+              --candidate-tag "$CANDIDATE_TAG" --candidate-manifest "$RUNNER_TEMP/promotion/candidate-manifest.json" \
+              --candidate-manifest-digest "$CANDIDATE_MANIFEST_DIGEST" "$RELEASE_VERSION"
+          python3 -B buildish-release-tooling/workflow.py outputs "$RUNNER_TEMP/promotion/promotion-state.json"
+      - id: seal
+        run: python3 -B buildish-release-tooling/workflow.py seal "$RUNNER_TEMP/promotion"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: promotion-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/promotion
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+    env:
+      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
+
+  stage:
+    needs: resolve
+    runs-on: ubuntu-26.04
+    environment: release-candidate
+    permissions:
+      contents: write
+    env:
+      GIT_COMMITTER_NAME: Mammoth Cache Release
+      GIT_COMMITTER_EMAIL: dev@buildish.org
+      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
+    outputs:
+      bundle_digest: ${{ steps.seal.outputs.bundle_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/setup-release-tooling
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: promotion-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/promotion
+      - name: Import approved M, create final tag, stage exact retained bytes, and verify draft
+        env:
+          EXPECTED_INPUT_DIGEST: ${{ needs.resolve.outputs.bundle_digest }}
+          EXPECTED_GIT_BUNDLE_DIGEST: ${{ needs.resolve.outputs.git_bundle_digest }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -B buildish-release-tooling/workflow.py verify "$RUNNER_TEMP/promotion" "$EXPECTED_INPUT_DIGEST"
+          python3 -B buildish-release-tooling/workflow.py assets "$RUNNER_TEMP/promotion/assets" "$RELEASE_VERSION" signed
+          state="$RUNNER_TEMP/imported-promotion.json"
+          MANIFEST_PATH="$state" bash buildish-release-tooling/release-tooling.sh import-materialization \
+            --promotion-state "$RUNNER_TEMP/promotion/promotion-state.json" \
+            --bundle "$RUNNER_TEMP/promotion/assets/materialized.bundle" --bundle-sha256 "$EXPECTED_GIT_BUNDLE_DIGEST"
+          bash buildish-release-tooling/release-tooling.sh create-final-tag --promotion-state "$state"
+          mkdir -p "$RUNNER_TEMP/stage"
+          assets=("$RUNNER_TEMP/promotion/assets/"*)
+          MANIFEST_PATH="$RUNNER_TEMP/stage/stage-result.json" bash buildish-release-tooling/release-tooling.sh stage-github-final-release \
+            --release-state "$state" "${assets[@]/#/--asset=}"
+          MANIFEST_PATH="$RUNNER_TEMP/stage/draft-verification.json" bash buildish-release-tooling/release-tooling.sh verify-github-final-release --release-state "$state"
+      - id: seal
+        run: python3 -B buildish-release-tooling/workflow.py seal "$RUNNER_TEMP/stage"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: promotion-stage-${{ github.run_id }}
+          path: ${{ runner.temp }}/stage
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+  consume-final:
+    needs: [resolve, stage]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    outputs:
+      bundle_digest: ${{ steps.seal.outputs.bundle_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/setup-node-npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: promotion-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/promotion
+      - name: Verify exact final tag and execute its payload without release credentials
+        env:
+          EXPECTED_INPUT_DIGEST: ${{ needs.resolve.outputs.bundle_digest }}
+          FINAL_TAG: ${{ needs.resolve.outputs.final_tag }}
+          MATERIALIZED_COMMIT: ${{ needs.resolve.outputs.materialized_commit }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 -B buildish-release-tooling/workflow.py verify "$RUNNER_TEMP/promotion" "$EXPECTED_INPUT_DIGEST"
+          git fetch --no-tags --depth=1 origin "refs/tags/$FINAL_TAG:refs/tags/$FINAL_TAG"
+          test "$(git rev-parse "refs/tags/$FINAL_TAG^{commit}")" = "$MATERIALIZED_COMMIT"
+          git worktree add --detach "$RUNNER_TEMP/final-action" "$MATERIALIZED_COMMIT"
+          trap 'git worktree remove --force "$RUNNER_TEMP/final-action"' EXIT
+          node scripts/smoke-test.mjs --distribution-root "$RUNNER_TEMP/final-action"
+          python3 -B buildish-release-tooling/workflow.py unpack \
+            "$RUNNER_TEMP/promotion/assets/buildish-mammoth-cache-$RELEASE_VERSION-github-action.zip" \
+            "$RUNNER_TEMP/unpacked" "$RELEASE_VERSION"
+          node scripts/smoke-test.mjs --distribution-root "$RUNNER_TEMP/unpacked/buildish-mammoth-cache-$RELEASE_VERSION-github-action"
+          python3 -B buildish-release-tooling/workflow.py consumer-record \
+            "$RUNNER_TEMP/promotion/promotion-state.json" "$FINAL_TAG" "$RUNNER_TEMP/consumer/consumer.json"
+      - id: seal
+        run: python3 -B buildish-release-tooling/workflow.py seal "$RUNNER_TEMP/consumer"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: promotion-consumer-${{ github.run_id }}
+          path: ${{ runner.temp }}/consumer
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+    env:
+      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
+
+  publish:
+    needs: [resolve, stage, consume-final]
+    if: >-
+      ${{ !cancelled() && needs.resolve.result == 'success'
+          && needs.stage.result == 'success' && needs.consume-final.result == 'success' }}
+    runs-on: ubuntu-26.04
+    environment: release-candidate
+    permissions:
+      contents: write
+    outputs:
+      manifest_digest: ${{ steps.publish.outputs.manifest_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/setup-release-tooling
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: promotion-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/promotion
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: promotion-stage-${{ github.run_id }}
+          path: ${{ runner.temp }}/stage
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: promotion-consumer-${{ github.run_id }}
+          path: ${{ runner.temp }}/consumer
+      - id: publish
+        name: Seal approval/consumer evidence and manifest; publish GitHub last
+        env:
+          EXPECTED_INPUT_DIGEST: ${{ needs.resolve.outputs.bundle_digest }}
+          EXPECTED_STAGE_DIGEST: ${{ needs.stage.outputs.bundle_digest }}
+          EXPECTED_CONSUMER_DIGEST: ${{ needs.consume-final.outputs.bundle_digest }}
+          EXPECTED_GIT_BUNDLE_DIGEST: ${{ needs.resolve.outputs.git_bundle_digest }}
+          FINAL_TAG: ${{ needs.resolve.outputs.final_tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_MANIFEST_DIGEST: ${{ inputs.candidate_manifest_digest }}
+          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -B buildish-release-tooling/workflow.py preflight promotion
+          python3 -B buildish-release-tooling/workflow.py verify "$RUNNER_TEMP/promotion" "$EXPECTED_INPUT_DIGEST"
+          python3 -B buildish-release-tooling/workflow.py verify "$RUNNER_TEMP/stage" "$EXPECTED_STAGE_DIGEST"
+          python3 -B buildish-release-tooling/workflow.py verify "$RUNNER_TEMP/consumer" "$EXPECTED_CONSUMER_DIGEST"
+          python3 -B buildish-release-tooling/workflow.py approval "$RUNNER_TEMP/current-approval.json"
+          cmp "$RUNNER_TEMP/current-approval.json" "$RUNNER_TEMP/promotion/approval.json"
+          MANIFEST_PATH="$RUNNER_TEMP/imported-promotion.json" bash buildish-release-tooling/release-tooling.sh import-materialization \
+            --promotion-state "$RUNNER_TEMP/promotion/promotion-state.json" \
+            --bundle "$RUNNER_TEMP/promotion/assets/materialized.bundle" --bundle-sha256 "$EXPECTED_GIT_BUNDLE_DIGEST"
+          git fetch --no-tags --depth=1 origin "refs/tags/$FINAL_TAG:refs/tags/$FINAL_TAG"
+          mkdir -p "$RUNNER_TEMP/sealed"
+          state="$RUNNER_TEMP/sealed/promotion-state.json"
+          python3 -B buildish-release-tooling/workflow.py evidence "$RUNNER_TEMP/imported-promotion.json" \
+            "$RUNNER_TEMP/promotion/approval.json" "$RUNNER_TEMP/consumer/consumer.json" "$state"
+          manifest="$RUNNER_TEMP/sealed/release-manifest-v1.json"
+          existing="$(gh release view "$FINAL_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[] | select(.name == "release-manifest-v1.json")] | length')"
+          if [ "$existing" = 1 ]; then
+            gh release download "$FINAL_TAG" --repo "$GITHUB_REPOSITORY" --pattern release-manifest-v1.json --dir "$RUNNER_TEMP/sealed"
+          elif [ "$existing" = 0 ]; then
+            MANIFEST_PATH="$manifest" bash buildish-release-tooling/release-tooling.sh create-release-manifest \
+              --release-state "$state" --publication-result "$RUNNER_TEMP/stage/stage-result.json"
+          else
+            echo 'Unexpected retained final manifest inventory' >&2; exit 1
+          fi
+          bash buildish-release-tooling/release-tooling.sh attach-github-release-manifest --release-state "$state" --release-manifest "$manifest"
+          sealed_digest="$(sha256sum "$manifest" | cut -d' ' -f1)"
+          MANIFEST_PATH="$RUNNER_TEMP/sealed/publication-result.json" \
+            bash buildish-release-tooling/release-tooling.sh publish-github-final-release \
+              --release-state "$state" --require-manifest-digest "$sealed_digest"
+          MANIFEST_PATH="$RUNNER_TEMP/sealed/final-verification.json" \
+            bash buildish-release-tooling/release-tooling.sh verify-github-final-release --release-state "$state"
+          printf 'manifest_digest=%s\n' "$sealed_digest" >> "$GITHUB_OUTPUT"
+          printf 'Final: %s; sealed manifest SHA-256: %s\n' "$FINAL_TAG" "$sealed_digest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: promotion-sealed-${{ github.run_id }}
+          path: ${{ runner.temp }}/sealed
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+    env:
+      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python

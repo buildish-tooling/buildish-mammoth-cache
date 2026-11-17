@@ -12,8 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The Buildish release process is TBD. This deliberately incomplete file is not
-# valid release-tooling input and must be replaced by reviewed configuration
-# before any release workflow is dispatched.
-component_id: buildish-mammoth-cache
-source_artifact_prefix: buildish-mammoth-cache
+# Modern candidate/promotion policy for exactly Release Tooling 0.1.4. Deployment,
+# signing-input usability, and live workflow checks remain prerequisites; policy is
+# not authorization to dispatch a release. See RELEASE-PROCESS.md.
+component:
+  id: buildish-mammoth-cache
+  display_name: Mammoth Cache
+versioning:
+  scheme: semver
+  final_tag_template: 'v{version}'
+source:
+  selection: explicit-ref
+  default_branch: main
+  require_default_branch_ancestor: true
+  snapshot:
+    mode: built-asset
+    filename_template: 'buildish-mammoth-cache-{version}-src.tar.gz'
+    archive_root_template: 'buildish-mammoth-cache-{version}-src'
+  checks:
+    platform: github
+    trusted_workflow_path: .github/workflows/ci.yml
+    trusted_event: push
+    trusted_branch: main
+    required:
+      - Required Checks
+lifecycle:
+  mode: candidate
+release_notes:
+  path_template: 'buildish-release-tooling/release-notes/{version}.md'
+candidate:
+  label: rc
+  start_number: 1
+  visibility: public-prerelease
+  retention: retain-published
+artifacts:
+  produced:
+    - source-archive
+    - github-action-archive
+  checksums:
+    - sha256
+    - sha512
+  signing:
+    kind: openpgp
+    private_key_env: BUILDISH_GPG_PRIVATE_KEY
+    passphrase_env: BUILDISH_GPG_PASSPHRASE
+    # Same signing inputs as Release Tooling; actual key usability is unverified.
+    expected_fingerprint: D52A35E355AB82E26B879B629890F738DF4BB337
+    signature_format: detached-ascii-armored
+publication:
+  authoritative:
+    kind: github-release
+    repository: buildish-tooling/buildish-mammoth-cache
+  convenience: []
+  secondary: []
+tags:
+  final_mode: detached-materialization-commit
+  materialized_paths: [dist]
+  moving: []
+  include_final_mode_in_summary: true
+policy_profiles: {}

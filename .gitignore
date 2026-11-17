@@ -18,6 +18,7 @@
 /buildish-release-tooling/harness/release-harness.local.yaml
 /coverage/
 /dist/
+/docs/releases/
 /lib/
 /node_modules/
 *.tsbuildinfo

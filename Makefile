@@ -16,12 +16,17 @@
 .DEFAULT_GOAL := build
 
 NPM ?= npm
+PYTHON ?= python3
 NODE_MODULES_STAMP := node_modules/.buildish-mammoth-cache-installed
 BUILD_STAMP := dist/.buildish-mammoth-cache-built
 BUILD_INPUTS := package.json tsconfig.json $(shell find src descriptors -type f 2>/dev/null)
+DISTRIBUTION_ROOT ?= .
+RELEASE_REPOSITORY ?= .
+ARCHIVE_OUTPUT_DIR ?= build/release-archives
+ARCHIVE_CONSUMER_NODE ?= node
 HELP_TARGETS := $(MAKEFILE_LIST)
 
-.PHONY: build check clean clean-all help integration-test integration-test-build-reporting integration-test-distributed-reuse integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse lint-check lint-fix rat-check rebuild release-legal-check release-legal-incompatible-license-check sanity-check smoke-test test zizmor-check
+.PHONY: archive-consumer-check archive-consumer-test build check clean clean-all distribution-check help integration-test integration-test-build-reporting integration-test-distributed-reuse integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse lint-check lint-fix rat-check rebuild release-archives release-archives-test release-launcher-test release-legal-check release-legal-incompatible-license-check release-tooling-qualification release-workflow-test sanity-check smoke-test test versioned-docs-test zizmor-check
 
 help: ## Show available Make targets.
 	@awk 'BEGIN {FS = ":.*## "; printf "Available targets:\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(HELP_TARGETS)
@@ -70,6 +75,34 @@ rebuild: clean build ## Perform a fresh rebuild from a clean workspace.
 
 test: build ## Run unit tests after ensuring the project is built.
 	$(NPM) run test
+	$(MAKE) versioned-docs-test release-archives-test archive-consumer-test release-launcher-test release-workflow-test
+
+versioned-docs-test: ## Test docs maintenance in disposable Git repositories (Python 3.11+, Bash, Git).
+	$(PYTHON) -B -m unittest discover -s test -p 'versioned_docs_test.py' -v
+
+release-archives-test: ## Test unsigned archive packaging against disposable Git commits (uses the existing Node dependencies).
+	$(PYTHON) -B -m unittest discover -s test -p 'release_archives_test.py' -v
+
+archive-consumer-test: ## Test archive consumer orchestration and cleanup without running or downloading Gradle.
+	$(PYTHON) -B -m unittest discover -s test -p 'archive_consumer_test.py' -v
+
+release-launcher-test: ## Test the exact installed-package launcher using disposable metadata fixtures; does not install tooling.
+	$(PYTHON) -B -m unittest discover -s test -p 'release_launcher_test.py' -v
+
+release-workflow-test: ## Test release transport, approval and evidence boundaries without credentials/network.
+	$(PYTHON) -B -m unittest discover -s test -p 'release_workflow_test.py' -v
+
+release-tooling-qualification: build ## Qualify an already installed 0.1.4 wheel with real bundles and disposable Git/state fixtures; no signing/publication.
+	@test -n "$${BUILDISH_RELEASE_TOOLING_PYTHON:-}" || { echo 'Set BUILDISH_RELEASE_TOOLING_PYTHON to an approved installed interpreter (absolute path).'; exit 1; }
+	$(PYTHON) -B -m unittest discover -s test -p 'release_tooling_qualification_test.py' -v
+
+archive-consumer-check: build ## Package real built bundles in disposable S/M commits and smoke-test the unpacked ZIP (can download Gradle).
+	$(PYTHON) -B scripts/archive-consumer-check.py --node "$(ARCHIVE_CONSUMER_NODE)"
+
+release-archives: sanity-check ## Package exact SOURCE_COMMIT and MATERIALIZED_COMMIT for RELEASE_VERSION into a new ARCHIVE_OUTPUT_DIR; no build/sign/publish.
+	$(PYTHON) -B scripts/package-release.py --repository "$(RELEASE_REPOSITORY)" \
+		--source-commit "$(SOURCE_COMMIT)" --materialized-commit "$(MATERIALIZED_COMMIT)" \
+		--version "$(RELEASE_VERSION)" --output-dir "$(ARCHIVE_OUTPUT_DIR)"
 
 lint-check: sanity-check $(NODE_MODULES_STAMP) ## Run linting and formatting checks.
 	$(NPM) run lint
@@ -101,7 +134,10 @@ release-legal-write: sanity-check $(NODE_MODULES_STAMP) ## Generate legal/github
 	$(NPM) run release-legal:write
 	$(NPM) run release-legal:check
 
-smoke-test: build ## Run the bundled-action smoke test against a staged fixture copy.
+distribution-check: sanity-check ## Validate and smoke-test an existing Action tree (DISTRIBUTION_ROOT defaults to .); does not build it.
+	$(NPM) run smoke-test -- --distribution-root "$(DISTRIBUTION_ROOT)"
+
+smoke-test: build ## Build, validate, and smoke-test both Actions' main/post bundles in isolation.
 	$(NPM) run smoke-test
 
 integration-test: build ## Run all local integration tests via Vitest (requires Java 21+; mvn also required for the Maven test).

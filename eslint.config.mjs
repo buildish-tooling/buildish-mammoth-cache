@@ -22,7 +22,14 @@ import tsParser from '@typescript-eslint/parser';
 
 export default [
   {
-    ignores: ['build/**', 'coverage/**', 'dist/**', 'lib/**', 'node_modules/**'],
+    ignores: [
+      'build/**',
+      'coverage/**',
+      'dist/**',
+      'docs/releases/**',
+      'lib/**',
+      'node_modules/**',
+    ],
   },
   js.configs.recommended,
   regexpPlugin.configs['flat/recommended'],

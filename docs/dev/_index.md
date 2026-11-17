@@ -32,7 +32,7 @@ and the full validation gate.
   Gradle and Maven.
 - [Maintenance](maintenance/) covers dependency, workflow, and generated-output
   upkeep.
-- [Release legal policy](release-legal/) records the deliberately TBD release
-  and legal posture.
+- [Release legal policy](release-legal/) defines the accepted initial dependency-license
+  and attribution gates for candidate releases.
 
 Nothing under this development route is release documentation.
