@@ -169,9 +169,13 @@ error downloading from `services.gradle.org`.
    allowlists those hosts. For GitHub API rate limits, pass a `github-token` with at least
    read-only `contents` access.
 
-4. **Windows: wrong `gpg` binary selected.** On Windows runners multiple `gpg` variants may be
-   on the PATH. Set the `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` environment variable to the
-   full path of the correct binary before the action runs.
+4. **Windows: wrong `gpg` binary or path format.** On Windows runners multiple `gpg` variants
+   may be on `PATH`. Errors such as `Unable to inspect trusted OpenPGP key material` followed by
+   `directory does not exist`, with a Windows temporary path appended to the workspace path,
+   indicate that MSYS GnuPG received a Windows path it treated as relative. With Mammoth Cache
+   0.1.1, set `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` to the full path of the installed
+   `gpg.exe` before the action runs. This lets the action select the correct path format. The
+   override also selects a specific GnuPG installation when several are available.
 
 If prepare fails during wrapper provisioning, finalize logs that it is skipping execution and
 saves no caches or artifacts. Resolve the original prepare error first. Older Mammoth Cache

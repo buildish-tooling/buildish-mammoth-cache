@@ -80,9 +80,11 @@ Automatic key retrieval is disabled. Acceptance requires both a successful GnuPG
 a `VALIDSIG` status record whose primary and signing fingerprints match a pinned entry. A key
 that signs through a dedicated subkey must match the pinned signing subkey fingerprint; entries
 without a signing subkey fingerprint permit only signatures made by the primary key.
-The GnuPG binary being used is `gpg` on Linux and macOS. For Windows `gpg.exe` is being used;
-override with the `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` environment variable (only evaluated
-on Windows) when multiple `gpg` variants exist on the runner, which is common on Windows.
+The GnuPG binary is `gpg` on Linux and macOS. On Windows, the action resolves the first
+`gpg.exe` on `PATH` to an absolute path before preparing arguments and launching it. Git for
+Windows MSYS GnuPG receives `/d/...` paths; native Windows GnuPG receives Windows paths.
+Set `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` to an absolute executable path to select a specific
+installation. This override is evaluated only on Windows.
 
 ### Atomic write
 

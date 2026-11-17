@@ -15,7 +15,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -131,8 +131,48 @@ describe('resolveValidatedGpgCommand', () => {
     ).resolves.toBe('gpg');
   });
 
-  it('returns gpg.exe on Windows when no override is set, without filesystem checks', async () => {
-    await expect(resolveValidatedGpgCommand('win32', {})).resolves.toBe('gpg.exe');
+  it('rejects missing Windows GnuPG instead of deferring an unresolved command to spawn', async () => {
+    await expect(resolveValidatedGpgCommand('win32', {})).rejects.toThrow(/not found on PATH/);
+  });
+
+  it('resolves the first Windows PATH binary before selecting MSYS path conversion', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mammoth-gpg-path-'));
+    try {
+      const msysDirectory = path.join(root, 'Git', 'usr', 'bin');
+      const nativeDirectory = path.join(root, 'GnuPG', 'bin');
+      const missingDirectory = path.join(root, 'missing');
+      await Promise.all([
+        mkdir(msysDirectory, { recursive: true }),
+        mkdir(nativeDirectory, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(path.join(msysDirectory, 'gpg.exe'), ''),
+        writeFile(path.join(nativeDirectory, 'gpg.exe'), ''),
+      ]);
+      const msys = await resolveValidatedGpgCommand('win32', {
+        Path: `${missingDirectory};"${msysDirectory}";${nativeDirectory}`,
+      });
+      expect(msys).toBe(
+        await resolveValidatedGpgCommand('win32', {
+          BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: path.join(msysDirectory, 'gpg.exe'),
+        }),
+      );
+      const home = 'D:\\a\\_temp\\mammoth-gpg';
+      expect(normalizePathForGpgCommand(home, msys, 'win32')).toBe('/d/a/_temp/mammoth-gpg');
+
+      const native = await resolveValidatedGpgCommand('win32', {
+        PATH: `${nativeDirectory};${msysDirectory}`,
+      });
+      expect(normalizePathForGpgCommand(home, native, 'win32')).toBe(home);
+      expect(
+        await resolveValidatedGpgCommand('win32', {
+          PATH: msysDirectory,
+          BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND: native,
+        }),
+      ).toBe(native);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('rejects a Windows override that is not an absolute path', async () => {
@@ -410,8 +450,12 @@ async function createDetachedSignature(
 }
 
 async function runGpgCommand(args: readonly string[]): Promise<{ readonly stdout: string }> {
+  const command = await resolveValidatedGpgCommand();
+  const normalizedArgs = args.map((argument) =>
+    path.isAbsolute(argument) ? normalizePathForGpgCommand(argument, command) : argument,
+  );
   return await new Promise((resolve, reject) => {
-    const child = spawn(DEFAULT_GPG_COMMAND, [...args], {
+    const child = spawn(command, normalizedArgs, {
       env: { ...process.env, LANG: 'C', LC_ALL: 'C' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

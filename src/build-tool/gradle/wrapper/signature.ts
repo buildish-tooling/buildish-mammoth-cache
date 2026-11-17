@@ -15,7 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -217,50 +217,53 @@ export function resolveDefaultGpgCommand(
 }
 
 /**
- * Resolves and validates the GnuPG command for the current process.
+ * Resolves the Windows GnuPG executable to an absolute, validated path so path
+ * conversion and execution use the same binary. An explicit override takes
+ * precedence; otherwise the first regular gpg.exe on PATH is used.
  *
- * On non-Windows platforms this always returns `'gpg'`. On Windows, when
- * `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` is set, the value is validated
- * via {@link validateAbsoluteExecutablePath}: it must be an absolute path that
- * resolves (through all symlinks) to an existing regular file. The canonical
- * resolved path is returned and cached for the lifetime of the process so that
- * filesystem validation is performed at most once per action run.
- *
- * @throws When the Windows override is set but fails path validation.
+ * The result is cached for the real process environment. Non-Windows platforms
+ * use 'gpg' and ignore the override.
  */
 export async function resolveValidatedGpgCommand(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  // On non-Windows platforms the override is ignored and 'gpg' is always used;
-  // no filesystem validation is required because 'gpg' is on PATH.
   if (platform !== 'win32') {
     return 'gpg';
   }
 
-  const override = env.BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND?.trim();
-
-  // No override: use the Windows default 'gpg.exe'; PATH resolution at spawn time suffices.
-  if (!override) {
-    return 'gpg.exe';
-  }
-
-  // An override is set: it must be an absolute path to an existing regular file.
-  // Cache the validated result when using the real process environment so that
-  // repeated GPG invocations within one action run do not re-stat the binary.
-  // When a custom env is injected (tests), skip the module-level cache to avoid
-  // cross-test collisions.
   if (env === process.env) {
-    validatedGpgCommandPromise ??= validateAbsoluteExecutablePath(
+    validatedGpgCommandPromise ??= resolveWindowsGpgCommand(env);
+    return await validatedGpgCommandPromise;
+  }
+  return await resolveWindowsGpgCommand(env);
+}
+
+async function resolveWindowsGpgCommand(env: NodeJS.ProcessEnv): Promise<string> {
+  const override = env.BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND?.trim();
+  if (override) {
+    return await validateAbsoluteExecutablePath(
       override,
       'BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND',
     );
-    return await validatedGpgCommandPromise;
   }
 
-  return await validateAbsoluteExecutablePath(
-    override,
-    'BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND',
+  const searchPath = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1];
+  for (const entry of (searchPath ?? '').split(';')) {
+    const directory = entry.trim().replace(/^"(.*)"$/u, '$1');
+    if (!directory) continue;
+    const candidate = path.resolve(directory, 'gpg.exe');
+    try {
+      if (!(await stat(candidate)).isFile()) continue;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+      throw error;
+    }
+    return await validateAbsoluteExecutablePath(candidate, 'GnuPG executable on PATH');
+  }
+  throw new Error(
+    "GnuPG command 'gpg.exe' is required for Gradle wrapper detached-signature verification but was not found on PATH. Install GnuPG or set BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND to its absolute path.",
   );
 }
 
@@ -380,7 +383,7 @@ export async function verifyDetachedOpenPgpSignature(
     const trustedKeysPath = path.join(gpgHome, 'trusted-keys.asc');
     const payloadPath = path.join(gpgHome, 'payload.bin');
     const signaturePath = path.join(gpgHome, 'payload.asc');
-    const resolvedCommand = options.command?.trim() || resolveDefaultGpgCommand();
+    const resolvedCommand = options.command?.trim() || (await resolveValidatedGpgCommand());
 
     // Use a fresh GPG home per verification so wrapper checks do not share mutable
     // keyring/trustdb state across calls or concurrent action invocations.
@@ -394,7 +397,7 @@ export async function verifyDetachedOpenPgpSignature(
       writeFile(signaturePath, `${armoredSignature.trim()}\n`, { encoding: 'utf8', flag: 'wx' }),
     ]);
 
-    const importResult = await runCommand(options.command, [
+    const importResult = await runCommand(resolvedCommand, [
       '--homedir',
       normalizePathForGpgCommand(gpgHome, resolvedCommand),
       '--batch',
@@ -408,7 +411,7 @@ export async function verifyDetachedOpenPgpSignature(
       );
     }
 
-    const verificationResult = await runCommand(options.command, [
+    const verificationResult = await runCommand(resolvedCommand, [
       '--homedir',
       normalizePathForGpgCommand(gpgHome, resolvedCommand),
       '--batch',
@@ -483,10 +486,10 @@ async function readArmoredKeyFingerprints(
 }> {
   return await withTemporaryGpgHome(async (gpgHome) => {
     const keyPath = path.join(gpgHome, 'trusted-key.asc');
-    const resolvedCommand = command?.trim() || resolveDefaultGpgCommand();
+    const resolvedCommand = command?.trim() || (await resolveValidatedGpgCommand());
     await writeFile(keyPath, `${armoredKey.trim()}\n`, { encoding: 'utf8', flag: 'wx' });
 
-    const result = await runCommand(command, [
+    const result = await runCommand(resolvedCommand, [
       '--homedir',
       normalizePathForGpgCommand(gpgHome, resolvedCommand),
       '--batch',
