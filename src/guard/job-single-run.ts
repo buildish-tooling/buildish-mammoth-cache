@@ -26,6 +26,9 @@ export const JOB_SINGLE_RUN_OWNER_TOKEN_STATE = 'buildish-mammoth-cache-job-sing
 /** CI state key set to `'true'` when the prepare phase was rejected as a duplicate. */
 export const JOB_SINGLE_RUN_DUPLICATE_STATE = 'buildish-mammoth-cache-job-single-run-duplicate';
 
+/** Set only when prepare failed after claiming ownership; finalize must perform no writes. */
+export const JOB_PREPARE_FAILED_STATE = 'buildish-mammoth-cache-prepare-failed';
+
 const JOB_SINGLE_RUN_DIRECTORY = 'buildish-mammoth-cache-job-guards';
 
 type JobSingleRunCiIdentity = Pick<
@@ -113,7 +116,8 @@ export async function claimSingleRunPrepareExecution(
  * should execute.
  *
  * Returns `shouldRun: false` when the prepare phase was rejected as a duplicate or when no
- * owner token is present (meaning prepare never ran for this invocation).
+ * owner token is present (meaning prepare never ran for this invocation), or when
+ * prepare explicitly recorded a failure.
  */
 export function decideSingleRunFinalizeExecution(
   dependencies: Pick<JobSingleRunDependencies, 'getState'> = {},
@@ -132,6 +136,14 @@ export function decideSingleRunFinalizeExecution(
       shouldRun: false,
       message:
         'Skipping finalize execution because this Buildish Mammoth Cache invocation did not claim single-run ownership for the current CI job.',
+    };
+  }
+
+  if (getState(JOB_PREPARE_FAILED_STATE) === 'true') {
+    return {
+      shouldRun: false,
+      message:
+        'Skipping finalize execution because prepare failed; no caches or artifacts will be saved.',
     };
   }
 

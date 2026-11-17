@@ -20,7 +20,10 @@ import {
   type PrepareActionDependencies,
 } from './flow';
 import type { HostOutputSink } from '../../host/types';
-import { claimSingleRunPrepareExecution } from '../../guard/job-single-run';
+import {
+  JOB_PREPARE_FAILED_STATE,
+  claimSingleRunPrepareExecution,
+} from '../../guard/job-single-run';
 
 /**
  * Runtime host required at the prepare entrypoint boundary.
@@ -60,7 +63,10 @@ export async function runPrepareExecution(
     throw new Error(singleRunClaim.message);
   }
 
-  const status = await executePrepareAction(dependencies);
+  const status = await executePrepareAction(dependencies).catch((error: unknown) => {
+    runtimeHost.saveState(JOB_PREPARE_FAILED_STATE, 'true');
+    throw error;
+  });
   for (const [name, value] of Object.entries(createPrepareActionOutputs(status))) {
     runtimeHost.setOutput(name, value);
   }

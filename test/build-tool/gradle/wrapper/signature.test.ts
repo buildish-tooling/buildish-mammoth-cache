@@ -41,8 +41,8 @@ const itIfGpg = GPG_AVAILABLE ? it : it.skip;
 describe('loadTrustedOpenPgpPublicKeys', () => {
   itIfGpg('loads pinned keys when the expected fingerprint matches', async () => {
     await expect(
-      loadTrustedOpenPgpPublicKeys([GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST[0]]),
-    ).resolves.toHaveLength(1);
+      loadTrustedOpenPgpPublicKeys(GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST),
+    ).resolves.toHaveLength(2);
   });
 
   itIfGpg(
@@ -65,6 +65,30 @@ describe('loadTrustedOpenPgpPublicKeys', () => {
         command: 'definitely-missing-gpg-command',
       }),
     ).rejects.toThrow(/required for Gradle wrapper detached-signature verification/);
+  });
+});
+
+describe('pinned Gradle signing keys', () => {
+  itIfGpg('checks the signing subkey fingerprint in the pinned material', async () => {
+    await expect(
+      loadTrustedOpenPgpPublicKeys([
+        {
+          ...GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST[1],
+          expectedSigningFingerprint: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        },
+      ]),
+    ).rejects.toThrow(/signing fingerprint mismatch/);
+  });
+
+  itIfGpg('rejects additional primary keys hidden in pinned material', async () => {
+    await expect(
+      loadTrustedOpenPgpPublicKeys([
+        {
+          ...GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST[0],
+          armoredKey: GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST.map((key) => key.armoredKey).join('\n'),
+        },
+      ]),
+    ).rejects.toThrow(/exactly one primary key/);
   });
 });
 
@@ -182,6 +206,77 @@ describe('verifyDetachedOpenPgpSignature', () => {
             'test payload',
           ),
         ).resolves.toBeUndefined();
+      });
+    },
+  );
+
+  itIfGpg(
+    'verifies a signing subkey and rejects it when only primary signing is allowed',
+    async () => {
+      await withTrustedSigningKeys(1, async ([primaryKey]) => {
+        await runGpgCommand([
+          '--homedir',
+          primaryKey.gpgHome,
+          '--batch',
+          '--no-options',
+          '--pinentry-mode',
+          'loopback',
+          '--passphrase',
+          '',
+          '--quick-add-key',
+          primaryKey.fingerprint,
+          'ed25519',
+          'sign',
+          '0',
+        ]);
+        const listing = await runGpgCommand([
+          '--homedir',
+          primaryKey.gpgHome,
+          '--batch',
+          '--no-options',
+          '--with-colons',
+          '--with-subkey-fingerprint',
+          '--list-keys',
+        ]);
+        const signingFingerprint = listing.stdout
+          .split(/\r?\n/u)
+          .filter((line) => line.startsWith('fpr:'))[1]
+          ?.split(':')[9];
+        if (!signingFingerprint) throw new Error('Generated signing subkey was missing.');
+        const { stdout: armoredKey } = await runGpgCommand([
+          '--homedir',
+          primaryKey.gpgHome,
+          '--batch',
+          '--no-options',
+          '--armor',
+          '--export',
+          primaryKey.fingerprint,
+        ]);
+        const signingKey = {
+          ...primaryKey,
+          armoredKey,
+          expectedSigningFingerprint: signingFingerprint,
+          fingerprint: signingFingerprint,
+        };
+        const payload = Buffer.from('payload signed by a dedicated subkey');
+        const signature = await createDetachedSignature(payload, signingKey);
+        const keys = await loadTrustedOpenPgpPublicKeys([signingKey]);
+        await expect(
+          verifyDetachedOpenPgpSignature(payload, signature, keys, 'subkey payload'),
+        ).resolves.toBeUndefined();
+        await expect(
+          verifyDetachedOpenPgpSignature(
+            payload,
+            signature,
+            [
+              {
+                ...signingKey,
+                expectedSigningFingerprint: undefined,
+              },
+            ],
+            'disallowed signer',
+          ),
+        ).rejects.toThrow(/signature signer did not match the pinned fingerprints/);
       });
     },
   );

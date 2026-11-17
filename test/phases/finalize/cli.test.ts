@@ -17,6 +17,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  JOB_PREPARE_FAILED_STATE,
+  JOB_SINGLE_RUN_OWNER_TOKEN_STATE,
+} from '../../../src/guard/job-single-run';
+import {
   runFinalizeExecution,
   type FinalizeEntrypointDependencies,
 } from '../../../src/phases/finalize/cli';
@@ -30,25 +34,21 @@ const finalizeFlowMock = vi.hoisted(() => ({
   })),
 }));
 
-const jobSingleRunMock = vi.hoisted(() => ({
-  decideSingleRunFinalizeExecution: vi.fn(() => ({
-    shouldRun: true,
-    message: 'Run post action.',
-  })),
-}));
-
 vi.mock('../../../src/phases/finalize/flow', () => finalizeFlowMock);
-vi.mock('../../../src/guard/job-single-run', () => jobSingleRunMock);
 
 describe('finalize entrypoint', () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('loads persisted action state when deciding and executing post work', async () => {
+  it.each([false, true])('runs finalize only when prepare did not fail: %s', async (failed) => {
     const runtimeHost = {
       getInput: vi.fn(() => ''),
-      getState: vi.fn(() => 'persisted-state'),
+      getState: vi.fn((name: string) => {
+        if (name === JOB_SINGLE_RUN_OWNER_TOKEN_STATE) return 'owner-token';
+        if (name === JOB_PREPARE_FAILED_STATE && failed) return 'true';
+        return '';
+      }),
       saveState: vi.fn(),
       setOutput: vi.fn(),
       info: vi.fn(),
@@ -96,10 +96,12 @@ describe('finalize entrypoint', () => {
 
     await runFinalizeExecution(dependencies);
 
-    expect(jobSingleRunMock.decideSingleRunFinalizeExecution).toHaveBeenCalledWith({
-      getState: runtimeHost.getState,
-    });
-    expect(finalizeFlowMock.executeFinalizeAction).toHaveBeenCalledWith(dependencies);
-    expect(runtimeHost.info).toHaveBeenCalledWith('Finalize execution completed.');
+    if (failed) {
+      expect(finalizeFlowMock.executeFinalizeAction).not.toHaveBeenCalled();
+      expect(runtimeHost.info).toHaveBeenLastCalledWith(expect.stringContaining('prepare failed'));
+    } else {
+      expect(finalizeFlowMock.executeFinalizeAction).toHaveBeenCalledWith(dependencies);
+      expect(runtimeHost.info).toHaveBeenCalledWith('Finalize execution completed.');
+    }
   });
 });

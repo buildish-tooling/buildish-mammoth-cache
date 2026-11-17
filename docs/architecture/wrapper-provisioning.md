@@ -53,7 +53,7 @@ Validation is static — no network calls are made during this step.
 flowchart TD
     A[Read gradle-wrapper.properties] --> B[Is gradle-wrapper.jar present?]
     B -- Yes --> Z1[Skip download]
-    B -- No --> C[Fetch JAR from\nservices.gradle.org]
+    B -- No --> C[Fetch JAR from\nGradle source tag on GitHub]
     C --> D[Fetch SHA-256 checksum\nfrom services.gradle.org]
     D --> E{SHA-256 match?}
     E -- No --> FAIL1[Fail: checksum mismatch]
@@ -66,16 +66,20 @@ flowchart TD
 
 ### SHA-256 verification
 
-The expected SHA-256 digest is downloaded from `services.gradle.org` (the same host as the JAR)
-over HTTPS and compared to the digest of the downloaded JAR bytes. This guards against accidental
+The expected SHA-256 digest is downloaded from `services.gradle.org` over HTTPS and compared
+to the digest of the JAR downloaded from the matching Gradle source tag on GitHub. This guards against accidental
 file corruption and mirrors the verification that `gradlew` scripts perform locally.
 
 ### PGP signature verification
 
 A detached ASCII-armored `.asc` signature is fetched from `services.gradle.org` and verified
-against a pinned allowlist of known Gradle signing keys in `src/gradle/wrapper/signature.ts`.
+against a pinned allowlist of known Gradle signing keys in `src/build-tool/gradle/wrapper/signature.ts`.
 
 Verification uses GnuPG with a fresh ephemeral home directory so no system keyring is modified.
+Automatic key retrieval is disabled. Acceptance requires both a successful GnuPG exit status and
+a `VALIDSIG` status record whose primary and signing fingerprints match a pinned entry. A key
+that signs through a dedicated subkey must match the pinned signing subkey fingerprint; entries
+without a signing subkey fingerprint permit only signatures made by the primary key.
 The GnuPG binary being used is `gpg` on Linux and macOS. For Windows `gpg.exe` is being used;
 override with the `BUILDISH_MAMMOTH_CACHE_GRADLE_GPG_COMMAND` environment variable (only evaluated
 on Windows) when multiple `gpg` variants exist on the runner, which is common on Windows.
@@ -91,8 +95,9 @@ The key allowlist in `src/build-tool/gradle/wrapper/signature.ts` is an explicit
 signing keys. Old and new keys may overlap during a key rotation period. Once a key is no longer
 used to sign any wrapper version you support, remove it from the allowlist.
 
-The allowlist is validated at action load time — unrecognized key material in the allowlist causes
-a startup error to prevent silently broken signature verification.
+The allowlist is validated lazily before the first detached-signature verification and cached for
+the process. Each entry must contain exactly one primary key matching its expected fingerprint
+and, when configured, the expected signing subkey. Invalid key material fails verification.
 
 ## Re-entrant provisioning
 

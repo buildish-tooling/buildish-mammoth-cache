@@ -24,17 +24,22 @@ limitations under the License.
 
 When Gradle publishes a new signing key at <https://gradle.org/keys/>:
 
-1. Verify the new key's fingerprint matches the published fingerprint on that page.
+1. Verify the primary key fingerprint and, when present, the signing subkey fingerprint against
+   that page. Use the complete public key block, including its signing subkey.
 2. Add the new key to the `GRADLE_TRUSTED_SIGNING_KEY_ALLOWLIST` array in
-   `src/build-tool/gradle/wrapper/signature.ts` alongside the current key.
+   `src/build-tool/gradle/wrapper/signature.ts` alongside the current key. Set `expectedFingerprint`
+   to the primary fingerprint and `expectedSigningFingerprint` to the signing subkey fingerprint.
+   Omit `expectedSigningFingerprint` only when the primary key signs directly.
 3. After the old key is no longer used to sign any wrapper version you support, remove it from the
    allowlist.
 
 Keep old and new keys in the allowlist concurrently during the rotation window to avoid breaking
 builds that pin an older Gradle version.
 
-The allowlist is validated at action load time — unrecognized key material in the allowlist causes
-a startup error rather than silently broken signature verification.
+The allowlist is validated lazily before the first detached-signature verification and cached for
+the process. A key-material or fingerprint mismatch fails verification. GnuPG must verify the
+signature successfully, and the reported primary and signing fingerprints must match a pinned
+entry. Verification uses an isolated temporary keyring with automatic key retrieval disabled.
 
 ## Cache schema version
 

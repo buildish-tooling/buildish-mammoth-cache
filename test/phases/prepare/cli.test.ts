@@ -16,6 +16,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { JOB_PREPARE_FAILED_STATE } from '../../../src/guard/job-single-run';
+
 import {
   runPrepareExecution,
   type PrepareEntrypointDependencies,
@@ -35,6 +37,7 @@ const prepareFlowMock = vi.hoisted(() => ({
 }));
 
 const jobSingleRunMock = vi.hoisted(() => ({
+  JOB_PREPARE_FAILED_STATE: 'buildish-mammoth-cache-prepare-failed',
   claimSingleRunPrepareExecution: vi.fn(async () => ({
     accepted: true,
     message: 'Claimed ownership.',
@@ -49,7 +52,7 @@ describe('prepare entrypoint', () => {
     vi.clearAllMocks();
   });
 
-  it('persists single-run ownership state for the post action', async () => {
+  it.each([false, true])('records prepare failure for the post action: %s', async (fails) => {
     const runtimeHost = {
       getInput: vi.fn(() => ''),
       getState: vi.fn(() => ''),
@@ -98,6 +101,15 @@ describe('prepare entrypoint', () => {
       buildToolAdapterFactory: {} as PrepareEntrypointDependencies['buildToolAdapterFactory'],
     } satisfies PrepareEntrypointDependencies;
 
+    if (fails) {
+      const failure = new Error('Detached signature verification failed');
+      prepareFlowMock.executePrepareAction.mockRejectedValueOnce(failure);
+      await expect(runPrepareExecution(dependencies)).rejects.toBe(failure);
+      expect(runtimeHost.saveState).toHaveBeenCalledWith(JOB_PREPARE_FAILED_STATE, 'true');
+      expect(runtimeHost.setOutput).not.toHaveBeenCalled();
+      return;
+    }
+
     await runPrepareExecution(dependencies);
 
     expect(jobSingleRunMock.claimSingleRunPrepareExecution).toHaveBeenCalledWith({
@@ -109,5 +121,6 @@ describe('prepare entrypoint', () => {
       'cache-family-key',
       'cache-family-key-value',
     );
+    expect(runtimeHost.saveState).not.toHaveBeenCalledWith(JOB_PREPARE_FAILED_STATE, 'true');
   });
 });
