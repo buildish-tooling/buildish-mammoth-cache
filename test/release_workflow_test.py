@@ -89,7 +89,6 @@ class ReleaseWorkflowTest(unittest.TestCase):
             CANDIDATE_MANIFEST_DIGEST="a" * 64,
             GITHUB_ACTOR="Alice",
             GITHUB_TRIGGERING_ACTOR="bob",
-            APPROVAL_REFERENCE="https://github.com/example/project/issues/1",
             GITHUB_REPOSITORY=workflow.REPOSITORY,
             GITHUB_REF="refs/heads/main",
         )
@@ -100,6 +99,8 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertEqual(record["approver"], "alice")
         self.assertEqual(record["candidate_manifest_digest"], "a" * 64)
         self.assertNotIn("RELEASE_APPROVERS", os.environ)
+        self.assertNotIn("APPROVAL_REFERENCE", os.environ)
+        self.assertNotIn("reference", record)
         workflow.preflight("promotion")
         # A GitHub-authorized rerun retains the original dispatch decision.
         os.environ["GITHUB_TRIGGERING_ACTOR"] = "another-maintainer"
@@ -115,7 +116,7 @@ class ReleaseWorkflowTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "dispatch actor is required"):
                 workflow.approval_record()
 
-    def test_version_candidate_digest_ref_and_approval_url_validation(self) -> None:
+    def test_version_candidate_digest_and_dispatch_context_validation(self) -> None:
         original = self.approved()
         env = dict(os.environ)
         for key, value in (
@@ -125,8 +126,6 @@ class ReleaseWorkflowTest(unittest.TestCase):
             ("CANDIDATE_MANIFEST_DIGEST", "not-a-digest"),
             ("GITHUB_REF", "refs/heads/topic"),
             ("GITHUB_REPOSITORY", "fork/project"),
-            ("APPROVAL_REFERENCE", "http://example.invalid/approval"),
-            ("APPROVAL_REFERENCE", "https://user:pass@example.invalid/approval"),
         ):
             with (
                 self.subTest(key=key, value=value),
@@ -136,8 +135,12 @@ class ReleaseWorkflowTest(unittest.TestCase):
                     workflow.preflight("promotion")
         self.assertEqual(workflow.approval_record(), original)
 
-    def test_candidate_requires_full_source_commit(self) -> None:
+    def test_candidate_accepts_omitted_source_or_a_full_explicit_commit(self) -> None:
         self.approved()
+        os.environ.pop("SOURCE_COMMIT", None)
+        workflow.preflight("candidate")
+        os.environ["SOURCE_COMMIT"] = ""
+        workflow.preflight("candidate")
         os.environ["SOURCE_COMMIT"] = "main"
         with self.assertRaisesRegex(ValueError, "full source commit"):
             workflow.preflight("candidate")
@@ -220,6 +223,10 @@ class ReleaseWorkflowTest(unittest.TestCase):
             self.root / "out.json",
         )
         result = workflow.read(self.root / "out.json")
+        self.assertEqual(
+            result["verification_results"][-2]["uri"],
+            f"https://github.com/{workflow.REPOSITORY}/releases/tag/v1.2.3-rc2",
+        )
         prior = copy.deepcopy(result)
         prior["verification_results"] = prior["verification_results"][:-2]
         self.assertEqual(prior, state)

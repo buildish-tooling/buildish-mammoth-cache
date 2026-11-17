@@ -22,8 +22,8 @@ on:
         required: true
         type: string
       source_commit:
-        description: Full reviewed source commit S on main with trusted successful push CI
-        required: true
+        description: Optional full source commit; defaults to the latest fetched main commit
+        required: false
         type: string
 
 permissions:
@@ -52,16 +52,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: $/.github/actions/setup-release-tooling
+        id: tooling
       - id: resolve
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           GH_TOKEN: ${{ github.token }}
           MANIFEST_PATH: ${{ runner.temp }}/resolution/resolved-state.json
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           python3 -B buildish-release-tooling/workflow.py preflight candidate
           git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          if [[ -z "$SOURCE_COMMIT" ]]; then
+            SOURCE_COMMIT="$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')"
+          fi
           mkdir -p "$RUNNER_TEMP/resolution"
           bash buildish-release-tooling/release-tooling.sh resolve-candidate "$RELEASE_VERSION" "$SOURCE_COMMIT"
           bash buildish-release-tooling/release-tooling.sh verify-source-ref-checks "$RELEASE_VERSION" "$SOURCE_COMMIT"
@@ -73,8 +78,6 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: true
-    env:
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
 
   build:
     needs: resolve
@@ -89,6 +92,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - uses: $/.github/actions/setup-release-tooling
+        id: tooling
       - uses: $/.github/actions/setup-node-npm
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
@@ -107,6 +111,7 @@ jobs:
       - name: Verify resolution and build selected source without release credentials
         env:
           EXPECTED_STATE_DIGEST: ${{ needs.resolve.outputs.state_digest }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           python3 -B buildish-release-tooling/workflow.py digest "$RUNNER_TEMP/resolution/resolved-state.json" "$EXPECTED_STATE_DIGEST"
@@ -122,6 +127,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           SOURCE_COMMIT: ${{ needs.resolve.outputs.source_commit }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           trusted="$GITHUB_WORKSPACE"
@@ -165,8 +171,6 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: true
-    env:
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
 
   sign:
     needs: [resolve, build]
@@ -181,6 +185,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: $/.github/actions/setup-release-tooling
+        id: tooling
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: candidate-resolution-${{ github.run_id }}
@@ -195,6 +200,7 @@ jobs:
           EXPECTED_BUILD_DIGEST: ${{ needs.build.outputs.bundle_digest }}
           EXPECTED_GIT_BUNDLE_DIGEST: ${{ needs.build.outputs.git_bundle_digest }}
           RELEASE_VERSION: ${{ inputs.version }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           python3 -B buildish-release-tooling/workflow.py digest "$RUNNER_TEMP/resolution/resolved-state.json" "$EXPECTED_STATE_DIGEST"
@@ -212,6 +218,7 @@ jobs:
           BUILDISH_GPG_PASSPHRASE: ${{ secrets.BUILDISH_RELEASE_GPG_PASSPHRASE }}
           MANIFEST_PATH: ${{ runner.temp }}/signing-result.json
           RELEASE_VERSION: ${{ inputs.version }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           bash buildish-release-tooling/release-tooling.sh prepare-release-assets \
@@ -229,8 +236,6 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: true
-    env:
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
 
   publish:
     needs: [resolve, build, sign]
@@ -241,7 +246,6 @@ jobs:
     env:
       GIT_COMMITTER_NAME: Mammoth Cache Release
       GIT_COMMITTER_EMAIL: dev@buildish.org
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
     outputs:
       candidate_manifest_digest: ${{ steps.publish.outputs.candidate_manifest_digest }}
     steps:
@@ -251,6 +255,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: $/.github/actions/setup-release-tooling
+        id: tooling
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: candidate-resolution-${{ github.run_id }}
@@ -267,6 +272,7 @@ jobs:
           CANDIDATE_TAG: ${{ needs.resolve.outputs.candidate_tag }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           python3 -B buildish-release-tooling/workflow.py digest "$RUNNER_TEMP/resolution/resolved-state.json" "$EXPECTED_STATE_DIGEST"

@@ -31,7 +31,6 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlparse
 
 REPOSITORY = "buildish-tooling/buildish-mammoth-cache"
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
@@ -197,7 +196,8 @@ def preflight(mode: str) -> None:
     ):
         raise ValueError("Release dispatch must use this repository's main workflow")
     if mode == "candidate":
-        require(COMMIT, os.environ["SOURCE_COMMIT"], "full source commit")
+        if source := os.environ.get("SOURCE_COMMIT", ""):
+            require(COMMIT, source, "full source commit")
     else:
         if not re.fullmatch(
             rf"v{re.escape(version)}-rc[1-9][0-9]*", os.environ["CANDIDATE_TAG"]
@@ -216,23 +216,12 @@ def approval_record() -> dict:
     actor = os.environ.get("GITHUB_ACTOR", "")
     if not actor.strip():
         raise ValueError("GitHub dispatch actor is required for the approval record")
-    reference = os.environ.get("APPROVAL_REFERENCE", "")
-    parsed = urlparse(reference)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or any(ord(c) < 33 for c in reference)
-    ):
-        raise ValueError("Approval reference must be a public HTTPS decision reference")
     version = require(VERSION, os.environ["RELEASE_VERSION"], "version")
     tag = os.environ["CANDIDATE_TAG"]
     if not re.fullmatch(rf"v{re.escape(version)}-rc[1-9][0-9]*", tag):
         raise ValueError("Approval candidate does not match version")
     return {
         "approver": actor.casefold(),
-        "reference": reference,
         "version": version,
         "candidate_tag": tag,
         "candidate_manifest_digest": require(
@@ -380,7 +369,11 @@ def evidence(
         )
     # Preserve the complete opaque CLI state; add only component-owned verification records.
     for kind, record, uri in (
-        ("mammoth-cache-maintainer-approval", approved, approved["reference"]),
+        (
+            "mammoth-cache-maintainer-approval",
+            approved,
+            f"https://github.com/{REPOSITORY}/releases/tag/{approved['candidate_tag']}",
+        ),
         (
             "mammoth-cache-node24-consumer",
             consumed,

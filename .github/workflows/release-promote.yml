@@ -22,15 +22,11 @@ on:
         required: true
         type: string
       candidate_tag:
-        description: Exact approved candidate tag vX.Y.Z-rcN
+        description: Exact candidate tag vX.Y.Z-rcN to promote
         required: true
         type: string
       candidate_manifest_digest:
         description: Independently retained lowercase SHA-256 of candidate-manifest.json
-        required: true
-        type: string
-      approval_reference:
-        description: Public HTTPS maintainer decision approving this exact candidate tag and digest
         required: true
         type: string
 
@@ -57,13 +53,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: $/.github/actions/setup-release-tooling
+        id: tooling
       - id: resolve
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           CANDIDATE_MANIFEST_DIGEST: ${{ inputs.candidate_manifest_digest }}
-          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
           GH_TOKEN: ${{ github.token }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           python3 -B buildish-release-tooling/workflow.py preflight promotion
@@ -90,8 +87,6 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: true
-    env:
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
 
   stage:
     needs: resolve
@@ -102,7 +97,6 @@ jobs:
     env:
       GIT_COMMITTER_NAME: Mammoth Cache Release
       GIT_COMMITTER_EMAIL: dev@buildish.org
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
     outputs:
       bundle_digest: ${{ steps.seal.outputs.bundle_digest }}
     steps:
@@ -112,6 +106,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: $/.github/actions/setup-release-tooling
+        id: tooling
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: promotion-input-${{ github.run_id }}
@@ -122,6 +117,7 @@ jobs:
           EXPECTED_GIT_BUNDLE_DIGEST: ${{ needs.resolve.outputs.git_bundle_digest }}
           RELEASE_VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           python3 -B buildish-release-tooling/workflow.py verify "$RUNNER_TEMP/promotion" "$EXPECTED_INPUT_DIGEST"
@@ -201,8 +197,6 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: true
-    env:
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python
 
   publish:
     needs: [resolve, stage, consume-final]
@@ -222,6 +216,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: $/.github/actions/setup-release-tooling
+        id: tooling
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: promotion-input-${{ github.run_id }}
@@ -245,8 +240,8 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           CANDIDATE_MANIFEST_DIGEST: ${{ inputs.candidate_manifest_digest }}
-          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
           GH_TOKEN: ${{ github.token }}
+          BUILDISH_RELEASE_TOOLING_PYTHON: ${{ steps.tooling.outputs.python }}
         run: |
           set -euo pipefail
           python3 -B buildish-release-tooling/workflow.py preflight promotion
@@ -289,5 +284,3 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: true
-    env:
-      BUILDISH_RELEASE_TOOLING_PYTHON: ${{ runner.temp }}/release-tooling/bin/python

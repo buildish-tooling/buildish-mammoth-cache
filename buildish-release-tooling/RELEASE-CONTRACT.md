@@ -40,7 +40,10 @@ Resolve one reviewed source commit S and build its generated Action payload into
 materialized commit M. Candidate and final `vX.Y.Z` Action tags resolve the approved M;
 S remains the source identity for source authorization, notes, and source artifacts.
 Trusted workflow/tooling revision W supplies code executed with signing/publication
-authority. Selected-source builds run without that authority.
+authority. Selected-source builds run without that authority. The candidate workflow's
+source override is optional: omission selects the freshly fetched main HEAD, resolved
+once to exact S. An explicit override must be a full commit ID. Both paths apply the
+same main ancestry, trusted push-CI and source-note requirements.
 
 Initially publish only immutable candidate and exact-version tags. Do not publish
 moving major/minor tags, `latest` tags, or other Action aliases. Any later moving-tag
@@ -120,8 +123,9 @@ not replace attribution analysis or the dependency-license gate.
 ## Approval, promotion, and completion
 
 Promotion follows an explicit dispatch by the maintainer authorized through GitHub
-repository/workflow permissions. Record the original dispatch actor and a durable
-HTTPS decision reference bound to the exact candidate tag and manifest SHA-256.
+repository/workflow permissions. The dispatch itself records the decision to promote
+the supplied version, exact candidate tag and manifest SHA-256; retain those values
+and the original dispatch actor in the sealed manifest.
 GitHub permissions also govern reruns; retain the original dispatch actor/decision
 when another authorized operator reruns a failed job. A separate actor allow-list is
 not required. Restrict repository access to intended release operators.
@@ -130,7 +134,7 @@ Verify the `release-candidate` environment/mutation settings before live promoti
 The chosen solo-maintainer environment has no required reviewers; keep its main-only
 deployment restriction. The explicit promotion dispatch supplies the approval,
 without a second-person/deployment gate. Its decision record is bound to the exact
-tag/digest; the workflow does not fetch or interpret the referenced decision page.
+tag/digest. No external decision page or approval URL input is required.
 No foundation vote, fixed vote duration, or additional quorum is introduced.
 
 A workflow-only fix can reuse approval only while the complete reviewed candidate

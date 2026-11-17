@@ -114,7 +114,7 @@ package, or deployment changes:
    Use `release-candidate` with **no required environment reviewers** and main-only
    deployments. GitHub repository/workflow permissions authorize dispatch and reruns;
    the explicit promotion dispatch records the maintainer's decision against an
-   exact candidate tag/digest and HTTPS reference. No separate actor allow-list or
+   exact candidate tag/digest. No separate actor allow-list or
    second-person/deployment approval is required. Restrict repository access to the
    intended release operators.
 5. Verify the actual exported key, complete expected primary
@@ -150,7 +150,7 @@ Do not treat the presence of a CLI name on PATH as proof of its version or origi
 
 ## Implemented 0.1.4 integration
 
-`release-config.yaml` expresses the accepted candidate lifecycle: explicit S
+`release-config.yaml` expresses the accepted candidate lifecycle: resolved S
 reachable from main, trusted push `Required Checks`, mandatory version notes, source
 archive built from S, two signed archive families, SHA-256/SHA-512, GitHub-only
 publication, immutable tags targeting M, and permitted generated path `dist`.
@@ -227,18 +227,18 @@ exact final tag, checks M, and runs Gradle/Maven main/post from both that tag an
 retained ZIP. Only success permits publication. The trusted sealing job appends
 component-owned approval and consumer `verification_results` to the otherwise
 unchanged promotion state; complete canonical records are embedded inline in the
-sealed final manifest's claims. They bind exact candidate tag/digest, maintainer/
-decision reference, S/M/tree, final tag, Node major and executed scenarios. Full CI
+sealed final manifest's claims. They retain the dispatch actor and exact version /
+candidate tag/digest alongside S/M/tree, final tag, Node major and executed scenarios. Full CI
 logs are separate supporting evidence, retained according to Actions policy; the
-inline records remain with the immutable manifest. They do not claim that GitHub
-independently verified the approval URL's contents.
+inline records remain with the immutable manifest. The explicit promotion dispatch
+is the maintainer decision; no external approval URL is requested.
 
 No registry is a publication target for Mammoth Cache. All signing and write jobs
 use `release-candidate` with main-only deployments and no required reviewers. Verify
 its branch restriction, shared signing inputs, repository permissions and immutable-release
 setting before use. A solo maintainer can review a candidate and dispatch promotion;
-the explicit HTTPS decision reference and exact candidate tag/digest remain required
-by the current workflow. No second-person approval is introduced.
+the exact candidate tag/digest identify the promotion decision. The original dispatch
+actor is captured automatically; no additional approval reference is required. No second-person approval is introduced.
 
 ## Local preparation available now
 
@@ -285,14 +285,21 @@ contain nonempty notes at `buildish-release-tooling/release-notes/{version}.md` 
 have successful trusted push CI on main. W is the selected workflow commit on main,
 which can differ from S. Record W, S, exact inputs and run URLs.
 
-For a candidate, supply a final version and full lowercase S commit ID:
+For a candidate, supply the final version. The default source is main's HEAD after
+the workflow fetches origin. It is resolved once and reused as exact S for trusted
+push-CI checks, notes and builds. W remains the workflow's dispatch revision.
+The trusted component configuration keeps explicit source selection because the
+workflow always supplies that resolved commit to Release Tooling.
 
 ```sh
 : "${RELEASE_VERSION:?Choose the final X.Y.Z version}"
-: "${SOURCE_COMMIT:?Set the full reviewed main commit S}"
 gh workflow run release-candidate.yml --repo buildish-tooling/buildish-mammoth-cache \
-  --ref main -f version="$RELEASE_VERSION" -f source_commit="$SOURCE_COMMIT"
+  --ref main -f version="$RELEASE_VERSION"
 ```
+
+To select another reviewed main commit, add `-f source_commit="$SOURCE_COMMIT"`
+with its full lowercase SHA. The same ancestry and successful trusted push-CI gates
+apply. The resolved source identity is retained in state and candidate evidence.
 
 The workflow allocates the next public `vX.Y.Z-rcN`, signs the two archives, retains
 all nine assets plus `candidate-manifest.json`, and reports the manifest SHA-256 in
@@ -301,20 +308,17 @@ the candidate artifact. Review the exact executable bytes and record the maintai
 approval against both. A rejected candidate remains published; a changed S/M or
 artifact requires a new candidate.
 
-For promotion, the maintainer with GitHub dispatch permission supplies the exact approved identity and
-public HTTPS decision reference. The reference is an attestation by that maintainer;
-the workflow checks actor authorization and binds the input, rather than fetching
-and interpreting the decision page.
+For promotion, supply the exact candidate and independently retained manifest digest.
+Submitting this dispatch is the maintainer's decision to promote those bytes. GitHub
+provides the original actor identity; no separate approval URL is needed.
 
 ```sh
-: "${RELEASE_VERSION:?Set the approved final X.Y.Z version}"
-: "${CANDIDATE_TAG:?Set the exact approved vX.Y.Z-rcN}"
+: "${RELEASE_VERSION:?Set the final X.Y.Z version}"
+: "${CANDIDATE_TAG:?Set the exact vX.Y.Z-rcN to promote}"
 : "${CANDIDATE_MANIFEST_DIGEST:?Set the independently retained lowercase SHA-256}"
-: "${APPROVAL_REFERENCE:?Set the public HTTPS decision reference}"
 gh workflow run release-promote.yml --repo buildish-tooling/buildish-mammoth-cache \
   --ref main -f version="$RELEASE_VERSION" -f candidate_tag="$CANDIDATE_TAG" \
-  -f candidate_manifest_digest="$CANDIDATE_MANIFEST_DIGEST" \
-  -f approval_reference="$APPROVAL_REFERENCE"
+  -f candidate_manifest_digest="$CANDIDATE_MANIFEST_DIGEST"
 ```
 
 Both workflows share non-cancelling repository/version concurrency. Promotion
@@ -394,7 +398,7 @@ conflict and must not overwrite published bytes. A fresh candidate dispatch allo
 a new RC. Candidate/final jobs detect existing manifest assets and reuse their exact
 bytes, then invoke strict attachment verification; they never regenerate an existing
 manifest. The final inline records are canonical and omit timestamps/run IDs, so the
-same approver/reference/identity and successful scenarios can converge. Different
+same actor/candidate identity and successful scenarios can converge. Different
 approval/consumer claims conflict with a previously sealed manifest; recover retained
 exact state/evidence or obtain an explicit correction plan instead of replacing it.
 A readback failure after publication requires investigation, not a second upload.

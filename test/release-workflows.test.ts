@@ -15,12 +15,15 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 interface Step {
+  id?: string;
   uses?: string;
   run?: string;
   env?: Record<string, string>;
@@ -56,14 +59,12 @@ describe('release workflow policy', () => {
     }
     expect(candidate.concurrency.group).toBe(promotion.concurrency.group);
     expect(candidate.concurrency.group).toContain('inputs.version');
-    for (const field of [
-      'version',
-      'candidate_tag',
-      'candidate_manifest_digest',
-      'approval_reference',
-    ]) {
+    for (const field of ['version', 'candidate_tag', 'candidate_manifest_digest']) {
       expect(promotion.on.workflow_dispatch.inputs[field].required).toBe(true);
     }
+    expect(promotion.on.workflow_dispatch.inputs.approval_reference).toBeUndefined();
+    expect(JSON.stringify(promotion)).not.toContain('APPROVAL_REFERENCE');
+    expect(candidate.on.workflow_dispatch.inputs.source_commit.required).toBe(false);
     for (const file of [
       '10-create-release-branch',
       '20-prepare-rc',
@@ -71,6 +72,83 @@ describe('release workflow policy', () => {
       '40-verify-rc',
     ]) {
       expect(existsSync(`.github/workflows/releasey-${file}.yml`)).toBe(false);
+    }
+  });
+
+  it('resolves an omitted source after fetching main and uses one SHA for resolution and CI', () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'mammoth release source '));
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const git = (...args: string[]): string =>
+      execFileSync(
+        realGit,
+        [
+          '-c',
+          'user.name=Source fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          '-c',
+          'commit.gpgsign=false',
+          '-c',
+          'core.hooksPath=/dev/null',
+          ...args,
+        ],
+        { cwd: directory, encoding: 'utf8' },
+      ).trim();
+    try {
+      git('init', '--initial-branch=main');
+      writeFileSync(path.join(directory, 'source.txt'), 'workflow revision\n');
+      git('add', 'source.txt');
+      git('commit', '-m', 'workflow fixture');
+      const workflowRevision = git('rev-parse', 'HEAD');
+      writeFileSync(path.join(directory, 'source.txt'), 'new main head\n');
+      git('commit', '-am', 'new main fixture');
+      const fetchedMain = git('rev-parse', 'HEAD');
+      git('checkout', '--detach', workflowRevision);
+      const bin = path.join(directory, 'bin');
+      mkdirSync(bin);
+      mkdirSync(path.join(directory, 'buildish-release-tooling'));
+      writeFileSync(
+        path.join(bin, 'git'),
+        `#!/bin/sh
+if [ "$1" = fetch ]; then
+  exec "$REAL_GIT" update-ref refs/remotes/origin/main "$FETCHED_MAIN"
+fi
+exec "$REAL_GIT" "$@"
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(bin, 'python3'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      writeFileSync(
+        path.join(directory, 'buildish-release-tooling/release-tooling.sh'),
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CAPTURE"\n',
+      );
+      const run = candidate.jobs.resolve.steps.find((step) => step.id === 'resolve')?.run;
+      expect(run).toBeDefined();
+      for (const override of ['', workflowRevision]) {
+        git('update-ref', 'refs/remotes/origin/main', workflowRevision);
+        const capture = path.join(directory, `calls-${override || 'default'}`);
+        execFileSync('bash', ['-euo', 'pipefail', '-c', run!], {
+          cwd: directory,
+          env: {
+            ...process.env,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+            REAL_GIT: realGit,
+            FETCHED_MAIN: fetchedMain,
+            CAPTURE: capture,
+            RUNNER_TEMP: directory,
+            RELEASE_VERSION: '0.1.0',
+            SOURCE_COMMIT: override,
+            MANIFEST_PATH: path.join(directory, 'state.json'),
+          },
+        });
+        const selected = override || fetchedMain;
+        expect(readFileSync(capture, 'utf8').trim().split('\n')).toEqual([
+          `resolve-candidate 0.1.0 ${selected}`,
+          `verify-source-ref-checks 0.1.0 ${selected}`,
+        ]);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
@@ -180,6 +258,42 @@ describe('release workflow policy', () => {
     expect(text).toContain('--no-deps --only-binary=:all:');
     expect(text).toContain('--package-info');
     expect(text).not.toContain('GITHUB_ENV');
+  });
+
+  it('keeps runner-time contexts out of job-level environment expressions', () => {
+    // GitHub's context-availability table excludes these from jobs.<job_id>.env.
+    for (const workflow of [candidate, promotion]) {
+      for (const job of Object.values(workflow.jobs)) {
+        for (const value of Object.values(job.env ?? {})) {
+          expect(value).not.toMatch(/\$\{\{[^}]*\b(?:runner|steps|job|env)\s*\./);
+        }
+      }
+    }
+  });
+
+  it('passes the setup action interpreter output to every installed-tooling caller', () => {
+    const action = parse(
+      readFileSync('.github/actions/setup-release-tooling/action.yml', 'utf8'),
+    ) as { outputs?: { python?: { value: string } } };
+    expect(action.outputs?.python?.value).toBe('${{ steps.install.outputs.python }}');
+    for (const workflow of [candidate, promotion]) {
+      for (const job of Object.values(workflow.jobs)) {
+        expect(job.env?.BUILDISH_RELEASE_TOOLING_PYTHON).toBeUndefined();
+        for (const [index, step] of job.steps.entries()) {
+          if (step.run && /release-tooling\.sh|make release-tooling-qualification/.test(step.run)) {
+            expect(step.env?.BUILDISH_RELEASE_TOOLING_PYTHON).toBe(
+              '${{ steps.tooling.outputs.python }}',
+            );
+            const setup = job.steps.findIndex((previous) =>
+              previous.uses?.endsWith('/setup-release-tooling'),
+            );
+            expect(setup).toBeGreaterThanOrEqual(0);
+            expect(setup).toBeLessThan(index);
+            expect(job.steps[setup].id).toBe('tooling');
+          }
+        }
+      }
+    }
   });
 
   it('all authored workflow shell blocks parse under bash', () => {
