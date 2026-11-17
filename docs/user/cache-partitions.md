@@ -142,34 +142,21 @@ This example: overrides `modules`, disables `kotlin-dsl`, and adds a custom part
 
 ## Timestamp garbage collection
 
-`cache-gc-mode: timestamp` is enabled by default to prevent managed cache partitions from growing
-without bound, especially Maven local repositories. GitHub Actions cache storage is finite, and a
-cache entry that only ever accumulates artifacts eventually becomes less useful or impossible to
-save.
+`cache-gc-mode: timestamp` is the default. Writable standalone/aggregate jobs remove regular managed
+files with mtime older than grace (14 days, minimum two), unless current local/upstream activity
+protects the path. Prepare records C after its own work; finalize uses ctime/mtime >= C for assumed
+upserts and atime >= C for access-only observations.
 
-Timestamp GC runs during finalize before standalone or distributed-aggregator jobs save the base
-cache. A file is eligible only when all of these are true:
+No historical last-use grace is stored. `noatime`, `relatime`, coalesced timestamps and clock changes
+can hide use, causing useful old files to be removed and redownloaded or recomputed. Workers and
+read-only jobs skip GC. `cleanup-enabled: false` and `cache-gc-mode: off` disable deletion, retaining
+tracking/exchange costs. #6 tracks read-only optimization; #7 tracks full-generation upload costs.
 
-- The file is matched by exactly one active cache partition.
-- The file is not excluded by partition excludes or hard safety excludes.
-- Its modification time is older than `cache-gc-older-than-days`.
-- Its effective access time is older than `cache-gc-older-than-days`.
+No tombstones are exchanged: locally deleted paths can return after restore/replay until GC.
+The internal namespace `.mammoth`, including case/portable aliases and names beginning `.mammoth.`
+or `.mammoth `, is reserved at every path component.
 
-The effective access time is the newer of the file's access time and modification time. This keeps
-newly written files even when access time data is stale or unavailable. The default threshold is
-`14` days, and the minimum accepted threshold is `2` days because common Linux, macOS, and Windows
-runner filesystems do not provide precise "updated on every read" access-time behavior.
-
-Distributed-worker jobs skip timestamp GC because they upload delta artifacts instead of saving the
-base cache. The GC pass deletes eligible files and then removes empty parent directories. It does
-not delete unmanaged files elsewhere in the build tool cache directory. To disable it:
-
-```yaml
-cache-gc-mode: off
-```
-
-Use `cache-gc-mode: off` or a larger `cache-gc-older-than-days` value for jobs that intentionally
-rely on old, rarely touched artifacts and cannot redownload them.
+Use `cache-gc-mode: off` or increase grace when old dependencies must remain available offline.
 
 ## Restore cleanup behavior
 

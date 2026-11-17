@@ -18,6 +18,16 @@ limitations under the License.
 
 ## Unreleased
 
+- Replace pre-build content inventories with post-prepare cutoff activity. Worker envelopes carry
+  assumed changed upserts and path-only usage, with no tombstones or historical last-use manifest.
+  Timestamp GC uses old mtime plus current-build protection; filesystem/clock misses may cause
+  useful artifacts to be redownloaded or recomputed. `off` disables deletion only.
+- Migrate to cache family 4, manifest 3, package 4 and CI lifecycle 3. Old families are cold misses.
+  Freeze retry decisions in bounded local journals, retire obsolete checkpoints, and publish a
+  constant empty-generation marker when GC removes the last managed file.
+- Defer read-only tracking optimization to #6 and full-generation publication optimization to #7.
+  No inexpensive bypass or storage redesign is introduced.
+
 - Retain distributed worker envelopes after failed and successful aggregation so aggregator-only
   retries can recover without rerunning workers. Workers still request seven-day retention, subject
   to backend expiry or removal and workflow-run deletion. This uses temporary artifact storage;

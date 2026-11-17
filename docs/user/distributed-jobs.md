@@ -28,12 +28,12 @@ changes that exist solely in the other workers' generations.
 
 Distributed mode solves this with **delta exchange**:
 
-- Each **worker job** uploads only the files that _changed_ in the build tool's cache directory
-  during its build as a workflow artifact (the delta). It does not write the base cache directly.
+- Each **worker job** uploads assumed changed files and path-only activity observations as a
+  workflow artifact. It does not write the base cache directly.
 - An **aggregator job**, which waits for all workers to complete, downloads every delta, merges
   them, and saves the merged result as the new base cache entry.
 
-Every parallel job's changes are captured. On the next run, all workers start from a cache that
+Observed parallel changes are combined. On the next run, all workers start from a cache that
 reflects the combined output of every job from the previous run.
 
 ```mermaid
@@ -56,15 +56,15 @@ sequenceDiagram
 
 ## How delta exchange works
 
-1. The worker's **prepare** step restores the base cache and captures a snapshot of the build
-   tool's cache directory (the pre-build manifest).
+1. Worker prepare restores the base and records a cutoff after its own reads/writes.
 2. The build runs normally.
-3. The worker's **finalize** step captures a second snapshot (the post-build manifest), computes
-   the difference, packs only the changed and added files into a compressed artifact, and uploads
-   it. The base cache is not written.
-4. The aggregator's **prepare** step restores the base cache, downloads the selected worker
-   envelopes, validates their identity and preconditions, and applies the merged delta.
-5. The aggregator's **finalize** step saves the resulting immutable base-cache generation.
+3. Worker finalize scans metadata before its own content reads and uploads selected upserts/usage.
+   Empty observation sets still produce completion envelopes. Workers never save the base.
+4. Aggregate prepare validates/applies selected envelopes and retains upstream activity before C.
+   Used-only paths do not recreate absent files.
+5. Aggregate finalize performs eligible GC and requires successful publication for upserts, GC
+   removal or a nonempty miss. Usage alone does not require a generation. Fresh replay may still
+   upload identical material again. No deletion tombstones are exchanged.
 
 On pull-request events, read-only mode performs no exchange: workers upload nothing, and an
 aggregator returns `skipped-read-only` without listing, downloading, validating, applying, or
@@ -206,8 +206,9 @@ up after use.
 
 If a required envelope is missing or expired, aggregation fails with the worker name even if a base
 cache was restored. Rerun the affected worker and then the aggregator within the same workflow run.
-A retry that restores the successfully published generation reapplies matching paths as idempotent
-no-ops and does not need another upload when the complete managed state is unchanged.
+A fresh retry can rewrite matching worker upserts and publish another complete generation, even
+when resulting bytes match an earlier successful aggregate. Existing targets are not hashed
+to prove a no-op; remote worker envelopes remain available for recovery.
 
 **A successful writable worker always uploads one envelope.** This includes workers that changed no
 managed cache files: their explicit empty envelope is proof of participation and is distinct from a

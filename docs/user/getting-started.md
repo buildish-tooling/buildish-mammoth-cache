@@ -116,9 +116,9 @@ jobs:
 ## How it works
 
 The action runs twice per job: a **prepare** step before the build and a **finalize** step after.
-This two-phase structure is what makes precise, non-invasive caching possible — the action
-snapshots the build tool's cache directory before the build, snapshots it again after, and saves
-only the difference without interfering while the build runs.
+Prepare records a cutoff after restore; finalize observes metadata after the build. Workers
+exchange assumed changed files and usage paths; eligible writers save complete generations when
+required. Filesystem and clock behavior make activity detection best-effort.
 
 ```mermaid
 sequenceDiagram
@@ -128,12 +128,12 @@ sequenceDiagram
 
     P->>P: restore cache
     note over P: Gradle only: provision gradle-wrapper.jar
-    P->>P: snapshot cache directory (pre-build)
+    P->>P: record activity cutoff
     P-->>B: hand off
     B->>B: build runs …
     B-->>F: job post step
-    F->>F: snapshot cache directory (post-build)
-    F->>F: compare material state (post − pre)
+    F->>F: scan metadata before own reads
+    F->>F: freeze upsert, used and GC decisions
     F->>F: publish complete generation if required
 ```
 

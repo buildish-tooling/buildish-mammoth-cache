@@ -86,3 +86,11 @@ flowchart LR
     WC([Worker C]) --> AG
     AG([Aggregator\nmerge + apply]) --> C[(Shared\ncache)]
 ```
+
+## Unreleased development changes
+
+Development now uses post-prepare timestamp cutoffs to select worker upserts and usage paths.
+Default timestamp GC combines old file mtime with current-build activity protection. It stores
+no historical last-use manifest; filesystem/clock misses may cause downloads or recomputation.
+Frozen local journals bound recovery state and retire obsolete checkpoints. Read-only tracking
+and full-generation upload optimization remain separate follow-ups.

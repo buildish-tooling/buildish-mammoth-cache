@@ -94,6 +94,8 @@ export type BootstrapHost = HostInputSource & HostStateStore & HostReporter;
  * Injectable dependencies for bootstrap-time environment/input discovery.
  */
 export interface BootstrapDependencies {
+  /** Exclusive internal prepare boundary before provisioning/restore. */
+  readonly beforeCacheWork?: (model: CacheModel) => Promise<void>;
   /** Optional environment map used by config resolution and persistence helpers. */
   readonly env?: NodeJS.ProcessEnv;
   /** Runtime host implementation used for input discovery, non-fatal reporting, and state. */
@@ -148,6 +150,7 @@ export async function bootstrapPhase(
         env: runtimeEnv,
       })
     : null;
+  if (cacheModel && phase === 'prepare') await dependencies.beforeCacheWork?.(cacheModel);
   const toolProvisioning: BuildToolProvisioning =
     phase === 'prepare'
       ? await adapter.provision({

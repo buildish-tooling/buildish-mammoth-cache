@@ -38,8 +38,8 @@ even after the project stops using them. The action therefore enables `cache-gc-
 default for both Maven and Gradle.
 
 For Maven this means managed local-repository files are pruned before standalone or
-distributed-aggregator jobs save the base cache when both their modification time and effective
-access time are older than `cache-gc-older-than-days` (`14` by default). This keeps GitHub Actions
+distributed-aggregator jobs save the base cache when their modification time is older than `cache-gc-older-than-days` (`14` by default) and no current local/upstream activity protects them.
+No historical last-use grace is stored; `noatime`/`relatime` and clocks can hide activity. This keeps GitHub Actions
 cache entries from growing indefinitely while still allowing Maven to redownload an old artifact if
 the build needs it again.
 

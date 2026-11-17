@@ -193,7 +193,8 @@ export const PUBLIC_ACTION_INPUTS = [
     default: 'timestamp',
     configFile: 'allowed',
     configFileValueKind: 'string',
-    description: 'Pre-save managed-cache garbage collection mode: off or timestamp.',
+    description:
+      'Managed-cache GC: timestamp uses file age and current-build activity; off disables deletion only.',
   },
   {
     name: 'cache-gc-older-than-days',
@@ -202,7 +203,8 @@ export const PUBLIC_ACTION_INPUTS = [
     default: '14',
     configFile: 'allowed',
     configFileValueKind: 'number',
-    description: 'Age threshold for timestamp garbage collection. Must be at least 2 days.',
+    description:
+      'File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days.',
   },
   {
     name: 'github-token',

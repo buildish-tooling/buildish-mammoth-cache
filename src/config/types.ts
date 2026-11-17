@@ -41,7 +41,7 @@ export const JOB_MODES = ['standalone', 'distributed-worker', 'distributed-aggre
 export type JobMode = (typeof JOB_MODES)[number];
 
 /** Internal base-cache identity schema. Bump whenever compatibility semantics change. */
-export const CACHE_SCHEMA_VERSION = 2;
+export const CACHE_SCHEMA_VERSION = 4;
 
 /**
  * How wrapper property files should be selected after input normalization.

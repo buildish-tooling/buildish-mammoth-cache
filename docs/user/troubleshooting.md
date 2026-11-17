@@ -62,8 +62,9 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
 **Diagnostic steps:**
 
 1. **Keep timestamp GC enabled.** `cache-gc-mode: timestamp` is the default and prunes managed
-   files before standalone or distributed-aggregator jobs save the base cache when modification and
-   effective access times are both older than `cache-gc-older-than-days`.
+   files before standalone or distributed-aggregator jobs save the base cache when mtime is older than `cache-gc-older-than-days` without current local/upstream activity protection.
+   No historical last-use grace is stored; noatime/relatime and coalesced clocks can hide use.
+   `off` disables deletion only, retaining tracking/exchange costs.
 
 2. **Tune the cutoff.** The default cutoff is `14` days. Lower values prune more aggressively, but
    the action rejects values below `2` days because common runner filesystems may not update access
@@ -204,3 +205,14 @@ already present in the repository.
 
 The token is applied only to requests targeting `api.github.com` and `raw.githubusercontent.com`.
 It is never written to workflow summaries, log output, or post-action persisted state.
+
+## Cutoff recovery errors
+
+Missing, oversized, corrupt, superseded or inconsistent local state fails finalize closed. Run a fresh
+prepare rather than editing the journal. Normal retention keeps current only; interrupted pointer
+writes may leave a candidate, and a corrupt pointer conservatively preserves unknown journals until
+successful replacement.
+
+Fresh aggregation may rewrite identical upserts and upload a complete generation. Usage alone does
+not force a base save. Read-only overhead (#6) and full-generation optimization (#7) remain follow-ups.
+Linux fixtures do not establish large-cache affordability; native Windows/macOS validation is open.

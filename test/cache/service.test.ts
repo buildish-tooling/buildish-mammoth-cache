@@ -97,6 +97,10 @@ describe('createBaseCachePaths', () => {
       '/home/runner/.gradle/caches/modules-2/**',
       '!/home/runner/.gradle/**/configuration-cache/**',
       '!/home/runner/.gradle/**/*.lock',
+      '!/home/runner/.gradle/**/.[mM][aA][mM][mM][oO][tT][hH]/**',
+      '!/home/runner/.gradle/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**',
+      '/home/runner/.gradle/.mammoth/empty-generation-v1',
+      '!/home/runner/.gradle/**/',
     ]);
   });
 });

@@ -163,10 +163,10 @@ const toolProvisioning: BuildToolProvisioning = {
 const cacheModel: CacheModel = {
   buildToolId: 'gradle',
   cacheRoot: '/home/runner/.gradle',
-  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
+  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v4-21-linux-x64-feedcafe1234abcd',
   currentRefToken: 'main-aaaaaaaaaaaa',
   currentRefLineagePrefix:
-    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
+    'buildish-mammoth-cache-gradle-v4-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
   fallbackRefLineagePrefixes: [],
   plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
   javaMajor: 21,
@@ -267,7 +267,7 @@ describe('bootstrap helpers', () => {
     expect(summaryText).toContain('<table>');
     expect(summaryText).toContain('gradle/wrapper/gradle-wrapper.properties');
     expect(summaryText).toContain(
-      '- Cache family: buildish\\-mammoth\\-cache\\-gradle\\-v2\\-21\\-linux\\-x64\\-feedcafe1234abcd',
+      '- Cache family: buildish\\-mammoth\\-cache\\-gradle\\-v4\\-21\\-linux\\-x64\\-feedcafe1234abcd',
     );
   });
 
@@ -402,7 +402,7 @@ describe('bootstrap helpers', () => {
 
       expect(status.message).toBe('Prepared prepare phase for push on main in standalone mode.');
       expect(status.cacheModel?.currentRefLineagePrefix).toMatch(
-        /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
+        /^buildish-mammoth-cache-gradle-v4-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
       );
       expect(status.baseCacheResult?.status).toBe('current-lineage-hit');
       expect(status.toolProvisioning.items).toHaveLength(1);

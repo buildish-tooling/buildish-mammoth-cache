@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import path from 'node:path';
+import { EMPTY_GENERATION_PATH } from './metadata-paths';
 import type { NormalizedActionConfig } from '../config/types';
 import type { BaseCacheBackend } from './backend';
 
@@ -120,7 +122,16 @@ export type BaseCacheOperationResult = BaseCacheRestoreResult | BaseCacheSaveRes
  * state such as configuration cache content or lock files.
  */
 export function createBaseCachePaths(cacheModel: CacheModel): readonly string[] {
-  return [...cacheModel.includePaths, ...cacheModel.excludePaths.map((pattern) => `!${pattern}`)];
+  return [
+    ...cacheModel.includePaths,
+    ...cacheModel.excludePaths.map((pattern) => `!${pattern}`),
+    // Exclude local journals and nested atomic-write scratch, including portable aliases.
+    `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH]/**`,
+    `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**`,
+    path.join(cacheModel.cacheRoot, EMPTY_GENERATION_PATH),
+    // A listed directory would let tar recursively bypass all the file exclusions.
+    `!${cacheModel.cacheRoot}/**/`,
+  ];
 }
 
 /** Creates the ordered current-ref and default-branch lineage lookup candidates. */
@@ -145,6 +156,7 @@ export function createBaseCacheRestoreCandidates(
 export async function restoreBaseCache(
   cacheModel: CacheModel,
   dependencies: BaseCacheServiceDependencies,
+  exactKey?: string,
 ): Promise<BaseCacheRestoreResult> {
   const { cacheBackend } = dependencies;
   const paths = createBaseCachePaths(cacheModel);
@@ -170,10 +182,12 @@ export async function restoreBaseCache(
   const [primaryCandidate, ...fallbackCandidates] = restoreCandidates;
   const matchedKey = await cacheBackend.restoreCache(
     [...paths],
-    primaryCandidate.keyPrefix,
-    fallbackCandidates.map((candidate) => candidate.keyPrefix),
+    exactKey ?? primaryCandidate.keyPrefix,
+    exactKey ? [] : fallbackCandidates.map((candidate) => candidate.keyPrefix),
   );
 
+  if (exactKey && matchedKey !== exactKey)
+    throw new Error('Pinned cache generation was unavailable during cleanup.');
   if (!matchedKey) {
     return {
       operation: 'restore',

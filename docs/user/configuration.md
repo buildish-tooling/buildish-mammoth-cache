@@ -50,8 +50,8 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `cache-partitions`                      | Gradle, Maven | `event-dependent or unset`                    | yes         | JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.                                                                |
 | `cleanup-enabled`                       | Gradle, Maven | `true`                                        | yes         | Enables restore cleanup and timestamp garbage collection.                                                                                                                    |
 | `restore-cleanup-mode`                  | Gradle, Maven | `none`                                        | yes         | Restore-time cleanup mode: none or prune-managed.                                                                                                                            |
-| `cache-gc-mode`                         | Gradle, Maven | `timestamp`                                   | yes         | Pre-save managed-cache garbage collection mode: off or timestamp.                                                                                                            |
-| `cache-gc-older-than-days`              | Gradle, Maven | `14`                                          | yes         | Age threshold for timestamp garbage collection. Must be at least 2 days.                                                                                                     |
+| `cache-gc-mode`                         | Gradle, Maven | `timestamp`                                   | yes         | Managed-cache GC: timestamp uses file age and current-build activity; off disables deletion only.                                                                            |
+| `cache-gc-older-than-days`              | Gradle, Maven | `14`                                          | yes         | File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days.                                                                               |
 | `github-token`                          | Gradle, Maven | `event-dependent or unset`                    | no          | Optional GitHub token for authenticated API requests. Pass secrets directly, never through repository config.                                                                |
 | `github-job-check-run-id`               | Gradle, Maven | `event-dependent or unset`                    | no          | Optional check-run ID used to create a direct current-job link.                                                                                                              |
 | `github-event-name`                     | Gradle, Maven | `event-dependent or unset`                    | no          | Optional triggering-event override for reusable workflows. Pass the trusted caller event.                                                                                    |
@@ -169,8 +169,9 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Supported values: `off`, `timestamp`
 - Controls best-effort garbage collection of managed cache files before standalone or
   distributed-aggregator jobs save the base cache.
-- `timestamp` deletes a managed file only when both its modification time and effective access time are older than `cache-gc-older-than-days`.
-- Effective access time is evaluated conservatively as the newer of access time and modification time.
+- `timestamp` deletes old-mtime files without activity protection during this build.
+- Activity uses ctime/mtime/atime crossing the post-prepare cutoff. No historical last-use grace is stored; filesystem/clock misses can cause redownloads.
+- `off` disables deletion only, retaining tracking, exchange and otherwise required publication.
 - Set `off` when jobs must retain rarely used old cache entries, for example offline-style builds that cannot redownload pruned dependencies.
 
 ### `cache-gc-older-than-days`
@@ -178,7 +179,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Default: `14`
 - Minimum: `2`
 - Age threshold for `cache-gc-mode: timestamp`.
-- The minimum is intentionally above 24 hours because common runner filesystems may defer or coalesce access-time updates.
+- Grace measures file age, not historical inactivity. Deferred/coalesced atime and `noatime` can hide current use.
 - Increase this value if your Gradle or Maven build uses a large dependency set with artifacts that are valid but touched infrequently.
 
 ### `restore-cleanup-mode`

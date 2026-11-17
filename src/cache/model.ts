@@ -194,7 +194,7 @@ export interface CacheGeneration {
   readonly lineagePrefix: string;
   /** Execution-unique writer identifier. */
   readonly generationId: string;
-  /** Canonical SHA-256 digest of the full post-build manifest. */
+  /** SHA-256 digest of the frozen publication decisions. */
   readonly contentDigest: string;
   /** Complete immutable backend key. */
   readonly key: string;
@@ -342,7 +342,7 @@ export function createCacheRefLineagePrefix(cacheFamilyKey: string, refToken: st
   return lineagePrefix;
 }
 
-/** Creates the complete immutable cache key for a canonical post-build manifest digest. */
+/** Creates the complete immutable cache key for a frozen publication decision digest. */
 export function createCacheGeneration(
   cacheModel: Pick<
     CacheModel,

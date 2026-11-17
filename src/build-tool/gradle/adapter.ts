@@ -30,6 +30,7 @@ import {
   loadGradleBuildReport,
   type GradleBuildReport,
 } from './build-results';
+import { INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME } from './build-result-capture-scripts';
 import { provisionWrapperJars, type WrapperProvisionOptions } from './wrapper/download';
 import { validateTargetWrapperProperties } from './wrapper/static-validation';
 
@@ -40,6 +41,9 @@ import { validateTargetWrapperProperties } from './wrapper/static-validation';
  * never be restored on a different runner.
  */
 const GRADLE_HARD_CACHE_EXCLUDE_GLOBS: readonly string[] = [
+  `init.d/${INIT_SCRIPT_FILE_NAME}`,
+  `init.d/${SERVICE_PLUGIN_FILE_NAME}`,
+  '**/.buildish-mammoth-cache/**',
   '**/configuration-cache/**', // Configuration cache: machine- and process-specific
   'caches/*/cc-keystore', // Configuration cache encryption key — security critical
   'caches/journal-1/**', // File-system access journal: not portable across runners

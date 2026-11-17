@@ -14,2302 +14,390 @@
  * limitations under the License.
  */
 
-import { cp } from 'node:fs/promises';
-import { lstat, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
-
-import { describe, expect, it } from 'vitest';
-
+import { afterEach, it, expect, vi } from 'vitest';
+import { mkdtemp, mkdir, writeFile, readFile, rm, utimes, readdir } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { cutoffJob } from '../../support/cutoff-job';
+import { CutoffArtifacts } from '../../support/cutoff-artifacts';
+import { executeFinalizeAction } from '../../../src/phases/finalize/flow';
 import {
-  downloadAndVerifyDeltaArtifactPackage,
-  stageDeltaArtifactPackage,
-  type WorkflowArtifactDescriptor,
-} from '../../../src/delta/service';
-import {
-  calculateCanonicalCacheManifestDigest,
-  captureCacheManifest,
-  computeCacheDelta,
-} from '../../../src/cache/manifest';
-import { createCacheModel, type CacheModel } from '../../../src/cache/model';
-import {
-  createFinalizeActionLogLines,
-  createFinalizeActionSummaryLines,
-  executeFinalizeAction,
-  formatByteCount,
-  type FinalizeActionStatus,
-} from '../../../src/phases/finalize/flow';
-import { executePrepareAction } from '../../../src/phases/prepare/flow';
-import type { BootstrapExecution } from '../../../src/phases/bootstrap';
-import type { NormalizedActionConfig } from '../../../src/config/types';
-import type { SummaryWriter } from '../../../src/ci/github/report-sink';
-import {
-  CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
-  getPersistedCacheLifecycleRecord,
-  persistCacheLifecycleRecord,
-  persistPreBuildCacheManifest,
-  type PersistedCacheLifecycleRecord,
-} from '../../../src/phases/finalize/state';
-import {
-  STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
-  type WorkflowArtifactBackend,
-} from '../../../src/delta/backend';
-import {
-  STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  type BaseCacheBackend,
-} from '../../../src/cache/backend';
-import {
-  createTestGitHubProvider,
-  createTestGitHubReportSink,
-  createTestRuntimeHost,
-} from '../../support/github-test-runtime';
-import type { GradleAdapterOptions } from '../../../src/build-tool/gradle/adapter';
-import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
-import type { NormalizedGradleConfig } from '../../../src/config/types';
-import {
-  normalizeGradleActionConfig,
-  readGradleActionInputs,
-  resolveGradleActionInputsFromConfigFile,
-} from '../../../src/build-tool/gradle/config';
-
-// ---------------------------------------------------------------------------
-// Shared fixture helpers shared by the executeFinalizeAction integration tests.
-// ---------------------------------------------------------------------------
-
-/**
- * Standard GitHub push-event payload used by most integration tests.
- * Providing it as a named constant avoids repeating the 3-line inline object literal.
- */
-const DEFAULT_PUSH_EVENT_PAYLOAD = {
-  repository: { default_branch: 'main' },
-} as const;
-
-/**
- * Stub Java-version command output returned by all finalize integration tests.
- * The value matches the exact string the real JVM produces so downstream parsing is exercised.
- */
-const MOCK_CAPTURE_COMMAND_OUTPUT = async (): Promise<string> =>
-  'openjdk version "21.0.4" 2024-07-16\n';
-
-/**
- * Returns the lifecycle-state callback used by most finalize integration tests.
- */
-function createLifecycleGetState(
-  savedState: Map<string, string> = new Map(),
-): (name: string) => string {
-  return (name: string) => savedState.get(name) ?? '';
+  preflightCutoffLifecycle,
+  readCutoffLifecycle,
+} from '../../../src/phases/cutoff-lifecycle';
+import * as scans from '../../../src/cache/manifest';
+import { cutoffJournalPath, loadCutoffJournal } from '../../../src/cache/cutoff-state';
+const roots: string[] = [];
+async function root() {
+  const r = await mkdtemp(path.join(os.tmpdir(), 'cutoff-final-'));
+  roots.push(r);
+  return r;
 }
-
-async function createFinalizeActionDependencies(options: {
-  readonly env: NodeJS.ProcessEnv;
-  readonly eventPayload?: Record<string, unknown>;
-  readonly summaryWriter: SummaryWriter;
-  readonly inputProvider: { getInput(name: string): string };
-  readonly getState?: (name: string) => string;
-  readonly saveState?: (name: string, value: string) => void;
-  readonly phase?: 'prepare' | 'finalize';
-  readonly info?: (message: string) => void;
-  readonly warning?: (message: string) => void;
-  readonly adapterOptions?: GradleAdapterOptions;
-  readonly workspace: string;
-}) {
-  const runtimeHost = createTestRuntimeHost({
-    getInput(name: string): string {
-      return options.inputProvider.getInput(name);
-    },
-    getState: options.getState,
-    saveState: options.saveState,
-    info: options.info,
-    warning: options.warning,
-  });
-  const ciProvider = createTestGitHubProvider(runtimeHost, {
-    env: options.env,
-    eventPayload: options.eventPayload,
-  });
-
-  const directInputs = readGradleActionInputs(runtimeHost);
-  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, {
-    workspace: options.workspace,
-  });
-  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
-    phase: options.phase ?? 'finalize',
-    ciContext: ciProvider.context,
-    env: options.env,
-  });
-
-  return {
-    runtimeHost,
-    ciProvider,
-    config,
-    reportSink: createTestGitHubReportSink(runtimeHost, {
-      env: options.env,
-      summaryWriter: options.summaryWriter,
-    }),
-    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config, options.adapterOptions ?? {}),
-  };
-}
-
-// These tests run real prepare/apply/finalize with fresh runner state per attempt.
-// GC is disabled to isolate envelope retention from timestamp collection behavior.
-describe('distributed artifact retention lifecycle', () => {
-  for (const failure of ['throw', 'decline', 'before-save'] as const) {
-    it(`recovers on a fresh aggregator after ${failure} publication failure`, async () => {
-      await withWorkspace(async (workspace) => {
-        const fixture = await createRetentionFixture(workspace);
-        await fixture.publishWorkers();
-        const originalArtifacts = await fixture.artifacts.listArtifacts();
-        const failed = await fixture.job('aggregate', 2, true);
-        await failed.prepare();
-        await fixture.assertComplete(failed.home);
-        if (failure === 'before-save') {
-          const record = getPersistedCacheLifecycleRecord(createLifecycleGetState(failed.state))!;
-          await rm(record.preBuildManifestPath);
-        } else {
-          fixture.cache.failure = failure;
-        }
-        await expect(failed.finalize()).rejects.toThrow(
-          failure === 'before-save' ? /ENOENT/u : /Required.*publication/iu,
-        );
-        expect(await fixture.artifacts.listArtifacts()).toEqual(originalArtifacts);
-        expect(fixture.cache.savedKeys).toHaveLength(1); // Only the seeded worker base.
-        await fixture.assertLocalCleanup();
-        await rm(failed.root, { recursive: true, force: true });
-
-        fixture.cache.failure = null;
-        const retry = await fixture.job('aggregate', 3, true);
-        const prepared = await retry.prepare();
-        expect(prepared.dependentDeltaResult).toMatchObject({
-          appliedArtifactCount: 2,
-          addedCount: 1,
-          modifiedCount: 1,
-          deletedCount: 1,
-        });
-        await fixture.assertComplete(retry.home);
-        expect((await retry.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
-        expect(fixture.cache.savedKeys).toHaveLength(2);
-        await fixture.assertDurableComplete();
-        expect(await fixture.artifacts.listArtifacts()).toEqual(originalArtifacts);
-        expect(fixture.artifacts.deletedArtifactNames).toEqual([]);
-        await fixture.assertLocalCleanup();
-      });
-    });
-  }
-
-  it('reapplies retained envelopes idempotently after success and retains them on an unchanged save', async () => {
-    await withWorkspace(async (workspace) => {
-      const fixture = await createRetentionFixture(workspace);
-      await fixture.publishWorkers();
-      const first = await fixture.job('aggregate', 2, true);
-      await first.prepare();
-      expect((await first.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
-      await rm(first.root, { recursive: true, force: true });
-
-      const retry = await fixture.job('aggregate', 3, true);
-      const prepared = await retry.prepare();
-      expect(prepared.bootstrap.baseCacheResult?.status).toBe('current-lineage-hit');
-      expect(prepared.dependentDeltaResult).toMatchObject({
-        appliedArtifactCount: 2,
-        addedCount: 0,
-        modifiedCount: 0,
-        deletedCount: 0,
-        noopCount: 3,
-      });
-      await fixture.assertComplete(retry.home);
-      expect((await retry.finalize()).bootstrap.baseCacheResult).toMatchObject({
-        status: 'not-required',
-      });
-      expect(fixture.cache.savedKeys).toHaveLength(2);
-      expect(await fixture.artifacts.listArtifacts()).toHaveLength(2);
-      expect(fixture.artifacts.deletedArtifactNames).toEqual([]);
-      await fixture.assertLocalCleanup();
-    });
-  });
-
-  it('selects a newer rerun worker alongside a retained older empty worker', async () => {
-    await withWorkspace(async (workspace) => {
-      const fixture = await createRetentionFixture(workspace);
-      await fixture.publishWorkers();
-      const failed = await fixture.job('aggregate', 2, true);
-      await failed.prepare();
-      fixture.cache.failure = 'throw';
-      await expect(failed.finalize()).rejects.toThrow(/publication/iu);
-      await rm(failed.root, { recursive: true, force: true });
-      fixture.cache.failure = null;
-      await fixture.publishChangedWorker(3, 'newer');
-
-      const retry = await fixture.job('aggregate', 3, true);
-      const prepared = await retry.prepare();
-      expect(
-        prepared.dependentDeltaResult?.selectedProducers.map(({ jobName, runAttempt }) => ({
-          jobName,
-          runAttempt,
-        })),
-      ).toEqual([
-        { jobName: 'worker-change', runAttempt: 3 },
-        { jobName: 'worker-empty', runAttempt: 1 },
-      ]);
-      await fixture.assertComplete(retry.home, 'newer');
-      expect((await retry.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
-      await fixture.assertDurableComplete('newer');
-      expect(await fixture.artifacts.listArtifacts()).toHaveLength(3);
-      await fixture.assertLocalCleanup();
-    });
-  });
-
-  it('fails with the missing worker name even when a complete generation can be restored', async () => {
-    await withWorkspace(async (workspace) => {
-      const fixture = await createRetentionFixture(workspace);
-      await fixture.publishWorkers();
-      const first = await fixture.job('aggregate', 2, true);
-      await first.prepare();
-      await first.finalize();
-      await rm(first.root, { recursive: true, force: true });
-      const empty = (await fixture.artifacts.listArtifacts()).find(({ name }) =>
-        name.includes('worker-empty'),
-      )!;
-      await fixture.artifacts.deleteArtifact(empty.name); // Model expiry/removal at the provider.
-      const retry = await fixture.job('aggregate', 3, true);
-      await expect(retry.prepare()).rejects.toThrow(/job 'worker-empty'.*no artifact/u);
-      await fixture.assertComplete(retry.home); // A cache hit is not completion evidence.
-      expect(retry.state.size).toBe(0);
-      expect(fixture.cache.savedKeys).toHaveLength(2);
-      await fixture.assertLocalCleanup();
-    });
-  });
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map((p) => rm(p, { recursive: true, force: true })));
 });
-
-async function createRetentionFixture(workspace: string) {
-  const artifacts = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-  const cache = new SnapshotCacheBackend(path.join(workspace, 'cache-store'));
-  const temporaryDirectories: string[] = [];
-  const relative = (file: string) => `caches/modules-2/files-2.1/example/${file}.bin`;
-  async function job(name: string, attempt: number, aggregator = false) {
-    const root = path.join(workspace, `${name}-${attempt}`);
-    const home = path.join(root, 'gradle-home');
-    await mkdir(root, { recursive: true });
-    const state = new Map<string, string>();
-    const env = { ...createTestEnv(root, home, name), GITHUB_RUN_ATTEMPT: String(attempt) };
-    const inputs: Record<string, string> = {
-      'job-mode': aggregator
-        ? 'distributed-aggregator'
-        : name === 'seed'
-          ? 'standalone'
-          : 'distributed-worker',
-      'dependent-jobs': aggregator ? 'worker-change,worker-empty' : '',
-      'cleanup-enabled': 'false',
-      'cache-partitions': JSON.stringify([
-        { id: 'modules', includes: ['caches/modules-2/files-2.1/**'] },
-        ...['kotlin-dsl', 'build-cache', 'wrapper-dists'].map((id) => ({ id, includes: [] })),
-      ]),
-    };
-    async function dependencies(phase: 'prepare' | 'finalize') {
-      const deps = await createFinalizeActionDependencies({
-        env,
-        phase,
-        workspace: root,
-        eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-        getState: createLifecycleGetState(state),
-        saveState: state.set.bind(state),
-        inputProvider: { getInput: (key) => inputs[key] ?? '' },
-        summaryWriter: createSummaryCapture().writer,
-      });
-      return {
-        ...deps,
-        env,
-        artifactBackend: artifacts,
-        cacheBackend: cache,
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        buildToolAdapterFactory: () => {
-          const adapter = deps.buildToolAdapterFactory();
-          // Provisioning is unrelated to the distributed cache lifecycle under test.
-          adapter.provision = async () => ({ items: [], warnings: [], additionalOutputs: {} });
-          return adapter;
-        },
-        removeTemporaryDirectory: async (directory: string) => {
-          temporaryDirectories.push(directory);
-          await rm(directory, { recursive: true, force: true });
-        },
-      };
-    }
+async function data(job: Awaited<ReturnType<typeof cutoffJob>>, name: string, value = 'bytes') {
+  await mkdir(path.dirname(path.join(job.home, name)), { recursive: true });
+  await writeFile(path.join(job.home, name), value);
+}
+async function journal(job: Awaited<ReturnType<typeof cutoffJob>>) {
+  const r = readCutoffLifecycle(job.deps.runtimeHost.getState);
+  if (!r.cacheEnabled) throw new Error('enabled');
+  return loadCutoffJournal(r.model, cutoffJournalPath(r.invocation));
+}
+it('freezes before report content reads, publishes new bytes, and reuses local successful receipt', async () => {
+  const job = await cutoffJob(await root());
+  await job.prepare();
+  await data(job, 'data/new');
+  const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+  const scan = vi.spyOn(scans, 'captureCacheManifest');
+  job.adapter.collectBuildReport = async () => {
+    expect((await journal(job)).phase).not.toBe('build-ready');
+    await readFile(path.join(job.home, 'data/new'));
     return {
-      root,
-      home,
-      state,
-      prepare: async () => executePrepareAction(await dependencies('prepare')),
-      finalize: async () => executeFinalizeAction(await dependencies('finalize')),
-    };
-  }
-  async function assertComplete(home: string, contents = 'changed') {
-    expect(await readFile(path.join(home, relative('added')), 'utf8')).toBe(contents);
-    expect(await readFile(path.join(home, relative('modified')), 'utf8')).toBe(contents);
-    expect(await pathExists(path.join(home, relative('deleted')))).toBe(false);
-  }
-  async function publishChangedWorker(attempt: number, contents = 'changed') {
-    const worker = await job('worker-change', attempt);
-    await worker.prepare();
-    await writeGradleFile(worker.home, relative('added'), contents);
-    await writeGradleFile(worker.home, relative('modified'), contents);
-    // Use exactly representable timestamps across filesystem save/restore copies.
-    for (const file of ['added', 'modified']) {
-      await utimes(path.join(worker.home, relative(file)), 1700000000, 1700000000);
-    }
-    await rm(path.join(worker.home, relative('deleted')));
-    const result = await worker.finalize();
-    expect(result.deltaArtifactResult).toMatchObject({
-      status: 'uploaded',
-      addedCount: 1,
-      modifiedCount: 1,
-      deletedCount: 1,
-    });
-    await rm(worker.root, { recursive: true, force: true });
-  }
-  return {
-    artifacts,
-    cache,
-    job,
-    assertComplete,
-    publishChangedWorker,
-    async publishWorkers() {
-      const seed = await job('seed', 1);
-      await seed.prepare();
-      await writeGradleFile(seed.home, relative('modified'), 'original');
-      await writeGradleFile(seed.home, relative('deleted'), 'original');
-      for (const file of ['modified', 'deleted']) {
-        await utimes(path.join(seed.home, relative(file)), 1700000000, 1700000000);
-      }
-      expect((await seed.finalize()).bootstrap.baseCacheResult?.status).toBe('saved');
-      await rm(seed.root, { recursive: true, force: true });
-      await publishChangedWorker(1);
-      const empty = await job('worker-empty', 1);
-      await empty.prepare();
-      expect((await empty.finalize()).deltaArtifactResult).toMatchObject({
-        status: 'uploaded',
-        emptyEnvelope: true,
-      });
-      await rm(empty.root, { recursive: true, force: true });
-      expect(artifacts.uploadRetentionDays).toEqual([7, 7]);
-    },
-    async assertDurableComplete(contents = 'changed') {
-      const reader = await job('reader', 9);
-      const prepared = await reader.prepare();
-      expect(prepared.bootstrap.baseCacheResult?.status).toBe('current-lineage-hit');
-      await assertComplete(reader.home, contents);
-      await rm(reader.root, { recursive: true, force: true });
-    },
-    async assertLocalCleanup() {
-      expect(temporaryDirectories.length).toBeGreaterThan(0);
-      for (const directory of [...temporaryDirectories, ...artifacts.downloadedDirectories]) {
-        expect(await pathExists(directory)).toBe(false);
-      }
-    },
-  };
-}
-
-/** Copies actual managed bytes to durable storage and back onto a fresh runner. */
-class SnapshotCacheBackend implements BaseCacheBackend {
-  readonly capabilities = STANDARD_BASE_CACHE_BACKEND_CAPABILITIES;
-  readonly savedKeys: string[] = [];
-  failure: 'throw' | 'decline' | null = null;
-  constructor(private readonly storageRoot: string) {}
-  isFeatureAvailable() {
-    return true;
-  }
-  isMissingPathsError() {
-    return false;
-  }
-  private managedDirectory(paths: string[]) {
-    // The fixture selects one exact include glob in the modules partition.
-    const includes = paths.filter((value) => !value.startsWith('!'));
-    expect(includes).toHaveLength(1);
-    expect(includes[0]).toMatch(/caches\/modules-2\/files-2\.1\/\*\*$/u);
-    return includes[0]!.slice(0, -3);
-  }
-  async saveCache(paths: string[], key: string) {
-    if (this.failure === 'throw') throw new Error('publication unavailable');
-    if (this.failure === 'decline') return -1;
-    expect(this.savedKeys).not.toContain(key);
-    await mkdir(this.storageRoot, { recursive: true });
-    await cp(
-      this.managedDirectory(paths),
-      path.join(this.storageRoot, String(this.savedKeys.length)),
-      { recursive: true, preserveTimestamps: true },
-    );
-    this.savedKeys.push(key);
-    return this.savedKeys.length;
-  }
-  async restoreCache(paths: string[], primary: string, fallback: string[] = []) {
-    for (const prefix of [primary, ...fallback]) {
-      let index = this.savedKeys.length - 1;
-      while (index >= 0 && !this.savedKeys[index]!.startsWith(prefix)) index -= 1;
-      if (index < 0) continue;
-      const target = this.managedDirectory(paths);
-      await mkdir(path.dirname(target), { recursive: true });
-      await cp(path.join(this.storageRoot, String(index)), target, {
-        recursive: true,
-        preserveTimestamps: true,
-      });
-      return this.savedKeys[index];
-    }
-    return undefined;
-  }
-}
-
-describe('executeFinalizeAction', () => {
-  it('uploads a delta artifact for distributed-worker jobs when cache contents changed', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      const summary = createSummaryCapture();
-      const warningMessages: string[] = [];
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'before',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'after',
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        async removeTemporaryDirectory(directory: string): Promise<void> {
-          await rm(directory, { recursive: true, force: true });
-          throw new Error('simulated cleanup reporting failure');
-        },
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-worker'),
-          summaryWriter: summary.writer,
-          warning(message: string): void {
-            warningMessages.push(message);
-          },
-          workspace,
-        })),
-      });
-
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'distributed-worker' }),
-      );
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({
-          status: 'uploaded',
-          addedCount: 0,
-          modifiedCount: 1,
-          deletedCount: 0,
-          totalChangedCount: 1,
-        }),
-      );
-
-      const artifacts = await artifactApi.listArtifacts();
-      expect(artifacts).toHaveLength(1);
-      expect(artifactApi.uploadRetentionDays).toEqual([7]);
-      const downloaded = await downloadAndVerifyDeltaArtifactPackage(artifactApi, artifacts[0]);
-      expect(downloaded.metadata.producer.jobName).toBe('worker-build');
-      expect(downloaded.metadata.producer.runId).toBe(101);
-      expect(
-        downloaded.deltaManifest.partitions.some((partition) => partition.entries.length > 0),
-      ).toBe(true);
-      expect(summary.lines).toEqual([]);
-      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
-      expect(summaryText).toContain('Gradle builds');
-      expect(summaryText).not.toContain('<summary>Cache details</summary>');
-      expect(summaryText).toContain('Delta artifact');
-      expect(summary.writeCalls).toBe(0);
-      expect(warningMessages).toEqual([
-        expect.stringMatching(/Could not remove staged delta artifact.*simulated cleanup/u),
-      ]);
-      await rm(downloaded.downloadDirectory, { recursive: true, force: true });
-    });
-  });
-
-  it('reuses the persisted main-phase execution identity when post-phase job metadata drifts', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      const summary = createSummaryCapture();
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'before',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      replaceLifecycleRecord(savedState, (record) => ({
-        ...record,
-        executionIdentity: {
-          jobName: 'worker_a',
-          runId: 101,
-          runAttempt: 2,
-        },
-      }));
-      expect(getPersistedCacheLifecycleRecord(createLifecycleGetState(savedState))).not.toBeNull();
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'after',
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'post-phase-job-name'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-worker'),
-          summaryWriter: summary.writer,
-          workspace,
-        })),
-      });
-
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({
-          status: 'uploaded',
-          artifactName: expect.stringMatching(
-            /^buildish-mammoth-cache-delta-worker_a-[a-f0-9]{8}-run-101-attempt-2-/u,
-          ),
-        }),
-      );
-
-      const artifacts = await artifactApi.listArtifacts();
-      expect(artifacts).toHaveLength(1);
-      const downloaded = await downloadAndVerifyDeltaArtifactPackage(artifactApi, artifacts[0]);
-      expect(downloaded.metadata.producer.jobName).toBe('worker_a');
-      expect(downloaded.metadata.producer.runId).toBe(101);
-      expect(downloaded.metadata.producer.runAttempt).toBe(2);
-      await rm(downloaded.downloadDirectory, { recursive: true, force: true });
-    });
-  });
-
-  it('renders the final post-action report layout and logs grouped details', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      const infoMessages: string[] = [];
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'before',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      replaceLifecycleRecord(savedState, (record) => ({
-        ...record,
-        restoreResult: {
-          ...record.restoreResult,
-          status: 'current-lineage-hit',
-          matchedKey: `${record.currentRefLineagePrefix}run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb`,
-          matchedLineagePrefix: record.currentRefLineagePrefix,
-          message: 'Restored cache using exact key hit.',
-        },
-      }));
-      await writeCapturedBuildResult(path.join(workspace, 'runner-temp'), {
-        invocationKey: 'build-1',
-        rootProjectName: 'platform',
-        requestedTasks: 'build --scan',
-        gradleVersion: '8.14.3',
-        javaVersion: '21.0.4',
-        configCacheHit: true,
-        buildScanUri: 'https://scans.gradle.com/s/local-it-published',
-      });
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'after',
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-worker', '987654321'),
-          info(message: string): void {
-            infoMessages.push(message);
-          },
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      const publishedSummary = await readFile(path.join(workspace, 'step-summary.md'), 'utf8');
-      const summaryContent = createFinalizeActionSummaryLines(status).join('\n');
-      expect(publishedSummary).toBe(`${summaryContent}\n`);
-      expect(summaryContent).toContain('## Buildish Mammoth Cache for Gradle');
-      expect(summaryContent).toContain(
-        '### <a href="https://github.com/buildish-tooling/buildish/actions/runs/101/job/987654321">Gradle builds</a>',
-      );
-      expect(summaryContent).toContain('Gradle 8\\.14\\.3 / Java 21\\.0\\.4');
-      expect(summaryContent).not.toContain('<summary>Cache details</summary>');
-      expect(summaryContent).not.toContain('Pulled base cache');
-      expect(summaryContent).toContain('Delta artifact');
-      expect(summaryContent).not.toContain('Uploaded base cache');
-      expect(summaryContent).not.toContain('manifest-derived, uncompressed content sizes');
-      expect(summaryContent).not.toContain('### Warnings');
-      expect(summaryContent).not.toContain('### Errors');
-      expect(infoMessages).toEqual(
-        expect.arrayContaining([
-          '::group::Buildish Mammoth Cache for Gradle',
-          'Bootstrap: Prepared finalize phase for push on main in distributed-worker mode.',
-          'Base cache restore: current-lineage-hit.',
-          'Delta artifact: uploaded.',
-          'Execution details: https://github.com/buildish-tooling/buildish/actions/runs/101/job/987654321',
-          'Cache partition statistics (manifest-derived, uncompressed content sizes):',
-          expect.stringContaining("Uploaded delta artifact 'buildish-mammoth-cache-delta-"),
-          "Gradle 8.14.3 SUCCESS (config-cache hit) tasks='build --scan' project='platform' scan=https://scans.gradle.com/s/local-it-published",
-          '::endgroup::',
-        ]),
-      );
-    });
-  });
-
-  it('falls back to the workflow run URL when the current job URL cannot be resolved', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      const status = await executeFinalizeAction({
-        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-worker'),
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      const summaryContent = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryContent).toContain('Gradle builds');
-      expect(summaryContent).not.toContain('Workflow run:');
-    });
-  });
-
-  it('skips artifact upload for standalone jobs even when cache contents changed', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      let saveCalls = 0;
-      const summary = createSummaryCapture();
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'before',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'after',
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({
-          saveCache: async () => {
-            saveCalls += 1;
-            return 77;
-          },
-        }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'build'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('standalone'),
-          summaryWriter: summary.writer,
-          workspace,
-        })),
-      });
-
-      expect(saveCalls).toBe(1);
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'saved' }),
-      );
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({
-          status: 'not-distributed-worker',
-          modifiedCount: 1,
-          totalChangedCount: 1,
-        }),
-      );
-      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
-      expect(summaryText).toContain('Gradle builds');
-      expect(summaryText).not.toContain('Delta artifact');
-      expect(summaryText).not.toContain('Post-build cache delta');
-      expect(summary.writeCalls).toBe(0);
-      await expect(artifactApi.listArtifacts()).resolves.toHaveLength(0);
-    });
-  });
-
-  it('does not publish a duplicate generation for an unchanged current-lineage hit', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      let saveCalls = 0;
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'unchanged',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      replaceLifecycleRecord(savedState, withCurrentLineageHit);
-
-      const status = await executeFinalizeFixture({
-        workspace,
-        gradleUserHome,
-        savedState,
-        jobMode: 'standalone',
-        jobName: 'build',
-        saveCache: async () => {
-          saveCalls += 1;
-          return 77;
-        },
-      });
-
-      expect(saveCalls).toBe(0);
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'not-required', generationKey: null }),
-      );
-      expect(createFinalizeActionSummaryLines(status).join('\n')).not.toContain(
-        'Published generation:',
-      );
-    });
-  });
-
-  it('publishes an initial non-empty generation after a restore miss', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      let saveCalls = 0;
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-
-      const status = await executeFinalizeFixture({
-        workspace,
-        gradleUserHome,
-        savedState,
-        jobMode: 'standalone',
-        jobName: 'build',
-        saveCache: async () => {
-          saveCalls += 1;
-          return 78;
-        },
-      });
-
-      expect(saveCalls).toBe(1);
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'saved', cacheId: 78 }),
-      );
-    });
-  });
-
-  it('uses the persisted prepare-phase generation seed when publishing', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      replaceLifecycleRecord(savedState, (record) => ({
-        ...record,
-        plannedGenerationId: 'uuid-persisted-prepare-seed',
-      }));
-
-      const status = await executeFinalizeFixture({
-        workspace,
-        gradleUserHome,
-        savedState,
-        jobMode: 'standalone',
-        jobName: 'build',
-        saveCache: async () => 79,
-      });
-
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({
-          status: 'saved',
-          generationKey: expect.stringContaining('-gen-uuid-persisted-prepare-seed-'),
-        }),
-      );
-    });
-  });
-
-  it('rejects prepare/finalize cache-family drift before attempting a save', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      let saveCalls = 0;
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      replaceLifecycleRecord(savedState, (record) => ({
-        ...record,
-        cacheFamilyKey: `${record.cacheFamilyKey}-drifted`,
-        restoreResult: {
-          ...record.restoreResult,
-          cacheFamilyKey: `${record.cacheFamilyKey}-drifted`,
-        },
-      }));
-
-      await expect(
-        executeFinalizeFixture({
-          workspace,
-          gradleUserHome,
-          savedState,
-          jobMode: 'standalone',
-          jobName: 'build',
-          saveCache: async () => {
-            saveCalls += 1;
-            return 80;
-          },
-        }),
-      ).rejects.toThrow(/configuration drift.*cache family/u);
-      expect(saveCalls).toBe(0);
-    });
-  });
-
-  it('rejects a pre-build manifest whose digest no longer matches lifecycle state', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      let saveCalls = 0;
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      replaceLifecycleRecord(savedState, (record) => ({
-        ...record,
-        preBuildManifestDigest: 'b'.repeat(64),
-      }));
-
-      await expect(
-        executeFinalizeFixture({
-          workspace,
-          gradleUserHome,
-          savedState,
-          jobMode: 'standalone',
-          jobName: 'build',
-          saveCache: async () => {
-            saveCalls += 1;
-            return 81;
-          },
-        }),
-      ).rejects.toThrow(/manifest does not match the digest/u);
-      expect(saveCalls).toBe(0);
-    });
-  });
-
-  it('reports standalone save failures as warnings without claiming publication', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-
-      const status = await executeFinalizeFixture({
-        workspace,
-        gradleUserHome,
-        savedState,
-        jobMode: 'standalone',
-        jobName: 'build',
-        saveCache: async () => {
-          throw new Error('backend unavailable');
-        },
-      });
-
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'failed', cacheId: null }),
-      );
-      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      const logText = createFinalizeActionLogLines(status).join('\n');
-      expect(summaryText).toContain('⚠️ Overall status: completed with warnings');
-      expect(summaryText).toContain('- Save status: failed');
-      expect(summaryText).toContain('### Warnings');
-      expect(summaryText).toContain('backend unavailable');
-      expect(summaryText).not.toContain('Published generation:');
-      expect(logText).toContain('Attempted base cache generation:');
-      expect(logText).not.toContain('Published base cache generation:');
-    });
-  });
-
-  it('fails an aggregator when its required base-cache publication fails', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-
-      await expect(
-        executeFinalizeFixture({
-          workspace,
-          gradleUserHome,
-          savedState,
-          jobMode: 'distributed-aggregator',
-          jobName: 'aggregate',
-          saveCache: async () => {
-            throw new Error('backend unavailable');
-          },
-        }),
-      ).rejects.toThrow(
-        /publication ended with 'failed'.*publication failed.*backend unavailable/u,
-      );
-    });
-  });
-
-  it('fails an aggregator when the backend declines to create the required generation', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-
-      await expect(
-        executeFinalizeFixture({
-          workspace,
-          gradleUserHome,
-          savedState,
-          jobMode: 'distributed-aggregator',
-          jobName: 'aggregate',
-          saveCache: async () => -1,
-        }),
-      ).rejects.toThrow(/publication ended with 'not-saved'/u);
-    });
-  });
-
-  it('skips artifact upload for distributed-aggregator jobs and still saves the base cache', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      let saveCalls = 0;
-      const summary = createSummaryCapture();
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'before',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'after',
-      );
-      await stageWorkerArtifact(artifactApi, workspace, 'worker-build');
-      const retainedArtifactName = (await artifactApi.listArtifacts())[0]!.name;
-      replaceLifecycleRecord(savedState, (record) =>
-        withConsumedArtifacts(record, [retainedArtifactName]),
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({
-          saveCache: async () => {
-            saveCalls += 1;
-            return 91;
-          },
-        }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-aggregator'),
-          summaryWriter: summary.writer,
-          workspace,
-        })),
-      });
-
-      expect(saveCalls).toBe(1);
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'saved' }),
-      );
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({
-          status: 'not-distributed-worker',
-          modifiedCount: 1,
-          totalChangedCount: 1,
-        }),
-      );
-      expect(artifactApi.deletedArtifactNames).toEqual([]);
-      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
-      expect(summaryText).not.toContain('<summary>Cache details</summary>');
-      expect(summaryText).not.toContain('Consumed delta cleanup');
-      expect(summaryText).not.toContain('Delta artifact');
-      expect(summaryText).not.toContain('Post-build cache delta');
-      expect(summary.writeCalls).toBe(0);
-      await expect(artifactApi.listArtifacts()).resolves.toHaveLength(1);
-    });
-  });
-
-  it('runs timestamp cache GC before saving the standalone base cache', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      const staleRelativePath = 'caches/modules-2/files-2.1/org/example/stale.bin';
-      const stalePath = path.join(gradleUserHome, staleRelativePath);
-      let stalePresentWhenSaving = true;
-
-      await writeGradleFile(gradleUserHome, staleRelativePath, 'stale');
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await utimes(
-        stalePath,
-        new Date('2026-01-01T00:00:00.000Z'),
-        new Date('2026-01-01T00:00:00.000Z'),
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({
-          saveCache: async () => {
-            stalePresentWhenSaving = await pathExists(stalePath);
-            return 82;
-          },
-        }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'build'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('standalone'),
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.cacheGcResult).toEqual(
-        expect.objectContaining({
-          deletedFileCount: 1,
-          deletedByteCount: 5,
-        }),
-      );
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({
-          status: 'not-distributed-worker',
-          deletedCount: 1,
-          totalChangedCount: 1,
-        }),
-      );
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'saved', cacheId: 82 }),
-      );
-      expect(stalePresentWhenSaving).toBe(false);
-      await expect(pathExists(stalePath)).resolves.toBe(false);
-    });
-  });
-
-  it('honors cleanup-enabled=false by skipping timestamp cache GC', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-      const staleRelativePath = 'caches/modules-2/files-2.1/org/example/stale.bin';
-      const stalePath = path.join(gradleUserHome, staleRelativePath);
-
-      await writeGradleFile(gradleUserHome, staleRelativePath, 'stale');
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await utimes(
-        stalePath,
-        new Date('2026-01-01T00:00:00.000Z'),
-        new Date('2026-01-01T00:00:00.000Z'),
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
-        cacheBackend: createCacheApi({ saveCache: async () => 83 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'build'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: {
-            getInput(name: string): string {
-              if (name === 'cleanup-enabled') return 'false';
-              return '';
-            },
-          },
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.cacheGcResult).toBeNull();
-      await expect(pathExists(stalePath)).resolves.toBe(true);
-    });
-  });
-
-  it('skips timestamp cache GC for distributed-worker delta producers', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      const staleRelativePath = 'caches/modules-2/files-2.1/org/example/stale.bin';
-      const stalePath = path.join(gradleUserHome, staleRelativePath);
-
-      await writeGradleFile(gradleUserHome, staleRelativePath, 'stale');
-      await utimes(
-        stalePath,
-        new Date('2026-01-01T00:00:00.000Z'),
-        new Date('2026-01-01T00:00:00.000Z'),
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-worker'),
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.cacheGcResult).toBeNull();
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({
-          status: 'uploaded',
-          emptyEnvelope: true,
-          totalChangedCount: 0,
-        }),
-      );
-      await expect(pathExists(stalePath)).resolves.toBe(true);
-    });
-  });
-
-  it('retains worker envelopes without requiring backend deletion support', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const artifactBackend: WorkflowArtifactBackend = {
-        capabilities: {
-          ...STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
-          supportsDeletion: false,
-        },
-        uploadArtifact: artifactApi.uploadArtifact.bind(artifactApi),
-        listArtifacts: artifactApi.listArtifacts.bind(artifactApi),
-        getArtifact: artifactApi.getArtifact.bind(artifactApi),
-        downloadArtifact: artifactApi.downloadArtifact.bind(artifactApi),
-        deleteArtifact: artifactApi.deleteArtifact.bind(artifactApi),
-      };
-      const savedState = new Map<string, string>();
-      const summary = createSummaryCapture();
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await stageWorkerArtifact(artifactBackend, workspace, 'worker-a');
-      const retainedArtifactName = (await artifactBackend.listArtifacts())[0]!.name;
-      replaceLifecycleRecord(savedState, (record) =>
-        withConsumedArtifacts(record, [retainedArtifactName]),
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend,
-        cacheBackend: createCacheApi({
-          saveCache: async () => 91,
-        }),
-        env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-aggregator'),
-          summaryWriter: summary.writer,
-          workspace,
-        })),
-      });
-
-      expect(status.bootstrap.baseCacheResult?.status).toBe('saved');
-      expect(createFinalizeActionLogLines(status).join('\n')).not.toContain('cleanup');
-      expect(artifactApi.deletedArtifactNames).toEqual([]);
-      await expect(artifactBackend.listArtifacts()).resolves.toHaveLength(1);
-    });
-  });
-
-  it('does not require an artifact backend for read-only aggregator finalize', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'initial',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      replaceLifecycleRecord(savedState, (record) =>
-        withConsumedArtifacts(record, ['must-not-be-read-or-deleted']),
-      );
-
-      const status = await executeFinalizeAction({
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'aggregate'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: {
-            getInput(name: string): string {
-              if (name === 'job-mode') return 'distributed-aggregator';
-              if (name === 'read-only') return 'true';
-              return '';
-            },
-          },
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.bootstrap.baseCacheResult).toEqual(
-        expect.objectContaining({ status: 'read-only' }),
-      );
-    });
-  });
-
-  it('uploads an explicit empty distributed-worker envelope when no cache changes were detected', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const artifactApi = new FakeArtifactApi(path.join(workspace, 'artifact-store'));
-      const savedState = new Map<string, string>();
-      const summary = createSummaryCapture();
-
-      await writeGradleFile(
-        gradleUserHome,
-        'caches/modules-2/files-2.1/org/example/module.bin',
-        'before',
-      );
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-
-      const status = await executeFinalizeAction({
-        artifactBackend: artifactApi,
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-worker'),
-          summaryWriter: summary.writer,
-          workspace,
-        })),
-      });
-
-      expect(status.deltaArtifactResult).toEqual(
-        expect.objectContaining({
-          status: 'uploaded',
-          emptyEnvelope: true,
-          addedCount: 0,
-          modifiedCount: 0,
-          deletedCount: 0,
-          totalChangedCount: 0,
-        }),
-      );
-      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('## Buildish Mammoth Cache for Gradle');
-      expect(summaryText).toContain('Delta artifact');
-      expect(summaryText).not.toContain('Post-build cache delta');
-      expect(summary.writeCalls).toBe(0);
-      await expect(artifactApi.listArtifacts()).resolves.toHaveLength(1);
-    });
-  });
-
-  it('shows error overall status in the finalize summary when a Gradle build has failed', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-
-      await writeGradleFile(gradleUserHome, 'caches/modules-2/files-2.1/module.bin', 'content');
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      // Write the build result directly to RUNNER_TEMP (where loadGradleBuildReport reads from),
-      // with buildFailed: true — the writeCapturedBuildResult helper hardcodes buildFailed: false.
-      const buildResultsDir = path.join(
-        workspace,
-        'runner-temp',
-        '.buildish-mammoth-cache',
-        'build-results',
-      );
-      await mkdir(buildResultsDir, { recursive: true });
-      await writeFile(
-        path.join(buildResultsDir, '__run-fail.json'),
-        JSON.stringify({
-          capturedAtEpochMillis: 1_000,
-          rootProjectName: 'demo',
-          requestedTasks: 'build',
-          gradleVersion: '8.14.3',
-          javaVersion: '21.0.4',
-          buildFailed: true,
-          configCacheHit: false,
-        }),
-        'utf8',
-      );
-
-      const status = await executeFinalizeAction({
-        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState: createLifecycleGetState(savedState),
-          inputProvider: createInputProvider('distributed-worker'),
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.buildReport.anyBuildFailed).toBe(true);
-      const summaryText = createFinalizeActionSummaryLines(status).join('\n');
-      expect(summaryText).toContain('❌');
-    });
-  });
-
-  it('skips artifact upload when a distributed-worker job runs in read-only mode', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-      const savedState = new Map<string, string>();
-
-      await writeGradleFile(gradleUserHome, 'caches/modules-2/files-2.1/module.bin', 'before');
-      await persistPreBuildState(gradleUserHome, savedState, workspace);
-      await writeGradleFile(gradleUserHome, 'caches/modules-2/files-2.1/module.bin', 'after');
-
-      const status = await executeFinalizeAction({
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          getState: createLifecycleGetState(savedState),
-          inputProvider: {
-            getInput(name: string): string {
-              if (name === 'job-mode') return 'distributed-worker';
-              if (name === 'read-only') return 'true';
-              return '';
-            },
-          },
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.deltaArtifactResult).toEqual(expect.objectContaining({ status: 'read-only' }));
-      await expect(
-        new FakeArtifactApi(path.join(workspace, 'artifact-store')).listArtifacts(),
-      ).resolves.toHaveLength(0);
-    });
-  });
-
-  it('fails closed when caching is armed without persisted lifecycle state', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-
-      // No persistPreBuildState call — the prepare phase manifest is absent.
-      await expect(
-        executeFinalizeAction({
-          artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
-          cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-          captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-          env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-          ...(await createFinalizeActionDependencies({
-            env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-            // Empty state simulates a finalize invocation without its prepare lifecycle record.
-            getState: createLifecycleGetState(),
-            inputProvider: createInputProvider('distributed-worker'),
-            summaryWriter: createSummaryCapture().writer,
-            workspace,
-          })),
-        }),
-      ).rejects.toThrow(/Cache lifecycle state is missing/u);
-    });
-  });
-
-  it('completes without cache orchestration when the cache is disabled', async () => {
-    await withWorkspace(async (workspace) => {
-      const gradleUserHome = path.join(workspace, '.gradle');
-
-      const status = await executeFinalizeAction({
-        artifactBackend: new FakeArtifactApi(path.join(workspace, 'artifact-store')),
-        cacheBackend: createCacheApi({ saveCache: async () => 0 }),
-        captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-        env: createTestEnv(workspace, gradleUserHome, 'build'),
-        ...(await createFinalizeActionDependencies({
-          env: createTestEnv(workspace, gradleUserHome, 'build'),
-          getState: () => '',
-          inputProvider: {
-            getInput(name: string): string {
-              if (name === 'cache-enabled') return 'false';
-              return '';
-            },
-          },
-          summaryWriter: createSummaryCapture().writer,
-          workspace,
-        })),
-      });
-
-      expect(status.bootstrap.cacheModel).toBeNull();
-      expect(status.deltaArtifactResult).toBeNull();
-      expect(status.cacheStatistics).toBeNull();
-    });
-  });
-});
-
-function createTestEnv(
-  workspace: string,
-  gradleUserHome: string,
-  jobName: string,
-): NodeJS.ProcessEnv {
-  return {
-    GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/main',
-    GITHUB_REPOSITORY: 'buildish-tooling/buildish',
-    GITHUB_WORKFLOW: 'CI',
-    GITHUB_JOB: jobName,
-    GITHUB_RUN_ID: '101',
-    GITHUB_RUN_ATTEMPT: '2',
-    GITHUB_STEP_SUMMARY: path.join(workspace, 'step-summary.md'),
-    GITHUB_WORKSPACE: workspace,
-    GRADLE_USER_HOME: gradleUserHome,
-    HOME: workspace,
-    RUNNER_OS: 'Linux',
-    RUNNER_ARCH: 'X64',
-    RUNNER_TEMP: path.join(workspace, 'runner-temp'),
-  };
-}
-
-function createTestCiContext(workspace: string) {
-  return {
-    eventName: 'push',
-    resolvedRefName: 'main',
-    safeRefName: 'main',
-    runnerOs: 'linux',
-    runnerArch: 'x64',
-    defaultBranch: 'main',
-    isPullRequest: false,
-    repository: 'buildish-tooling/buildish',
-    workflowName: 'CI',
-    jobName: 'worker-build',
-    runId: 101,
-    runAttempt: 2,
-    sourceRevision: null,
-    tempDirectory: path.join(workspace, 'runner-temp'),
-    workspace,
-    actionPath: null,
-  };
-}
-
-function createInputProvider(
-  jobMode: string,
-  githubJobCheckRunId = '',
-): { getInput(name: string): string } {
-  return {
-    getInput(name: string): string {
-      if (name === 'job-mode') {
-        return jobMode;
-      }
-      if (name === 'github-job-check-run-id') {
-        return githubJobCheckRunId;
-      }
-      return '';
-    },
-  };
-}
-
-function createCacheApi(options: { readonly saveCache: () => Promise<number> }): BaseCacheBackend {
-  return {
-    capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-    isFeatureAvailable(): boolean {
-      return true;
-    },
-    async restoreCache(): Promise<string | undefined> {
-      throw new Error('restoreCache should not be called during post action flow');
-    },
-    async saveCache(): Promise<number> {
-      return await options.saveCache();
-    },
-    isMissingPathsError(): boolean {
-      return false;
-    },
-  };
-}
-
-async function executeFinalizeFixture(options: {
-  readonly workspace: string;
-  readonly gradleUserHome: string;
-  readonly savedState: Map<string, string>;
-  readonly jobMode: string;
-  readonly jobName: string;
-  readonly saveCache: () => Promise<number>;
-}): Promise<FinalizeActionStatus> {
-  const env = createTestEnv(options.workspace, options.gradleUserHome, options.jobName);
-  return await executeFinalizeAction({
-    artifactBackend: new FakeArtifactApi(path.join(options.workspace, 'artifact-store')),
-    cacheBackend: createCacheApi({ saveCache: options.saveCache }),
-    captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-    env,
-    ...(await createFinalizeActionDependencies({
-      env,
-      eventPayload: DEFAULT_PUSH_EVENT_PAYLOAD,
-      getState: createLifecycleGetState(options.savedState),
-      inputProvider: createInputProvider(options.jobMode),
-      summaryWriter: createSummaryCapture().writer,
-      workspace: options.workspace,
-    })),
-  });
-}
-
-function createSummaryCapture(): {
-  readonly lines: string[];
-  readonly writer: SummaryWriter;
-  get writeCalls(): number;
-} {
-  const lines: string[] = [];
-  let writeCalls = 0;
-  const writer: SummaryWriter = {
-    addRaw(text: string): SummaryWriter {
-      lines.push(text);
-      return writer;
-    },
-    async write(): Promise<void> {
-      writeCalls += 1;
-    },
-  };
-
-  return {
-    lines,
-    writer,
-    get writeCalls(): number {
-      return writeCalls;
-    },
-  };
-}
-
-async function createTestCacheModel(
-  gradleUserHome: string,
-  workspace: string,
-): Promise<CacheModel> {
-  const gradleAdapter = new GradleBuildToolAdapter({ gradleUserHome } as NormalizedGradleConfig);
-  return await createCacheModel(
-    {
-      cacheKeyPrefix: 'buildish-mammoth-cache-',
-      cacheSchemaVersion: 2,
-      cachePartitions: [],
-    } as unknown as NormalizedActionConfig,
-    createTestCiContext(workspace),
-    gradleAdapter,
-    {
-      captureCommandOutput: MOCK_CAPTURE_COMMAND_OUTPUT,
-      env: createTestEnv(workspace, gradleUserHome, 'worker-build'),
-    },
-  );
-}
-
-async function persistPreBuildState(
-  gradleUserHome: string,
-  savedState: Map<string, string>,
-  workspace: string,
-): Promise<void> {
-  const cacheModel = await createTestCacheModel(gradleUserHome, workspace);
-  const manifest = await captureCacheManifest(cacheModel);
-  const persistedManifest = await persistPreBuildCacheManifest(manifest, {
-    env: { RUNNER_TEMP: path.join(workspace, 'runner-temp') },
-  });
-  persistCacheLifecycleRecord(
-    {
-      lifecycleSchemaVersion: CACHE_LIFECYCLE_RECORD_SCHEMA_VERSION,
-      cacheSchemaVersion: 2,
-      buildToolId: cacheModel.buildToolId,
-      cacheFamilyKey: cacheModel.cacheFamilyKey,
-      currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
-      fallbackRefLineagePrefixes: [...cacheModel.fallbackRefLineagePrefixes],
-      plannedGenerationId: cacheModel.plannedGenerationId,
-      restoreResult: {
-        operation: 'restore',
-        status: 'miss',
-        cacheFamilyKey: cacheModel.cacheFamilyKey,
-        currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
-        matchedKey: null,
-        matchedLineagePrefix: null,
-        restoreCandidates: [
-          { lineage: 'current-ref', keyPrefix: cacheModel.currentRefLineagePrefix },
-          ...cacheModel.fallbackRefLineagePrefixes.map((keyPrefix) => ({
-            lineage: 'default-branch' as const,
-            keyPrefix,
-          })),
-        ],
-        paths: [...cacheModel.includePaths, ...cacheModel.excludePaths.map((value) => `!${value}`)],
-        message: 'Base cache restore missed.',
-      },
-      preBuildManifestPath: persistedManifest.manifestPath,
-      preBuildManifestDigest: persistedManifest.manifestDigest,
-      executionIdentity: {
-        jobName: 'worker-build',
-        runId: 101,
-        runAttempt: 2,
-      },
-      sourceRevision: null,
-      dependentDelta: null,
-    },
-    savedState.set.bind(savedState),
-  );
-  expect(getPersistedCacheLifecycleRecord(createLifecycleGetState(savedState))).not.toBeNull();
-}
-
-function replaceLifecycleRecord(
-  savedState: Map<string, string>,
-  replace: (record: PersistedCacheLifecycleRecord) => PersistedCacheLifecycleRecord,
-): void {
-  const record = getPersistedCacheLifecycleRecord(createLifecycleGetState(savedState));
-  if (!record) {
-    throw new Error('Expected test lifecycle state to be present.');
-  }
-  persistCacheLifecycleRecord(replace(record), savedState.set.bind(savedState));
-}
-
-function withConsumedArtifacts(
-  record: PersistedCacheLifecycleRecord,
-  artifactNames: readonly string[],
-): PersistedCacheLifecycleRecord {
-  return {
-    ...record,
-    dependentDelta: {
-      requestedJobs: ['worker-a'],
-      artifactNames: [...artifactNames],
-      addedCount: 1,
-      modifiedCount: 0,
-      deletedCount: 0,
-      totalChangedCount: 1,
-    },
-  };
-}
-
-function withCurrentLineageHit(
-  record: PersistedCacheLifecycleRecord,
-): PersistedCacheLifecycleRecord {
-  return {
-    ...record,
-    restoreResult: {
-      ...record.restoreResult,
-      status: 'current-lineage-hit',
-      matchedKey: `${record.currentRefLineagePrefix}run-1-attempt-1-job-test-aaaaaaaaaaaa`,
-      matchedLineagePrefix: record.currentRefLineagePrefix,
-      message: 'Restored current lineage.',
-    },
-  };
-}
-
-async function writeGradleFile(
-  gradleUserHome: string,
-  relativePath: string,
-  contents: string,
-): Promise<void> {
-  const absolutePath = path.join(gradleUserHome, relativePath);
-  await mkdir(path.dirname(absolutePath), { recursive: true });
-  await writeFile(absolutePath, contents, 'utf8');
-}
-
-async function pathExists(absolutePath: string): Promise<boolean> {
-  return await lstat(absolutePath)
-    .then(() => true)
-    .catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
-        return false;
-      }
-      throw error;
-    });
-}
-
-async function writeCapturedBuildResult(
-  gradleUserHome: string,
-  options: {
-    readonly invocationKey: string;
-    readonly rootProjectName: string;
-    readonly requestedTasks: string;
-    readonly gradleVersion: string;
-    readonly javaVersion: string;
-    readonly configCacheHit: boolean;
-    readonly buildScanUri: string | null;
-  },
-): Promise<void> {
-  const resultsDirectory = path.join(gradleUserHome, '.buildish-mammoth-cache', 'build-results');
-  const buildScansDirectory = path.join(gradleUserHome, '.buildish-mammoth-cache', 'build-scans');
-  await mkdir(resultsDirectory, { recursive: true });
-  await mkdir(buildScansDirectory, { recursive: true });
-  await writeFile(
-    path.join(resultsDirectory, `${options.invocationKey}.json`),
-    JSON.stringify({
-      capturedAtEpochMillis: 1_000,
-      rootProjectName: options.rootProjectName,
-      requestedTasks: options.requestedTasks,
-      gradleVersion: options.gradleVersion,
-      javaVersion: options.javaVersion,
-      buildFailed: false,
-      configCacheHit: options.configCacheHit,
-    }),
-    'utf8',
-  );
-
-  if (options.buildScanUri) {
-    await writeFile(
-      path.join(buildScansDirectory, `${options.invocationKey}.json`),
-      JSON.stringify({ buildScanUri: options.buildScanUri, buildScanFailed: false }),
-      'utf8',
-    );
-  }
-}
-
-async function withWorkspace(testBody: (workspace: string) => Promise<void>): Promise<void> {
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'buildish-mammoth-cache-post-flow-'));
-  try {
-    await testBody(workspace);
-  } finally {
-    await rm(workspace, { recursive: true, force: true });
-  }
-}
-
-class FakeArtifactApi implements WorkflowArtifactBackend {
-  readonly capabilities = STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES;
-
-  private nextId = 1;
-  private readonly artifacts = new Map<
-    number,
-    { descriptor: WorkflowArtifactDescriptor; directory: string }
-  >();
-
-  constructor(private readonly storageRoot: string) {}
-
-  async uploadArtifact(
-    name: string,
-    _files: readonly string[],
-    rootDirectory: string,
-    options?: { readonly retentionDays?: number; readonly compressionLevel?: number },
-  ): Promise<WorkflowArtifactDescriptor> {
-    await mkdir(this.storageRoot, { recursive: true });
-    const id = this.nextId++;
-    const directory = path.join(this.storageRoot, String(id));
-    await cp(rootDirectory, directory, { recursive: true });
-    this.uploadRetentionDays.push(options?.retentionDays ?? null);
-
-    const descriptor: WorkflowArtifactDescriptor = {
-      id,
-      name,
-      size: 0,
-      digest: null,
-    };
-    this.artifacts.set(id, { descriptor, directory });
-    return descriptor;
-  }
-
-  async listArtifacts(): Promise<readonly WorkflowArtifactDescriptor[]> {
-    return [...this.artifacts.values()].map((artifact) => artifact.descriptor);
-  }
-
-  async getArtifact(name: string): Promise<WorkflowArtifactDescriptor> {
-    const artifact = [...this.artifacts.values()].find(
-      (candidate) => candidate.descriptor.name === name,
-    );
-    if (!artifact) {
-      throw new Error(`Artifact '${name}' not found.`);
-    }
-    return artifact.descriptor;
-  }
-
-  async downloadArtifact(
-    artifactId: number,
-    options?: { readonly path?: string; readonly expectedHash?: string },
-  ): Promise<{ readonly downloadPath: string; readonly digestMismatch: boolean }> {
-    const artifact = this.artifacts.get(artifactId);
-    if (!artifact) {
-      throw new Error(`Artifact '${artifactId}' not found.`);
-    }
-
-    const parentDirectory = options?.path ?? this.storageRoot;
-    const downloadPath = path.join(parentDirectory, `artifact-${artifactId}`);
-    this.downloadedDirectories.push(downloadPath);
-    await cp(artifact.directory, downloadPath, { recursive: true });
-
-    return {
-      downloadPath,
-      digestMismatch: false,
-    };
-  }
-
-  async deleteArtifact(name: string): Promise<void> {
-    this.deletedArtifactNames.push(name);
-    const artifact = [...this.artifacts.entries()].find(
-      ([, candidate]) => candidate.descriptor.name === name,
-    );
-    if (!artifact) {
-      throw new Error(`Artifact '${name}' not found.`);
-    }
-    this.artifacts.delete(artifact[0]);
-    await rm(artifact[1].directory, { recursive: true, force: true });
-  }
-
-  readonly downloadedDirectories: string[] = [];
-
-  readonly uploadRetentionDays: Array<number | null> = [];
-
-  readonly deletedArtifactNames: string[] = [];
-}
-
-async function stageWorkerArtifact(
-  artifactApi: WorkflowArtifactBackend,
-  workspace: string,
-  jobName: string,
-): Promise<void> {
-  const workerGradleHome = path.join(workspace, `${jobName}-gradle-home`);
-  await writeGradleFile(
-    workerGradleHome,
-    'caches/modules-2/files-2.1/example/module.bin',
-    'worker-before',
-  );
-  const cacheModel = await createTestCacheModel(workerGradleHome, workspace);
-  const previousManifest = await captureCacheManifest(cacheModel);
-  await writeGradleFile(
-    workerGradleHome,
-    'caches/modules-2/files-2.1/example/module.bin',
-    'worker-after',
-  );
-  const currentManifest = await captureCacheManifest(cacheModel);
-  const deltaManifest = computeCacheDelta(previousManifest, currentManifest);
-  const stagedPackage = await stageDeltaArtifactPackage(
-    {
-      eventName: 'push',
-      resolvedRefName: 'main',
-      safeRefName: 'main',
-      runnerOs: 'linux',
-      runnerArch: 'x64',
-      defaultBranch: 'main',
-      isPullRequest: false,
-      repository: 'buildish-tooling/buildish',
-      workflowName: 'CI',
-      jobName,
-      runId: 101,
-      runAttempt: 2,
-      sourceRevision: null,
-      tempDirectory: path.join(workspace, 'runner-temp'),
-      workspace,
-      actionPath: null,
-    },
-    cacheModel,
-    deltaManifest,
-    {
-      lifecycleIdentity: {
-        restoredGenerationKey: null,
-        preBuildManifestDigest: calculateCanonicalCacheManifestDigest(previousManifest),
-      },
-    },
-  );
-  await artifactApi.uploadArtifact(
-    stagedPackage.artifactName,
-    stagedPackage.files,
-    stagedPackage.rootDirectory,
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Unit tests for createFinalizeActionSummaryLines rendering logic.
-//
-// These tests exercise the heading, status icon/label, and job-URL link logic
-// in isolation using minimal FinalizeActionStatus fixtures so regressions in
-// formatting are caught without running the full executeFinalizeAction flow.
-// ---------------------------------------------------------------------------
-
-/**
- * Builds a fully-typed {@link BootstrapExecution} stub for use in rendering-only unit tests.
- *
- * All fields required by {@link createFinalizeActionSummaryLines} and
- * {@link createFinalizeActionLogLines} are given concrete values. Fields that are never
- * accessed by those rendering functions (`ciProvider`, `reportSink`) are null-asserted to the
- * correct type; these assertions are safe because the tested functions do not call any method
- * on those objects — TypeScript still validates that the overall object satisfies the
- * {@link BootstrapExecution} interface, so any newly accessed field will surface as a compile
- * error rather than a silent runtime failure.
- */
-function createMinimalBootstrapExecution(): BootstrapExecution {
-  return {
-    phase: 'finalize',
-    message: 'Test bootstrap.',
-    config: {
-      jobMode: 'standalone',
-      readOnly: false,
-      cacheEnabled: false,
-    } as NormalizedActionConfig,
-    ciContext: {
-      eventName: 'push',
-      resolvedRefName: 'main',
-      safeRefName: 'main',
-      runnerOs: 'linux',
-      runnerArch: 'x64',
-      defaultBranch: 'main',
-      isPullRequest: false,
-      repository: 'test/repo',
-      workflowName: 'CI',
-      jobName: 'build',
-      runId: 1,
-      runAttempt: 1,
-      sourceRevision: null,
-      tempDirectory: '/tmp',
-      workspace: '/workspace',
-      actionPath: null,
-    },
-    cacheModel: null,
-    baseCacheResult: null,
-    toolProvisioning: { items: [], warnings: [], additionalOutputs: {} },
-    ciDiagnosticsLines: [],
-    ciExecutionUrls: { jobUrl: null, workflowRunUrl: null },
-    buildToolAdapter: { getName: () => 'Gradle' } as BootstrapExecution['buildToolAdapter'],
-    // ciProvider and reportSink are never accessed by the rendering functions under test.
-    ciProvider: null as unknown as BootstrapExecution['ciProvider'],
-    reportSink: null as unknown as BootstrapExecution['reportSink'],
-  };
-}
-
-/**
- * Builds the minimum {@link FinalizeActionStatus} fixture required by
- * {@link createFinalizeActionSummaryLines} and {@link createFinalizeActionLogLines}.
- * Apply `overrides` to exercise specific rendering paths.
- */
-function createMinimalFinalizeStatus(
-  overrides: Partial<FinalizeActionStatus> = {},
-): FinalizeActionStatus {
-  return {
-    bootstrap: createMinimalBootstrapExecution(),
-    baseCacheRestoreResult: null,
-    cacheGcResult: null,
-    cacheStatistics: null,
-    deltaArtifactResult: null,
-    buildReport: {
       anyBuildFailed: false,
       warnings: [],
-      summaryLines: ['No builds captured.'],
+      summaryLines: ['retained build report'],
       logLines: [],
       builds: [],
-    },
-    jobUrl: null,
-    workflowRunUrl: null,
-    message: 'Test.',
-    ...overrides,
+    };
   };
-}
-
-describe('createFinalizeActionSummaryLines', () => {
-  it('includes the build-tool name in the top-level heading', () => {
-    const lines = createFinalizeActionSummaryLines(createMinimalFinalizeStatus()).join('\n');
-    expect(lines).toContain('## Buildish Mammoth Cache for Gradle');
-  });
-
-  it('shows success icon and label when there are no issues', () => {
-    const lines = createFinalizeActionSummaryLines(createMinimalFinalizeStatus()).join('\n');
-    expect(lines).toContain('✅ Overall status: success');
-  });
-
-  it('shows error icon and label when a build failed', () => {
-    const status = createMinimalFinalizeStatus({
-      buildReport: {
-        anyBuildFailed: true,
-        warnings: [],
-        summaryLines: [],
-        logLines: [],
-        builds: [],
-      },
-    });
-    const lines = createFinalizeActionSummaryLines(status).join('\n');
-    expect(lines).toContain('❌ Overall status: issues detected');
-    expect(lines).not.toContain('✅');
-  });
-
-  it('shows warning icon and label when the cache restore feature is unavailable', () => {
-    const status = createMinimalFinalizeStatus({
-      baseCacheRestoreResult: {
-        operation: 'restore',
-        status: 'feature-unavailable',
-        cacheFamilyKey: 'test-family',
-        currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
-        matchedKey: null,
-        matchedLineagePrefix: null,
-        restoreCandidates: [
-          { lineage: 'current-ref', keyPrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-' },
-        ],
-        paths: [],
-        message: 'Cache backend unavailable.',
-      },
-    });
-    const lines = createFinalizeActionSummaryLines(status).join('\n');
-    expect(lines).toContain('⚠️ Overall status: completed with warnings');
-    expect(lines).not.toContain('✅');
-  });
-
-  it('renders the tool builds heading as a plain label when jobUrl is absent', () => {
-    const lines = createFinalizeActionSummaryLines(createMinimalFinalizeStatus()).join('\n');
-    expect(lines).toContain('### Gradle builds');
-    expect(lines).not.toContain('href');
-  });
-
-  it('renders the tool builds heading as an HTML link when jobUrl is present', () => {
-    const status = createMinimalFinalizeStatus({
-      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42',
-    });
-    const lines = createFinalizeActionSummaryLines(status).join('\n');
-    expect(lines).toContain(
-      'href="https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42"',
-    );
-    expect(lines).toContain('Gradle builds');
-  });
-
-  it('includes build-report summary lines verbatim', () => {
-    const status = createMinimalFinalizeStatus({
-      buildReport: {
-        anyBuildFailed: false,
-        warnings: [],
-        summaryLines: ['Line one from build report.', 'Line two from build report.'],
-        logLines: [],
-        builds: [],
-      },
-    });
-    const lines = createFinalizeActionSummaryLines(status).join('\n');
-    expect(lines).toContain('Line one from build report.');
-    expect(lines).toContain('Line two from build report.');
-  });
+  const first = await executeFinalizeAction(job.deps);
+  expect(first.bootstrap.baseCacheResult?.status).toBe('saved');
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(scan).not.toHaveBeenCalled();
+  expect(first.cacheStatistics?.upsertCount).toBe(1);
+  expect(job.summaries.join('\n')).toContain('retained build report');
+  await executeFinalizeAction(job.deps);
+  expect(save).toHaveBeenCalledTimes(1);
 });
-
-// ---------------------------------------------------------------------------
-// Unit tests for createFinalizeActionLogLines rendering logic.
-//
-// These tests mirror the createFinalizeActionSummaryLines tests above but cover
-// the log-group output path in isolation using the same minimal fixtures.
-// ---------------------------------------------------------------------------
-
-describe('createFinalizeActionLogLines', () => {
-  it('includes the success status icon and label when there are no issues', () => {
-    const lines = createFinalizeActionLogLines(createMinimalFinalizeStatus()).join('\n');
-    expect(lines).toContain('✅ Overall status: success');
-  });
-
-  it('includes the error status icon and label when a build failed', () => {
-    const status = createMinimalFinalizeStatus({
-      buildReport: {
-        anyBuildFailed: true,
-        warnings: [],
-        summaryLines: [],
-        logLines: [],
-        builds: [],
-      },
-    });
-    const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain('❌ Overall status: issues detected');
-    expect(lines).not.toContain('✅');
-  });
-
-  it('includes the warning status icon and label when the cache restore feature is unavailable', () => {
-    const status = createMinimalFinalizeStatus({
-      baseCacheRestoreResult: {
-        operation: 'restore',
-        status: 'feature-unavailable',
-        cacheFamilyKey: 'test-family',
-        currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
-        matchedKey: null,
-        matchedLineagePrefix: null,
-        restoreCandidates: [
-          { lineage: 'current-ref', keyPrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-' },
-        ],
-        paths: [],
-        message: 'Cache backend unavailable.',
-      },
-    });
-    const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain('⚠️ Overall status: completed with warnings');
-    expect(lines).not.toContain('✅');
-  });
-
-  it('includes an Execution details line from jobUrl when present', () => {
-    const status = createMinimalFinalizeStatus({
-      jobUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42',
-    });
-    const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain(
-      'Execution details: https://github.com/buildish-tooling/buildish/actions/runs/101/jobs/42',
-    );
-  });
-
-  it('falls back to workflowRunUrl for the Execution details line when jobUrl is absent', () => {
-    const status = createMinimalFinalizeStatus({
-      jobUrl: null,
-      workflowRunUrl: 'https://github.com/buildish-tooling/buildish/actions/runs/101',
-    });
-    const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain(
-      'Execution details: https://github.com/buildish-tooling/buildish/actions/runs/101',
-    );
-  });
-
-  it('prefixes failed base-cache saves with "Warning:" in the log output', () => {
-    const status = createMinimalFinalizeStatus({
-      bootstrap: {
-        ...createMinimalBootstrapExecution(),
-        baseCacheResult: {
-          operation: 'save',
-          status: 'failed',
-          generationKey: 'test-family-ref-main-gen-run-1-deadbeef',
-          cacheId: null,
-          paths: ['/tmp/cache'],
-          message: 'Base cache generation publication failed: backend unavailable.',
-        },
-      },
-    });
-    const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain('Warning:');
-    expect(lines).toContain('⚠️ Overall status: completed with warnings');
-    expect(lines).not.toContain('saved under');
-  });
-
-  it('prefixes warning messages with "Warning:" in the log output', () => {
-    const status = createMinimalFinalizeStatus({
-      buildReport: {
-        anyBuildFailed: false,
-        warnings: ['Configuration cache was invalidated.'],
-        summaryLines: [],
-        logLines: [],
-        builds: [],
-      },
-    });
-    const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain('Warning: Configuration cache was invalidated.');
-  });
-
-  it('includes build-report log lines verbatim', () => {
-    const status = createMinimalFinalizeStatus({
-      buildReport: {
-        anyBuildFailed: false,
-        warnings: [],
-        summaryLines: [],
-        logLines: ['Log line one.', 'Log line two.'],
-        builds: [],
-      },
-    });
-    const lines = createFinalizeActionLogLines(status).join('\n');
-    expect(lines).toContain('Log line one.');
-    expect(lines).toContain('Log line two.');
-  });
+it.each(['off', 'timestamp'])(
+  'retains only one completed local journal across repeated %s lifecycles',
+  async (mode) => {
+    const job = await cutoffJob(await root(), { inputs: { 'cache-gc-mode': mode } });
+    await data(job, 'data/a');
+    for (let i = 0; i < 5; i++) {
+      await job.prepare();
+      await executeFinalizeAction(job.deps);
+    }
+    const files = await readdir(path.join(job.home, '.mammoth/cutoff-state-v1'));
+    expect(files.filter((f) => f.startsWith('journal-'))).toHaveLength(1);
+  },
+);
+it.each(['read-only', 'worker', 'cleanup-off', 'gc-off'])(
+  'honors %s deletion and publication gates',
+  async (mode) => {
+    const inputs: Record<string, string> =
+      mode === 'read-only'
+        ? { 'read-only': 'true' }
+        : mode === 'worker'
+          ? { 'job-mode': 'distributed-worker' }
+          : mode === 'cleanup-off'
+            ? { 'cleanup-enabled': 'false' }
+            : { 'cache-gc-mode': 'off' };
+    const r = await root(),
+      artifacts = new CutoffArtifacts(path.join(r, 'artifacts'));
+    const job = await cutoffJob(r, { inputs, artifactBackend: artifacts });
+    await data(job, 'data/old');
+    await utimes(path.join(job.home, 'data/old'), 1700000000, 1700000000);
+    job.deps.now = () => Date.now() + 10000;
+    await job.prepare();
+    const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+    const result = await executeFinalizeAction(job.deps);
+    expect(result.cacheGcResult).toBeNull();
+    expect(await readFile(path.join(job.home, 'data/old'), 'utf8')).toBe('bytes');
+    if (mode === 'read-only' || mode === 'worker') expect(save).not.toHaveBeenCalled();
+  },
+);
+it('deletes frozen old targets despite Mammoth report atime and publishes an empty generation', async () => {
+  const job = await cutoffJob(await root());
+  await data(job, 'data/old');
+  await utimes(path.join(job.home, 'data/old'), 1700000000, 1700000000);
+  job.deps.now = () => Date.now() + 10000;
+  await job.prepare();
+  job.adapter.collectBuildReport = async () => {
+    await readFile(path.join(job.home, 'data/old'));
+    return { anyBuildFailed: false, warnings: [], summaryLines: [], logLines: [], builds: [] };
+  };
+  const result = await executeFinalizeAction(job.deps);
+  expect(result.cacheGcResult?.deletedFileCount).toBe(1);
+  expect(result.bootstrap.baseCacheResult?.status).toBe('saved');
+  await expect(readFile(path.join(job.home, 'data/old'))).rejects.toThrow();
+  expect(
+    JSON.parse(await readFile(path.join(job.home, '.mammoth/empty-generation-v1'), 'utf8')),
+  ).toBe('mammoth-empty-v1');
 });
-
-// ---------------------------------------------------------------------------
-// Unit tests for formatByteCount boundary behaviour.
-//
-// The function has two non-obvious decision points:
-//   1. The size >= 10 threshold that switches between .toFixed(2) and .toFixed(1).
-//   2. The loop that stops at TiB regardless of the input magnitude.
-// These tests pin both so a future refactor (e.g. flipping >= to >) is caught immediately.
-// ---------------------------------------------------------------------------
-
-describe('formatByteCount', () => {
-  it('formats zero bytes as "0 B"', () => {
-    expect(formatByteCount(0)).toBe('0 B');
+it('keeps imported paths protected before aggregate cutoff, including upstream used-only records', async () => {
+  const r = await root(),
+    artifacts = new CutoffArtifacts(path.join(r, 'artifacts'));
+  const worker = await cutoffJob(path.join(r, 'worker'), {
+    name: 'worker',
+    inputs: { 'job-mode': 'distributed-worker' },
+    artifactBackend: artifacts,
   });
-
-  it('formats 1 byte as "1 B"', () => {
-    expect(formatByteCount(1)).toBe('1 B');
+  await worker.prepare();
+  await data(worker, 'data/imported');
+  await utimes(path.join(worker.home, 'data/imported'), 1700000000, 1700000000);
+  const published = await executeFinalizeAction(worker.deps);
+  expect(published.deltaArtifactResult?.status).toBe('uploaded');
+  // Same invocation retries retain envelope and stable identity.
+  await executeFinalizeAction(worker.deps);
+  expect(artifacts.artifacts).toHaveLength(1);
+  const aggregate = await cutoffJob(path.join(r, 'aggregate'), {
+    inputs: { 'job-mode': 'distributed-aggregator', 'dependent-jobs': 'worker' },
+    artifactBackend: artifacts,
   });
-
-  it('formats 1 023 bytes as "1023 B" (just below the KiB boundary)', () => {
-    expect(formatByteCount(1023)).toBe('1023 B');
-  });
-
-  it('formats exactly 1 024 bytes as "1.00 KiB" (size < 10, two decimal places)', () => {
-    // 1024 / 1024 = 1.0 which is less than the >= 10 threshold, so .toFixed(2) applies.
-    expect(formatByteCount(1024)).toBe('1.00 KiB');
-  });
-
-  it('formats 10 239 bytes as "10.00 KiB" (just below the >= 10 threshold, .toFixed(2) rounds up)', () => {
-    // 10239 / 1024 ≈ 9.999, which is < 10 so .toFixed(2) is used; rounding carries all the
-    // way through the fractional digits and produces "10.00", not "9.99".
-    expect(formatByteCount(10239)).toBe('10.00 KiB');
-  });
-
-  it('formats exactly 10 240 bytes as "10.0 KiB" (at the >= 10 threshold, .toFixed(1) applies)', () => {
-    // 10240 / 1024 = 10.0 which satisfies size >= 10, so .toFixed(1) applies.
-    expect(formatByteCount(10240)).toBe('10.0 KiB');
-  });
-
-  it('formats exactly 1 MiB as "1.00 MiB"', () => {
-    expect(formatByteCount(1024 * 1024)).toBe('1.00 MiB');
-  });
-
-  it('formats exactly 1 GiB as "1.00 GiB"', () => {
-    expect(formatByteCount(1024 * 1024 * 1024)).toBe('1.00 GiB');
-  });
-
-  it('formats exactly 1 TiB as "1.00 TiB"', () => {
-    expect(formatByteCount(1024 * 1024 * 1024 * 1024)).toBe('1.00 TiB');
-  });
-
-  it('formats values above 1 TiB in TiB units (loop caps at TiB)', () => {
-    // The loop terminates at TiB (unitIndex 3) regardless of input magnitude.
-    // 2 TiB → size = 2.0 which is < 10, so .toFixed(2) applies → '2.00 TiB'.
-    expect(formatByteCount(2 * 1024 * 1024 * 1024 * 1024)).toBe('2.00 TiB');
-  });
+  aggregate.deps.now = () => Date.now() + 10000;
+  await aggregate.prepare();
+  const final = await executeFinalizeAction(aggregate.deps);
+  expect(final.cacheGcResult?.deletedFileCount).toBe(0);
+  expect(final.bootstrap.baseCacheResult?.status).toBe('saved');
+  expect(await readFile(path.join(aggregate.home, 'data/imported'), 'utf8')).toBe('bytes');
+  // Fresh aggregator replay still succeeds and republishes applied upserts.
+  await aggregate.prepare();
+  await executeFinalizeAction(aggregate.deps);
+  expect(artifacts.artifacts).toHaveLength(1);
 });
+it.each([0, -1])(
+  'fails aggregation on required publication decline %s and retries the frozen key',
+  async (decline) => {
+    const job = await cutoffJob(await root(), { inputs: { 'job-mode': 'distributed-aggregator' } });
+    await job.prepare();
+    await data(job, 'data/new');
+    const save = vi.spyOn(job.deps.cacheBackend, 'saveCache').mockResolvedValue(decline);
+    await expect(executeFinalizeAction(job.deps)).rejects.toThrow(/required a durable/);
+    const state = await journal(job);
+    expect(state.phase).toBe('publication-intent');
+    save.mockResolvedValue(11);
+    await executeFinalizeAction(job.deps);
+    expect(save.mock.calls[0]![1]).toBe(save.mock.calls[1]![1]);
+    expect((await journal(job)).saved).toBe(true);
+  },
+);
+it('warns standalone failed publication and retains recovery; rejects changed retained metadata on retry', async () => {
+  const job = await cutoffJob(await root());
+  await job.prepare();
+  await data(job, 'data/new');
+  vi.spyOn(job.deps.cacheBackend, 'saveCache').mockRejectedValue(new Error('network'));
+  expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('failed');
+  expect(job.warnings.join(' ')).toContain('network');
+  await data(job, 'data/new', 'different');
+  await expect(executeFinalizeAction(job.deps)).rejects.toThrow(/changed/);
+});
+it('requires intact current lifecycle and rejects policy drift before report or publication', async () => {
+  const job = await cutoffJob(await root());
+  await job.prepare();
+  const report = vi.spyOn(job.adapter, 'collectBuildReport');
+  const preflight = await preflightCutoffLifecycle(job.deps.runtimeHost.getState);
+  await expect(
+    executeFinalizeAction({
+      ...job.deps,
+      preflight,
+      config: { ...job.deps.config, cacheGcMode: 'off' },
+    }),
+  ).rejects.toThrow(/drift/);
+  expect(report).not.toHaveBeenCalled();
+  job.state.clear();
+  await expect(executeFinalizeAction(job.deps)).rejects.toThrow(/missing/);
+});
+it('handles cache-disabled reports without journal, cache, or artifact operations', async () => {
+  const job = await cutoffJob(await root(), { inputs: { 'cache-enabled': 'false' } });
+  await job.prepare();
+  const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+  const final = await executeFinalizeAction(job.deps);
+  expect(final.cacheStatistics).toBeNull();
+  expect(save).not.toHaveBeenCalled();
+});
+it('replays GC with the original decisions after the sweep checkpoint write fails', async () => {
+  const job = await cutoffJob(await root(), { inputs: { 'job-mode': 'distributed-aggregator' } });
+  await data(job, 'data/a');
+  await data(job, 'data/b');
+  for (const p of ['a', 'b']) await utimes(path.join(job.home, 'data', p), 1700000000, 1700000000);
+  job.deps.now = () => Date.now() + 10000;
+  await job.prepare();
+  const io = await import('../../../src/cache/metadata-io');
+  const original = io.writeMetadata;
+  let failed = false;
+  const spy = vi.spyOn(io, 'writeMetadata').mockImplementation(async (...args) => {
+    const value = args[2];
+    if (
+      !failed &&
+      typeof value === 'object' &&
+      value !== null &&
+      'deletedPaths' in value &&
+      Array.isArray(value.deletedPaths) &&
+      value.deletedPaths.length === 2
+    ) {
+      failed = true;
+      throw new Error('disk failure after unlink');
+    }
+    await original(...args);
+  });
+  await expect(executeFinalizeAction(job.deps)).rejects.toThrow('disk failure');
+  const frozen = await journal(job);
+  expect(frozen.selection?.gc).toHaveLength(2);
+  await expect(readFile(path.join(job.home, 'data/a'))).rejects.toThrow();
+  spy.mockRestore();
+  const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+  const recovered = await executeFinalizeAction(job.deps);
+  expect(recovered.cacheGcResult?.deletedFileCount).toBe(2);
+  expect(save).toHaveBeenCalledTimes(1);
+  expect((await journal(job)).selection).toEqual(frozen.selection);
+});
+it('refuses recreated or changed planned GC targets and never publishes an incomplete aggregate', async () => {
+  const job = await cutoffJob(await root(), { inputs: { 'job-mode': 'distributed-aggregator' } });
+  await data(job, 'data/a');
+  await utimes(path.join(job.home, 'data/a'), 1700000000, 1700000000);
+  job.deps.now = () => Date.now() + 10000;
+  await job.prepare();
+  const pre = await preflightCutoffLifecycle(job.deps.runtimeHost.getState);
+  expect(pre.journal?.selection?.gc).toHaveLength(1);
+  await rm(path.join(job.home, 'data/a'));
+  await data(job, 'data/a', 'replacement');
+  const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+  await expect(executeFinalizeAction({ ...job.deps, preflight: pre })).rejects.toThrow(/changed/);
+  expect(save).not.toHaveBeenCalled();
+  expect(await readFile(path.join(job.home, 'data/a'), 'utf8')).toBe('replacement');
+});
+it('does not publish an empty pristine miss or invent an empty marker', async () => {
+  const job = await cutoffJob(await root());
+  await job.prepare();
+  const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+  expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+    'not-required',
+  );
+  expect(save).not.toHaveBeenCalled();
+  await expect(readFile(path.join(job.home, '.mammoth/empty-generation-v1'))).rejects.toThrow();
+});
+it('keeps an unchanged cache hit and a usage-only hit without publishing replacements', async () => {
+  const job = await cutoffJob(await root(), { inputs: { 'cache-gc-mode': 'off' } });
+  vi.spyOn(job.deps.cacheBackend, 'restoreCache').mockImplementation(
+    async (_paths, primary) => primary + 'seed',
+  );
+  await data(job, 'data/old');
+  await utimes(path.join(job.home, 'data/old'), 1700000000, 1700000000);
+  job.deps.now = () => Date.now() + 10000;
+  await job.prepare();
+  const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+  expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+    'not-required',
+  );
+  expect(save).not.toHaveBeenCalled();
+  await job.prepare();
+  const actual = scans.captureCacheMetadataSnapshot;
+  const record = readCutoffLifecycle(job.deps.runtimeHost.getState);
+  if (!record.cacheEnabled) throw new Error('enabled');
+  const scan = vi
+    .spyOn(scans, 'captureCacheMetadataSnapshot')
+    .mockImplementation(async (...args) => {
+      const snapshot = await actual(...args);
+      const e = snapshot.partitions[0]!.entries[0]!;
+      Object.assign(e, { atimeMs: record.cutoff + 1 });
+      e.identity.atimeMs = record.cutoff + 1;
+      return snapshot;
+    });
+  const used = await executeFinalizeAction(job.deps);
+  expect(used.cacheStatistics).toMatchObject({ upsertCount: 0, usedCount: 1 });
+  expect(used.bootstrap.baseCacheResult?.status).toBe('not-required');
+  expect(save).not.toHaveBeenCalled();
+  scan.mockRestore();
+});
+it.each([true, false])(
+  'records warm-fixture operation counts with readOnly=%s (not a scale benchmark)',
+  async (readOnly) => {
+    const job = await cutoffJob(await root(), {
+      inputs: { 'cache-gc-mode': 'off', 'read-only': String(readOnly) },
+    });
+    vi.spyOn(job.deps.cacheBackend, 'restoreCache').mockImplementation(
+      async (_paths, primary) => primary + 'seed',
+    );
+    const payload = Buffer.alloc(16 * 1024, 42);
+    await mkdir(path.join(job.home, 'data'), { recursive: true });
+    await Promise.all(
+      Array.from({ length: 512 }, async (_, i) => {
+        const file = path.join(job.home, 'data', String(i).padStart(4, '0'));
+        await writeFile(file, payload);
+        await utimes(file, 1700000000, 1700000000);
+      }),
+    );
+    const scan = vi.spyOn(scans, 'captureCacheMetadataSnapshot');
+    const hash = vi.spyOn(scans, 'captureCacheManifest');
+    const guarded = await import('../../../src/cache/guarded-files');
+    const copy = vi.spyOn(guarded, 'copyGuardedFile');
+    const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
+    const started = performance.now();
+    job.deps.now = () => Date.now() + 10000;
+    await job.prepare();
+    const prepared = performance.now();
+    expect(scan).not.toHaveBeenCalled();
+    const result = await executeFinalizeAction(job.deps);
+    const finalized = performance.now();
+    expect(result.cacheStatistics?.fileCount).toBe(512);
+    expect(copy).not.toHaveBeenCalled();
+    expect(hash).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(scan).toHaveBeenCalledTimes(3); // Initial selection, post-report validation, pre-publication validation.
+    const state = await journal(job);
+    const io = await import('node:fs/promises');
+    const journalBytes = (await io.stat(path.join(job.home, cutoffJournalPath(state.invocation))))
+      .size;
+    console.log(
+      'CUTOFF_OPERATION_FIXTURE',
+      JSON.stringify({
+        readOnly,
+        files: 512,
+        sourceBytes: 512 * payload.length,
+        prepareMs: Math.round(prepared - started),
+        finalizeMs: Math.round(finalized - prepared),
+        metadataPasses: scan.mock.calls.length,
+        selectedSourceCopies: copy.mock.calls.length,
+        baseSaves: save.mock.calls.length,
+        retainedJournalBytes: journalBytes,
+        processLifetimeMaxRssKiB: process.resourceUsage().maxRSS,
+      }),
+    );
+  },
+  10000,
+);
+it.each(['exception', 'decline'])(
+  'recovers a fresh aggregate after %s using retained envelopes and cleans temporary staging',
+  async (failure) => {
+    const r = await root(),
+      artifacts = new CutoffArtifacts(path.join(r, 'artifacts'));
+    const worker = await cutoffJob(path.join(r, 'worker'), {
+      name: 'worker',
+      inputs: { 'job-mode': 'distributed-worker' },
+      artifactBackend: artifacts,
+    });
+    await worker.prepare();
+    await data(worker, 'data/recovered', 'worker bytes');
+    await executeFinalizeAction(worker.deps);
+    const envelope = artifacts.artifacts[0]!;
+    const inputs = { 'job-mode': 'distributed-aggregator', 'dependent-jobs': 'worker' };
+    const first = await cutoffJob(path.join(r, 'failed'), { inputs, artifactBackend: artifacts });
+    const prepared = await first.prepare();
+    expect(prepared.dependentDeltaResult?.selectedProducers.map((p) => p.jobName)).toEqual([
+      'worker',
+    ]);
+    const save = vi.spyOn(first.deps.cacheBackend, 'saveCache');
+    if (failure === 'exception') save.mockRejectedValue(new Error('backend unavailable'));
+    else save.mockResolvedValue(0);
+    await expect(executeFinalizeAction(first.deps)).rejects.toThrow(/required a durable/);
+    expect(artifacts.artifacts).toEqual([envelope]);
+    const fresh = await cutoffJob(path.join(r, 'fresh'), { inputs, artifactBackend: artifacts });
+    const restored = await fresh.prepare();
+    expect(restored.dependentDeltaResult?.selectedProducers.map((p) => p.jobName)).toEqual([
+      'worker',
+    ]);
+    expect(await readFile(path.join(fresh.home, 'data/recovered'), 'utf8')).toBe('worker bytes');
+    expect((await executeFinalizeAction(fresh.deps)).bootstrap.baseCacheResult?.status).toBe(
+      'saved',
+    );
+    expect(artifacts.artifacts).toEqual([envelope]);
+    const fs = await import('node:fs/promises');
+    for (const download of artifacts.downloads) await expect(fs.stat(download)).rejects.toThrow();
+    const staging = path.join(worker.home, '.mammoth/cutoff-state-v1/staging');
+    expect((await readdir(staging)).filter((p) => p.startsWith('package-'))).toEqual([]);
+  },
+);

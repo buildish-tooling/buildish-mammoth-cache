@@ -58,11 +58,11 @@ inputs:
     required: false
     default: none
   cache-gc-mode:
-    description: 'Pre-save managed-cache garbage collection mode: off or timestamp.'
+    description: 'Managed-cache GC: timestamp uses file age and current-build activity; off disables deletion only.'
     required: false
     default: timestamp
   cache-gc-older-than-days:
-    description: Age threshold for timestamp garbage collection. Must be at least 2 days.
+    description: File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days.
     required: false
     default: '14'
   github-token:

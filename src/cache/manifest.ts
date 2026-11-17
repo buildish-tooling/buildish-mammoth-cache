@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { fileIdentity, type FileIdentity } from './file-identity';
+import { isCacheMetadataPath } from './metadata-paths';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -50,6 +52,7 @@ export const DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY = 32;
 const STABLE_ENTRY_CAPTURE_ATTEMPTS = 3;
 
 export interface CacheFileMetadataEntry {
+  readonly identity: FileIdentity;
   readonly relativePath: string;
   readonly size: number;
   readonly atimeMs: number;
@@ -139,6 +142,24 @@ export async function captureCacheMetadataSnapshot(
   };
 }
 
+/** Match managed ownership without filesystem discovery. */
+export function createManagedCachePathMatcher(model: CacheModel) {
+  const partitions = model.partitions.map((p) => ({
+    id: p.id,
+    includes: p.relativeIncludeGlobs.map(compileGlobPattern),
+    excludes: p.relativeExcludeGlobs.map(compileGlobPattern),
+  }));
+  return (partitionId: string, relativePath: string): boolean => {
+    if (isCacheMetadataPath(relativePath)) return false;
+    const matches = partitions.filter(
+      (p) =>
+        matchesAnyCompiledGlob(relativePath, p.includes) &&
+        !matchesAnyCompiledGlob(relativePath, p.excludes),
+    );
+    return matches.length === 1 && matches[0]!.id === partitionId;
+  };
+}
+
 async function scanCachePartitions<T extends { readonly relativePath: string }>(
   cacheModel: CacheModel,
   captureEntry: (
@@ -168,6 +189,7 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
           async (absolutePath) => {
             const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
             if (
+              isCacheMetadataPath(relativePath) ||
               compiledPartition.seenRelativePaths.has(relativePath) ||
               matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)
             ) {
@@ -232,6 +254,7 @@ async function captureFileMetadataEntry(
 
   return {
     relativePath,
+    identity: fileIdentity(stats),
     size: stats.size,
     atimeMs: stats.atimeMs,
     mtimeMs: stats.mtimeMs,

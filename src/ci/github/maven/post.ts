@@ -14,54 +14,53 @@
  * limitations under the License.
  */
 
-import { MavenBuildToolAdapter } from '../../../build-tool/maven/adapter';
-import {
-  readMavenActionInputs,
-  resolveMavenActionInputsFromConfigFile,
-  normalizeMavenActionConfig,
-} from '../../../build-tool/maven/config';
-import { runFinalizeExecution } from '../../../phases/finalize/cli';
-import type { NormalizedMavenConfig } from '../../../config/types';
-import { readGitHubPlatformActionInputs } from '../action-inputs';
-
-import {
-  createGitHubBaseCacheBackend,
-  createGitHubPlatform,
-  createGitHubReportSink,
-  createGitHubHost,
-  createGitHubWorkflowArtifactBackend,
-} from '../index';
+import { createGitHubHost } from '../host';
+import { runGuardedCutoffPost } from '../../../phases/finalize/preflight';
 
 const runtimeHost = createGitHubHost();
-const ciProvider = createGitHubPlatform({
-  env: process.env,
-  ...readGitHubPlatformActionInputs(runtimeHost, 'maven'),
-});
-const reportSink = createGitHubReportSink({ env: process.env });
-
 async function main(): Promise<void> {
-  const directInputs = readMavenActionInputs(runtimeHost);
-  const rawInputs = await resolveMavenActionInputsFromConfigFile(directInputs, {
-    workspace: ciProvider.context.workspace,
-  });
-  const config: NormalizedMavenConfig = normalizeMavenActionConfig(rawInputs, {
-    phase: 'finalize',
-    ciContext: ciProvider.context,
-    env: process.env,
-  });
-
-  await runFinalizeExecution({
-    runtimeHost,
-    ciProvider,
-    reportSink,
-    config,
-    env: process.env,
-    cacheBackend: createGitHubBaseCacheBackend(),
-    artifactBackend: config.readOnly ? undefined : createGitHubWorkflowArtifactBackend(),
-    buildToolAdapterFactory: () => new MavenBuildToolAdapter(config),
+  await runGuardedCutoffPost(runtimeHost, async (preflight) => {
+    // Importing the artifact SDK can read GITHUB_EVENT_PATH. Defer the entire graph.
+    const { MavenBuildToolAdapter } = await import('../../../build-tool/maven/adapter');
+    const {
+      readMavenActionInputs,
+      resolveMavenActionInputsFromConfigFile,
+      normalizeMavenActionConfig,
+    } = await import('../../../build-tool/maven/config');
+    const { runFinalizeExecution } = await import('../../../phases/finalize/cli');
+    const { readGitHubPlatformActionInputs } = await import('../action-inputs');
+    const {
+      createGitHubBaseCacheBackend,
+      createGitHubPlatform,
+      createGitHubReportSink,
+      createGitHubWorkflowArtifactBackend,
+    } = await import('../index');
+    const ciProvider = createGitHubPlatform({
+      env: process.env,
+      ...readGitHubPlatformActionInputs(runtimeHost, 'maven'),
+    });
+    const directInputs = readMavenActionInputs(runtimeHost);
+    const rawInputs = await resolveMavenActionInputsFromConfigFile(directInputs, {
+      workspace: ciProvider.context.workspace,
+    });
+    const config = normalizeMavenActionConfig(rawInputs, {
+      phase: 'finalize',
+      ciContext: ciProvider.context,
+      env: process.env,
+    });
+    await runFinalizeExecution({
+      runtimeHost,
+      ciProvider,
+      config,
+      preflight,
+      reportSink: createGitHubReportSink({ env: process.env }),
+      env: process.env,
+      cacheBackend: createGitHubBaseCacheBackend(),
+      artifactBackend: config.readOnly ? undefined : createGitHubWorkflowArtifactBackend(),
+      buildToolAdapterFactory: () => new MavenBuildToolAdapter(config),
+    });
   });
 }
-
 main().catch((error: unknown) => {
   runtimeHost.setFailed(error instanceof Error ? error.message : String(error));
 });
