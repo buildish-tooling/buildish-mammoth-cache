@@ -72,11 +72,22 @@ directory to be included as upserts. This can increase payload sizes when a vers
 classifiers. It carries the worker's artifact bytes and origin marker
 together, including siblings whose timestamps did not change. It does not replicate deletions.
 
-If two worker packages update the same directory, they must contain identical path sets, content
-hashes, sizes, and modes for that directory. Otherwise aggregation fails before applying the plan.
+By default, if two worker packages update the same directory, they must contain identical path sets,
+content hashes and sizes for that directory. Otherwise aggregation fails before applying the plan.
 `allow-duplicate-dependent-delta-paths` cannot override this Maven directory check. Even markers
 with matching properties can conflict because Resolver writes timestamp comments; Mammoth neither
 parses nor merges those properties.
+
+Opt-in partition `conflict-handling: choose-worker-directory` elects the producer
+with the smallest job name in JavaScript UTF-16 ordinal order and retains its
+complete immediate-directory contribution. Membership differences trigger the
+same election as content differences. It does not combine properties, bytes or
+attributes from losing workers. The policy is limited to aggregate Maven
+repository partitions and participates in their compatibility fingerprint.
+Default families remain unchanged. This trades the losing workers' cache
+contents and resolution contexts for one actual producer view. Usage-only
+packages cannot win; forwarding changes producer identity. Different directories
+can elect different producers. See [configuration](../../user/configuration/).
 
 Before applying any upserts, the aggregator checks all non-transient files already in each
 target directory, including files excluded from caching. An existing sibling absent from the
@@ -95,8 +106,10 @@ checks still apply.
 
 The qualified topology uses the enhanced local repository manager with its default
 `_remote.repositories` tracking filename and unsplit `repository/` layout under a dedicated Maven
-user home. Use a common seeded repository and compatible Resolver/repository configuration, with
-one writer for each changed directory. Custom marker filenames and split layouts have not been
+user home. The default strict policy uses a common seeded repository and compatible
+Resolver/repository configuration, with one writer for each changed directory.
+The opt-in directory policy instead accepts discarding other workers' complete
+directory contributions, retaining the same target-completeness checks. Custom marker filenames and split layouts have not been
 qualified. Workers may add different artifact/version directories. Independent workers adding different classifiers, origins,
 or local installs to the same version directory can fail aggregation. Seed shared plugin and
 transitive dependencies in one job first, serialize overlapping resolution, or use standalone mode.

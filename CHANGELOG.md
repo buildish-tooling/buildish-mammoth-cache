@@ -18,6 +18,13 @@ limitations under the License.
 
 ## Unreleased
 
+- Add opt-in partition `conflict-handling: choose-worker-directory` for aggregate Maven repository
+  partitions. Select a complete producer directory deterministically, including differing file sets,
+  rather than mixing files or parsing origin markers. Losing classifiers, origin entries and local
+  installs may be unavailable downstream. Preserve strict default behavior, default cache identities,
+  and checks for existing or excluded target siblings absent from the winner. Opt-in families are
+  isolated by the effective policy. Enable the mode explicitly in hosted Maven distributed scenarios.
+
 - Share Gradle and Maven cache families across Java versions, operating systems and architectures by default.
   Opt into separation with `cache-key-prefix`. Remove Java detection, probing and Java-based lifecycle
   drift checks; build tools and project inputs determine output reuse. Enable

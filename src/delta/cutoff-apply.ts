@@ -30,6 +30,7 @@ import { guardedPath, verifyParents, regularStat, copyGuardedFile } from '../cac
 import { fileIdentity, sameFileIdentity, type FileIdentity } from '../cache/file-identity';
 import { isReplaceTargetError } from '../util/fs';
 import { portableCacheFileMode } from '../cache/file-permissions';
+import { resolveMavenDirectoryConflicts } from './maven-directory-conflicts';
 
 export interface CutoffMergedUpsert {
   partitionId: string;
@@ -37,6 +38,7 @@ export interface CutoffMergedUpsert {
   rootDirectory: string;
 }
 export interface CutoffMergePlan {
+  directoryConflicts?: { count: number; details: string[] };
   upserts: CutoffMergedUpsert[];
   used: string[];
   snapshots?: { partitionId: string; entries: CutoffUpsert[]; rootDirectory: string }[];
@@ -50,37 +52,24 @@ export function mergeCutoffPackages(
 ): CutoffMergePlan {
   const upserts = new Map<string, CutoffMergedUpsert>(),
     used = new Set<string>();
-  const mavenDirectories = new Map<string, string>();
+  const validated = packages.map((pkg) => {
+    const manifest = cutoffManifestSchema.parse(pkg.manifest);
+    const candidate = { ...pkg, manifest };
+    assertCutoffPackageCompatible(candidate, model, ci);
+    return candidate;
+  });
+  const directories = resolveMavenDirectoryConflicts(
+    validated.filter(
+      (pkg) => !ordinaryProducers || ordinaryProducers.includes(pkg.metadata.producer.jobName),
+    ),
+    model,
+  );
   const snapshots = new Map<
     string,
     { partitionId: string; entries: CutoffUpsert[]; rootDirectory: string }
   >();
-  for (const pkg of packages) {
-    const manifest = cutoffManifestSchema.parse(pkg.manifest);
-    assertCutoffPackageCompatible({ ...pkg, manifest }, model, ci);
-    if (
-      model.buildToolId === 'maven' &&
-      (!ordinaryProducers || ordinaryProducers.includes(pkg.metadata.producer.jobName))
-    ) {
-      const directories = new Map<string, string[]>();
-      for (const p of manifest.partitions)
-        for (const entry of p.upserts) {
-          if (!entry.relativePath.startsWith('repository/')) continue;
-          const directory = path.posix.dirname(entry.relativePath);
-          const members = directories.get(directory) ?? [];
-          members.push(JSON.stringify([entry.relativePath, entry.contentSha256, entry.size]));
-          directories.set(directory, members);
-        }
-      for (const [directory, members] of directories) {
-        const signature = JSON.stringify(members.sort());
-        const previous = mavenDirectories.get(directory);
-        if (previous !== undefined && previous !== signature)
-          throw new Error(
-            `Conflicting Maven repository directory: ${directory}. Use a common seeded repository and one writer per changed directory; duplicate-path overrides do not apply.`,
-          );
-        mavenDirectories.set(directory, signature);
-      }
-    }
+  for (const pkg of validated) {
+    const manifest = pkg.manifest;
     for (const p of manifest.partitions) {
       if (p.snapshot) {
         if (snapshots.has(p.partitionId))
@@ -95,6 +84,8 @@ export function mergeCutoffPackages(
       if (ordinaryProducers && !ordinaryProducers.includes(pkg.metadata.producer.jobName)) continue;
       for (const name of p.usedPaths) used.add(name);
       for (const entry of p.upserts) {
+        const winner = directories.winners.get(path.posix.dirname(entry.relativePath));
+        if (winner && winner !== pkg) continue;
         const candidate = { partitionId: p.partitionId, entry, rootDirectory: pkg.rootDirectory },
           existing = upserts.get(entry.relativePath);
         if (!existing) {
@@ -118,12 +109,18 @@ export function mergeCutoffPackages(
       }
     }
   }
+  const selectedPaths = new Set(upserts.keys());
   return {
+    ...(directories.count
+      ? { directoryConflicts: { count: directories.count, details: directories.details } }
+      : {}),
     snapshots: [...snapshots.values()],
     upserts: [...upserts.values()].sort((a, b) =>
       a.entry.relativePath.localeCompare(b.entry.relativePath),
     ),
-    used: [...used].filter((p) => !upserts.has(p)).sort((a, b) => a.localeCompare(b)),
+    used: [...used]
+      .filter((p) => !selectedPaths.has(p) && !directories.winners.has(path.posix.dirname(p)))
+      .sort((a, b) => a.localeCompare(b)),
   };
 }
 export async function applyCutoffPlan(

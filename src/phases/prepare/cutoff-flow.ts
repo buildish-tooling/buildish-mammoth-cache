@@ -258,6 +258,17 @@ export async function executeCutoffPrepareAction(
               state.snapshotWarnings.push(
                 `Partition '${p.id}' writer '${p.writer}' contributed no snapshot. Retaining previous metadata.`,
               );
+          if (plan.directoryConflicts) {
+            const { count, details } = plan.directoryConflicts;
+            dependent.warnings.push(
+              `Maven directory selection resolved ${count} conflicting directory view(s).`,
+              ...details,
+            );
+            if (count > details.length)
+              dependent.warnings.push(
+                `${count - details.length} additional conflicting directories omitted.`,
+              );
+          }
           state.workers = { upserts: applied.upserts, used: plan.used };
           state.producerArtifacts = names;
           Object.assign(dependent, {
@@ -289,7 +300,8 @@ export async function executeCutoffPrepareAction(
     state.cutoff = (dependencies.now ?? Date.now)();
     state.phase = 'build-ready';
     await persistCutoffJournal(state);
-    for (const warning of state.snapshotWarnings) dependencies.runtimeHost.warning(warning);
+    for (const warning of [...state.snapshotWarnings, ...(dependent?.warnings ?? [])])
+      dependencies.runtimeHost.warning(warning);
     persistCutoffLifecycle(
       {
         schemaVersion: 4,
@@ -333,6 +345,7 @@ export function createCutoffPrepareSummary(s: CutoffPrepareStatus): string[] {
     `- Activity cutoff: ${s.cutoff ?? 'not applicable'}`,
     `- Worker upserts: ${s.dependentDeltaResult?.upsertCount ?? 0}`,
     `- Worker used paths: ${s.dependentDeltaResult?.usedCount ?? 0}`,
+    ...(s.dependentDeltaResult?.warnings ?? []).map((line) => `- ${escapeSummaryText(line)}`),
     ...(s.partitionSnapshotLines ?? []).map((line) => '- ' + escapeSummaryText(line)),
   ];
 }

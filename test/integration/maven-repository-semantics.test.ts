@@ -403,3 +403,102 @@ it('refuses GC of a marker when real excluded sources would survive', async () =
     /Incomplete Maven repository directory/u,
   );
 });
+
+const chooseDirectory = {
+  'cache-partitions': JSON.stringify([
+    { id: 'repository', 'conflict-handling': 'choose-worker-directory' },
+  ]),
+};
+
+it.each([false, true])(
+  'selects a native worker directory with different origins (different bytes/membership: %s)',
+  async (different) => {
+    const winner = `policy-winner-${different}`,
+      loser = `policy-loser-${different}`;
+    const remote = different ? 'remote-b' : 'policy-same-bytes';
+    if (!different) await publish(remote, 'example', '1.0', 'A');
+    expect(await resolve(winner)).toBe('A');
+    expect(await resolve(loser, release, { id: 'origin-b', remote })).toBe(different ? 'B' : 'A');
+    if (different) {
+      await publish(remote, 'example', '1.0', 'LOSER-SOURCES', '-sources');
+      expect(await resolve(loser, sourcesCoordinates, { id: 'origin-b', remote })).toBe(
+        'LOSER-SOURCES',
+      );
+    }
+    const a = await mavenFixtureState(path.join(root, winner), 'a-worker', chooseDirectory);
+    const b = await mavenFixtureState(path.join(root, loser), 'z-worker', chooseDirectory);
+    const packages = [
+      await stageCutoffPackage(b.state, b.ci),
+      await stageCutoffPackage(a.state, a.ci),
+    ];
+    const targetName = `policy-target-${different}`;
+    const target = await mavenFixtureModel(path.join(root, targetName), chooseDirectory);
+    const plan = mergeCutoffPackages(packages, target, a.ci);
+    expect(plan.directoryConflicts?.count).toBe(1);
+    await applyCutoffPlan(plan, target);
+    expect(await readFile(path.join(target.cacheRoot, marker), 'utf8')).toBe(
+      await readFile(path.join(root, winner, marker), 'utf8'),
+    );
+    for (const local of [winner, targetName]) {
+      expect(await resolve(local, release, { offline: true })).toBe('A');
+      await expect(
+        resolve(local, release, { offline: true, id: 'origin-b', remote }),
+      ).rejects.toThrow(/offline mode/u);
+      if (different)
+        await expect(resolve(local, sourcesCoordinates, { offline: true })).rejects.toThrow(
+          /offline mode/u,
+        );
+    }
+    if (different)
+      await expect(readFile(path.join(target.cacheRoot, sourcesArtifact))).rejects.toThrow();
+  },
+);
+
+it('can discard an unretrievable local install when the remote worker wins its directory', async () => {
+  const coordinates = 'test:example:jar:local-only:1.0';
+  const source = await publish(
+    'policy-install-source',
+    'example',
+    '1.0',
+    'LOCAL-ONLY',
+    '-local-only',
+  );
+  await resolve('policy-remote-winner');
+  await exec('java', [
+    `-Duser.home=${path.join(root, 'home')}`,
+    '-cp',
+    classpath,
+    'ResolverProbe',
+    path.join(root, 'policy-local-loser/repository'),
+    coordinates,
+    'install',
+    source,
+  ]);
+  expect(await resolve('policy-local-loser', coordinates, { offline: true })).toBe('LOCAL-ONLY');
+  const a = await mavenFixtureState(
+    path.join(root, 'policy-remote-winner'),
+    'a-remote',
+    chooseDirectory,
+  );
+  const b = await mavenFixtureState(
+    path.join(root, 'policy-local-loser'),
+    'z-local',
+    chooseDirectory,
+  );
+  const packages = [
+    await stageCutoffPackage(b.state, b.ci),
+    await stageCutoffPackage(a.state, a.ci),
+  ];
+  const model = await mavenFixtureModel(path.join(root, 'policy-install-target'), chooseDirectory);
+  await applyCutoffPlan(mergeCutoffPackages(packages, model, a.ci), model);
+  expect(await resolve('policy-install-target', release, { offline: true })).toBe('A');
+  await expect(resolve('policy-install-target', coordinates, { offline: true })).rejects.toThrow(
+    /offline mode/u,
+  );
+  await expect(resolve('policy-install-target', coordinates)).rejects.toThrow(
+    /Could not find artifact/u,
+  );
+  expect(await readFile(path.join(model.cacheRoot, marker), 'utf8')).toBe(
+    await readFile(path.join(root, 'policy-remote-winner', marker), 'utf8'),
+  );
+});

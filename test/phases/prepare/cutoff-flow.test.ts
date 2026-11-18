@@ -28,7 +28,10 @@ import {
   preflightCutoffLifecycle,
   CUTOFF_LIFECYCLE_STATE,
 } from '../../../src/phases/cutoff-lifecycle';
-import { createCutoffPrepareOutputs } from '../../../src/phases/prepare/cutoff-flow';
+import {
+  createCutoffPrepareOutputs,
+  executeCutoffPrepareAction,
+} from '../../../src/phases/prepare/cutoff-flow';
 import { executeFinalizeAction } from '../../../src/phases/finalize/flow';
 import { cutoffJournalPath, loadCutoffJournal } from '../../../src/cache/cutoff-state';
 import { STANDARD_BASE_CACHE_BACKEND_CAPABILITIES } from '../../../src/cache/backend';
@@ -300,4 +303,62 @@ it('excludes real Gradle capture scripts and report scratch through finalize cle
   if (!state.cacheEnabled) throw new Error('enabled');
   const saved = await loadCutoffJournal(state.model, cutoffJournalPath(state.invocation));
   expect(saved.selection?.upserts.map((e) => e.relativePath)).toEqual(['data/retained']);
+});
+
+it('keeps directory election separate from ordinary and writer-only snapshot contributions', async () => {
+  const r = await root();
+  const artifacts = new CutoffArtifacts(path.join(r, 'artifacts'));
+  const partitions = JSON.stringify([
+    {
+      id: 'repository',
+      includes: ['repository/**'],
+      'conflict-handling': 'choose-worker-directory',
+    },
+    { id: 'metadata-a', includes: ['metadata-a/**'], publication: 'single-writer', writer: 'a' },
+    { id: 'metadata-z', includes: ['metadata-z/**'], publication: 'single-writer', writer: 'z' },
+  ]);
+  const job = async (name: string, mode: string, dependentJobs = '') => {
+    const result = await cutoffJob(path.join(r, name), {
+      name,
+      artifactBackend: artifacts,
+      inputs: { 'cache-partitions': partitions, 'job-mode': mode, 'dependent-jobs': dependentJobs },
+    });
+    const deps = {
+      ...result.deps,
+      buildToolAdapterFactory: () => ({ ...result.adapter, getBuildToolId: () => 'maven' }),
+    };
+    return { ...result, deps, prepare: () => executeCutoffPrepareAction(deps) };
+  };
+  const a = await job('a', 'distributed-worker');
+  await a.prepare();
+  for (const [file, bytes] of [
+    ['repository/test/a.jar', 'artifact'],
+    ['repository/test/_remote.repositories', 'marker'],
+    ['metadata-a/file', 'A'],
+  ]) {
+    await mkdir(path.dirname(path.join(a.home, file!)), { recursive: true });
+    await writeFile(path.join(a.home, file!), bytes!);
+  }
+  await executeFinalizeAction(a.deps);
+  const z = await job('z', 'distributed-worker');
+  await z.prepare();
+  await mkdir(path.join(z.home, 'metadata-z'), { recursive: true });
+  await writeFile(path.join(z.home, 'metadata-z/file'), 'Z');
+  await executeFinalizeAction(z.deps);
+  const b = await job('b', 'distributed-worker');
+  await b.prepare();
+  await mkdir(path.join(b.home, 'repository/test'), { recursive: true });
+  await writeFile(path.join(b.home, 'repository/test/a.jar'), 'losing-artifact');
+  await writeFile(path.join(b.home, 'repository/test/_remote.repositories'), 'losing-marker');
+  await executeFinalizeAction(b.deps);
+  const aggregator = await job('aggregator', 'distributed-aggregator', 'a,b');
+  const prepared = await aggregator.prepare();
+  expect(prepared.dependentDeltaResult?.warnings.join('\n')).toContain('resolved 1 conflicting');
+  expect(aggregator.warnings.join('\n')).toContain("selected 'a'");
+  expect(aggregator.summaries.join('\n')).toContain("selected 'a'");
+  expect(await readFile(path.join(aggregator.home, 'repository/test/a.jar'), 'utf8')).toBe(
+    'artifact',
+  );
+  expect(await readFile(path.join(aggregator.home, 'metadata-a/file'), 'utf8')).toBe('A');
+  expect(await readFile(path.join(aggregator.home, 'metadata-z/file'), 'utf8')).toBe('Z');
 });

@@ -23,6 +23,7 @@ import type {
   ConfiguredCachePartitionInput,
   NormalizedActionConfig,
   PartitionPublication,
+  PartitionConflictHandling,
 } from '../config/types';
 
 const CACHE_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,512}$/;
@@ -122,6 +123,8 @@ export interface CacheModel {
  * to pass to filesystem or cache APIs for the current {@link CacheModel.cacheRoot}.
  */
 export interface CachePartitionDefinition {
+  /** Effective default is omitted to preserve existing compatibility identities. */
+  readonly conflictHandling?: Exclude<PartitionConflictHandling, 'default'>;
   /** Defaults to aggregation when absent. Single-writer partitions travel as complete snapshots. */
   readonly publication?: PartitionPublication;
   readonly writer?: string;
@@ -196,6 +199,7 @@ export async function createCacheModel(
     adapter.getBuiltInPartitionPresets(),
     adapter.getHardCacheExcludeGlobs(),
   );
+  validatePartitionConflictHandling(adapter.getBuildToolId(), partitions);
   const partitionFingerprint = createPartitionFingerprint(
     partitions,
     adapter.getHardCacheExcludeGlobs(),
@@ -347,6 +351,7 @@ export function createCachePartitions(
         hardCacheExcludeGlobs,
         override?.publication ?? preset.publication,
         override?.writer,
+        override?.conflictHandling ?? preset.conflictHandling,
       ),
     ];
   });
@@ -372,6 +377,7 @@ export function createCachePartitions(
         hardCacheExcludeGlobs,
         partition.publication,
         partition.writer,
+        partition.conflictHandling,
       ),
     ];
   });
@@ -389,6 +395,7 @@ function createPartition(
   hardCacheExcludeGlobs: readonly string[],
   publication: PartitionPublication = 'aggregate',
   writer?: string,
+  conflictHandling?: PartitionConflictHandling,
 ): CachePartitionDefinition {
   if (writer && publication !== 'single-writer')
     throw new Error(`Partition '${id}' writer requires single-writer publication.`);
@@ -402,6 +409,7 @@ function createPartition(
     id,
     publication,
     ...(writer ? { writer } : {}),
+    ...(conflictHandling === 'choose-worker-directory' ? { conflictHandling } : {}),
     displayName,
     description,
     relativeIncludeGlobs: deduplicatedIncludeGlobs,
@@ -425,6 +433,7 @@ function createPartitionFingerprint(
       excludes: partition.relativeExcludeGlobs,
       publication: partition.publication ?? 'aggregate',
       writer: partition.writer ?? null,
+      ...(partition.conflictHandling ? { conflictHandling: partition.conflictHandling } : {}),
     })),
   });
 
@@ -458,4 +467,24 @@ function validateCacheKey(value: string, label: string): void {
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/** Validate again when restoring persisted models, not only when parsing user inputs. */
+export function validatePartitionConflictHandling(
+  buildToolId: string,
+  partitions: readonly CachePartitionDefinition[],
+): void {
+  for (const partition of partitions) {
+    if (!partition.conflictHandling) continue;
+    if (
+      partition.conflictHandling !== 'choose-worker-directory' ||
+      buildToolId !== 'maven' ||
+      (partition.publication ?? 'aggregate') !== 'aggregate' ||
+      !partition.relativeIncludeGlobs.length ||
+      partition.relativeIncludeGlobs.some((glob) => !glob.startsWith('repository/'))
+    )
+      throw new Error(
+        `Partition '${partition.id}' choose-worker-directory requires an aggregate Maven partition rooted under repository/.`,
+      );
+  }
 }

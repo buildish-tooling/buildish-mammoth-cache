@@ -74,3 +74,17 @@ it.each(['gradle', 'maven'])(
     }
   },
 );
+
+it('Maven writable workers and aggregator explicitly share the directory conflict policy', async () => {
+  const workflow = parse(await readFile('.github/workflows/it-reusable-maven.yml', 'utf8')) as {
+    jobs: Record<string, { steps: { with?: Record<string, string> }[] }>;
+  };
+  for (const name of ['maven_workers', 'maven_aggregator']) {
+    const action = workflow.jobs[name]!.steps.find((s) =>
+      s.with?.['job-mode']?.startsWith('distributed-'),
+    );
+    expect(JSON.parse(action!.with!['cache-partitions']!)).toEqual([
+      { id: 'repository', 'conflict-handling': 'choose-worker-directory' },
+    ]);
+  }
+});

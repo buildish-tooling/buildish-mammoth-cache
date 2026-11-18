@@ -216,7 +216,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Only relevant for distributed aggregator jobs.
 
 For Maven files under `repository/`, directory consistency takes precedence: workers updating the
-same directory must provide identical managed path sets, content, sizes, and modes. This option
+same directory must provide identical managed path sets, content, and sizes by default. This option
 cannot select a newer conflicting origin marker or combine different directory views. See
 [Maven caching patterns](../maven-caching-patterns/).
 
@@ -243,6 +243,48 @@ Matrix jobs must have distinct producer identities.
 `dependent-jobs` optional. If a job is also listed there for ordinary artifacts, its envelope remains
 required. See [the distributed guide](../distributed-jobs/#gradle-metadata-writer) for complete
 workflows, skipped writers, fallback, and configuration compatibility.
+
+### Partition conflict handling
+
+Each `cache-partitions` entry accepts `conflict-handling`: `default` (also the
+omitted value) or `choose-worker-directory`. Built-in partitions keep their
+existing behavior unless explicitly overridden. An explicit `default` clears an
+inherited opt-in policy.
+
+```yaml
+cache-partitions:
+  - id: repository
+    conflict-handling: choose-worker-directory
+```
+
+`choose-worker-directory` supports only aggregate Maven partitions whose include
+globs all start with `repository/`. Configure the same policy in every producer
+and aggregator. The policy changes the partition fingerprint and starts a new
+compatible cache family; omitted/default configuration retains existing families.
+
+For each immediate repository directory, choose the complete contribution from
+the producer with the smallest job name in JavaScript UTF-16 ordinal order.
+Discovery first selects each producer's newest eligible attempt. File arrival
+order, modification times and attempt numbers across different producers do not
+set priority. Differing directory membership counts as a conflict too.
+
+The winner supplies all files and their attributes, subject to normal portable
+permissions. Other producers' files for that directory are discarded. Marker
+contents are neither parsed nor merged. This directory policy takes precedence
+over `allow-duplicate-dependent-delta-paths`. Usage-only contributions cannot win.
+Directories spanning partitions must use one consistent policy; single-writer
+snapshot partitions cannot use this mode.
+
+Selection can lose classifiers, origin entries or local installs supplied only
+by another worker. Offline builds may fail, and a discarded local install may
+have no remote copy. Different directories may select different workers, so this
+is not a snapshot of the entire Maven repository. A forwarding worker republishes
+its selected view under its own job identity; priority is per merge stage.
+
+Existing aggregator files absent from the winning directory still cause an error
+before worker upserts, including files excluded from caching. This mode does not
+delete target siblings or add exact directory replacement. Diagnostics report
+resolved conflicts with bounded winner/discarded-producer details.
 
 ### `github-token`
 

@@ -195,6 +195,7 @@ jobs:
         with:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
+          cache-partitions: '[{"id":"repository","conflict-handling":"choose-worker-directory"}]'
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
@@ -234,6 +235,7 @@ jobs:
         with:
           base-directory: build/integration-fixtures/maven-aggregator
           job-mode: distributed-aggregator
+          cache-partitions: '[{"id":"repository","conflict-handling":"choose-worker-directory"}]'
           dependent-jobs: maven_worker_a,maven_worker_b
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}

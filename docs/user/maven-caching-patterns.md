@@ -133,13 +133,13 @@ local repository before the finalize step runs.
 
 In distributed mode, each changed managed file under `repository/` carries its immediate managed
 directory as upserts, keeping artifacts and origin markers in the worker's complete view. Use a
-common seeded repository and one writer per changed directory. The qualified topology uses
+common seeded repository and one writer per changed directory under the default policy. The qualified topology uses
 Resolver's enhanced local repository manager, default `_remote.repositories` tracking filename,
 and unsplit `repository/` layout. Different artifact/version
 directories can be populated in parallel. Seed common plugins and transitives once before workers
 resolve their remaining disjoint dependencies, or use standalone mode for cold seeding.
 
-Different worker views of the same directory fail aggregation, including disjoint classifiers or
+Under the default policy, different worker views of the same directory fail aggregation, including disjoint classifiers or
 local installs sharing a marker. Even equal marker entries can differ in timestamp comments and
 fail the byte comparison. The duplicate-path override cannot bypass this check. An aggregator also
 rejects updates missing non-transient siblings already present in its repository, including
@@ -194,3 +194,28 @@ exist that add goal-level incremental caching to Maven, analogous to Gradle's bu
 operate independently of this action and require separate configuration. This action is compatible
 with such extensions — the files they produce in the local repository are captured and cached
 alongside regular dependency artifacts.
+
+## Selecting one worker directory on conflict
+
+For independent cold workers, an explicit partition policy can select one
+complete worker directory instead of rejecting differing marker bytes:
+
+```yaml
+cache-partitions:
+  - id: repository
+    conflict-handling: choose-worker-directory
+```
+
+Use the same configuration in producers and aggregators. The smallest producer
+job name in JavaScript UTF-16 ordinal order wins each immediate directory after
+discovery selects eligible attempts. It keeps that worker's artifacts, marker
+and attributes together, without parsing Java properties. Different file sets
+also trigger selection. Other workers' classifiers, local installs and origin
+entries can be lost; offline resolution is not guaranteed for losing workers.
+A discarded local install may not be downloadable anywhere.
+
+This policy is optional and creates a separate cache family. Common seeding
+remains supported with the strict default. Existing target siblings absent from
+the winner, including excluded artifacts, still prevent application; selection
+does not delete files. See [configuration](../configuration/) for constraints,
+forwarding behavior and interaction with the generic duplicate override.

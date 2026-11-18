@@ -34,7 +34,7 @@ import {
 import { sameFileIdentity } from './file-identity';
 import { captureCacheMetadataSnapshot, createManagedCachePathMatcher } from './manifest';
 import { validateNormalizedRelativePosixPath } from '../util/paths';
-import type { CacheModel } from './model';
+import { validatePartitionConflictHandling, type CacheModel } from './model';
 import type { NormalizedActionConfig } from '../config/types';
 import { isMissingPathError } from '../util/fs';
 import { snapshotPartitions, ownsSnapshot, readPartitionSnapshot } from './partition-snapshots';
@@ -56,6 +56,7 @@ const partitionSchema = z
     description: z.string(),
     publication: z.enum(['aggregate', 'single-writer']).optional(),
     writer: text.optional(),
+    conflictHandling: z.literal('choose-worker-directory').optional(),
     relativeIncludeGlobs: z.array(glob),
     relativeExcludeGlobs: z.array(glob),
     absoluteIncludeGlobs: z.array(text),
@@ -81,6 +82,11 @@ export const cutoffModelSchema = z
   })
   .strict()
   .superRefine((model, ctx) => {
+    try {
+      validatePartitionConflictHandling(model.buildToolId, model.partitions);
+    } catch (error) {
+      ctx.addIssue({ code: 'custom', message: (error as Error).message });
+    }
     const ids = model.partitions.map((p) => p.id);
     if (new Set(ids).size !== ids.length)
       ctx.addIssue({ code: 'custom', message: 'Duplicate partitions.' });

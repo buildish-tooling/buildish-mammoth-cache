@@ -87,8 +87,17 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
       (typeof partition.writer !== 'string' || !partition.writer.trim())
     )
       throw new Error(`Partition '${id}' writer must be a nonempty job name.`);
+    if (
+      partition['conflict-handling'] !== undefined &&
+      partition['conflict-handling'] !== 'default' &&
+      partition['conflict-handling'] !== 'choose-worker-directory'
+    )
+      throw new Error(`Invalid conflict-handling policy for partition '${id}'.`);
     return {
       id,
+      ...(partition['conflict-handling'] === undefined
+        ? {}
+        : { conflictHandling: partition['conflict-handling'] }),
       ...(partition.includes === undefined
         ? {}
         : {

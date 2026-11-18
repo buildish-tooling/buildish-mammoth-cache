@@ -20,6 +20,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { parseCachePartitionsInput } from '../../src/config/shared';
 import { readActionInputs, resolveActionInputsFromConfigFile } from '../../src/config/inputs';
 
 describe('canonical raw action inputs', () => {
@@ -71,6 +72,26 @@ describe('canonical raw action inputs', () => {
           ]),
           processAllWrapperFiles: 'true',
         });
+      },
+    );
+  });
+
+  it('preserves nested conflict-handling through repository YAML and direct JSON inputs', async () => {
+    const partition = { id: 'repository', 'conflict-handling': 'choose-worker-directory' };
+    const expected = [{ id: 'repository', conflictHandling: 'choose-worker-directory' }];
+    const direct = readActionInputs('maven', {
+      getInput: (name) => (name === 'cache-partitions' ? JSON.stringify([partition]) : ''),
+    });
+    expect(parseCachePartitionsInput(direct.cachePartitions)).toEqual(expected);
+    await withConfigFile(
+      'cache.yml',
+      'cache-partitions:\n  - id: repository\n    conflict-handling: choose-worker-directory\n',
+      async (workspace) => {
+        const raw = readActionInputs('maven', {
+          getInput: (name) => (name === 'config-file' ? 'cache.yml' : ''),
+        });
+        const resolved = await resolveActionInputsFromConfigFile('maven', raw, { workspace });
+        expect(parseCachePartitionsInput(resolved.cachePartitions)).toEqual(expected);
       },
     );
   });

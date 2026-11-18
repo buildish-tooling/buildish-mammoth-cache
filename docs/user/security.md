@@ -153,9 +153,16 @@ The following paths are excluded from every active partition unconditionally and
 
 Maven origin markers (`_remote.repositories`) remain cached. Changed files under `repository/`
 carry their complete managed directory in worker packages; different worker views of the same
-directory fail aggregation even with duplicate-path overrides. GC retains a managed directory
+directory fail aggregation by default, even with duplicate-path overrides. GC retains a managed directory
 while any sibling survives. Partial-directory exclusions cannot leave excluded artifact bytes
 beside a replaced or deleted marker: source capture, aggregation, and GC reject such directories,
 and custom-exclusion restores validate the existing tree before extraction. Whole-directory
 exclusions remain supported. See [Maven caching patterns](../maven-caching-patterns/) for topology,
 snapshot/local-install exclusions, and cold-seeding guidance.
+
+The explicit Maven `conflict-handling: choose-worker-directory` partition policy
+can instead select one complete producer view per immediate directory. It keeps
+the winning marker with that worker's bytes and discards losing contributions;
+it does not parse or union origin claims. This can lose offline availability or
+local installs. Target completeness, excluded-sibling checks, and package
+verification remain enforced. See [configuration](../configuration/).
