@@ -129,7 +129,7 @@ jobs:
 
       - name: Resolve standalone dependencies online
         working-directory: build/integration-fixtures/maven-standalone-round-trip
-        run: mvn -P standalone dependency:resolve -q
+        run: mvn -P standalone dependency:resolve
 
       - name: Save exact standalone cache snapshot
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -155,7 +155,7 @@ jobs:
 
       - name: Verify the saved cache restores offline
         working-directory: build/integration-fixtures/maven-standalone-round-trip
-        run: mvn -P standalone dependency:resolve --offline -q
+        run: mvn -P standalone dependency:resolve --offline
 
       - name: Assert exact cache reuse
         run: test "${STEPS_RESTORE_OUTPUTS_CACHE_HIT}" = 'true'
@@ -202,7 +202,7 @@ jobs:
 
       - name: Produce worker cache delta
         working-directory: build/integration-fixtures/${{ matrix.worker.id }}
-        run: mvn -P ${{ matrix.worker.profile }} dependency:resolve -q
+        run: mvn -P ${{ matrix.worker.profile }} dependency:resolve
 
   # Aggregator waits for both workers, downloads their current-run artifacts, applies both deltas,
   # and confirms the merged dependencies resolve offline before post-action cleanup removes consumed
@@ -242,11 +242,11 @@ jobs:
 
       - name: Verify worker A dependency (guava) resolves offline after delta merge
         working-directory: build/integration-fixtures/maven-aggregator
-        run: mvn -P worker-a dependency:resolve --offline -q
+        run: mvn -P worker-a dependency:resolve --offline
 
       - name: Verify worker B dependency (commons-io) resolves offline after delta merge
         working-directory: build/integration-fixtures/maven-aggregator
-        run: mvn -P worker-b dependency:resolve --offline -q
+        run: mvn -P worker-b dependency:resolve --offline
 
       - name: Assert both worker artifacts were consumed
         env:
@@ -338,7 +338,7 @@ jobs:
 
       - name: Run a read-only PR worker build
         working-directory: build/integration-fixtures/maven-pull-request-worker
-        run: mvn -P worker-a dependency:resolve -q
+        run: mvn -P worker-a dependency:resolve
 
   # Validates the full PR worker/aggregator topology under minimal permissions.
   maven_pull_request_read_only:
@@ -376,7 +376,7 @@ jobs:
 
       - name: Run a read-only PR aggregator build
         working-directory: build/integration-fixtures/maven-pull-request
-        run: mvn -P standalone dependency:resolve -q
+        run: mvn -P standalone dependency:resolve
 
       - name: Assert the PR default stayed read-only
         env:
