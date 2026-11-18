@@ -212,10 +212,7 @@ it.each(['disabled', 'miss', 'hit', 'fallback', 'unavailable'] as const)(
       vi.spyOn(job.deps.cacheBackend, 'restoreCache').mockImplementation(
         async (_paths, primary, fallback) => {
           // Empty snapshot transport is valid; restore still verifies it before consumption.
-          const cacheModel = await model.createCacheModel(job.deps.config, job.ci, job.adapter, {
-            captureCommandOutput: job.deps.captureCommandOutput,
-            env: {},
-          });
+          const cacheModel = await model.createCacheModel(job.deps.config, job.ci, job.adapter);
           for (const p of snapshots.snapshotPartitions(cacheModel))
             await snapshots.stagePartitionSnapshot(cacheModel, p.id, job.home, []);
           return (kind === 'fallback' ? fallback![0]! : primary) + 'seed';

@@ -29,6 +29,7 @@ import {
 import { guardedPath, verifyParents, regularStat, copyGuardedFile } from '../cache/guarded-files';
 import { fileIdentity, sameFileIdentity, type FileIdentity } from '../cache/file-identity';
 import { isReplaceTargetError } from '../util/fs';
+import { portableCacheFileMode } from '../cache/file-permissions';
 
 export interface CutoffMergedUpsert {
   partitionId: string;
@@ -67,9 +68,7 @@ export function mergeCutoffPackages(
           if (!entry.relativePath.startsWith('repository/')) continue;
           const directory = path.posix.dirname(entry.relativePath);
           const members = directories.get(directory) ?? [];
-          members.push(
-            JSON.stringify([entry.relativePath, entry.contentSha256, entry.size, entry.mode]),
-          );
+          members.push(JSON.stringify([entry.relativePath, entry.contentSha256, entry.size]));
           directories.set(directory, members);
         }
       for (const [directory, members] of directories) {
@@ -103,13 +102,19 @@ export function mergeCutoffPackages(
           continue;
         }
         const old = existing.entry;
-        const equivalent =
-          old.contentSha256 === entry.contentSha256 &&
-          old.size === entry.size &&
-          old.mode === entry.mode;
+        const equivalent = old.contentSha256 === entry.contentSha256 && old.size === entry.size;
         if (!equivalent && (!allowDuplicates || old.mtimeMs === entry.mtimeMs))
           throw new Error(`Conflicting worker upserts: ${entry.relativePath}`);
-        if (entry.mtimeMs > old.mtimeMs) upserts.set(entry.relativePath, candidate);
+        const selected = entry.mtimeMs > old.mtimeMs ? candidate : existing;
+        upserts.set(
+          entry.relativePath,
+          equivalent
+            ? {
+                ...selected,
+                entry: { ...selected.entry, mode: portableCacheFileMode(old.mode | entry.mode) },
+              }
+            : selected,
+        );
       }
     }
   }
@@ -161,7 +166,10 @@ export async function applyCutoffPlan(
         size: item.entry.size,
         contentSha256: item.entry.contentSha256,
       });
-      await chmod(scratch, item.entry.mode);
+      await chmod(
+        scratch,
+        portableCacheFileMode(item.entry.mode, model.buildToolId, item.entry.relativePath),
+      );
       await utimes(scratch, new Date(item.entry.mtimeMs), new Date(item.entry.mtimeMs));
       await verifyParents(model.cacheRoot, parent);
       const actual = await regularStat(target),

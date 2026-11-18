@@ -51,13 +51,12 @@ const config: NormalizedGradleConfig = {
 const baseModel: CacheModel = {
   buildToolId: 'gradle',
   cacheRoot: '/home/runner/.gradle',
-  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
+  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v2-feedcafe1234abcd',
   currentRefToken: 'main-0d6e4079e367',
   currentRefLineagePrefix:
-    'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd-ref-main-0d6e4079e367-gen-',
+    'buildish-mammoth-cache-gradle-v2-feedcafe1234abcd-ref-main-0d6e4079e367-gen-',
   fallbackRefLineagePrefixes: [],
   plannedGenerationId: 'run-101-attempt-1-job-aaaaaaaaaaaa',
-  javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',
   safeRefName: 'main',

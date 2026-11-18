@@ -138,6 +138,26 @@ async function fixture(writer: string | null = 'master', secondWriter = false) {
   return { root, job, seed, entries, artifacts };
 }
 describe('single-writer partition lifecycle', () => {
+  it('publishes Windows writer metadata through a macOS aggregator and restores it on Linux', async () => {
+    const f = await fixture();
+    await f.seed();
+    const writer = await f.job('master', 'distributed-worker');
+    writer.ci.runnerOs = 'windows';
+    writer.ci.runnerArch = 'arm64';
+    await writer.prepare();
+    await put(writer, 'metadata/index.bin', 'windows writer');
+    await executeFinalizeAction(writer.deps);
+    const aggregator = await f.job('aggregate', 'distributed-aggregator');
+    aggregator.ci.runnerOs = 'macos';
+    aggregator.ci.runnerArch = 'arm64';
+    await aggregator.prepare();
+    expect(await get(aggregator, 'metadata/index.bin')).toBe('windows writer');
+    await executeFinalizeAction(aggregator.deps);
+    const fresh = await f.job('fresh');
+    await fresh.prepare();
+    expect(await get(fresh, 'metadata/index.bin')).toBe('windows writer');
+  });
+
   it('caches the default Gradle metadata partition while omitting locks and GC markers', async () => {
     const f = await fixture();
     const job = await f.job('gradle-default');

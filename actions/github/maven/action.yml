@@ -43,7 +43,7 @@ inputs:
     required: false
     default: 'false'
   cache-key-prefix:
-    description: Namespace prefix for action-owned cache families; build, runner, partition, ref-lineage, and generation identity are appended automatically.
+    description: Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically.
     required: false
     default: buildish-mammoth-cache-
   cache-partitions:

@@ -18,6 +18,15 @@ limitations under the License.
 
 ## Unreleased
 
+- Share Gradle and Maven cache families across Java versions, operating systems and architectures by default.
+  Opt into separation with `cache-key-prefix`. Remove Java detection, probing and Java-based lifecycle
+  drift checks; build tools and project inputs determine output reuse. Enable
+  GitHub cross-OS archives with cache-root-relative path identity and extraction. Equal-content
+  worker entries tolerate permission differences and retain executable bits; restored worker and
+  snapshot files receive portable permissions. Restore executable Gradle and Maven distribution launchers
+  on POSIX. Preserve strict content conflicts, Maven origins/directory checks and snapshot ownership.
+  Shorter family keys start cold with no fallback to the former platform-specific families.
+
 - Skip publication-only activity scans, replay verification, snapshot capture and generation
   decisions in read-only finalize. Preserve restore validation, lifecycle identity/configuration
   checks and build reports. Report uncollected activity statistics as unavailable and label snapshot

@@ -140,7 +140,7 @@ describe('MavenBuildToolAdapter', () => {
       ...adapter.getHardCacheExcludeGlobs(),
       '**/_remote.repositories',
     ];
-    const options = { env: {}, captureCommandOutput: async () => 'openjdk version "21.0.12"' };
+    const options = {};
     const currentModel = await createCacheModel(
       config,
       { ...STUB_CI_CONTEXT, resolvedRefName: 'feature' },

@@ -15,6 +15,9 @@
  */
 
 import * as toolkitCache from '@actions/cache';
+import { warning } from '@actions/core';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
@@ -34,26 +37,97 @@ const NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT =
  *
  * @param cacheBackend - Cache implementation to delegate to; defaults to the toolkit cache client.
  *   Inject a test double to exercise cache logic without touching the GitHub cache API.
+ * @param cacheRoot - Managed root used for portable path hashing and archive member names.
+ * @param warn - Reports unsupported SDK archive paths without failing the build.
  */
 export function createGitHubBaseCacheBackend(
   cacheBackend: Pick<
-    BaseCacheBackend,
+    typeof toolkitCache,
     'isFeatureAvailable' | 'restoreCache' | 'saveCache'
   > = toolkitCache,
+  cacheRoot?: string,
+  warn: (message: string) => void = warning,
 ): BaseCacheBackend {
+  const root = cacheRoot === undefined ? undefined : path.resolve(cacheRoot);
+  let warned = false;
+  const supportsRoot = () => {
+    if (root !== undefined && /[\s"]/u.test(root)) {
+      if (!warned)
+        warn(
+          'Base cache unavailable: the GitHub cache toolkit cannot quote cache-root paths containing whitespace or double quotes. Use a runner/cache home without these characters. Workflow artifact exchange remains available.',
+        );
+      warned = true;
+      return false;
+    }
+    return true;
+  };
   return {
     capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
     isFeatureAvailable(): boolean {
-      return cacheBackend.isFeatureAvailable();
+      return supportsRoot() && cacheBackend.isFeatureAvailable();
     },
     async restoreCache(paths: string[], primaryKeyPrefix: string, fallbackKeyPrefixes?: string[]) {
-      return await cacheBackend.restoreCache(paths, primaryKeyPrefix, fallbackKeyPrefixes);
+      if (!supportsRoot()) return undefined;
+      return await withCacheRoot(root, paths, (relativePaths) =>
+        cacheBackend.restoreCache(
+          relativePaths,
+          primaryKeyPrefix,
+          fallbackKeyPrefixes,
+          undefined,
+          true,
+        ),
+      );
     },
     async saveCache(paths: string[], key: string) {
-      return await cacheBackend.saveCache(paths, key);
+      if (!supportsRoot()) return -1;
+      return await withCacheRoot(root, paths, (relativePaths) =>
+        cacheBackend.saveCache(relativePaths, key, undefined, true),
+      );
     },
     isMissingPathsError(error: unknown): boolean {
       return error instanceof Error && error.message.includes(NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT);
     },
   };
+}
+
+// The toolkit hashes its path arguments and archives relative to GITHUB_WORKSPACE. Both must
+// refer to the cache root rather than a platform-specific home or checkout. The action awaits
+// cache operations sequentially; serialize instances too, and always restore process context.
+let cacheOperation: Promise<unknown> = Promise.resolve();
+async function withCacheRoot<T>(
+  root: string | undefined,
+  paths: string[],
+  operation: (paths: string[]) => Promise<T>,
+): Promise<T> {
+  if (root === undefined) return await operation(paths);
+  const relativePaths = paths.map((pattern) => {
+    const negated = pattern.startsWith('!');
+    const relative = path.relative(root, negated ? pattern.slice(1) : pattern);
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative))
+      throw new Error('Cache archive path is outside the cache root.');
+    return (
+      (negated ? '!' : '') +
+      (relative || '.').split(path.sep).join('/') +
+      (/[\\/]$/u.test(pattern) ? '/' : '')
+    );
+  });
+  const previous = cacheOperation;
+  let release!: () => void;
+  cacheOperation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  const cwd = process.cwd();
+  const workspace = process.env.GITHUB_WORKSPACE;
+  try {
+    await mkdir(root, { recursive: true });
+    process.chdir(root);
+    process.env.GITHUB_WORKSPACE = root;
+    return await operation(relativePaths);
+  } finally {
+    process.chdir(cwd);
+    if (workspace === undefined) delete process.env.GITHUB_WORKSPACE;
+    else process.env.GITHUB_WORKSPACE = workspace;
+    release();
+  }
 }

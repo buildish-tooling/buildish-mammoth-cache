@@ -14,16 +14,14 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   createCacheGeneration,
   createCacheModel,
   createCachePartitions,
   createCacheRefToken,
-  parseJavaMajor,
   renderCacheFamilyKey,
-  renderCacheJavaMajor,
 } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import type { CiJobContext } from '../../src/ci/types';
@@ -73,7 +71,7 @@ const baseCiContext: CiJobContext = {
   actionPath: '/workspace',
 };
 
-describe('parseJavaMajor', () => {
+describe('partition policy', () => {
   it('inherits snapshot policy and patterns while permitting explicit file exclusions', () => {
     const preset = {
       id: 'metadata',
@@ -115,7 +113,6 @@ describe('parseJavaMajor', () => {
         },
         baseCiContext,
         gradleAdapter,
-        { captureCommandOutput: async () => 'openjdk version "21"' },
       );
     const models = await Promise.all([
       model('aggregate'),
@@ -125,25 +122,66 @@ describe('parseJavaMajor', () => {
     ]);
     expect(new Set(models.map((m) => m.partitionFingerprint)).size).toBe(4);
   });
-  it('parses current java version output', () => {
-    expect(parseJavaMajor('openjdk version "21.0.4" 2024-07-16\n')).toBe(21);
-  });
-
-  it('parses legacy java 8 version output', () => {
-    expect(parseJavaMajor('java version "1.8.0_432"\n')).toBe(8);
-  });
-
-  it('rejects unsupported java versions', () => {
-    expect(() => parseJavaMajor('openjdk version "1.7.0_80"\n')).toThrow(/Java 8 or newer/);
-  });
 });
 
 describe('cache identity rendering', () => {
   it('renders an action-owned cache family without ref or generation identity', () => {
-    expect(renderCacheFamilyKey(baseConfig, 'gradle', baseCiContext, 21, 'feedcafe1234abcd')).toBe(
-      'buildish-mammoth-cache-gradle-v2-21-linux-x64-feedcafe1234abcd',
+    expect(renderCacheFamilyKey(baseConfig, 'gradle', 'feedcafe1234abcd')).toBe(
+      'buildish-mammoth-cache-gradle-v2-feedcafe1234abcd',
     );
   });
+
+  it.each(['gradle', 'maven'])(
+    'keeps explicit namespaces and structural compatibility for %s',
+    (tool) => {
+      const key = renderCacheFamilyKey(baseConfig, tool, 'feedcafe1234abcd');
+      expect(
+        renderCacheFamilyKey(
+          { ...baseConfig, cacheKeyPrefix: 'project-java21-linux-' },
+          tool,
+          'feedcafe1234abcd',
+        ),
+      ).not.toBe(key);
+      expect(
+        renderCacheFamilyKey({ ...baseConfig, cacheSchemaVersion: 99 }, tool, 'feedcafe1234abcd'),
+      ).not.toBe(key);
+      expect(renderCacheFamilyKey(baseConfig, tool, 'different-layout')).not.toBe(key);
+      expect(
+        renderCacheFamilyKey(
+          baseConfig,
+          tool === 'gradle' ? 'maven' : 'gradle',
+          'feedcafe1234abcd',
+        ),
+      ).not.toBe(key);
+    },
+  );
+
+  it.each(['gradle', 'maven'])(
+    'constructs %s families without reading JAVA_HOME or launching Java',
+    async (tool) => {
+      const capture = { ...process.env };
+      // Trap inherited environment reads without changing the caller's actual JAVA_HOME.
+      const env = new Proxy(capture, {
+        get(target, key) {
+          if (key === 'JAVA_HOME') throw new Error('Cache identity must not inspect Java');
+          return Reflect.get(target, key);
+        },
+      });
+      const adapter = new GradleBuildToolAdapter(baseConfig);
+      adapter.getBuildToolId = () => tool;
+      const previousEnv = process.env;
+      process.env = env;
+      try {
+        const model = await createCacheModel(baseConfig, baseCiContext, adapter);
+        expect(model.cacheFamilyKey).toMatch(
+          new RegExp('^buildish-mammoth-cache-' + tool + '-v2-[a-f0-9]{16}$', 'u'),
+        );
+        expect(model).not.toHaveProperty('javaMajor');
+      } finally {
+        process.env = previousEnv;
+      }
+    },
+  );
 
   it('keeps lossy slug collisions in different ref lineages', () => {
     const slashToken = createCacheRefToken('feature/cache');
@@ -277,27 +315,17 @@ describe('createCachePartitions', () => {
   });
 });
 
-// Env that disables JAVA_HOME-based detection so tests relying on captureCommandOutput
-// injection are not accidentally short-circuited by the local developer's JAVA_HOME.
-const envWithoutJavaHome: NodeJS.ProcessEnv = { ...process.env, JAVA_HOME: '' };
-
 describe('createCacheModel', () => {
   it('derives the cache model from the normalized config and ci context', async () => {
-    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
-      captureCommandOutput: async () => 'openjdk version "21.0.4" 2024-07-16\n',
-      env: envWithoutJavaHome,
-    });
+    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {});
 
-    expect(cacheModel.cacheFamilyKey).toMatch(
-      /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}$/u,
-    );
+    expect(cacheModel.cacheFamilyKey).toMatch(/^buildish-mammoth-cache-gradle-v2-[a-f0-9]{16}$/u);
     expect(cacheModel.currentRefLineagePrefix).toMatch(
-      /^buildish-mammoth-cache-gradle-v2-21-linux-x64-[a-f0-9]{16}-ref-feature-cache-model-[a-f0-9]{12}-gen-$/u,
+      /^buildish-mammoth-cache-gradle-v2-[a-f0-9]{16}-ref-feature-cache-model-[a-f0-9]{12}-gen-$/u,
     );
     expect(cacheModel.fallbackRefLineagePrefixes).toHaveLength(1);
     expect(cacheModel.plannedGenerationId).toMatch(/^run-123-attempt-1-job-[a-f0-9]{12}$/u);
     expect(cacheModel.cacheRoot).toBe('/home/runner/.gradle');
-    expect(cacheModel.javaMajor).toBe(21);
     expect(cacheModel.partitionFingerprint).toMatch(/^[a-f0-9]{16}$/);
     expect(cacheModel.partitions).toHaveLength(5);
     expect(cacheModel.includePaths).toContain('/home/runner/.gradle/wrapper/dists/**');
@@ -309,32 +337,8 @@ describe('createCacheModel', () => {
     );
   });
 
-  it('reads the Java version from $JAVA_HOME/release without spawning a subprocess', async () => {
-    // Use the real JAVA_HOME from the test environment if available.
-    const javaHome = process.env.JAVA_HOME?.trim();
-    if (!javaHome) {
-      return; // skip when JAVA_HOME is not set in the test environment
-    }
-
-    const captureCommandOutput = vi.fn(async () => {
-      throw new Error('captureCommandOutput should not be called when release file is present');
-    });
-
-    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
-      captureCommandOutput,
-    });
-
-    expect(cacheModel.javaMajor).toBeGreaterThanOrEqual(8);
-    expect(captureCommandOutput).not.toHaveBeenCalled();
-  });
-
   it('changes the partition fingerprint and cache family when the partition layout changes', async () => {
-    const captureCommandOutput = async () => 'openjdk version "21.0.4" 2024-07-16\n';
-
-    const defaultModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
-      captureCommandOutput,
-      env: envWithoutJavaHome,
-    });
+    const defaultModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {});
     const customizedConfig = {
       ...baseConfig,
       cachePartitions: [
@@ -350,7 +354,7 @@ describe('createCacheModel', () => {
       customizedConfig,
       baseCiContext,
       customizedAdapter,
-      { captureCommandOutput, env: envWithoutJavaHome },
+      {},
     );
 
     expect(customizedModel.partitions.map((partition) => partition.id)).toContain(
@@ -372,38 +376,11 @@ describe('createCacheModel', () => {
       },
       gradleAdapter,
       {
-        captureCommandOutput: async () => 'openjdk version "21.0.4" 2024-07-16\n',
-        env: envWithoutJavaHome,
         randomUuid: () => '123e4567-e89b-12d3-a456-426614174000',
       },
     );
 
     expect(cacheModel.plannedGenerationId).toBe('uuid-123e4567-e89b-12d3-a456-426614174000');
     expect(cacheModel.fallbackRefLineagePrefixes).toEqual([]);
-  });
-
-  it('sets javaMajor to null and uses 0 in the cache family when no Java runtime is available', async () => {
-    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
-      captureCommandOutput: async () => {
-        throw new Error('ENOENT: java not found');
-      },
-      env: envWithoutJavaHome,
-    });
-
-    expect(cacheModel.javaMajor).toBeNull();
-    expect(renderCacheJavaMajor(cacheModel.javaMajor)).toBe('0');
-    expect(cacheModel.cacheFamilyKey).toMatch(/-v2-0-linux-/u);
-  });
-
-  it('sets javaMajor to null when java -version exits non-zero', async () => {
-    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {
-      captureCommandOutput: async () => {
-        throw new Error("'java -version' failed with exit code 2.");
-      },
-      env: envWithoutJavaHome,
-    });
-
-    expect(cacheModel.javaMajor).toBeNull();
-    expect(cacheModel.cacheFamilyKey).toMatch(/-v2-0-linux-/u);
   });
 });

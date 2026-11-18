@@ -86,7 +86,6 @@ describe('finalize entrypoint', () => {
       runtimeHost,
       ciProvider,
       reportSink,
-      env: process.env,
       config: {} as FinalizeEntrypointDependencies['config'],
       cacheBackend: {} as FinalizeEntrypointDependencies['cacheBackend'],
       artifactBackend: {} as FinalizeEntrypointDependencies['artifactBackend'],

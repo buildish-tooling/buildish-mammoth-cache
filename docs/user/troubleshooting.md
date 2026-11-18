@@ -38,9 +38,9 @@ even on the same branch with no dependency changes.
    therefore a new key lineage. This is expected and correct; after the first successful build
    on the new configuration the cache will hit again.
 
-3. **Check whether the Java major version changed.** Switching between Java 17, 21, and 24 produces
-   different cache families. Ensure
-   `actions/setup-java` uses the same major version on every run.
+3. **Check explicit namespace isolation.** Java versions, OS and architecture share by default.
+   If your `cache-key-prefix` includes matrix values, those values intentionally create separate
+   families. Every worker and aggregator in a sharing group must resolve the same prefix.
 
 4. **Check the cache eviction policy.** GitHub Actions caches are evicted after 7 days of
    inactivity and when the total storage cap for the repository is reached. An evicted entry
@@ -216,3 +216,27 @@ successful replacement.
 Fresh aggregation may rewrite identical upserts and upload a complete generation. Usage alone does
 not force a base save. Read-only overhead (#6) and full-generation optimization (#7) remain follow-ups.
 Linux fixtures do not establish large-cache affordability; native Windows/macOS validation is open.
+
+## Cross-platform cache sharing
+
+Java versions, OS and architecture share by default; build tool, schema and partition layout still
+separate families. The platform-sharing key change starts cold and does not restore older keys.
+If platform jobs miss each other's caches, check that prefixes and family inputs match and that
+self-hosted Windows runners provide GNU tar and zstd. The GitHub backend enables cross-OS archives
+and uses paths relative to the cache root so runner home paths do not determine cache versions.
+
+Exact file permissions are not preserved across every platform. Worker/snapshot restores establish
+ordinary readable/writable files while retaining recorded executable bits, and base restores repair
+Gradle and Maven distribution launchers on POSIX. Custom cached executables whose Unix execute bit was lost
+on Windows may need a project-specific permission step.
+
+If a platform-sensitive Gradle task reuses unsuitable output, declare the relevant task inputs or
+isolate the prefix. For Maven local installs, distinguish environment-dependent coordinates or
+isolate the prefix. Same-path different-byte conflicts remain errors; permission-only worker
+differences do not require platform isolation.
+
+The current GitHub cache toolkit constructs an unquoted tar argument for the cache root. Mammoth
+therefore warns and skips base-cache operations when that root contains whitespace or double quotes,
+instead of running a broken extraction/save. Use a runner/cache home without these characters;
+distributed workflow-artifact exchange remains available. This is an SDK transport limitation,
+independent of task compatibility and platform-family sharing.

@@ -39,10 +39,7 @@ export async function mavenFixtureModel(root: string, inputs: Record<string, str
       env: { MAVEN_USER_HOME: root },
     },
   );
-  return createCacheModel(config, ci, new MavenBuildToolAdapter(config), {
-    captureCommandOutput: async () => 'openjdk version "21.0.12"',
-    env: {},
-  });
+  return createCacheModel(config, ci, new MavenBuildToolAdapter(config));
 }
 
 export async function mavenFixtureState(

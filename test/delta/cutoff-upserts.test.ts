@@ -22,6 +22,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import os from 'node:os';
 import {
+  assertCutoffPackageCompatible,
   stageCutoffPackage,
   verifyCutoffPackage,
   uploadCutoffPackage,
@@ -218,4 +219,99 @@ it('treats fractional conflicting mtimes in the same portable millisecond as a t
   other.manifest.partitions[0]!.upserts[0]!.mtimeMs = 1000.9;
   other.manifest.partitions[0]!.upserts[0]!.contentSha256 = 'f'.repeat(64);
   expect(() => mergeCutoffPackages([pkg, other], model, ci, true)).toThrow(/Conflicting/);
+});
+
+it.each(['gradle', 'maven'])(
+  'accepts mixed-platform %s workers without weakening identity checks',
+  async (tool) => {
+    const { state, ci, model } = await fixture();
+    const pkg = await stageCutoffPackage(state, ci);
+    pkg.manifest.buildToolId = tool;
+    const targetModel = { ...model, buildToolId: tool };
+    pkg.metadata.producer.runnerOs = 'windows';
+    pkg.metadata.producer.runnerArch = 'arm64';
+    expect(() =>
+      assertCutoffPackageCompatible(pkg, targetModel, { ...ci, runnerOs: 'macos' }),
+    ).not.toThrow();
+    const bad = structuredClone(pkg);
+    bad.metadata.cacheIdentity.familyKey += '-other';
+    expect(() => assertCutoffPackageCompatible(bad, targetModel, ci)).toThrow(/identity/);
+    bad.metadata.cacheIdentity.familyKey = model.cacheFamilyKey;
+    bad.metadata.cacheIdentity.partitionFingerprint += '-other';
+    expect(() => assertCutoffPackageCompatible(bad, targetModel, ci)).toThrow(/identity/);
+    bad.metadata.cacheIdentity.partitionFingerprint = model.partitionFingerprint;
+    bad.metadata.producer.safeRefName = 'other';
+    expect(() => assertCutoffPackageCompatible(bad, targetModel, ci)).toThrow(/identity/);
+  },
+);
+
+it('coalesces permission differences in either worker order and preserves executability', async () => {
+  const { state, ci, model, root } = await fixture();
+  const pkg = await stageCutoffPackage(state, ci);
+  const other = structuredClone(pkg);
+  pkg.manifest.partitions[0]!.upserts[0]!.mode = 0o755;
+  other.manifest.partitions[0]!.upserts[0]!.mode = 0o600;
+  for (const packages of [
+    [pkg, other],
+    [other, pkg],
+  ]) {
+    const plan = mergeCutoffPackages(packages, model, ci);
+    expect(plan.upserts[0]!.entry.mode).toBe(0o755);
+    await applyCutoffPlan(plan, model);
+    expect((await lstat(path.join(root, 'data/a'))).mode & 0o777).toBe(0o755);
+  }
+  other.manifest.partitions[0]!.upserts[0]!.contentSha256 = 'f'.repeat(64);
+  expect(() => mergeCutoffPackages([pkg, other], model, ci)).toThrow(/Conflicting/);
+});
+
+it('ignores incidental modes in complete Maven directory views while retaining content conflicts', async () => {
+  const { state, ci, model } = await fixture();
+  const pkg = await stageCutoffPackage(state, ci);
+  pkg.manifest.buildToolId = 'maven';
+  const pattern = 'repository/**';
+  const targetModel = {
+    ...model,
+    buildToolId: 'maven',
+    partitions: [
+      {
+        ...model.partitions[0]!,
+        relativeIncludeGlobs: [pattern],
+        absoluteIncludeGlobs: [path.join(model.cacheRoot, pattern)],
+      },
+    ],
+  };
+  pkg.manifest.partitions[0]!.upserts[0]!.relativePath = 'repository/org/example/1/example.jar';
+  const other = structuredClone(pkg);
+  other.manifest.partitions[0]!.upserts[0]!.mode = 0o666;
+  expect(mergeCutoffPackages([pkg, other], targetModel, ci).upserts).toHaveLength(1);
+  other.manifest.partitions[0]!.upserts[0]!.contentSha256 = 'f'.repeat(64);
+  expect(() => mergeCutoffPackages([pkg, other], targetModel, ci, true)).toThrow(
+    /Conflicting Maven/,
+  );
+});
+
+it.each([
+  ['gradle', 'wrapper/dists/gradle-9-bin/hash/gradle-9/bin/gradle'],
+  ['maven', 'wrapper/dists/apache-maven-3/hash/bin/mvn'],
+  ['maven', 'wrapper/dists/apache-maven-3-bin/hash/apache-maven-3/bin/mvn'],
+])('makes Windows %s launchers executable during worker application', async (tool, launcher) => {
+  const { state, ci, model, root } = await fixture();
+  const pkg = await stageCutoffPackage(state, ci);
+  pkg.manifest.buildToolId = tool;
+  const entry = pkg.manifest.partitions[0]!.upserts[0]!;
+  entry.relativePath = launcher;
+  entry.mode = 0o666;
+  const targetModel = {
+    ...model,
+    buildToolId: tool,
+    partitions: [
+      {
+        ...model.partitions[0]!,
+        relativeIncludeGlobs: ['wrapper/dists/**'],
+        absoluteIncludeGlobs: [path.join(root, 'wrapper/dists/**')],
+      },
+    ],
+  };
+  await applyCutoffPlan(mergeCutoffPackages([pkg], targetModel, ci), targetModel);
+  expect((await lstat(path.join(root, launcher))).mode & 0o777).toBe(0o755);
 });

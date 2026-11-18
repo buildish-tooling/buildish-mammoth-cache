@@ -157,7 +157,7 @@ export const PUBLIC_ACTION_INPUTS = [
     configFile: 'allowed',
     configFileValueKind: 'string',
     description:
-      'Namespace prefix for action-owned cache families; build, runner, partition, ref-lineage, and generation identity are appended automatically.',
+      'Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically.',
   },
   {
     name: 'cache-partitions',

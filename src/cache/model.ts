@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -25,8 +24,6 @@ import type {
   NormalizedActionConfig,
   PartitionPublication,
 } from '../config/types';
-import { readJavaMajorFromReleaseFile, resolveJavaExecutablePath } from '../util/paths';
-import { buildMinimalChildEnv } from '../util/spawn';
 
 const CACHE_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,512}$/;
 const GENERATION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
@@ -56,13 +53,6 @@ export interface CacheModel {
   readonly fallbackRefLineagePrefixes: readonly string[];
   /** Execution-unique generation identifier derived for this writer invocation. */
   readonly plannedGenerationId: string;
-  /**
-   * The detected Java major version, derived from `$JAVA_HOME/release` or `java -version`.
-   *
-   * `null` when Java cannot be located at all; the cache family renders this as `'0'`
-   * so that jobs where Java is unavailable do not collide with jobs running a real version.
-   */
-  readonly javaMajor: number | null;
   /**
    * Normalized runner operating system, lower-cased by the CI adapter.
    *
@@ -170,25 +160,8 @@ export interface CachePartitionDefinition {
   readonly absoluteExcludeGlobs: readonly string[];
 }
 
-/**
- * Optional injection points for cache-model creation.
- *
- * Tests can replace command execution to avoid spawning `java`, and callers may supply a custom
- * environment when detection must not read from `process.env`.
- */
+/** Optional injection points for cache-model creation. */
 export interface CacheModelOptions {
-  /**
-   * Optional command runner override used for Java detection.
-   *
-   * Defaults to the internal child-process implementation when omitted.
-   */
-  readonly captureCommandOutput?: CommandOutputCapture;
-  /**
-   * Optional environment override used during Java detection.
-   *
-   * Defaults to `process.env` when omitted.
-   */
-  readonly env?: NodeJS.ProcessEnv;
   /** Optional random UUID source used when provider run identity is unavailable. */
   readonly randomUuid?: () => string;
 }
@@ -208,23 +181,6 @@ export interface CacheGeneration {
 }
 
 /**
- * Minimal abstraction for commands whose combined stdout/stderr should be captured as text.
- *
- * The cache model currently uses this for Java version detection, but keeping it typed makes the
- * bootstrap path deterministic in tests and avoids coupling callers to `child_process` directly.
- *
- * @param command Executable name or absolute path. Defaults to `java` in the built-in caller.
- * @param args Command arguments, typically `['-version']` for Java detection.
- * @param env Optional environment to run with; if omitted, the current process environment is used.
- * @returns Combined stdout/stderr text from the completed command.
- */
-export type CommandOutputCapture = (
-  command: string,
-  args: readonly string[],
-  env?: NodeJS.ProcessEnv,
-) => Promise<string>;
-
-/**
  * Derives the cache key coordinates and partition definitions for the current job.
  */
 export async function createCacheModel(
@@ -233,10 +189,6 @@ export async function createCacheModel(
   adapter: BuildToolAdapter,
   options: CacheModelOptions = {},
 ): Promise<CacheModel> {
-  const javaMajor = await detectJavaMajor(
-    options.captureCommandOutput ?? captureCombinedOutput,
-    options.env,
-  );
   const cacheRoot = adapter.getCacheRoot();
   const partitions = createCachePartitions(
     cacheRoot,
@@ -249,13 +201,7 @@ export async function createCacheModel(
     adapter.getHardCacheExcludeGlobs(),
   );
   const buildToolId = adapter.getBuildToolId();
-  const cacheFamilyKey = renderCacheFamilyKey(
-    config,
-    buildToolId,
-    ciContext,
-    javaMajor,
-    partitionFingerprint,
-  );
+  const cacheFamilyKey = renderCacheFamilyKey(config, buildToolId, partitionFingerprint);
   const currentRefToken = createCacheRefToken(ciContext.resolvedRefName);
   const currentRefLineagePrefix = createCacheRefLineagePrefix(cacheFamilyKey, currentRefToken);
   const defaultBranchRefToken = createCacheRefToken(ciContext.defaultBranch);
@@ -276,7 +222,6 @@ export async function createCacheModel(
     plannedGenerationId,
     buildToolId,
     cacheRoot,
-    javaMajor,
     runnerOs: ciContext.runnerOs,
     runnerArch: ciContext.runnerArch,
     safeRefName: ciContext.safeRefName,
@@ -295,31 +240,16 @@ export async function createCacheModel(
 export function renderCacheFamilyKey(
   config: NormalizedActionConfig,
   buildToolId: string,
-  ciContext: CiJobContext,
-  javaMajor: number | null,
   partitionFingerprint: string,
 ): string {
   const cacheFamilyKey = [
     `${config.cacheKeyPrefix}${buildToolId}`,
     `v${config.cacheSchemaVersion}`,
-    renderCacheJavaMajor(javaMajor),
-    ciContext.runnerOs,
-    ciContext.runnerArch,
     partitionFingerprint,
   ].join('-');
 
   validateCacheKey(cacheFamilyKey, 'cache family key');
   return cacheFamilyKey;
-}
-
-/** Renders Java compatibility identity consistently across cache keys, outputs, and reports. */
-export function renderCacheJavaMajor(javaMajor: number | null): string {
-  if (javaMajor === null) {
-    return '0';
-  }
-
-  validateJavaMajor(javaMajor);
-  return String(javaMajor);
 }
 
 /**
@@ -374,25 +304,6 @@ export function createCacheGeneration(
     contentDigest,
     key,
   };
-}
-
-/**
- * Parses `java -version` output into a supported Java major version.
- */
-export function parseJavaMajor(versionOutput: string): number {
-  const match = /version "((?:1\.)?[0-9]+)(?:[._][^"]*)?"/u.exec(versionOutput);
-
-  if (!match) {
-    throw new Error(`Unable to determine Java version from output:\n${versionOutput}`);
-  }
-
-  const versionToken = match[1];
-  const javaMajor = versionToken.startsWith('1.')
-    ? Number.parseInt(versionToken.slice(2), 10)
-    : Number.parseInt(versionToken, 10);
-
-  validateJavaMajor(javaMajor);
-  return javaMajor;
 }
 
 /**
@@ -466,69 +377,6 @@ export function createCachePartitions(
   });
 
   return [...builtIns, ...customPartitions];
-}
-
-async function detectJavaMajor(
-  captureCommandOutput: CommandOutputCapture,
-  env: NodeJS.ProcessEnv | undefined,
-): Promise<number | null> {
-  // Prefer reading the $JAVA_HOME/release file: no process spawn, no PATH dependency.
-  const fromRelease = await readJavaMajorFromReleaseFile(env ?? process.env);
-  if (fromRelease !== null) {
-    return fromRelease;
-  }
-
-  // Fall back to running java -version. Resolve via JAVA_HOME first, then PATH.
-  const javaCommand = await resolveJavaExecutablePath(env ?? process.env);
-  let javaVersionOutput: string;
-  try {
-    javaVersionOutput = await captureCommandOutput(javaCommand, ['-version'], env);
-  } catch {
-    // Java is not available at all; return null so callers can degrade gracefully.
-    return null;
-  }
-
-  try {
-    return parseJavaMajor(javaVersionOutput);
-  } catch {
-    return null;
-  }
-}
-
-async function captureCombinedOutput(
-  command: string,
-  args: readonly string[],
-  env: NodeJS.ProcessEnv | undefined,
-): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env: buildMinimalChildEnv(env ?? process.env) });
-    let output = '';
-
-    child.stdout.on('data', (chunk) => {
-      output += String(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      output += String(chunk);
-    });
-    child.on('error', (error) => {
-      reject(new Error(`Unable to execute '${command} ${args.join(' ')}': ${error.message}`));
-    });
-    child.on('close', (code, signal) => {
-      if (signal) {
-        reject(new Error(`'${command} ${args.join(' ')}' terminated by signal ${signal}.`));
-        return;
-      }
-
-      if (code !== 0) {
-        reject(
-          new Error(`'${command} ${args.join(' ')}' failed with exit code ${code}.\n${output}`),
-        );
-        return;
-      }
-
-      resolve(output);
-    });
-  });
 }
 
 function createPartition(
@@ -610,10 +458,4 @@ function validateCacheKey(value: string, label: string): void {
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function validateJavaMajor(javaMajor: number): void {
-  if (!Number.isInteger(javaMajor) || javaMajor < 8) {
-    throw new Error(`Unsupported Java major version '${javaMajor}'. Expected Java 8 or newer.`);
-  }
 }

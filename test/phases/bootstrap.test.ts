@@ -163,13 +163,12 @@ const toolProvisioning: BuildToolProvisioning = {
 const cacheModel: CacheModel = {
   buildToolId: 'gradle',
   cacheRoot: '/home/runner/.gradle',
-  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v5-21-linux-x64-feedcafe1234abcd',
+  cacheFamilyKey: 'buildish-mammoth-cache-gradle-v5-feedcafe1234abcd',
   currentRefToken: 'main-aaaaaaaaaaaa',
   currentRefLineagePrefix:
-    'buildish-mammoth-cache-gradle-v5-21-linux-x64-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
+    'buildish-mammoth-cache-gradle-v5-feedcafe1234abcd-ref-main-aaaaaaaaaaaa-gen-',
   fallbackRefLineagePrefixes: [],
   plannedGenerationId: 'run-123-attempt-1-job-aaaaaaaaaaaa',
-  javaMajor: 21,
   runnerOs: 'linux',
   runnerArch: 'x64',
   safeRefName: 'main',
@@ -267,7 +266,7 @@ describe('bootstrap helpers', () => {
     expect(summaryText).toContain('<table>');
     expect(summaryText).toContain('gradle/wrapper/gradle-wrapper.properties');
     expect(summaryText).toContain(
-      '- Cache family: buildish\\-mammoth\\-cache\\-gradle\\-v5\\-21\\-linux\\-x64\\-feedcafe1234abcd',
+      '- Cache family: buildish\\-mammoth\\-cache\\-gradle\\-v5\\-feedcafe1234abcd',
     );
   });
 
@@ -298,7 +297,7 @@ describe('bootstrap helpers', () => {
     expect(logText).toContain("GitHub environment 'GITHUB_TOKEN' available: yes.");
     expect(logText).toContain("GitHub input 'github-job-check-run-id': 987654321.");
     expect(logText).toContain(
-      `Cache family: ${cacheModel.cacheFamilyKey}; current ref lineage: ${cacheModel.currentRefLineagePrefix}; Java major: 21; cache partitions: 1.`,
+      `Cache family: ${cacheModel.cacheFamilyKey}; current ref lineage: ${cacheModel.currentRefLineagePrefix}; cache partitions: 1.`,
     );
     expect(logText).toContain("Downloaded 'gradle/wrapper/gradle-wrapper.properties' (8.14.0).");
   });
@@ -394,15 +393,13 @@ describe('bootstrap helpers', () => {
         workspace,
       });
       const status = await bootstrapPhase('prepare', {
-        env: bootstrapEnv,
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         cacheBackend,
         ...deps,
       });
 
       expect(status.message).toBe('Prepared prepare phase for push on main in standalone mode.');
       expect(status.cacheModel?.currentRefLineagePrefix).toMatch(
-        /^buildish-mammoth-cache-gradle-v5-21-linux-x64-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
+        /^buildish-mammoth-cache-gradle-v5-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
       );
       expect(status.baseCacheResult?.status).toBe('current-lineage-hit');
       expect(status.toolProvisioning.items).toHaveLength(1);
@@ -470,8 +467,6 @@ describe('bootstrap helpers', () => {
         workspace,
       });
       const status = await bootstrapPhase('finalize', {
-        env: finalizeEnv,
-        captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
         cacheBackend,
         ...deps,
       });
@@ -545,9 +540,6 @@ describe('bootstrap helpers', () => {
           workspace,
         });
         const status = await bootstrapPhase('finalize', {
-          env: cfEnv,
-          captureCommandOutput: async (): Promise<string> =>
-            'openjdk version "21.0.4" 2024-07-16\n',
           cacheBackend,
           ...deps,
         });
@@ -600,8 +592,6 @@ describe('bootstrap helpers', () => {
           workspace,
         });
         const status = await bootstrapPhase('finalize', {
-          captureCommandOutput: async (): Promise<string> =>
-            'openjdk version "21.0.4" 2024-07-16\n',
           cacheBackend: {
             capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
             isFeatureAvailable(): boolean {

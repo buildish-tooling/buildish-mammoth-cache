@@ -420,12 +420,10 @@ export function assertCutoffPackageCompatible(
     id.partitionFingerprint !== model.partitionFingerprint ||
     JSON.stringify(id.partitionIds) !== JSON.stringify(model.partitions.map((p) => p.id)) ||
     pkg.manifest.buildToolId !== model.buildToolId ||
-    p.runnerOs !== ci.runnerOs ||
-    p.runnerArch !== ci.runnerArch ||
     p.safeRefName !== ci.safeRefName ||
     p.defaultBranch !== ci.defaultBranch
   )
-    throw new Error('Worker package cache/runner/ref identity mismatch.');
+    throw new Error('Worker package cache/ref identity mismatch.');
   const owns = createManagedCachePathMatcher(model);
   for (const partition of pkg.manifest.partitions) {
     const definition = model.partitions.find((p) => p.id === partition.partitionId);

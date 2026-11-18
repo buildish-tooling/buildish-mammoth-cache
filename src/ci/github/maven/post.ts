@@ -54,8 +54,7 @@ async function main(): Promise<void> {
       config,
       preflight,
       reportSink: createGitHubReportSink({ env: process.env }),
-      env: process.env,
-      cacheBackend: createGitHubBaseCacheBackend(),
+      cacheBackend: createGitHubBaseCacheBackend(undefined, config.mavenUserHome),
       artifactBackend: config.readOnly ? undefined : createGitHubWorkflowArtifactBackend(),
       buildToolAdapterFactory: () => new MavenBuildToolAdapter(config),
     });

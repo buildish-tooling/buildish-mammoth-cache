@@ -94,7 +94,6 @@ describe('prepare entrypoint', () => {
       runtimeHost,
       ciProvider,
       reportSink,
-      env: process.env,
       config: {} as PrepareEntrypointDependencies['config'],
       cacheBackend: {} as PrepareEntrypointDependencies['cacheBackend'],
       artifactBackend: {} as PrepareEntrypointDependencies['artifactBackend'],

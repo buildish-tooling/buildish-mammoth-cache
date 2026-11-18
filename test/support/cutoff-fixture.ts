@@ -34,7 +34,6 @@ export function cutoffFixtureModel(root: string): CacheModel {
     currentRefLineagePrefix: 'family-v4-ref-main-gen-',
     fallbackRefLineagePrefixes: [],
     plannedGenerationId: 'run-1',
-    javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',
     safeRefName: 'main',

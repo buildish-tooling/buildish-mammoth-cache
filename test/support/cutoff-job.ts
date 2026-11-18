@@ -119,8 +119,6 @@ export async function cutoffJob(
     buildToolAdapterFactory: () => adapter,
     cacheBackend,
     artifactBackend: options.artifactBackend,
-    captureCommandOutput: async () => 'openjdk version "21.0.4"',
-    env: {},
   };
   return {
     root,

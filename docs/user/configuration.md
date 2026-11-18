@@ -46,7 +46,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `job-mode`                              | Gradle, Maven | `standalone`                                  | yes         | Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.                                                                                          |
 | `dependent-jobs`                        | Gradle, Maven | `event-dependent or unset`                    | yes         | Comma- or newline-separated worker job names consumed by a distributed aggregator.                                                                                           |
 | `allow-duplicate-dependent-delta-paths` | Gradle, Maven | `false`                                       | yes         | Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.  |
-| `cache-key-prefix`                      | Gradle, Maven | `buildish-mammoth-cache-`                     | yes         | Namespace prefix for action-owned cache families; build, runner, partition, ref-lineage, and generation identity are appended automatically.                                 |
+| `cache-key-prefix`                      | Gradle, Maven | `buildish-mammoth-cache-`                     | yes         | Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically.                                         |
 | `cache-partitions`                      | Gradle, Maven | `event-dependent or unset`                    | yes         | JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.                                                                |
 | `cleanup-enabled`                       | Gradle, Maven | `true`                                        | yes         | Enables restore cleanup and timestamp garbage collection.                                                                                                                    |
 | `restore-cleanup-mode`                  | Gradle, Maven | `none`                                        | yes         | Restore-time cleanup mode: none or prune-managed.                                                                                                                            |
@@ -143,8 +143,18 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Default: `buildish-mammoth-cache-`
 - Must start with an alphanumeric character.
 - Remaining characters may only be letters, numbers, `.`, `_`, or `-`.
-- Changes only the namespace prefix. The action always appends build tool, schema, Java, runner,
+- Changes only the namespace prefix. The action always appends build tool, schema,
   partition, ref-lineage, and immutable-generation identity.
+- OS and architecture share by default for both tools. To isolate them, use a workflow input:
+
+  ```yaml
+  cache-key-prefix: project-${{ runner.os }}-${{ runner.arch }}-
+  ```
+
+- Every participating worker and aggregator must resolve the same prefix to share. GitHub
+  expressions belong in workflow YAML; config-file strings are literal.
+- Maven local installs with environment-dependent bytes at identical coordinates require distinct
+  coordinates or an explicitly isolated prefix. Java versions share by default too; include a chosen Java identity in the prefix when needed.
 
 ### `cache-partitions`
 

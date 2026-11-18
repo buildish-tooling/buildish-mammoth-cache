@@ -1,0 +1,195 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { mkdir, mkdtemp, rm, writeFile, readFile, chmod, lstat } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { afterEach, expect, it, vi } from 'vitest';
+import { createGitHubBaseCacheBackend } from '../../src/ci/github/cache';
+import { restoreBaseCache } from '../../src/cache/service';
+import { cutoffFixtureModel } from '../support/cutoff-fixture';
+
+const roots: string[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+async function fixture() {
+  const root = await mkdtemp(path.resolve('build/platform-transport-'));
+  roots.push(root);
+  const source = path.join(root, 'windows-home/cache');
+  const target = path.join(root, 'mac-home/cache');
+  await mkdir(path.join(source, 'data'), { recursive: true });
+  await mkdir(target, { recursive: true });
+  return { root, source, target };
+}
+it('relocates a real toolkit tar archive with stable version inputs, exclusions and cross-OS flags', async () => {
+  const { root, source, target } = await fixture();
+  const sdk = path.dirname(fileURLToPath(import.meta.resolve('@actions/cache')));
+  const utils = await import(pathToFileURL(path.join(sdk, 'internal/cacheUtils.js')).href);
+  const tar = await import(pathToFileURL(path.join(sdk, 'internal/tar.js')).href);
+  const archive = path.join(root, 'archive');
+  await mkdir(archive);
+  await writeFile(path.join(source, 'data/a'), 'portable');
+  await chmod(path.join(source, 'data/a'), 0o755);
+  await writeFile(path.join(source, 'data/excluded'), 'excluded');
+  const paths = (base: string) => [
+    path.join(base, 'data/**'),
+    '!' + path.join(base, 'data/excluded'),
+    '!' + base + '/**/',
+  ];
+  let version: string;
+  const backend = {
+    isFeatureAvailable: () => true,
+    saveCache: vi.fn(
+      async (patterns: string[], _key: string, _options?: unknown, crossOs?: boolean) => {
+        expect(crossOs).toBe(true);
+        version = utils.getCacheVersion(patterns, 'gzip', crossOs);
+        const members = await utils.resolvePaths(patterns);
+        expect(members).toEqual(['data/a']);
+        await tar.createTar(archive, members, 'gzip');
+        return 1;
+      },
+    ),
+    restoreCache: vi.fn(
+      async (
+        patterns: string[],
+        key: string,
+        _fallback?: string[],
+        _options?: unknown,
+        crossOs?: boolean,
+      ) => {
+        expect(crossOs).toBe(true);
+        expect(utils.getCacheVersion(patterns, 'gzip', crossOs)).toBe(version);
+        await tar.extractTar(path.join(archive, 'cache.tgz'), 'gzip');
+        return key;
+      },
+    ),
+  };
+  const cwd = process.cwd(),
+    workspace = process.env.GITHUB_WORKSPACE;
+  await createGitHubBaseCacheBackend(backend, source).saveCache(paths(source), 'family');
+  await createGitHubBaseCacheBackend(backend, target).restoreCache(paths(target), 'family');
+  expect(await readFile(path.join(target, 'data/a'), 'utf8')).toBe('portable');
+  expect((await lstat(path.join(target, 'data/a'))).mode & 0o111).not.toBe(0);
+  await expect(lstat(path.join(target, 'data/excluded'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(process.cwd()).toBe(cwd);
+  expect(process.env.GITHUB_WORKSPACE).toBe(workspace);
+});
+
+it('restores process context after errors and serializes concurrent backend instances', async () => {
+  const { source, target } = await fixture();
+  const cwd = process.cwd(),
+    workspace = process.env.GITHUB_WORKSPACE;
+  const seen: string[] = [];
+  const backend = {
+    isFeatureAvailable: () => true,
+    saveCache: async () => 1,
+    restoreCache: async (_paths: string[], key: string) => {
+      const expected = key === 'first' ? source : target;
+      expect(process.cwd()).toBe(expected);
+      expect(process.env.GITHUB_WORKSPACE).toBe(expected);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(process.cwd()).toBe(expected);
+      seen.push(key);
+      if (key === 'first') throw new Error('transport failed');
+      return key;
+    },
+  };
+  const outcomes = await Promise.allSettled([
+    createGitHubBaseCacheBackend(backend, source).restoreCache([source + '/data/**'], 'first'),
+    createGitHubBaseCacheBackend(backend, target).restoreCache([target + '/data/**'], 'second'),
+  ]);
+  expect(outcomes.map((o) => o.status)).toEqual(['rejected', 'fulfilled']);
+  expect(seen).toEqual(['first', 'second']);
+  expect(process.cwd()).toBe(cwd);
+  expect(process.env.GITHUB_WORKSPACE).toBe(workspace);
+});
+
+it('rejects archive patterns outside the managed root', async () => {
+  const { source, target } = await fixture();
+  const saveCache = vi.fn(async () => 1);
+  const backend = createGitHubBaseCacheBackend(
+    { isFeatureAvailable: () => true, saveCache, restoreCache: async () => undefined },
+    source,
+  );
+  await expect(backend.saveCache([target + '/**'], 'family')).rejects.toThrow(/outside/);
+  expect(saveCache).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['gradle', 'wrapper/dists/gradle-9-bin/hash/gradle-9/bin/gradle'],
+  ['maven', 'wrapper/dists/apache-maven-3/hash/bin/mvn'],
+  ['maven', 'wrapper/dists/apache-maven-3-bin/hash/apache-maven-3/bin/mvnDebug'],
+])(
+  'repairs restored %s launcher %s without changing excluded launchers',
+  async (tool, included) => {
+    const { target } = await fixture();
+    const model = cutoffFixtureModel(target);
+    const excluded = included.replace('/hash/', '/excluded/');
+    const targetModel = {
+      ...model,
+      buildToolId: tool,
+      partitions: [
+        {
+          ...model.partitions[0]!,
+          relativeIncludeGlobs: ['wrapper/dists/**'],
+          relativeExcludeGlobs: ['wrapper/dists/*/excluded/**'],
+          absoluteIncludeGlobs: [path.join(target, 'wrapper/dists/**')],
+          absoluteExcludeGlobs: [path.join(target, 'wrapper/dists/*/excluded/**')],
+        },
+      ],
+    };
+    const backend = {
+      capabilities: { supportsNewestPrefixRestore: true, supportsExplicitSave: true },
+      isFeatureAvailable: () => true,
+      restoreCache: async () => {
+        for (const name of [included, excluded]) {
+          await mkdir(path.dirname(path.join(target, name)), { recursive: true });
+          await writeFile(path.join(target, name), '#!/bin/sh');
+          await chmod(path.join(target, name), 0o644);
+        }
+        return model.currentRefLineagePrefix + 'generation';
+      },
+      saveCache: async () => 1,
+      isMissingPathsError: () => false,
+    };
+    await restoreBaseCache(targetModel, { cacheBackend: backend });
+    expect((await lstat(path.join(target, included))).mode & 0o777).toBe(0o755);
+    expect((await lstat(path.join(target, excluded))).mode & 0o777).toBe(0o644);
+  },
+);
+
+it.each(['cache home', 'cache\thome', 'cache"home'])(
+  'skips unsupported SDK root %s with a warning instead of broken tar operations',
+  async (name) => {
+    const { root } = await fixture();
+    const warn = vi.fn();
+    const sdk = {
+      isFeatureAvailable: vi.fn(() => true),
+      saveCache: vi.fn(async () => 1),
+      restoreCache: vi.fn(async () => 'family'),
+    };
+    const backend = createGitHubBaseCacheBackend(sdk, path.join(root, name), warn);
+    expect(backend.isFeatureAvailable()).toBe(false);
+    expect(await backend.restoreCache([], 'family')).toBeUndefined();
+    expect(await backend.saveCache([], 'family')).toBe(-1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain('Workflow artifact exchange remains available');
+    expect(sdk.restoreCache).not.toHaveBeenCalled();
+    expect(sdk.saveCache).not.toHaveBeenCalled();
+  },
+);

@@ -91,8 +91,6 @@ async function main(): Promise<void> {
     await executePrepareAction({
       artifactBackend: unavailableArtifactApi(),
       cacheBackend: unavailableCacheApi(),
-      captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
-      env: runtime.env,
       ...(await createGitHubActionDependencies(
         runtime,
         {
@@ -113,8 +111,6 @@ async function main(): Promise<void> {
     const finalizeStatus = await executeFinalizeAction({
       artifactBackend: unavailableArtifactApi(),
       cacheBackend: unavailableCacheApi(),
-      captureCommandOutput: async (): Promise<string> => 'openjdk version "21.0.4" 2024-07-16\n',
-      env: runtime.env,
       ...(await createGitHubActionDependencies(
         runtime,
         {

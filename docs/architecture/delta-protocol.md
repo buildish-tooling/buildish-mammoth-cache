@@ -37,7 +37,7 @@ artifact lookup, download, application and upload.
 ## Package 5 and manifest 4
 
 The flat package contains `delta-package.json`, `delta-manifest.json` and numbered `payload/*.bin`.
-Metadata binds producer repository/workflow/job/run/attempt/source, runner/ref, family/lineage/restored
+Metadata binds producer repository/workflow/job/run/attempt/source, ref, diagnostic runner platform, family/lineage/restored
 key, partition fingerprint and manifest SHA-256. No pre-build digest or old-target precondition exists.
 
 Each partition has sorted unique disjoint lists. Ordinary partitions use cutoff observations:

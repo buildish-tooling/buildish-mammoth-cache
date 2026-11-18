@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { portableCacheFileMode } from './file-permissions';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, opendir, lstat, rm, rename, chmod, utimes } from 'node:fs/promises';
 import path from 'node:path';
@@ -307,7 +308,10 @@ export async function restorePartitionSnapshot(
         size: entry.size,
         contentSha256: entry.contentSha256,
       });
-      await chmod(temporary, entry.mode);
+      await chmod(
+        temporary,
+        portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath),
+      );
       await utimes(temporary, new Date(entry.mtimeMs), new Date(entry.mtimeMs));
       await verifyParents(model.cacheRoot, parent);
       const current = await regularStat(target);

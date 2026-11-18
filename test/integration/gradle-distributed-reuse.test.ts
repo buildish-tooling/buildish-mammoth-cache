@@ -253,7 +253,6 @@ async function executePreparePhase(
   cacheBackend: BaseCacheBackend,
 ) {
   return await executePrepareAction({
-    env: job.env,
     artifactBackend: artifactApi,
     cacheBackend,
     ...(await createGitHubActionDependencies(
@@ -272,7 +271,6 @@ async function executeFinalizePhase(
   cacheBackend: BaseCacheBackend,
 ) {
   return await executeFinalizeAction({
-    env: job.env,
     artifactBackend: artifactApi,
     cacheBackend,
     ...(await createGitHubActionDependencies(

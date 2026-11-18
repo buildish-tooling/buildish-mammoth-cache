@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   parseBooleanInput,
@@ -41,8 +40,6 @@ import {
 } from '../../src/util/html';
 import {
   normalizeUserSuppliedRelativePath,
-  readJavaMajorFromReleaseFile,
-  resolveJavaExecutablePath,
   validateNormalizedRelativePosixPath,
 } from '../../src/util/paths';
 import { parseSerializedJson, parseWithZod } from '../../src/util/serialization';
@@ -369,94 +366,5 @@ describe('spawn env helpers', () => {
   it('overrides always appear in the result even when not in the source env', () => {
     const result = buildMinimalChildEnv({}, { LANG: 'C', LC_ALL: 'C', EXTRA: 'forced' }, 'linux');
     expect(result).toEqual({ LANG: 'C', LC_ALL: 'C', EXTRA: 'forced' });
-  });
-});
-
-describe('readJavaMajorFromReleaseFile', () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'buildish-java-release-test-'));
-  });
-
-  afterEach(async () => {
-    await rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns null when JAVA_HOME is not set', async () => {
-    await expect(readJavaMajorFromReleaseFile({})).resolves.toBeNull();
-    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: '' })).resolves.toBeNull();
-    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: '   ' })).resolves.toBeNull();
-  });
-
-  it('returns null when the release file is absent', async () => {
-    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBeNull();
-  });
-
-  it('parses a modern JAVA_VERSION field (e.g. 21.0.10)', async () => {
-    await writeFile(
-      path.join(tmpDir, 'release'),
-      'IMPLEMENTOR="Test"\nJAVA_VERSION="21.0.10"\nOS_ARCH="x86_64"\n',
-    );
-    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBe(21);
-  });
-
-  it('parses a legacy 1.x JAVA_VERSION field (e.g. 1.8.0_432) and returns the minor as major', async () => {
-    await writeFile(path.join(tmpDir, 'release'), 'JAVA_VERSION="1.8.0_432"\n');
-    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBe(8);
-  });
-
-  it('returns null when the release file contains no JAVA_VERSION line', async () => {
-    await writeFile(path.join(tmpDir, 'release'), 'IMPLEMENTOR="Test"\nOS_ARCH="x86_64"\n');
-    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBeNull();
-  });
-
-  it('returns null for a JAVA_VERSION that looks too old to be supported (< 8)', async () => {
-    await writeFile(path.join(tmpDir, 'release'), 'JAVA_VERSION="1.7.0_80"\n');
-    await expect(readJavaMajorFromReleaseFile({ JAVA_HOME: tmpDir })).resolves.toBeNull();
-  });
-
-  it('reads the real JAVA_HOME/release when available in the test environment', async () => {
-    const javaHome = process.env.JAVA_HOME?.trim();
-    if (!javaHome) return; // skip when JAVA_HOME is not set
-    const major = await readJavaMajorFromReleaseFile(process.env);
-    expect(major).toBeGreaterThanOrEqual(8);
-  });
-});
-
-describe('resolveJavaExecutablePath', () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'buildish-java-exec-test-'));
-  });
-
-  afterEach(async () => {
-    await rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it("returns 'java' on Linux/macOS when JAVA_HOME is not set", async () => {
-    await expect(resolveJavaExecutablePath({}, 'linux')).resolves.toBe('java');
-    await expect(resolveJavaExecutablePath({}, 'darwin')).resolves.toBe('java');
-    await expect(resolveJavaExecutablePath({ JAVA_HOME: '' }, 'linux')).resolves.toBe('java');
-  });
-
-  it("returns 'java.exe' on Windows when JAVA_HOME is not set", async () => {
-    await expect(resolveJavaExecutablePath({}, 'win32')).resolves.toBe('java.exe');
-  });
-
-  it('returns the absolute $JAVA_HOME/bin/java path when the binary is accessible', async () => {
-    // Create a fake java binary that passes the access() check.
-    const binDir = path.join(tmpDir, 'bin');
-    await mkdir(binDir);
-    const fakeBinary = path.join(binDir, 'java');
-    await writeFile(fakeBinary, '#!/bin/sh\n', { mode: 0o755 });
-
-    const resolved = await resolveJavaExecutablePath({ JAVA_HOME: tmpDir }, 'linux');
-    expect(resolved).toBe(fakeBinary);
-  });
-
-  it("falls back to 'java' when JAVA_HOME is set but the binary is absent", async () => {
-    await expect(resolveJavaExecutablePath({ JAVA_HOME: tmpDir }, 'linux')).resolves.toBe('java');
   });
 });

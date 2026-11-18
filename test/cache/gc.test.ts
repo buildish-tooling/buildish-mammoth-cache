@@ -190,7 +190,6 @@ function createCacheModel(cacheRoot: string, includes = ['caches/**']): CacheMod
     currentRefLineagePrefix: 'test-family-ref-main-aaaaaaaaaaaa-gen-',
     fallbackRefLineagePrefixes: [],
     plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
-    javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',
     safeRefName: 'main',

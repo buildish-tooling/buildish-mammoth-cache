@@ -54,7 +54,6 @@ async function fixture() {
     currentRefLineagePrefix: 'family-ref-main-gen-',
     fallbackRefLineagePrefixes: [],
     plannedGenerationId: 'run-1',
-    javaMajor: 21,
     runnerOs: 'linux',
     runnerArch: 'x64',
     safeRefName: 'main',

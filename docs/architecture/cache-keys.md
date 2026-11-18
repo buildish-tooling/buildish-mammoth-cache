@@ -34,7 +34,7 @@ cache family
 A default generation key has this conceptual shape:
 
 ```text
-buildish-mammoth-cache-{tool}-v{schema}-{java}-{os}-{arch}-{partitionFingerprint}
+buildish-mammoth-cache-{tool}-v{schema}-{partitionFingerprint}
   -ref-{readableRefSlug}-{refDigest12}
   -gen-{runIdentity}-{contentDigest12}
 ```
@@ -48,8 +48,6 @@ The family identifies states that are structurally compatible. It always include
 
 - the build tool (`gradle` or `maven`);
 - the internal cache schema version;
-- detected Java major (`0` when Java is unavailable);
-- runner OS and architecture;
 - the 16-character partition fingerprint.
 
 The default namespace prefix is `buildish-mammoth-cache-` for both actions. The build-tool segment
@@ -69,7 +67,7 @@ Restore lookup is intentionally narrow:
    generation;
 3. otherwise report a miss.
 
-OS, architecture, Java, build tool, schema, and partition dimensions are never dropped during
+Build tool, schema, and partition dimensions are never dropped during
 fallback.
 
 For pull-request events, the resolved ref is the base ref and cache operation remains read-only by
@@ -123,17 +121,32 @@ lineage rather than restoring an entry that was built with a different partition
 therefore contain stale or missing files. See the [Partition fingerprint](#partition-fingerprint)
 section above.
 
-**Java major**
-Gradle and Maven both compile plugin code and resolve version constraints with the active JVM.
-The internal format of some cached artifacts (for example, Gradle's daemon registry or certain
-build tool resolver caches) can differ across major Java versions. Separating the cache by major
-version avoids subtle compatibility problems when a project is built with Java 17 one day and
-Java 21 the next.
+**Java versions**
+Java versions do not split cache families. Mammoth does not detect Java or invoke `java -version`.
+Gradle and project-declared task inputs determine task-output reuse, including compiler and test
+JVM differences. Runtime JVM and task toolchains can differ. Projects requiring stricter isolation
+can include their chosen Java identity in `cache-key-prefix`, for example
+`project-java${{ matrix.java }}-`. All sharing jobs must resolve the same prefix.
+
+Maven repositories include downloaded artifacts and local installs. Environment-dependent local
+installs must have distinct coordinates or use explicitly isolated namespaces; sharing an archive
+cannot establish whether those bytes suit another build. Strict merge conflicts remain enforced.
 
 **Runner OS and architecture**
-Native binaries, platform-specific ZIP distributions, and OS-dependent path separators all mean
-that a Gradle or Maven cache populated on Linux is unsafe to restore on macOS or Windows.
-Separating by OS and architecture keeps the cache coherent.
+OS and architecture do not split cache families. Downloaded platform artifacts should have distinct
+identities, and cacheable tasks must declare platform inputs when their outputs depend on them.
+Maven local installs can contain different bytes at the same coordinates: distinguish coordinates
+or opt into isolation with `cache-key-prefix: project-${{ runner.os }}-${{ runner.arch }}-`.
+
+GitHub archives use cache-root-relative paths and cross-OS archive support. Self-hosted Windows
+runners need GNU tar and zstd for interoperable archives. Worker merges compare content, tolerate
+permission differences and retain executable bits from either equal-content producer. Restored
+worker and snapshot files receive ordinary read/write permissions plus recorded executable bits;
+Gradle and Maven distribution launchers are made executable on POSIX after base restore. Exact source
+permissions are not a portability contract.
+
+The shorter family key starts a cold cache; restore does not fall back to platform-specific keys.
+Producer OS/architecture remain diagnostic metadata and part of local lifecycle drift checks.
 
 **Ref token**
 Branch-scoped caching prevents long-lived topic branches from polluting the `main` cache, and
@@ -146,8 +159,9 @@ restore sequence permits only the explicit default-branch fallback.
 
 A few patterns that commonly affect hit rates in practice:
 
-**Matrix jobs** — Java, OS, architecture, and partition differences automatically create separate
-families. Independent jobs share only when every mandatory dimension matches.
+**Matrix jobs** — Java versions, OS and architecture share by default. Build-tool, schema and
+partition differences still create separate families. Add environment identities to the namespace
+prefix when isolation is needed.
 
 **PR-branch caching** — the default lineage lookup lets PR branches inherit the latest
 default-branch generation. Read-only PR builds do not publish generations unless a trusted workflow

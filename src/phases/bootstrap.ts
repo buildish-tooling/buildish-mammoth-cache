@@ -16,12 +16,7 @@
 
 import { restoreBaseCache, type BaseCacheOperationResult } from '../cache/service';
 import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from '../ci';
-import {
-  createCacheModel,
-  renderCacheJavaMajor,
-  type CacheModel,
-  type CommandOutputCapture,
-} from '../cache/model';
+import { createCacheModel, type CacheModel } from '../cache/model';
 import type { NormalizedActionConfig } from '../config/types';
 import { createDetailsSection, createHtmlTable, escapeHtml, escapeSummaryText } from '../util/html';
 import type { CoreExecutionPhase } from '../config/types';
@@ -96,8 +91,6 @@ export type BootstrapHost = HostInputSource & HostStateStore & HostReporter;
 export interface BootstrapDependencies {
   /** Exclusive internal prepare boundary before provisioning/restore. */
   readonly beforeCacheWork?: (model: CacheModel) => Promise<void>;
-  /** Optional environment map used by config resolution and persistence helpers. */
-  readonly env?: NodeJS.ProcessEnv;
   /** Runtime host implementation used for input discovery, non-fatal reporting, and state. */
   readonly runtimeHost: BootstrapHost;
   /** Provider adapter for the active CI environment. */
@@ -119,12 +112,6 @@ export interface BootstrapDependencies {
    * any adapter-level test overrides (e.g. `fetchImpl`, `verifyWrapperSignature` for Gradle).
    */
   readonly buildToolAdapterFactory: () => BuildToolAdapter;
-  /**
-   * Optional command-capture override for Java version detection.
-   *
-   * Defaults to the internal child-process implementation when omitted.
-   */
-  readonly captureCommandOutput?: CommandOutputCapture;
   /** Provider-neutral base-cache backend for the active CI provider. */
   readonly cacheBackend: BaseCacheBackend;
 }
@@ -140,15 +127,11 @@ export async function bootstrapPhase(
   phase: BootstrapPhase,
   dependencies: BootstrapDependencies,
 ): Promise<BootstrapExecution> {
-  const runtimeEnv = dependencies.env ?? process.env;
   const ciProvider = dependencies.ciProvider;
   const config = dependencies.config;
   const adapter = dependencies.buildToolAdapterFactory();
   const cacheModel = config.cacheEnabled
-    ? await createCacheModel(config, ciProvider.context, adapter, {
-        captureCommandOutput: dependencies.captureCommandOutput,
-        env: runtimeEnv,
-      })
+    ? await createCacheModel(config, ciProvider.context, adapter)
     : null;
   if (cacheModel && phase === 'prepare') await dependencies.beforeCacheWork?.(cacheModel);
   const toolProvisioning: BuildToolProvisioning =
@@ -229,7 +212,6 @@ export function createBootstrapSummaryLines(status: BootstrapStatus): readonly s
       `- Cache enabled: ${status.config.cacheEnabled ? 'yes' : 'no'}`,
       `- Cache family: ${escapeSummaryText(status.cacheModel?.cacheFamilyKey ?? 'disabled')}`,
       `- Current ref lineage: ${escapeSummaryText(status.cacheModel?.currentRefLineagePrefix ?? 'disabled')}`,
-      `- Java major: ${escapeSummaryText(status.cacheModel ? renderCacheJavaMajor(status.cacheModel.javaMajor) : 'n/a')}`,
       `- Cache partitions: ${status.cacheModel?.partitions.length ?? 0}`,
       ...(status.baseCacheResult
         ? [`- Base cache detail: ${escapeSummaryText(status.baseCacheResult.message)}`]
@@ -258,7 +240,7 @@ export function createBootstrapLogLines(status: BootstrapStatus): readonly strin
 
   if (status.cacheModel) {
     lines.push(
-      `Cache family: ${status.cacheModel.cacheFamilyKey}; current ref lineage: ${status.cacheModel.currentRefLineagePrefix}; Java major: ${renderCacheJavaMajor(status.cacheModel.javaMajor)}; cache partitions: ${status.cacheModel.partitions.length}.`,
+      `Cache family: ${status.cacheModel.cacheFamilyKey}; current ref lineage: ${status.cacheModel.currentRefLineagePrefix}; cache partitions: ${status.cacheModel.partitions.length}.`,
     );
   }
 

@@ -55,8 +55,7 @@ async function main(): Promise<void> {
     ciProvider,
     reportSink,
     config,
-    env: process.env,
-    cacheBackend: createGitHubBaseCacheBackend(),
+    cacheBackend: createGitHubBaseCacheBackend(undefined, config.gradleUserHome),
     artifactBackend: config.readOnly ? undefined : createGitHubWorkflowArtifactBackend(),
     buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
   });

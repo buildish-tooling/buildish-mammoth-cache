@@ -70,7 +70,6 @@ export const cutoffModelSchema = z
     currentRefLineagePrefix: text.max(512),
     fallbackRefLineagePrefixes: z.array(text).max(1),
     plannedGenerationId: text,
-    javaMajor: z.number().int().min(8).nullable(),
     runnerOs: text,
     runnerArch: text,
     safeRefName: text,

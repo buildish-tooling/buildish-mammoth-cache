@@ -352,6 +352,19 @@ to prove a no-op; remote worker envelopes remain available for recovery.
 managed cache files: their explicit empty envelope is proof of participation and is distinct from a
 missing or failed worker.
 
+## Sharing across Java versions, operating systems and architectures
+
+Gradle and Maven workers can share with an aggregator using another Java version, OS or architecture when their
+family inputs match. Platform information remains in producer diagnostics. Same-path different
+contents still conflict, including Maven directory inconsistencies; equal bytes with incidental
+permission differences coalesce and retain executable bits from either producer.
+
+Use a workflow input such as `cache-key-prefix: project-${{ runner.os }}-${{ runner.arch }}-` to
+isolate platforms, or include `${{ matrix.java }}` for explicit Java separation. All jobs in a sharing
+group must resolve the same prefix. Gradle task inputs
+must account for platform-sensitive outputs; Maven platform artifacts and environment-dependent
+local installs need distinct coordinates/classifiers or explicit namespace isolation.
+
 ## Using a config file
 
 Repeat inputs can be moved to a shared config file. The file format is identical for both build

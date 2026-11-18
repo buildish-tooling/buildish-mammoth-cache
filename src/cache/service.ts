@@ -15,6 +15,7 @@
  */
 
 import path from 'node:path';
+import { restoreDistributionLauncherPermissions } from './file-permissions';
 import { captureCacheMetadataSnapshot } from './manifest';
 import { MAVEN_TRANSIENT_CACHE_EXCLUDE_GLOBS } from './maven-repository';
 import { EMPTY_GENERATION_PATH } from './metadata-paths';
@@ -234,6 +235,8 @@ export async function restoreBaseCache(
       `Cache backend returned key '${matchedKey}' outside the requested cache lineages.`,
     );
   }
+
+  await restoreDistributionLauncherPermissions(cacheModel);
 
   return {
     operation: 'restore',
