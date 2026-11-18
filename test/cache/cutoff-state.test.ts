@@ -119,7 +119,7 @@ it('retains only current across five completed lifecycles and rejects superseded
       previous,
     );
     expect(
-      (await readdir(path.join(root, '.mammoth/cutoff-state-v1'))).filter((p) =>
+      (await readdir(path.join(root, '.mammoth/cutoff-state-v2'))).filter((p) =>
         p.startsWith('journal-'),
       ),
     ).toHaveLength(1);
@@ -145,7 +145,7 @@ it('preserves recovery through failed pointer writes and reclaims orphan attempt
     ).rejects.toThrow('pointer failed');
     expect(await loadCutoffJournal(model, cutoffJournalPath(state.invocation))).toEqual(state);
     expect(
-      (await readdir(path.join(root, '.mammoth/cutoff-state-v1'))).filter((p) =>
+      (await readdir(path.join(root, '.mammoth/cutoff-state-v2'))).filter((p) =>
         p.startsWith('journal-'),
       ),
     ).toHaveLength(2);
@@ -153,7 +153,7 @@ it('preserves recovery through failed pointer writes and reclaims orphan attempt
   spy.mockRestore();
   await persistCutoffJournal(newCutoffJournal(model, state.policy, state.execution));
   expect(
-    (await readdir(path.join(root, '.mammoth/cutoff-state-v1'))).filter((p) =>
+    (await readdir(path.join(root, '.mammoth/cutoff-state-v2'))).filter((p) =>
       p.startsWith('journal-'),
     ),
   ).toHaveLength(1);

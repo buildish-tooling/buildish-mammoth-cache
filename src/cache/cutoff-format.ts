@@ -19,10 +19,10 @@ import { validateNormalizedRelativePosixPath } from '../util/paths';
 import { isCacheMetadataPath } from './metadata-paths';
 import { canonicalTimestampMs } from '../util/timestamps';
 
-export const CUTOFF_CACHE_SCHEMA_VERSION = 4;
-export const CUTOFF_MANIFEST_SCHEMA_VERSION = 3;
-export const CUTOFF_PACKAGE_SCHEMA_VERSION = 4;
-export const CUTOFF_LIFECYCLE_SCHEMA_VERSION = 3;
+export const CUTOFF_CACHE_SCHEMA_VERSION = 5;
+export const CUTOFF_MANIFEST_SCHEMA_VERSION = 4;
+export const CUTOFF_PACKAGE_SCHEMA_VERSION = 5;
+export const CUTOFF_LIFECYCLE_SCHEMA_VERSION = 4;
 export const cutoffPathSchema = z.string().refine((value) => {
   try {
     validateNormalizedRelativePosixPath(value, 'Cutoff path', 'cache root');
@@ -53,6 +53,8 @@ function sortedUnique(values: readonly string[], ctx: z.RefinementCtx) {
 export const cutoffPartitionSchema = z
   .object({
     partitionId: cutoffPartitionIdSchema,
+    /** True means upserts are the complete configured partition, including intentional empty. */
+    snapshot: z.literal(true).optional(),
     upserts: z.array(cutoffUpsertSchema).superRefine((v, ctx) =>
       sortedUnique(
         v.map((e) => e.relativePath),
@@ -63,6 +65,11 @@ export const cutoffPartitionSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (value.snapshot && value.usedPaths.length)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Complete snapshots cannot contain usage-only paths.',
+      });
     const upserts = new Set(value.upserts.map((e) => e.relativePath));
     if (value.usedPaths.some((p) => upserts.has(p)))
       ctx.addIssue({ code: 'custom', message: 'Upserts already cover usage.' });

@@ -48,6 +48,7 @@ const GRADLE_HARD_CACHE_EXCLUDE_GLOBS: readonly string[] = [
   'caches/*/cc-keystore', // Configuration cache encryption key — security critical
   'caches/journal-1/**', // File-system access journal: not portable across runners
   '**/*.lock', // Lock files: invalid when restored on a different PID/host
+  'caches/modules-*/**/gc.properties', // Gradle's local dependency-cache cleanup markers
 ];
 
 /**
@@ -70,6 +71,15 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
       'caches/resources-*/**',
     ],
     relativeExcludeGlobs: ['caches/modules-*/metadata-*/**'],
+  },
+  {
+    id: 'dependency-metadata',
+    displayName: 'Dependency metadata',
+    description: 'Complete dependency-resolution metadata snapshots from a single writer.',
+    defaultEnabled: true,
+    publication: 'single-writer',
+    relativeIncludeGlobs: ['caches/modules-*/metadata-*/**'],
+    relativeExcludeGlobs: [],
   },
   {
     id: 'transforms-metadata',

@@ -38,20 +38,29 @@ export interface CutoffMergedUpsert {
 export interface CutoffMergePlan {
   upserts: CutoffMergedUpsert[];
   used: string[];
+  snapshots?: { partitionId: string; entries: CutoffUpsert[]; rootDirectory: string }[];
 }
 export function mergeCutoffPackages(
   packages: readonly CutoffPackage[],
   model: CacheModel,
   ci: CiJobContext,
   allowDuplicates = false,
+  ordinaryProducers?: readonly string[],
 ): CutoffMergePlan {
   const upserts = new Map<string, CutoffMergedUpsert>(),
     used = new Set<string>();
   const mavenDirectories = new Map<string, string>();
+  const snapshots = new Map<
+    string,
+    { partitionId: string; entries: CutoffUpsert[]; rootDirectory: string }
+  >();
   for (const pkg of packages) {
     const manifest = cutoffManifestSchema.parse(pkg.manifest);
     assertCutoffPackageCompatible({ ...pkg, manifest }, model, ci);
-    if (model.buildToolId === 'maven') {
+    if (
+      model.buildToolId === 'maven' &&
+      (!ordinaryProducers || ordinaryProducers.includes(pkg.metadata.producer.jobName))
+    ) {
       const directories = new Map<string, string[]>();
       for (const p of manifest.partitions)
         for (const entry of p.upserts) {
@@ -74,6 +83,17 @@ export function mergeCutoffPackages(
       }
     }
     for (const p of manifest.partitions) {
+      if (p.snapshot) {
+        if (snapshots.has(p.partitionId))
+          throw new Error('Multiple snapshots for a single-writer partition.');
+        snapshots.set(p.partitionId, {
+          partitionId: p.partitionId,
+          entries: p.upserts,
+          rootDirectory: pkg.rootDirectory,
+        });
+        continue;
+      }
+      if (ordinaryProducers && !ordinaryProducers.includes(pkg.metadata.producer.jobName)) continue;
       for (const name of p.usedPaths) used.add(name);
       for (const entry of p.upserts) {
         const candidate = { partitionId: p.partitionId, entry, rootDirectory: pkg.rootDirectory },
@@ -94,6 +114,7 @@ export function mergeCutoffPackages(
     }
   }
   return {
+    snapshots: [...snapshots.values()],
     upserts: [...upserts.values()].sort((a, b) =>
       a.entry.relativePath.localeCompare(b.entry.relativePath),
     ),

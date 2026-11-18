@@ -41,6 +41,7 @@ export interface FinalizeActionStatus {
   workflowRunUrl: string | null;
   message: string;
   activityCutoff: number | null;
+  partitionSnapshotLines?: string[];
 }
 export function createFinalizeCacheStatistics(selection: CutoffSelection) {
   return {
@@ -61,6 +62,7 @@ export function createFinalizeActionLogLines(s: FinalizeActionStatus): readonly 
     cutoffPolicyLine(s),
     ...s.buildReport.logLines,
     ...s.buildReport.warnings,
+    ...(s.partitionSnapshotLines ?? []),
     s.bootstrap.baseCacheResult?.message ?? '',
     s.cacheGcResult?.message ?? '',
     s.deltaArtifactResult?.message ?? '',
@@ -94,6 +96,7 @@ export function createFinalizeActionSummaryLines(s: FinalizeActionStatus): reado
         ]
       : []),
     ...s.buildReport.warnings.map((w) => `- Warning: ${escapeSummaryText(w)}`),
+    ...(s.partitionSnapshotLines ?? []).map((line) => '- ' + escapeSummaryText(line)),
     ...(save?.status === 'failed' ? [`- Error: ${escapeSummaryText(save.message)}`] : []),
   ];
 }

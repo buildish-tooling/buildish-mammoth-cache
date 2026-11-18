@@ -21,31 +21,39 @@ limitations under the License.
 -->
 
 Mammoth restores immutable cache generations and observes activity using a cutoff recorded after
-prepare. It creates no upfront artifact inventory or content-hash baseline.
+prepare. Ordinary aggregate partitions need no upfront artifact inventory or content-hash baseline.
+Single-writer partitions instead retain a complete authoritative snapshot for replacement.
 
 ## Lifecycle
 
 1. Prepare validates configuration and creates a pending local journal before provisioning/restore.
-   It optionally prunes and re-restores the exact matched generation, then applies worker envelopes.
+   It clears preexisting managed snapshot files, restores their authoritative transport, optionally
+   prunes/re-restores ordinary files, then applies worker envelopes and selected writer snapshots.
 2. After all prepare reads/writes, it records cutoff **C**.
 3. The owning post action checks its pure CI-state guard and captures managed file metadata before
    importing provider SDKs, resolving config files, discovering Java, or collecting reports.
-4. `ctime >= C` or `mtime >= C` selects an assumed changed upsert. Otherwise `atime >= C` selects
+4. For aggregate partitions, `ctime >= C` or `mtime >= C` selects an assumed changed upsert. Otherwise `atime >= C` selects
    path-only usage. Equality admits false positives on coarse clocks. Imported upserts and usage
    explicitly protect paths before applying the aggregate cutoff.
 5. These decisions are durably frozen before Mammoth reads content. Workers copy/hash selected
-   payloads; eligible writers execute frozen GC and publish a complete generation if required.
+   payloads. Snapshot owners capture every configured member, including unchanged files;
+   nonowners retain the selected snapshot despite local changes. Eligible writers execute frozen
+   GC for ordinary partitions and publish a complete generation if required.
 
 An added file with preserved old mtime is selected when its ctime crosses C. Metadata misses remain
 possible. There is no previous-path inventory, deletion tombstone, old-target checksum comparison,
-or historical access manifest. Removed files can return after restore/replay until GC removes them.
+or historical access manifest for ordinary partitions. Their removed files can return after
+restore/replay until GC removes them. Complete single-writer snapshots propagate removals through
+replacement membership; an absent contribution preserves the previous snapshot.
 
 ## Timestamp GC
 
 The default is `cache-gc-mode: timestamp`, with a 14-day grace and a minimum of two days.
 Only writable standalone/aggregate jobs with cleanup enabled perform GC. A regular managed file is
 eligible when its **mtime** precedes finalize observation time minus grace and no local or upstream
-activity protects it during this build.
+activity protects it during this build. Single-writer partitions are exempt from per-file GC;
+ordinary artifact GC can remove files referenced by retained metadata, so offline completeness is
+not guaranteed.
 
 This is artifact-age/current-lifecycle GC, not historical inactivity or LRU. Earlier builds' reads do
 not restart a stored grace period. `noatime`, `relatime`, timestamp coalescing, coarse clocks and clock
@@ -56,26 +64,32 @@ parent directories are removed, while unmanaged/excluded files remain untouched.
 
 ## Immutable generations
 
-Writable finalize saves on a nonempty miss, local upserts, applied worker upserts, or GC removal.
+Writable finalize saves on a nonempty miss, ordinary local/applied worker upserts, GC removal, or
+a material single-writer snapshot replacement. Snapshot-only removals independently trigger save;
+unchanged snapshot contents do not require a generation.
 Access-only observations do not require a replacement base generation. Fresh aggregator replay may
 reapply identical upserts and upload another complete generation. Required aggregator publication
 must succeed; other outcomes fail aggregation while retaining worker envelopes. Standalone backend
 failures produce warnings and preserve retry intent.
 
-Empty-after-GC publication uses the constant `.mammoth/empty-generation-v1` marker so subsequent
+Publication after removal of the last managed file, including an empty writer snapshot, uses the constant `.mammoth/empty-generation-v1` marker so subsequent
 restore does not choose the old snapshot. Its optional include is always present in the same ordered
 restore/save path list, including nonempty generations, preserving the backend's path-derived
 version. Local journals and nested scratch are excluded; directory entries are excluded to prevent
 tar recursion bypassing file excludes. The marker authorizes no deletion of existing overlay files.
 
-Cache family **4**, package **4**, worker manifest **3**, CI lifecycle **3** are distinct strict
+Cache family **5**, package **5**, worker manifest **4**, CI lifecycle **4** are distinct strict
 contracts. Old families are cold misses; old packages/lifecycle records fail validation.
 
 ## Recovery and bounds
 
-`.mammoth/cutoff-state-v1/` contains a root-local journal and `current.json` pointer. It is never
+`.mammoth/cutoff-state-v2/` contains a root-local journal and `current.json` pointer. It is never
 cached or sent to workers. It binds the full model/policy/execution, C, observations, native retained
-fingerprint, frozen GC plan, package seal, publication intent and local receipts. The fingerprint
+fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 2
+also binds baseline and selected snapshot digests, source, counts, and replacement decisions.
+Snapshot payloads are transported separately under the reserved fixed
+`.mammoth/partition-snapshots-v1/<partition>/` path; only verified manifest/payload files are included
+in the base archive, using stable save/restore patterns. Live nonwriter snapshot paths are omitted. The fingerprint
 excludes atime for Mammoth's own reads and planned deletions for partial-GC recovery. Changed retained
 native metadata, new files, or replaced targets require a fresh prepare.
 
@@ -101,9 +115,13 @@ at any path component. This covers portable aliases and target-local atomic-writ
 
 Opt-in `restore-cleanup-mode: prune-managed` runs only after a hit, prunes regular managed files with
 native checks, then re-restores the exact original key. Missing/different generation fails prepare.
-That optional traversal is cleanup, not a baseline inventory.
+That optional traversal is cleanup, not a baseline inventory. Single-writer partitions independently
+clear preexisting managed members before restore and validate/restore their staged authoritative
+snapshots, including when ordinary cleanup is disabled.
 
-Prepare normally performs no artifact scan/hash. Finalize selects metadata and validates replay
+For ordinary partitions, prepare performs no baseline artifact scan/hash. Single-writer snapshots
+require transport verification at prepare and full snapshot capture/staging for publication; this
+adds copy/hash I/O even in standalone mode. Finalize selects metadata and validates replay
 metadata; selected worker sources are copied/hashed once. Incoming payload verification is separate.
 Read-only jobs and `off` retain tracking costs. Complete generations may be uploaded after assumed
 upserts even when a content diff could prove redundancy. Read-only optimization is deferred to #6;

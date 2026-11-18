@@ -37,6 +37,7 @@ import { validateNormalizedRelativePosixPath } from '../util/paths';
 import type { CacheModel } from './model';
 import type { NormalizedActionConfig } from '../config/types';
 import { isMissingPathError } from '../util/fs';
+import { snapshotPartitions, ownsSnapshot, readPartitionSnapshot } from './partition-snapshots';
 
 export const CUTOFF_JOURNAL_LIMITS = { records: 200_000, bytes: 64 * 1024 * 1024 } as const;
 const text = z.string().min(1);
@@ -53,6 +54,8 @@ const partitionSchema = z
     id: cutoffPartitionIdSchema,
     displayName: text,
     description: z.string(),
+    publication: z.enum(['aggregate', 'single-writer']).optional(),
+    writer: text.optional(),
     relativeIncludeGlobs: z.array(glob),
     relativeExcludeGlobs: z.array(glob),
     absoluteIncludeGlobs: z.array(text),
@@ -146,6 +149,8 @@ const observationsSchema = z
   .strict();
 const selectionSchema = z
   .object({
+    snapshotFileCount: z.number().int().nonnegative().optional(),
+    snapshotByteCount: z.number().nonnegative().optional(),
     upserts: z.array(cutoffTargetSchema),
     used: z.array(cutoffPathSchema),
     gc: z.array(cutoffTargetSchema),
@@ -157,9 +162,21 @@ const selectionSchema = z
 const sealSchema = z
   .object({ manifest: cutoffManifestSchema, identity: cutoffDigestSchema, artifactName: text })
   .strict();
+const partitionSnapshotRecordSchema = z
+  .object({
+    partitionId: cutoffPartitionIdSchema,
+    baselineDigest: cutoffDigestSchema.nullable(),
+    digest: cutoffDigestSchema,
+    contentDigest: cutoffDigestSchema,
+    fileCount: z.number().int().nonnegative(),
+    byteCount: z.number().nonnegative(),
+    source: z.enum(['seed', 'writer', 'local']),
+    changed: z.boolean(),
+  })
+  .strict();
 export const cutoffJournalSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     invocation: z.string().uuid(),
     phase: z.enum([
       'prepare-pending',
@@ -176,6 +193,8 @@ export const cutoffJournalSchema = z
     cutoff: z.number().finite().nonnegative().nullable(),
     workers: observationsSchema,
     producerArtifacts: z.array(text),
+    partitionSnapshots: z.array(partitionSnapshotRecordSchema).default([]),
+    snapshotWarnings: z.array(text).default([]),
     restoredKey: text.nullable(),
     restoreStatus: z.enum([
       'miss',
@@ -196,6 +215,16 @@ export const cutoffJournalSchema = z
   })
   .strict()
   .superRefine((state, ctx) => {
+    const snapshotIds = snapshotPartitions(state.model).map((p) => p.id);
+    if (
+      new Set(state.partitionSnapshots.map((s) => s.partitionId)).size !==
+        state.partitionSnapshots.length ||
+      state.partitionSnapshots.some((s) => !snapshotIds.includes(s.partitionId)) ||
+      (state.phase !== 'prepare-pending' && state.partitionSnapshots.length !== snapshotIds.length)
+    )
+      ctx.addIssue({ code: 'custom', message: 'Snapshot selection/model mismatch.' });
+    if (state.selection?.gc.some((e) => snapshotIds.includes(e.partitionId)))
+      ctx.addIssue({ code: 'custom', message: 'Snapshot partitions cannot use per-file GC.' });
     if (
       state.workerReceipt &&
       (!state.seal || state.workerReceipt.name !== state.seal.artifactName)
@@ -248,6 +277,14 @@ export const cutoffJournalSchema = z
         ctx.addIssue({ code: 'custom', message: 'Duplicate usage/upsert.' });
       if (state.seal) {
         const manifest = state.seal.manifest;
+        for (const p of manifest.partitions) {
+          const definition = state.model.partitions.find((d) => d.id === p.partitionId);
+          if (
+            !definition ||
+            !!p.snapshot !== ownsSnapshot(definition, state.policy.jobMode, state.execution.jobName)
+          )
+            ctx.addIssue({ code: 'custom', message: 'Sealed snapshot ownership mismatch.' });
+        }
         if (
           manifest.buildToolId !== state.model.buildToolId ||
           JSON.stringify(manifest.partitions.map((p) => p.partitionId)) !==
@@ -319,7 +356,7 @@ export function newCutoffJournal(
   execution: CutoffJournal['execution'],
 ): CutoffJournal {
   return cutoffJournalSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     invocation: randomUUID(),
     phase: 'prepare-pending',
     model,
@@ -328,6 +365,8 @@ export function newCutoffJournal(
     cutoff: null,
     workers: { upserts: [], used: [] },
     producerArtifacts: [],
+    partitionSnapshots: [],
+    snapshotWarnings: [],
     restoredKey: null,
     restoreStatus: 'miss',
     observedAt: null,
@@ -349,6 +388,7 @@ export function validateCutoffBudget(
     state.workers.used.length +
     state.producerArtifacts.length +
     state.deletedPaths.length +
+    state.partitionSnapshots.reduce((n, s) => n + s.fileCount, 0) +
     (s ? s.upserts.length + s.used.length + s.gc.length : 0) +
     (state.seal
       ? state.seal.manifest.partitions.reduce(
@@ -365,10 +405,13 @@ export function validateCutoffBudget(
     needsSeal && s
       ? {
           manifest: {
-            schemaVersion: 3,
+            schemaVersion: 4,
             buildToolId: state.model.buildToolId,
             partitions: state.model.partitions.map((p, index) => ({
               partitionId: p.id,
+              ...(ownsSnapshot(p, state.policy.jobMode, state.execution.jobName)
+                ? { snapshot: true }
+                : {}),
               upserts: s.upserts
                 .filter((e) => e.partitionId === p.id)
                 .map((e) => ({
@@ -499,6 +542,19 @@ export async function freezeCutoffSelection(
 }
 export async function verifyCutoffReplay(state: CutoffJournal): Promise<void> {
   if (!state.selection) throw new Error('No frozen cutoff observations.');
+  for (const selected of state.partitionSnapshots) {
+    const partition = state.model.partitions.find((p) => p.id === selected.partitionId)!;
+    // An owner can reconstruct an interrupted first install from frozen live sources.
+    if (
+      !state.policy.readOnly &&
+      selected.source !== 'local' &&
+      ownsSnapshot(partition, state.policy.jobMode, state.execution.jobName)
+    )
+      continue;
+    const snapshot = await readPartitionSnapshot(state.model, selected.partitionId);
+    if (!snapshot || snapshot.digest !== selected.digest)
+      throw new Error('Selected partition snapshot changed.');
+  }
   const snapshot = await captureCacheMetadataSnapshot(state.model),
     gc = new Set(state.selection.gc.map((e) => e.relativePath));
   if (fingerprintMetadata(snapshot, gc) !== state.selection.retainedFingerprint)
@@ -522,6 +578,7 @@ export function cutoffDecisionDigest(state: CutoffJournal): string {
         policy: state.policy,
         selection: state.selection,
         producerArtifacts: state.producerArtifacts,
+        partitionSnapshots: state.partitionSnapshots,
       }),
     )
     .digest('hex');

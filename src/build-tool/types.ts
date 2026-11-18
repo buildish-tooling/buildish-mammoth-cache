@@ -15,6 +15,7 @@
  */
 
 import type { CiJobContext, HttpHeadersByHost } from '../ci';
+import type { PartitionPublication } from '../config/types';
 
 /**
  * One entry in the built-in cache partition preset list supplied by a {@link BuildToolAdapter}.
@@ -24,6 +25,7 @@ import type { CiJobContext, HttpHeadersByHost } from '../ci';
  * include list is empty after applying an override.
  */
 export interface BuiltInCachePartitionPreset {
+  readonly publication?: PartitionPublication;
   readonly id: string;
   readonly displayName: string;
   readonly description: string;

@@ -18,6 +18,7 @@ import path from 'node:path';
 import { captureCacheMetadataSnapshot } from './manifest';
 import { MAVEN_TRANSIENT_CACHE_EXCLUDE_GLOBS } from './maven-repository';
 import { EMPTY_GENERATION_PATH } from './metadata-paths';
+import { PARTITION_SNAPSHOT_DIRECTORY, snapshotPartitions } from './partition-snapshots';
 import type { NormalizedActionConfig } from '../config/types';
 import type { BaseCacheBackend } from './backend';
 
@@ -124,13 +125,23 @@ export type BaseCacheOperationResult = BaseCacheRestoreResult | BaseCacheSaveRes
  * state such as configuration cache content or lock files.
  */
 export function createBaseCachePaths(cacheModel: CacheModel): readonly string[] {
+  const snapshots = snapshotPartitions(cacheModel);
   return [
-    ...cacheModel.includePaths,
+    ...(snapshots.length
+      ? cacheModel.partitions
+          .filter((p) => p.publication !== 'single-writer')
+          .flatMap((p) => p.absoluteIncludeGlobs)
+      : cacheModel.includePaths),
     ...cacheModel.excludePaths.map((pattern) => `!${pattern}`),
     // Exclude local journals and nested atomic-write scratch, including portable aliases.
     `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH]/**`,
     `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**`,
     path.join(cacheModel.cacheRoot, EMPTY_GENERATION_PATH),
+    // Stable save/restore patterns: only verified snapshot transport is re-included.
+    ...snapshots.flatMap((p) => [
+      path.join(cacheModel.cacheRoot, PARTITION_SNAPSHOT_DIRECTORY, p.id, 'snapshot.json'),
+      path.join(cacheModel.cacheRoot, PARTITION_SNAPSHOT_DIRECTORY, p.id, 'payload', '*.bin'),
+    ]),
     // A listed directory would let tar recursively bypass all the file exclusions.
     `!${cacheModel.cacheRoot}/**/`,
   ];

@@ -20,6 +20,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+Gradle dependency metadata is cached by default in `dependency-metadata`. A standalone job owns
+its complete snapshot automatically. On prepare, preexisting managed metadata is replaced; cache
+misses start that partition empty, and displaced files produce a warning and GitHub summary.
+For multiple jobs, [select a metadata writer](../distributed-jobs/#gradle-metadata-writer) using the
+same partition configuration in every job. Without one, Mammoth retains the previous snapshot and
+warns that local metadata updates will not be published.
+
 ## What this action does
 
 This action speeds up JVM builds on CI by caching the build tool's local artifact store between

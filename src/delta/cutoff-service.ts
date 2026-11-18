@@ -41,6 +41,7 @@ import { hashStableFileSha256 } from '../util/fs';
 import type { WorkflowArtifactBackend, WorkflowArtifactDescriptor } from './backend';
 import { createDeltaArtifactNamePrefix, DELTA_ARTIFACT_RESOURCE_LIMITS } from './discovery';
 import type { CiJobContext } from '../ci';
+import { ownsSnapshot } from '../cache/partition-snapshots';
 
 const MAX_JSON = 64 * 1024 * 1024;
 const META = 'delta-package.json',
@@ -117,7 +118,7 @@ function packageMetadata(
 ): CutoffPackageMetadata {
   const digest = cutoffHash(serialize(manifest));
   return packageSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     artifactType: 'buildish-mammoth-cache-upserts',
     artifactName: artifactName(
       ci.jobName,
@@ -169,10 +170,13 @@ export async function stageCutoffPackage(
     await mkdir(path.join(directory, 'payload'));
     const owns = createManagedCachePathMatcher(state.model);
     let manifest: CutoffManifest = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       buildToolId: state.model.buildToolId,
       partitions: state.model.partitions.map((p) => ({
         partitionId: p.id,
+        ...(ownsSnapshot(p, state.policy.jobMode, state.execution.jobName)
+          ? { snapshot: true as const }
+          : {}),
         upserts: [],
         usedPaths: state.selection!.used.filter((name) => owns(p.id, name)),
       })),
@@ -423,8 +427,19 @@ export function assertCutoffPackageCompatible(
   )
     throw new Error('Worker package cache/runner/ref identity mismatch.');
   const owns = createManagedCachePathMatcher(model);
-  for (const partition of pkg.manifest.partitions)
+  for (const partition of pkg.manifest.partitions) {
+    const definition = model.partitions.find((p) => p.id === partition.partitionId);
+    if (
+      !definition ||
+      (partition.snapshot &&
+        (definition.publication !== 'single-writer' || definition.writer !== p.jobName)) ||
+      (definition.publication === 'single-writer' &&
+        !partition.snapshot &&
+        (partition.upserts.length > 0 || partition.usedPaths.length > 0))
+    )
+      throw new Error('Worker snapshot publication ownership mismatch.');
     for (const name of [...partition.usedPaths, ...partition.upserts.map((e) => e.relativePath)])
       if (!owns(partition.partitionId, name))
         throw new Error('Worker path is outside its managed partition.');
+  }
 }

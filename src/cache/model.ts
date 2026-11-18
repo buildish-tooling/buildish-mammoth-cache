@@ -20,7 +20,11 @@ import path from 'node:path';
 
 import type { CiJobContext } from '../ci';
 import type { BuildToolAdapter, BuiltInCachePartitionPreset } from '../build-tool/types';
-import type { ConfiguredCachePartitionInput, NormalizedActionConfig } from '../config/types';
+import type {
+  ConfiguredCachePartitionInput,
+  NormalizedActionConfig,
+  PartitionPublication,
+} from '../config/types';
 import { readJavaMajorFromReleaseFile, resolveJavaExecutablePath } from '../util/paths';
 import { buildMinimalChildEnv } from '../util/spawn';
 
@@ -128,6 +132,9 @@ export interface CacheModel {
  * to pass to filesystem or cache APIs for the current {@link CacheModel.cacheRoot}.
  */
 export interface CachePartitionDefinition {
+  /** Defaults to aggregation when absent. Single-writer partitions travel as complete snapshots. */
+  readonly publication?: PartitionPublication;
+  readonly writer?: string;
   /**
    * Stable machine-readable partition identifier.
    */
@@ -427,6 +434,8 @@ export function createCachePartitions(
         includeGlobs,
         deduplicatePaths(override?.excludes ?? preset.relativeExcludeGlobs),
         hardCacheExcludeGlobs,
+        override?.publication ?? preset.publication,
+        override?.writer,
       ),
     ];
   });
@@ -435,7 +444,7 @@ export function createCachePartitions(
     if (builtInPresetIds.has(partition.id)) {
       return [];
     }
-    if (partition.includes.length === 0) {
+    if (!partition.includes?.length) {
       throw new Error(
         `Custom cache partition '${partition.id}' must declare at least one include glob. Empty includes only disable built-in partitions.`,
       );
@@ -448,8 +457,10 @@ export function createCachePartitions(
         `User-defined build tool cache partition '${partition.id}'.`,
         cacheRoot,
         deduplicatePaths(partition.includes),
-        deduplicatePaths(partition.excludes),
+        deduplicatePaths(partition.excludes ?? []),
         hardCacheExcludeGlobs,
+        partition.publication,
+        partition.writer,
       ),
     ];
   });
@@ -528,7 +539,11 @@ function createPartition(
   relativeIncludeGlobs: readonly string[],
   partitionRelativeExcludeGlobs: readonly string[],
   hardCacheExcludeGlobs: readonly string[],
+  publication: PartitionPublication = 'aggregate',
+  writer?: string,
 ): CachePartitionDefinition {
+  if (writer && publication !== 'single-writer')
+    throw new Error(`Partition '${id}' writer requires single-writer publication.`);
   const deduplicatedIncludeGlobs = deduplicatePaths(relativeIncludeGlobs);
   const relativeExcludeGlobs = deduplicatePaths([
     ...hardCacheExcludeGlobs,
@@ -537,6 +552,8 @@ function createPartition(
 
   return {
     id,
+    publication,
+    ...(writer ? { writer } : {}),
     displayName,
     description,
     relativeIncludeGlobs: deduplicatedIncludeGlobs,
@@ -558,6 +575,8 @@ function createPartitionFingerprint(
       id: partition.id,
       includes: partition.relativeIncludeGlobs,
       excludes: partition.relativeExcludeGlobs,
+      publication: partition.publication ?? 'aggregate',
+      writer: partition.writer ?? null,
     })),
   });
 

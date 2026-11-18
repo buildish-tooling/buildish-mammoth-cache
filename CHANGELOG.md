@@ -18,6 +18,19 @@ limitations under the License.
 
 ## Unreleased
 
+- Cache Gradle dependency metadata in a default `dependency-metadata` partition. Add partition
+  `publication` (`aggregate` or `single-writer`) and optional distributed `writer` configuration.
+  Standalone jobs own their snapshots; distributed publication uses only the designated job and
+  otherwise retains the previous snapshot with a warning and GitHub summary. Full configured
+  snapshot replacement propagates removals and preserves user exclusions. Preexisting managed
+  metadata is replaced before restore, including clearing it on a miss, even when ordinary cleanup
+  is disabled. Snapshot partitions skip per-file GC. The guarded staged representation adds a full
+  copy/hash cost in standalone mode too; distributed writers also upload complete snapshots.
+- Migrate to cache family 5, manifest 4, package 5, CI lifecycle 4 and local journal 2. Publication
+  policy and writer identity affect layout compatibility. Earlier families start cold. Add guarded
+  archive transport and interruption/retry coverage; preserve existing ordinary aggregation and
+  Maven consistency checks. Correct the unsupported dependency-metadata absolute-path rationale.
+
 - Preserve Maven `_remote.repositories` origin markers. Changed repository files travel with their
   complete managed directory; aggregation rejects different worker directory views and incomplete
   updates over existing aggregator files, including when duplicate-path overrides are enabled.

@@ -40,6 +40,18 @@ import { restoreBaseCache } from '../../cache/service';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 import type { PublicActionOutputName } from '../../config/public-contract';
 import { escapeSummaryText } from '../../util/html';
+import {
+  snapshotPartitions,
+  clearSnapshotFiles,
+  resetSnapshotTransport,
+  stagePartitionSnapshot,
+  restorePartitionSnapshot,
+} from '../../cache/partition-snapshots';
+import {
+  initializePartitionSnapshots,
+  snapshotRecord,
+  partitionSnapshotSummary,
+} from '../../cache/snapshot-lifecycle';
 
 export interface CutoffPrepareDependencies extends BootstrapDependencies {
   artifactBackend?: WorkflowArtifactBackend;
@@ -63,6 +75,7 @@ export interface CutoffDependentResult {
   message: string;
 }
 export interface CutoffPrepareStatus {
+  partitionSnapshotLines?: string[];
   bootstrap: BootstrapExecution;
   restoreCleanupResult: {
     mode: 'prune-managed';
@@ -88,6 +101,14 @@ export async function executeCutoffPrepareAction(
         cutoffExecution(dependencies.ciProvider.context),
       );
       await persistCutoffJournal(journal);
+      if (snapshotPartitions(model).length) {
+        const removed = await clearSnapshotFiles(model);
+        if (removed)
+          journal.snapshotWarnings.push(
+            `Replaced ${removed} preexisting managed snapshot file(s) before cache restore. Restore misses start these partitions empty.`,
+          );
+        await resetSnapshotTransport(model);
+      }
       await dependencies.beforeCacheWork?.(model);
     },
   });
@@ -100,7 +121,7 @@ export async function executeCutoffPrepareAction(
     dependent: CutoffDependentResult | null = null;
   if (!bootstrap.cacheModel) {
     persistCutoffLifecycle(
-      { schemaVersion: 3, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
+      { schemaVersion: 4, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
       dependencies.runtimeHost.saveState,
     );
   } else {
@@ -143,7 +164,15 @@ export async function executeCutoffPrepareAction(
         message: `Restore cleanup removed ${count} managed file(s).`,
       };
     }
-    const requested = bootstrap.config.dependentJobs;
+    await initializePartitionSnapshots(state, !!restore.matchedKey);
+    const required = bootstrap.config.dependentJobs;
+    const writerJobs =
+      bootstrap.config.jobMode === 'distributed-aggregator'
+        ? snapshotPartitions(model).flatMap((p) =>
+            p.writer && p.writer !== bootstrap.ciContext.jobName ? [p.writer] : [],
+          )
+        : [];
+    const requested = [...new Set([...required, ...writerJobs])];
     if (requested.length) {
       dependent = {
         status: bootstrap.config.readOnly ? 'skipped-read-only' : 'applied',
@@ -165,6 +194,7 @@ export async function executeCutoffPrepareAction(
             backend,
             requested,
             bootstrap.ciContext,
+            { optionalProducerJobNames: requested.filter((name) => !required.includes(name)) },
           ),
           downloaded: DownloadedCutoffPackage[] = [];
         const marker = await metadataPath(
@@ -194,6 +224,7 @@ export async function executeCutoffPrepareAction(
             model,
             bootstrap.ciContext,
             bootstrap.config.allowDuplicateDependentDeltaPaths,
+            required,
           );
           const workers = {
               upserts: plan.upserts.map((e) => e.entry.relativePath),
@@ -202,6 +233,31 @@ export async function executeCutoffPrepareAction(
             names = downloaded.map((p) => p.artifact.name);
           assertPrepareWorkerBudget(state, workers, names);
           const applied = await applyCutoffPlan(plan, model);
+          for (const incoming of plan.snapshots ?? []) {
+            const previous = state.partitionSnapshots.find(
+              (s) => s.partitionId === incoming.partitionId,
+            )!;
+            const snapshot = await stagePartitionSnapshot(
+              model,
+              incoming.partitionId,
+              incoming.rootDirectory,
+              incoming.entries.map((e) => ({ ...e, sourcePath: e.payloadPath })),
+            );
+            await restorePartitionSnapshot(model, snapshot);
+            state.partitionSnapshots = state.partitionSnapshots.map((s) =>
+              s.partitionId === incoming.partitionId
+                ? snapshotRecord(snapshot, previous.baselineDigest, 'writer')
+                : s,
+            );
+          }
+          for (const p of snapshotPartitions(model))
+            if (
+              writerJobs.includes(p.writer ?? '') &&
+              !(plan.snapshots ?? []).some((s) => s.partitionId === p.id)
+            )
+              state.snapshotWarnings.push(
+                `Partition '${p.id}' writer '${p.writer}' contributed no snapshot. Retaining previous metadata.`,
+              );
           state.workers = { upserts: applied.upserts, used: plan.used };
           state.producerArtifacts = names;
           Object.assign(dependent, {
@@ -233,9 +289,10 @@ export async function executeCutoffPrepareAction(
     state.cutoff = (dependencies.now ?? Date.now)();
     state.phase = 'build-ready';
     await persistCutoffJournal(state);
+    for (const warning of state.snapshotWarnings) dependencies.runtimeHost.warning(warning);
     persistCutoffLifecycle(
       {
-        schemaVersion: 3,
+        schemaVersion: 4,
         cacheEnabled: true,
         model: state.model,
         policy: state.policy,
@@ -257,6 +314,9 @@ export async function executeCutoffPrepareAction(
     dependentDeltaResult: dependent,
     cutoff: journal?.cutoff ?? null,
     message: 'Prepare completed with cutoff-based cache observations.',
+    partitionSnapshotLines: journal
+      ? [...journal.snapshotWarnings, ...partitionSnapshotSummary(journal)]
+      : [],
   };
   bootstrap.reportSink.publishLogGroup(
     `Buildish Mammoth Cache for ${bootstrap.buildToolAdapter.getName()}`,
@@ -273,6 +333,7 @@ export function createCutoffPrepareSummary(s: CutoffPrepareStatus): string[] {
     `- Activity cutoff: ${s.cutoff ?? 'not applicable'}`,
     `- Worker upserts: ${s.dependentDeltaResult?.upsertCount ?? 0}`,
     `- Worker used paths: ${s.dependentDeltaResult?.usedCount ?? 0}`,
+    ...(s.partitionSnapshotLines ?? []).map((line) => '- ' + escapeSummaryText(line)),
   ];
 }
 export function createCutoffPrepareOutputs(

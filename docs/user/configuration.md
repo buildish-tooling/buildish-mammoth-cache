@@ -206,6 +206,30 @@ same directory must provide identical managed path sets, content, sizes, and mod
 cannot select a newer conflicting origin marker or combine different directory views. See
 [Maven caching patterns](../maven-caching-patterns/).
 
+### Partition publication and metadata writers
+
+The existing `cache-partitions` input also accepts `publication` and `writer` on individual entries.
+Gradle's enabled `dependency-metadata` preset defaults to `single-writer`; other partitions use
+`aggregate`. A standalone job is automatically its own writer. For distributed jobs, put this same
+configuration in every participating job, preferably using a shared config file:
+
+```yaml
+cache-partitions:
+  - id: dependency-metadata
+    writer: worker-a
+```
+
+Omit `includes` and `excludes` to inherit the built-in patterns. Explicit lists replace the
+corresponding defaults; an empty include list disables a built-in. Custom partitions must supply
+nonempty includes and can opt into `publication: single-writer` with their own `writer`.
+A writer is a trimmed producer identity, including an explicit `github-job-name` when supplied.
+Matrix jobs must have distinct producer identities.
+
+`writer` identifies an optional snapshot contribution. It does not make an entry in
+`dependent-jobs` optional. If a job is also listed there for ordinary artifacts, its envelope remains
+required. See [the distributed guide](../distributed-jobs/#gradle-metadata-writer) for complete
+workflows, skipped writers, fallback, and configuration compatibility.
+
 ### `github-token`
 
 - Default: unset (falls back to `GITHUB_TOKEN` when available)

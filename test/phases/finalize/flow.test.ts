@@ -81,7 +81,7 @@ it.each(['off', 'timestamp'])(
       await job.prepare();
       await executeFinalizeAction(job.deps);
     }
-    const files = await readdir(path.join(job.home, '.mammoth/cutoff-state-v1'));
+    const files = await readdir(path.join(job.home, '.mammoth/cutoff-state-v2'));
     expect(files.filter((f) => f.startsWith('journal-'))).toHaveLength(1);
   },
 );
@@ -397,7 +397,7 @@ it.each(['exception', 'decline'])(
     expect(artifacts.artifacts).toEqual([envelope]);
     const fs = await import('node:fs/promises');
     for (const download of artifacts.downloads) await expect(fs.stat(download)).rejects.toThrow();
-    const staging = path.join(worker.home, '.mammoth/cutoff-state-v1/staging');
+    const staging = path.join(worker.home, '.mammoth/cutoff-state-v2/staging');
     expect((await readdir(staging)).filter((p) => p.startsWith('package-'))).toEqual([]);
   },
 );

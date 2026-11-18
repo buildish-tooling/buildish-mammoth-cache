@@ -36,7 +36,7 @@ and which parts cause corruption or non-determinism is the foundation of this ac
 ## Dependency store: `caches/modules-*/`
 
 **`files-2.1/`** — Content-addressable storage for external JAR and POM files. The path encodes
-the artifact coordinates and SHA-256 checksum of the file:
+the artifact coordinates and checksum of the file:
 
 ```
 caches/modules-2/files-2.1/<group>/<module>/<version>/<checksum>/<filename>
@@ -44,10 +44,40 @@ caches/modules-2/files-2.1/<group>/<module>/<version>/<checksum>/<filename>
 
 Because the path is derived solely from content, `files-2.1/` is fully portable across machines.
 
-**`metadata-*/`** — Binary indexes that map dynamic versions and resolution results to concrete
-artifacts. These indexes contain absolute file-system paths pointing back into `files-2.1/`. If the
-Gradle user home is restored to a different path (e.g. `/home/runner/.gradle` vs `/Users/dev/.gradle`),
-these pointers become invalid. The metadata directories should **not** be cached.
+**`metadata-*/`** — Gradle's binary dependency-resolution cache. It records resolved module
+descriptors and dependencies, dynamic-version results, artifact-file references, missing modules
+or artifacts, repository identity, and cache timestamps used for expiry. Downloaded POM and Ivy
+files are stored separately in `files-2.1/`.
+
+Dependency caches populated by Gradle 6.1 or later are relocatable, including metadata; see the
+[Gradle 6.1 release notes](https://github.com/gradle/gradle/blob/v6.1.0/subprojects/docs/src/docs/release/notes.md#gradles-dependency-cache-can-be-relocated).
+Gradle documents relative paths for both stores. Preserve the `caches/modules-<version>/` structure,
+use compatible cache formats, and omit `*.lock` and `gc.properties` when copying; see
+[Copying and reusing the cache](https://docs.gradle.org/current/userguide/dependency_caching.html#sec:copying_and_reusing_the_cache).
+
+Mammoth caches artifact files in `modules` and resolution metadata in the separate,
+enabled-by-default `dependency-metadata` partition. In standalone mode, the current job owns
+metadata publication. Distributed mode accepts one complete snapshot from the partition's
+configured `writer`; other jobs' local updates are omitted. If the writer contributes no snapshot,
+Mammoth carries forward the previous snapshot. With no writer configured, it also emits a warning
+and explains the retained metadata in the GitHub summary.
+
+A snapshot replaces the entire configured metadata file set, including removals. An explicit empty
+snapshot clears it; an absent contribution preserves it. Before restore, Mammoth removes preexisting
+managed metadata and reports that replacement in a warning and summary. A miss starts the managed
+metadata partition empty, even on a self-hosted runner and with `cleanup-enabled: false`.
+User-excluded files remain unmanaged. Explicitly narrowing the definition is supported; the user
+is responsible for any effect on Gradle's ability to use the remaining metadata.
+
+Snapshots use excluded local staging and fixed archive transport paths. Capturing a standalone
+snapshot also copies and hashes the complete configured partition; a distributed writer additionally
+uploads it in its worker envelope. Mammoth does not merge binary indexes or apply per-file timestamp
+GC to these snapshots. Gradle can clean its local copy, and its writer's next snapshot reflects that.
+Ordinary artifact GC continues independently, so retained metadata does not guarantee offline
+completeness. Different Gradle cache formats can coexist; use Gradle's compatibility table above.
+
+See [Distributed multi-job builds](../../user/distributed-jobs/#gradle-metadata-writer) for writer
+configuration and skipped-writer examples.
 
 ## Artifact transforms: `caches/transforms-*/`
 
@@ -125,14 +155,17 @@ the entire configuration cache as local-only data.
 
 **Always excluded:**
 
-| Pattern                                      | Reason                                           |
-| -------------------------------------------- | ------------------------------------------------ |
-| `**/configuration-cache/**`                  | May contain secrets; volatile                    |
-| `**/*.lock`                                  | PID-bearing; causes hangs on restore             |
-| `caches/*/cc-keystore`                       | Configuration-cache encryption key material      |
-| `caches/journal-1/**`                        | Local-only; propagates corruption                |
-| `caches/transforms-*/**`                     | Absolute path dependencies; environment-specific |
-| `caches/[version]/**`                        | Local execution history and timestamps           |
-| `caches/modules-*/metadata-*/descriptors/**` | Binary pointers to absolute paths                |
-| `daemon/**`                                  | Local PIDs and ephemeral logs                    |
-| `native/**`                                  | Platform-specific; regenerated on demand         |
+| Pattern                     | Reason                                           |
+| --------------------------- | ------------------------------------------------ |
+| `**/configuration-cache/**` | May contain secrets; volatile                    |
+| `**/*.lock`                 | PID-bearing; causes hangs on restore             |
+| `caches/*/cc-keystore`      | Configuration-cache encryption key material      |
+| `caches/journal-1/**`       | Local-only; propagates corruption                |
+| `caches/transforms-*/**`    | Absolute path dependencies; environment-specific |
+| `caches/[version]/**`       | Local execution history and timestamps           |
+| `daemon/**`                 | Local PIDs and ephemeral logs                    |
+| `native/**`                 | Platform-specific; regenerated on demand         |
+
+Dependency metadata is cached separately as complete `dependency-metadata` snapshots under
+`caches/modules-*/metadata-*/**`. It is relocatable with compatible Gradle cache formats; locks and
+`caches/modules-*/**/gc.properties` are omitted.

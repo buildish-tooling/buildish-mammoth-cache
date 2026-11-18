@@ -110,7 +110,7 @@ it.each(['gradle', 'maven'])(
     });
     const journal = path.join(
       job.home,
-      '.mammoth/cutoff-state-v1',
+      '.mammoth/cutoff-state-v2',
       `journal-${record.invocation}.json`,
     );
     await writeFile(

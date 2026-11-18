@@ -92,6 +92,7 @@ describe('GradleBuildToolAdapter', () => {
 
     expect(ids).toEqual([
       'modules',
+      'dependency-metadata',
       'transforms-metadata',
       'kotlin-dsl',
       'build-cache',

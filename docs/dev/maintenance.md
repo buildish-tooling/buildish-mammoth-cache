@@ -167,3 +167,24 @@ Per-provider implementation notes:
 
 - [Codeberg / Forgejo CI](../portability/codeberg/)
 - [GitLab CI](../portability/gitlab/)
+
+## Dependency metadata snapshot qualification
+
+Unit coverage exercises complete membership replacement, configured exclusions, writer ownership,
+missing versus empty versus invalid contributions, optional discovery, publication projection, GC,
+and interrupted snapshot/journal installation. The archive test uses the installed GitHub glob
+implementation and GNU tar, rather than a backend that ignores path patterns.
+
+To check real Gradle recovery after ordinary artifact eviction while retaining captured binary
+metadata, supply an already installed Gradle executable:
+
+```sh
+INTEGRATION_TESTS=1 BUILDISH_TEST_GRADLE_EXECUTABLE=/absolute/path/to/gradle/bin/gradle \
+  node_modules/.bin/vitest run test/integration/gradle-metadata-eviction.test.ts
+```
+
+The test uses a loopback Maven repository, a disposable Gradle home under `build/`, and
+`--no-daemon`. It does not provision Gradle or use public dependency repositories. It is skipped
+when the executable is not supplied. This checks missing-artifact recovery through Mammoth's
+captured snapshot; it does not promise offline completeness, binary-index merging, or portability
+across every Gradle format and platform.

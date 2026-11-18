@@ -81,7 +81,7 @@ describe('captureCacheManifest', () => {
       await writeTrackedFile(
         gradleUserHome,
         'caches/modules-2/metadata-2.107/module-artifact.bin',
-        'ignored-metadata',
+        'cached-metadata',
       );
 
       const manifest = await captureCacheManifest(createTestCacheModel(gradleUserHome));
@@ -90,10 +90,12 @@ describe('captureCacheManifest', () => {
         'caches/8.10/scripts/script.bin',
         'caches/build-cache-1/output.bin',
         'caches/modules-2/files-2.1/example.jar',
+        'caches/modules-2/metadata-2.107/module-artifact.bin',
         'wrapper/dists/gradle-8.10/bin/gradle',
       ]);
       expect(manifest.partitions.map((partition) => partition.partitionId)).toEqual([
         'modules',
+        'dependency-metadata',
         'kotlin-dsl',
         'build-cache',
         'wrapper-dists',

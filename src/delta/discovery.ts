@@ -70,7 +70,10 @@ export async function selectDeltaArtifactsForProducerJobs(
     CiJobContext,
     'repository' | 'workflowName' | 'runId' | 'runAttempt' | 'sourceRevision'
   >,
-  options: ArtifactLookupOptions & DeltaArtifactResourceLimitOptions = {},
+  options: ArtifactLookupOptions &
+    DeltaArtifactResourceLimitOptions & {
+      optionalProducerJobNames?: readonly string[];
+    } = {},
 ): Promise<readonly SelectedDeltaArtifact[]> {
   assertArtifactLookupScopeSupport(artifactBackend, options.scope);
   const limits = resolveDeltaArtifactResourceLimits(options.resourceLimits);
@@ -126,6 +129,8 @@ export async function selectDeltaArtifactsForProducerJobs(
         : attempt !== null && attempt <= ciContext.runAttempt,
     );
     if (eligible.length === 0) {
+      if (candidates.length === 0 && options.optionalProducerJobNames?.includes(producerJobName))
+        continue;
       failures.push(
         `job '${producerJobName}' has no artifact at or before the current run attempt`,
       );

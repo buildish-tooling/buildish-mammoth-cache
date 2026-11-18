@@ -60,6 +60,55 @@ function snapshot(): CacheMetadataSnapshot {
   };
 }
 describe('cutoff metadata contracts', () => {
+  it('rejects Maven sibling ownership across snapshot publication units before expansion', () => {
+    const input = snapshot(),
+      entries = input.partitions[0]!.entries;
+    const mixed = {
+      ...input,
+      buildToolId: 'maven',
+      partitions: [
+        {
+          partitionId: 'data',
+          entries: [{ ...entries[0]!, relativePath: 'repository/g/a/1/a.jar' }],
+        },
+        {
+          partitionId: 'metadata',
+          entries: [{ ...entries[1]!, relativePath: 'repository/g/a/1/_remote.repositories' }],
+        },
+      ],
+    };
+    const policy = {
+      id: 'metadata',
+      publication: 'single-writer',
+    } as CacheModel['partitions'][number];
+    expect(() =>
+      selectCutoffActivity(
+        mixed,
+        cutoff,
+        cutoff + 100,
+        14,
+        true,
+        { upserts: [], used: [] },
+        [policy],
+        [],
+      ),
+    ).toThrow(/cannot span single-writer/);
+  });
+  it('distinguishes absent and empty snapshots and rejects partial usage snapshots', () => {
+    const manifest = (p: object) => ({
+      schemaVersion: 4,
+      buildToolId: 'test',
+      partitions: [{ partitionId: 'data', upserts: [], usedPaths: [], ...p }],
+    });
+    expect(cutoffManifestSchema.parse(manifest({})).partitions[0]!.snapshot).toBeUndefined();
+    expect(cutoffManifestSchema.parse(manifest({ snapshot: true })).partitions[0]!.snapshot).toBe(
+      true,
+    );
+    expect(cutoffManifestSchema.safeParse(manifest({ snapshot: false })).success).toBe(false);
+    expect(
+      cutoffManifestSchema.safeParse(manifest({ snapshot: true, usedPaths: ['data/a'] })).success,
+    ).toBe(false);
+  });
   it('selects preserved-mtime changes, tied timestamps, used-only paths and GC in the same observation', () => {
     const result = selectCutoffActivity(snapshot(), cutoff, cutoff + 100, 14, true, {
       upserts: ['imported'],
@@ -87,7 +136,7 @@ describe('cutoff metadata contracts', () => {
   });
   it('rejects old/deletion/precondition/native fields and reserved or duplicate paths', () => {
     const valid = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       buildToolId: 'test',
       partitions: [
         {

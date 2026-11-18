@@ -27,6 +27,7 @@ import * as path from 'node:path';
 
 import { isAbsolutePosixOrWindowsPath, normalizeUserSuppliedRelativePath } from '../util/paths';
 import { parseSerializedJson } from '../util/serialization';
+import { validateNamedValue } from '../util/action-input';
 import type { ConfiguredCachePartitionInput } from './types';
 
 // ---------------------------------------------------------------------------
@@ -75,18 +76,46 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
       throw new Error(`cache-partitions contains duplicate partition id '${id}'.`);
     }
     seenIds.add(id);
+    if (
+      partition.publication !== undefined &&
+      partition.publication !== 'aggregate' &&
+      partition.publication !== 'single-writer'
+    )
+      throw new Error(`Invalid publication policy for partition '${id}'.`);
+    if (
+      partition.writer !== undefined &&
+      (typeof partition.writer !== 'string' || !partition.writer.trim())
+    )
+      throw new Error(`Partition '${id}' writer must be a nonempty job name.`);
     return {
       id,
-      includes: validateCachePartitionGlobList(
-        partition.includes,
-        `cache-partitions entry '${id}' includes`,
-        'include',
-      ),
-      excludes: validateCachePartitionGlobList(
-        partition.excludes ?? [],
-        `cache-partitions entry '${id}' excludes`,
-        'exclude',
-      ),
+      ...(partition.includes === undefined
+        ? {}
+        : {
+            includes: validateCachePartitionGlobList(
+              partition.includes,
+              `cache-partitions entry '${id}' includes`,
+              'include',
+            ),
+          }),
+      ...(partition.excludes === undefined
+        ? {}
+        : {
+            excludes: validateCachePartitionGlobList(
+              partition.excludes,
+              `cache-partitions entry '${id}' excludes`,
+              'exclude',
+            ),
+          }),
+      ...(partition.publication === undefined ? {} : { publication: partition.publication }),
+      ...(partition.writer === undefined
+        ? {}
+        : {
+            writer: validateNamedValue(
+              (partition.writer as string).trim(),
+              `partition '${id}' writer`,
+            ),
+          }),
     } satisfies ConfiguredCachePartitionInput;
   });
 }

@@ -34,6 +34,7 @@ The Gradle action resolves `GRADLE_USER_HOME` into these ordered partitions:
 | Partition             | Contents                                                  | Default  |
 | --------------------- | --------------------------------------------------------- | -------- |
 | `modules`             | Dependency artifacts, JARs, and resource stores           | enabled  |
+| `dependency-metadata` | Complete dependency-resolution metadata snapshots         | enabled  |
 | `transforms-metadata` | Artifact transforms and related metadata                  | disabled |
 | `kotlin-dsl`          | Compiled Kotlin DSL scripts and generated Gradle API JARs | enabled  |
 | `build-cache`         | The local Gradle build cache                              | enabled  |
@@ -41,6 +42,10 @@ The Gradle action resolves `GRADLE_USER_HOME` into these ordered partitions:
 
 See [Gradle cache internals](../../architecture/gradle-cache-internals/) for details on what each
 partition covers and why certain directories are excluded.
+
+The built-in `modules` partition covers dependency artifacts. `dependency-metadata` separately
+covers `caches/modules-*/metadata-*/**` with single-writer publication. The disabled
+`transforms-metadata` preset covers artifact transforms and their metadata, not dependency resolution.
 
 ### Maven
 
@@ -59,7 +64,7 @@ partition covers and why certain files are excluded.
 Built-in partitions for both tools keep a deterministic order. Custom partitions are appended after
 the active built-ins in the order supplied by `cache-partitions`.
 
-The resolved partition order plus each partition's include/exclude set is hashed into
+The resolved partition order, include/exclude sets, publication policies, and writer identities are hashed into
 `partitionFingerprint`, which is part of the cache family. Changing the active partition layout
 produces a different family and therefore starts a cold lineage for the complete managed state.
 
@@ -67,7 +72,8 @@ produces a different family and therefore starts a cold lineage for the complete
 
 - Includes define the files the action manages for a partition.
 - Excludes remove files from that partition after includes are matched.
-- Overriding a built-in replaces its built-in include/exclude lists.
+- Each supplied built-in `includes` or `excludes` list replaces that list; omitted lists inherit
+  the preset. This permits a writer-only override.
 - Built-in overrides with `includes: []` disable that built-in.
 - Custom partitions with `includes: []` are rejected.
 - If the same file matches more than one active partition, manifest capture fails instead of guessing an owner.
@@ -76,12 +82,13 @@ Hard safety excludes are always applied to every active partition and cannot be 
 
 **Gradle**
 
-| Pattern                     | Reason                                                                  |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `**/configuration-cache/**` | May contain encrypted secrets; volatile by nature                       |
-| `**/*.lock`                 | PID-bearing files that cause hangs if restored on another runner        |
-| `caches/*/cc-keystore`      | Configuration-cache encryption key material                             |
-| `caches/journal-1/**`       | Gradle's local-only file-access journal; migrating it causes corruption |
+| Pattern                             | Reason                                                                  |
+| ----------------------------------- | ----------------------------------------------------------------------- |
+| `**/configuration-cache/**`         | May contain encrypted secrets; volatile by nature                       |
+| `**/*.lock`                         | PID-bearing files that cause hangs if restored on another runner        |
+| `caches/*/cc-keystore`              | Configuration-cache encryption key material                             |
+| `caches/modules-*/**/gc.properties` | Gradle dependency-cache cleanup markers; omit when copying              |
+| `caches/journal-1/**`               | Gradle's local-only file-access journal; migrating it causes corruption |
 
 **Maven**
 
@@ -90,6 +97,45 @@ Hard safety excludes are always applied to every active partition and cannot be 
 | `**/*.lastUpdated`              | Artifact failure/check state that can suppress retries after restore    |
 | `**/resolver-status.properties` | Metadata update-check timestamps and errors; omit to allow fresh checks |
 | `**/*.lock`                     | Transient Resolver synchronization state                                |
+
+## Publication policies
+
+Each partition resolves a `publication` policy and an optional distributed `writer` job name:
+
+| Field         | Values and default                                                                                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `publication` | `aggregate` for ordinary partitions; `single-writer` for the Gradle `dependency-metadata` preset. Overrides inherit the built-in policy; custom partitions default to `aggregate`. |
+| `writer`      | Optional producer job identity for `single-writer`. Use the same value in every participating job. It is invalid with `aggregate`.                                                 |
+
+`aggregate` preserves the existing cutoff upsert/usage exchange and conflict checks.
+`single-writer` captures and replaces the complete configured file set, including deletions.
+Standalone jobs own their snapshots automatically. In distributed mode only the named writer's
+snapshot qualifies; all jobs can restore it and modify their local copies. A validated snapshot can
+be published even if its build failed. The aggregator can itself be explicitly named as writer.
+
+```yaml
+cache-partitions:
+  - id: dependency-metadata
+    writer: worker-a
+```
+
+This is config-file YAML. For a direct action input, pass the equivalent JSON string:
+
+```yaml
+cache-partitions: '[{"id":"dependency-metadata","writer":"worker-a"}]'
+```
+
+If no writer is configured or it contributes no snapshot, the previous snapshot survives unchanged.
+A warning and GitHub summary explain the fallback. A corrupt or incompatible contribution fails;
+it is not treated as missing. A writer's explicit empty snapshot clears the configured set.
+
+Snapshot completeness follows the user's include/exclude definition, with required hard excludes.
+Explicitly excluding related Gradle indexes is allowed and its effect on Gradle is the user's
+responsibility. Replacement leaves excluded files untouched. Generic ownership validation still
+rejects files claimed by multiple partitions. Maven coordinate directories cannot span distinct
+partitions when one uses single-writer publication, preserving Maven's directory consistency rule.
+File-to-directory or directory-to-file replacements fail safely rather than removing unmanaged
+structure. See [Distributed multi-job builds](../distributed-jobs/#gradle-metadata-writer).
 
 ## Supported glob subset
 
@@ -151,7 +197,9 @@ can hide use, causing useful old files to be removed and redownloaded or recompu
 read-only jobs skip GC. `cleanup-enabled: false` and `cache-gc-mode: off` disable deletion, retaining
 tracking/exchange costs. #6 tracks read-only optimization; #7 tracks full-generation upload costs.
 
-No tombstones are exchanged: locally deleted paths can return after restore/replay until GC.
+Aggregate partitions exchange no tombstones: locally deleted paths can return after restore/replay
+until GC. Single-writer snapshots replace membership, so their deletions propagate without tombstones.
+These partitions skip per-file GC; ordinary artifact GC still runs independently.
 The internal namespace `.mammoth`, including case/portable aliases and names beginning `.mammoth.`
 or `.mammoth `, is reserved at every path component.
 
@@ -159,7 +207,12 @@ Use `cache-gc-mode: off` or increase grace when old dependencies must remain ava
 
 ## Restore cleanup behavior
 
-`restore-cleanup-mode: prune-managed` is the safe, narrow cleanup mode supported today.
+Single-writer partitions always replace preexisting managed files before restore, with a warning
+and GitHub summary when files are displaced. A miss starts them empty. This applies even with
+`cleanup-enabled: false`; excluded files survive. Retained seed snapshots are independent of local
+build changes. Complete snapshot copy/hash staging adds local I/O in standalone mode too.
+
+For ordinary partitions, `restore-cleanup-mode: prune-managed` is the optional narrow cleanup mode.
 
 - It only runs after a base-cache hit.
 - It only deletes files currently matched by the active managed partitions.

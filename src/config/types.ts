@@ -41,7 +41,7 @@ export const JOB_MODES = ['standalone', 'distributed-worker', 'distributed-aggre
 export type JobMode = (typeof JOB_MODES)[number];
 
 /** Internal base-cache identity schema. Bump whenever compatibility semantics change. */
-export const CACHE_SCHEMA_VERSION = 4;
+export { CUTOFF_CACHE_SCHEMA_VERSION as CACHE_SCHEMA_VERSION } from '../cache/cutoff-format';
 
 /**
  * How wrapper property files should be selected after input normalization.
@@ -85,13 +85,19 @@ export type CacheGcMode = (typeof CACHE_GC_MODES)[number];
  * Partition IDs that match a built-in partition override that built-in's include/exclude lists.
  * New IDs create custom partitions appended after the built-ins in declaration order.
  */
+export type PartitionPublication = 'aggregate' | 'single-writer';
+
 export interface ConfiguredCachePartitionInput {
   /** Stable machine-readable partition identifier. */
   readonly id: string;
   /** Include globs for this partition, relative to the build tool's cache root. */
-  readonly includes: readonly string[];
+  readonly includes?: readonly string[];
   /** Exclude globs for this partition, relative to the build tool's cache root. */
-  readonly excludes: readonly string[];
+  readonly excludes?: readonly string[];
+  /** Omitted values inherit the built-in policy, or aggregation for custom partitions. */
+  readonly publication?: PartitionPublication;
+  /** Distributed producer allowed to replace this partition; standalone owns its own snapshot. */
+  readonly writer?: string;
 }
 
 /**

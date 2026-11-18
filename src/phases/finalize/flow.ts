@@ -33,6 +33,12 @@ import { setEmptyGeneration } from '../../cache/empty-generation';
 import { createCacheGeneration } from '../../cache/model';
 import { saveBaseCache, createBaseCachePaths, type BaseCacheSaveResult } from '../../cache/service';
 import { stageCutoffPackage, uploadCutoffPackage } from '../../delta/cutoff-service';
+import {
+  captureLocalPartitionSnapshots,
+  projectedSnapshotStatistics,
+  partitionSnapshotSummary,
+} from '../../cache/snapshot-lifecycle';
+import { ownsSnapshot, verifySnapshotTransport } from '../../cache/partition-snapshots';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 import {
   createFinalizeActionLogLines,
@@ -81,13 +87,18 @@ export async function executeFinalizeAction(
       throw new Error('Cache lifecycle model/policy configuration drift.');
     bootstrap = { ...bootstrap, cacheModel: record.model };
   }
-  const buildReport = await bootstrap.buildToolAdapter.collectBuildReport(bootstrap.ciContext);
+  const report = await bootstrap.buildToolAdapter.collectBuildReport(bootstrap.ciContext);
+  const buildReport = {
+    ...report,
+    warnings: [...report.warnings, ...(state?.snapshotWarnings ?? [])],
+  };
   let cacheGcResult: FinalizeActionStatus['cacheGcResult'] = null;
   let deltaArtifactResult: FinalizeDeltaArtifactResult | null = null;
   if (state) {
     // Reports may read managed files but must not change the retained metadata projection.
     await verifyCutoffReplay(state);
     cacheGcResult = await collectCutoffGarbage(state);
+    await captureLocalPartitionSnapshots(state);
     const selection = state.selection!;
     if (state.policy.jobMode === 'distributed-worker' && !state.policy.readOnly) {
       if (!d.artifactBackend) throw new Error('Artifact backend dependency is required.');
@@ -102,7 +113,12 @@ export async function executeFinalizeAction(
           artifactName: uploaded.name,
           artifactId: uploaded.id,
           artifactSizeBytes: uploaded.size,
-          emptyEnvelope: !selection.upserts.length && !selection.used.length,
+          emptyEnvelope:
+            !selection.upserts.length &&
+            !selection.used.length &&
+            !state.model.partitions.some((p) =>
+              ownsSnapshot(p, state.policy.jobMode, state.execution.jobName),
+            ),
           upsertCount: selection.upserts.length,
           usedCount: selection.used.length,
           message: `Uploaded worker envelope '${uploaded.name}'.`,
@@ -128,10 +144,15 @@ export async function executeFinalizeAction(
       };
     }
     await verifyCutoffReplay(state);
-    const remaining = selection.fileCount - selection.gc.length;
+    const remaining = projectedSnapshotStatistics(state).fileCount - selection.gc.length;
     const required =
       !!state.publicationKey ||
-      selection.upserts.length > 0 ||
+      selection.upserts.some(
+        (e) =>
+          state.model.partitions.find((p) => p.id === e.partitionId)?.publication !==
+          'single-writer',
+      ) ||
+      state.partitionSnapshots.some((s) => s.changed) ||
       state.workers.upserts.length > 0 ||
       state.deletedPaths.length > 0 ||
       ((state.restoreStatus === 'miss' || state.restoreStatus === 'feature-unavailable') &&
@@ -160,7 +181,14 @@ export async function executeFinalizeAction(
         paths: createBaseCachePaths(state.model),
         message: 'Reused locally recorded successful publication.',
       };
-    } else save = await saveBaseCache(bootstrap.config, state.model, () => generation, d);
+    } else {
+      if (generation)
+        await verifySnapshotTransport(
+          state.model,
+          new Map(state.partitionSnapshots.map((s) => [s.partitionId, s.digest])),
+        );
+      save = await saveBaseCache(bootstrap.config, state.model, () => generation, d);
+    }
     if (eligible && required && save.status !== 'saved') {
       if (state.policy.jobMode === 'distributed-aggregator')
         throw new Error(
@@ -179,7 +207,13 @@ export async function executeFinalizeAction(
     bootstrap,
     baseCacheRestoreResult: record.cacheEnabled ? record.restoreResult : null,
     cacheGcResult,
-    cacheStatistics: state ? createFinalizeCacheStatistics(state.selection!) : null,
+    cacheStatistics: state
+      ? {
+          ...createFinalizeCacheStatistics(state.selection!),
+          ...projectedSnapshotStatistics(state),
+        }
+      : null,
+    partitionSnapshotLines: state ? partitionSnapshotSummary(state) : [],
     deltaArtifactResult,
     buildReport,
     ...bootstrap.ciExecutionUrls,

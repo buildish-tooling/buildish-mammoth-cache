@@ -19,6 +19,7 @@ import { z } from 'zod';
 import type { CacheMetadataSnapshot } from './manifest';
 import { fileIdentitySchema } from './file-identity';
 import { cutoffPartitionIdSchema, cutoffPathSchema, cutoffTimeSchema } from './cutoff-format';
+import type { CachePartitionDefinition } from './model';
 
 export const cutoffTargetSchema = z
   .object({
@@ -34,6 +35,8 @@ export interface WorkerObservations {
 }
 export const EMPTY_WORKER_OBSERVATIONS: WorkerObservations = { upserts: [], used: [] };
 export interface CutoffSelection {
+  snapshotFileCount?: number;
+  snapshotByteCount?: number;
   upserts: CutoffTarget[];
   used: string[];
   gc: CutoffTarget[];
@@ -66,6 +69,8 @@ export function selectCutoffActivity(
   graceDays: number,
   gcEnabled: boolean,
   workers: WorkerObservations = EMPTY_WORKER_OBSERVATIONS,
+  partitions: readonly CachePartitionDefinition[] = [],
+  ownedSnapshotIds: readonly string[] = [],
 ): CutoffSelection {
   cutoffTimeSchema.parse(cutoff);
   cutoffTimeSchema.parse(now);
@@ -78,16 +83,32 @@ export function selectCutoffActivity(
     accessed = new Set(workers.used);
   let fileCount = 0,
     byteCount = 0;
+  let snapshotFileCount = 0,
+    snapshotByteCount = 0;
+  const snapshots = new Set(
+    partitions.filter((p) => p.publication === 'single-writer').map((p) => p.id),
+  );
+  const owned = new Set(ownedSnapshotIds);
   for (const p of snapshot.partitions)
     for (const e of p.entries) {
       fileCount++;
       byteCount += e.size;
+      if (snapshots.has(p.partitionId)) {
+        snapshotFileCount++;
+        snapshotByteCount += e.size;
+        if (!owned.has(p.partitionId)) continue;
+      }
       const target = {
         partitionId: p.partitionId,
         relativePath: e.relativePath,
         identity: e.identity,
       };
-      if (imported.has(e.relativePath) || e.identity.ctimeMs >= cutoff || e.mtimeMs >= cutoff)
+      if (
+        snapshots.has(p.partitionId) ||
+        imported.has(e.relativePath) ||
+        e.identity.ctimeMs >= cutoff ||
+        e.mtimeMs >= cutoff
+      )
         upserts.push(target);
       else if (accessed.has(e.relativePath) || e.atimeMs >= cutoff) used.push(e.relativePath);
       else if (gcEnabled && e.mtimeMs < now - graceDays * 86400_000) gc.push(target);
@@ -95,6 +116,22 @@ export function selectCutoffActivity(
   // A Resolver marker describes siblings, including local installs. Never transfer a
   // changed file without its directory's complete managed view, or GC only its marker.
   if (snapshot.buildToolId === 'maven') {
+    // Maven origins describe a complete coordinate directory. Different publication
+    // units cannot independently own siblings and then expand each other's changes.
+    const directoryOwners = new Map<string, Set<string>>();
+    for (const p of snapshot.partitions)
+      for (const e of p.entries) {
+        if (!e.relativePath.startsWith('repository/')) continue;
+        const directory = path.posix.dirname(e.relativePath);
+        const owners = directoryOwners.get(directory) ?? new Set<string>();
+        owners.add(p.partitionId);
+        directoryOwners.set(directory, owners);
+      }
+    for (const [directory, owners] of directoryOwners)
+      if (owners.size > 1 && [...owners].some((id) => snapshots.has(id)))
+        throw new Error(
+          `Maven repository directory '${directory}' cannot span single-writer publication units.`,
+        );
     const directories = new Map<string, CutoffTarget[]>();
     for (const p of snapshot.partitions)
       for (const e of p.entries) {
@@ -131,6 +168,8 @@ export function selectCutoffActivity(
     upserts.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
   }
   return {
+    snapshotFileCount,
+    snapshotByteCount,
     upserts,
     used,
     gc,

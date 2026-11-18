@@ -74,6 +74,57 @@ const baseCiContext: CiJobContext = {
 };
 
 describe('parseJavaMajor', () => {
+  it('inherits snapshot policy and patterns while permitting explicit file exclusions', () => {
+    const preset = {
+      id: 'metadata',
+      displayName: 'Metadata',
+      description: '',
+      defaultEnabled: true,
+      publication: 'single-writer' as const,
+      relativeIncludeGlobs: ['metadata/**'],
+      relativeExcludeGlobs: ['**/gc.properties'],
+    };
+    const [partition] = createCachePartitions(
+      '/cache',
+      [{ id: 'metadata', writer: 'master', excludes: ['metadata/skip.bin'] }],
+      [preset],
+      ['**/*.lock'],
+    );
+    expect(partition).toMatchObject({
+      publication: 'single-writer',
+      writer: 'master',
+      relativeIncludeGlobs: ['metadata/**'],
+      relativeExcludeGlobs: ['**/*.lock', 'metadata/skip.bin'],
+    });
+    expect(() =>
+      createCachePartitions('/cache', [{ id: 'custom', includes: ['data/**'], writer: 'master' }]),
+    ).toThrow(/requires single-writer/);
+    expect(() =>
+      createCachePartitions('/cache', [{ id: 'custom', publication: 'single-writer' }]),
+    ).toThrow(/at least one include/);
+  });
+
+  it('separates cache compatibility for publication and writer changes', async () => {
+    const model = async (publication: 'aggregate' | 'single-writer', writer?: string) =>
+      createCacheModel(
+        {
+          ...baseConfig,
+          cachePartitions: [
+            { id: 'extra', includes: ['extra/**'], publication, ...(writer ? { writer } : {}) },
+          ],
+        },
+        baseCiContext,
+        gradleAdapter,
+        { captureCommandOutput: async () => 'openjdk version "21"' },
+      );
+    const models = await Promise.all([
+      model('aggregate'),
+      model('single-writer'),
+      model('single-writer', 'one'),
+      model('single-writer', 'two'),
+    ]);
+    expect(new Set(models.map((m) => m.partitionFingerprint)).size).toBe(4);
+  });
   it('parses current java version output', () => {
     expect(parseJavaMajor('openjdk version "21.0.4" 2024-07-16\n')).toBe(21);
   });
@@ -140,6 +191,7 @@ describe('createCachePartitions', () => {
 
     expect(partitions.map((partition) => partition.id)).toEqual([
       'modules',
+      'dependency-metadata',
       'kotlin-dsl',
       'build-cache',
       'wrapper-dists',
@@ -203,13 +255,14 @@ describe('createCachePartitions', () => {
 
     expect(partitions.map((partition) => partition.id)).toEqual([
       'modules',
+      'dependency-metadata',
       'transforms-metadata',
       'build-cache',
       'wrapper-dists',
       'custom-generated-jars',
     ]);
     expect(partitions[0]?.relativeIncludeGlobs).toEqual(['caches/modules-*/files-*/**']);
-    expect(partitions[4]?.relativeIncludeGlobs).toEqual(['caches/*/generated-gradle-jars/**']);
+    expect(partitions[5]?.relativeIncludeGlobs).toEqual(['caches/*/generated-gradle-jars/**']);
   });
 
   it('rejects empty custom partitions', () => {
@@ -246,7 +299,7 @@ describe('createCacheModel', () => {
     expect(cacheModel.cacheRoot).toBe('/home/runner/.gradle');
     expect(cacheModel.javaMajor).toBe(21);
     expect(cacheModel.partitionFingerprint).toMatch(/^[a-f0-9]{16}$/);
-    expect(cacheModel.partitions).toHaveLength(4);
+    expect(cacheModel.partitions).toHaveLength(5);
     expect(cacheModel.includePaths).toContain('/home/runner/.gradle/wrapper/dists/**');
     expect(cacheModel.excludePaths).toContain('/home/runner/.gradle/**/configuration-cache/**');
     expect(cacheModel.excludePaths).toContain('/home/runner/.gradle/**/*.lock');

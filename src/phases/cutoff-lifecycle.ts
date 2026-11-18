@@ -28,6 +28,7 @@ import {
 import { captureCacheMetadataSnapshot } from '../cache/manifest';
 import { selectCutoffActivity } from '../cache/cutoff-selection';
 import type { CiJobContext } from '../ci';
+import { ownsSnapshot } from '../cache/partition-snapshots';
 
 export const CUTOFF_LIFECYCLE_STATE = 'buildish-mammoth-cache-cutoff-lifecycle';
 const restoreSchema = z
@@ -49,7 +50,7 @@ const restoreSchema = z
   .strict();
 const enabled = z
   .object({
-    schemaVersion: z.literal(3),
+    schemaVersion: z.literal(4),
     cacheEnabled: z.literal(true),
     model: cutoffModelSchema,
     policy: cutoffPolicySchema,
@@ -64,7 +65,7 @@ export const cutoffLifecycleSchema = z
     enabled,
     z
       .object({
-        schemaVersion: z.literal(3),
+        schemaVersion: z.literal(4),
         cacheEnabled: z.literal(false),
         execution: cutoffExecutionSchema,
       })
@@ -160,6 +161,12 @@ export async function preflightCutoffLifecycle(
       journal.policy.cacheGcOlderThanDays,
       cutoffGcEnabled(journal.policy),
       journal.workers,
+      record.model.partitions,
+      journal.policy.readOnly
+        ? []
+        : record.model.partitions
+            .filter((p) => ownsSnapshot(p, journal.policy.jobMode, journal.execution.jobName))
+            .map((p) => p.id),
     );
     await freezeCutoffSelection(journal, selection, now);
   }
