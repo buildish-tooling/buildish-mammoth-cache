@@ -251,3 +251,19 @@ it('reuses committed observations after journal write succeeds but pointer write
   expect(state.selection).toEqual(first);
   expect(state.observedAt).toBe(state.cutoff);
 });
+
+it('allows completed read-only state without frozen decisions while preserving writable invariants', async () => {
+  const { state } = await fixture();
+  state.cutoff = Date.now();
+  state.phase = 'completed';
+  await expect(persistCutoffJournal(state)).rejects.toThrow(/Missing frozen/);
+  state.policy.readOnly = true;
+  await persistCutoffJournal(state);
+  const completed = await loadCutoffJournal(state.model, cutoffJournalPath(state.invocation));
+  expect(completed).toMatchObject({ phase: 'completed', selection: null, observedAt: null });
+  state.observedAt = Date.now();
+  await expect(persistCutoffJournal(state)).rejects.toThrow(/Decisions without/);
+  state.observedAt = null;
+  state.phase = 'observations-frozen';
+  await expect(persistCutoffJournal(state)).rejects.toThrow(/Read-only lifecycle/);
+});

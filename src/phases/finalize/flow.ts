@@ -63,7 +63,7 @@ export interface FinalizeActionDependencies extends BootstrapDependencies {
 export async function executeFinalizeAction(
   d: FinalizeActionDependencies,
 ): Promise<FinalizeActionStatus> {
-  // Direct callers also freeze before bootstrap Java discovery/report reads.
+  // Direct callers also validate state and freeze writable observations before content reads.
   const pre = consumeCutoffPreflight(
     d.preflight ?? (await preflightCutoffLifecycle(d.runtimeHost.getState)),
     d.runtimeHost.getState,
@@ -94,7 +94,24 @@ export async function executeFinalizeAction(
   };
   let cacheGcResult: FinalizeActionStatus['cacheGcResult'] = null;
   let deltaArtifactResult: FinalizeDeltaArtifactResult | null = null;
-  if (state) {
+  if (state?.policy.readOnly) {
+    const save = await saveBaseCache(bootstrap.config, state.model, () => null, d);
+    deltaArtifactResult = {
+      status: 'read-only',
+      artifactName: null,
+      artifactId: null,
+      artifactSizeBytes: null,
+      emptyEnvelope: false,
+      upsertCount: null,
+      usedCount: null,
+      message: 'Worker envelope publication skipped in read-only mode.',
+    };
+    if (state.phase !== 'completed') {
+      state.phase = 'completed';
+      await persistCutoffJournal(state);
+    }
+    bootstrap = { ...bootstrap, baseCacheResult: save };
+  } else if (state) {
     // Reports may read managed files but must not change the retained metadata projection.
     await verifyCutoffReplay(state);
     cacheGcResult = await collectCutoffGarbage(state);
@@ -207,7 +224,7 @@ export async function executeFinalizeAction(
     bootstrap,
     baseCacheRestoreResult: record.cacheEnabled ? record.restoreResult : null,
     cacheGcResult,
-    cacheStatistics: state
+    cacheStatistics: state?.selection
       ? {
           ...createFinalizeCacheStatistics(state.selection!),
           ...projectedSnapshotStatistics(state),
@@ -217,7 +234,9 @@ export async function executeFinalizeAction(
     deltaArtifactResult,
     buildReport,
     ...bootstrap.ciExecutionUrls,
-    message: 'Finalize completed with cutoff-based observations.',
+    message: state?.policy.readOnly
+      ? 'Read-only finalize completed without post-build cache observations.'
+      : 'Finalize completed with cutoff-based observations.',
     activityCutoff: state?.cutoff ?? null,
   };
   bootstrap.reportSink.publishLogGroup(

@@ -18,6 +18,11 @@ limitations under the License.
 
 ## Unreleased
 
+- Skip publication-only activity scans, replay verification, snapshot capture and generation
+  decisions in read-only finalize. Preserve restore validation, lifecycle identity/configuration
+  checks and build reports. Report uncollected activity statistics as unavailable and label snapshot
+  counts as prepare state. Read-only completion retains no per-file publication decisions.
+
 - Cache Gradle dependency metadata in a default `dependency-metadata` partition. Add partition
   `publication` (`aggregate` or `single-writer`) and optional distributed `writer` configuration.
   Standalone jobs own their snapshots; distributed publication uses only the designated job and
@@ -49,8 +54,7 @@ limitations under the License.
 - Migrate to cache family 4, manifest 3, package 4 and CI lifecycle 3. Old families are cold misses.
   Freeze retry decisions in bounded local journals, retire obsolete checkpoints, and publish a
   constant empty-generation marker when GC removes the last managed file.
-- Defer read-only tracking optimization to #6 and full-generation publication optimization to #7.
-  No inexpensive bypass or storage redesign is introduced.
+- Keep full-generation publication optimization separate (#7). No storage redesign is introduced.
 
 - Retain distributed worker envelopes after failed and successful aggregation so aggregator-only
   retries can recover without rerunning workers. Workers still request seven-day retention, subject

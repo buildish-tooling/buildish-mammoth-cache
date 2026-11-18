@@ -336,6 +336,49 @@ describe('single-writer partition lifecycle', () => {
     );
     expect(f.entries).toHaveLength(before);
   });
+  it.each(['standalone', 'distributed-worker', 'distributed-aggregator'])(
+    'restores read-only snapshots in %s and ignores publication-only drift at finalize',
+    async (mode) => {
+      const f = await fixture();
+      await f.seed();
+      const reader = await f.job('reader', mode, { 'read-only': 'true' });
+      await put(reader, 'metadata/extra.bin', 'replace me');
+      await put(reader, 'metadata/excluded.bin', 'keep');
+      await reader.prepare();
+      expect(await get(reader, 'metadata/index.bin')).toBe('seed');
+      expect(await get(reader, 'metadata/stale.bin')).toBe('stale');
+      expect(await get(reader, 'metadata/excluded.bin')).toBe('keep');
+      await expect(get(reader, 'metadata/extra.bin')).rejects.toThrow();
+      await put(reader, 'metadata/index.bin', 'local build changes');
+      await rm(path.join(reader.home, 'metadata/stale.bin'));
+      // Consumed transport is no longer a publication/retry contract for a reader.
+      await rm(path.join(reader.home, PARTITION_SNAPSHOT_DIRECTORY), { recursive: true });
+      const original = fs.readFile;
+      const reads = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+        if (String(args[0]).includes(PARTITION_SNAPSHOT_DIRECTORY))
+          throw new Error('Unexpected transport read');
+        return original(...args);
+      });
+      const before = f.entries.length;
+      const result = await executeFinalizeAction(reader.deps);
+      expect(result.cacheStatistics).toBeNull();
+      expect(result.partitionSnapshotLines?.join(' ')).toContain(
+        'prepare snapshot; 2 file(s). Post-build contents not observed',
+      );
+      expect(await get(reader, 'metadata/index.bin')).toBe('local build changes');
+      expect(f.entries).toHaveLength(before);
+      expect((await journal(reader)).selection).toBeNull();
+      reads.mockRestore();
+    },
+  );
+  it('still rejects corrupt restored transport for a read-only consumer', async () => {
+    const f = await fixture();
+    await f.seed();
+    const payload = f.entries[0]!.files.find((file) => file.name.endsWith('payload/000001.bin'))!;
+    payload.bytes = Buffer.from('corrupt');
+    const reader = await f.job('reader', 'standalone', { 'read-only': 'true' });
+    await expect(reader.prepare()).rejects.toThrow(/size\/SHA-256/);
+  });
   it('exempts retained snapshots from per-file GC while ordinary artifacts are evicted', async () => {
     const f = await fixture();
     const s = await f.job('seed');

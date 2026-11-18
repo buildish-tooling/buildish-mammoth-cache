@@ -304,7 +304,7 @@ it('keeps an unchanged cache hit and a usage-only hit without publishing replace
   scan.mockRestore();
 });
 it.each([true, false])(
-  'records warm-fixture operation counts with readOnly=%s (not a scale benchmark)',
+  'observes a warm cache only for writable finalize (readOnly=%s)',
   async (readOnly) => {
     const job = await cutoffJob(await root(), {
       inputs: { 'cache-gc-mode': 'off', 'read-only': String(readOnly) },
@@ -312,10 +312,10 @@ it.each([true, false])(
     vi.spyOn(job.deps.cacheBackend, 'restoreCache').mockImplementation(
       async (_paths, primary) => primary + 'seed',
     );
-    const payload = Buffer.alloc(16 * 1024, 42);
+    const payload = Buffer.from('cache bytes');
     await mkdir(path.join(job.home, 'data'), { recursive: true });
     await Promise.all(
-      Array.from({ length: 512 }, async (_, i) => {
+      Array.from({ length: 4 }, async (_, i) => {
         const file = path.join(job.home, 'data', String(i).padStart(4, '0'));
         await writeFile(file, payload);
         await utimes(file, 1700000000, 1700000000);
@@ -326,39 +326,16 @@ it.each([true, false])(
     const guarded = await import('../../../src/cache/guarded-files');
     const copy = vi.spyOn(guarded, 'copyGuardedFile');
     const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
-    const started = performance.now();
     job.deps.now = () => Date.now() + 10000;
     await job.prepare();
-    const prepared = performance.now();
     expect(scan).not.toHaveBeenCalled();
     const result = await executeFinalizeAction(job.deps);
-    const finalized = performance.now();
-    expect(result.cacheStatistics?.fileCount).toBe(512);
+    expect(result.cacheStatistics?.fileCount ?? null).toBe(readOnly ? null : 4);
     expect(copy).not.toHaveBeenCalled();
     expect(hash).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
-    expect(scan).toHaveBeenCalledTimes(3); // Initial selection, post-report validation, pre-publication validation.
-    const state = await journal(job);
-    const io = await import('node:fs/promises');
-    const journalBytes = (await io.stat(path.join(job.home, cutoffJournalPath(state.invocation))))
-      .size;
-    console.log(
-      'CUTOFF_OPERATION_FIXTURE',
-      JSON.stringify({
-        readOnly,
-        files: 512,
-        sourceBytes: 512 * payload.length,
-        prepareMs: Math.round(prepared - started),
-        finalizeMs: Math.round(finalized - prepared),
-        metadataPasses: scan.mock.calls.length,
-        selectedSourceCopies: copy.mock.calls.length,
-        baseSaves: save.mock.calls.length,
-        retainedJournalBytes: journalBytes,
-        processLifetimeMaxRssKiB: process.resourceUsage().maxRSS,
-      }),
-    );
+    expect(scan).toHaveBeenCalledTimes(readOnly ? 0 : 3); // Initial selection, post-report validation, pre-publication validation.
   },
-  10000,
 );
 it.each(['exception', 'decline'])(
   'recovers a fresh aggregate after %s using retained envelopes and cleans temporary staging',

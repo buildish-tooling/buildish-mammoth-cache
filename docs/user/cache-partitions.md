@@ -195,7 +195,9 @@ upserts and atime >= C for access-only observations.
 No historical last-use grace is stored. `noatime`, `relatime`, coalesced timestamps and clock changes
 can hide use, causing useful old files to be removed and redownloaded or recomputed. Workers and
 read-only jobs skip GC. `cleanup-enabled: false` and `cache-gc-mode: off` disable deletion, retaining
-tracking/exchange costs. #6 tracks read-only optimization; #7 tracks full-generation upload costs.
+writable tracking/exchange costs. Read-only finalize skips publication-only scans, snapshot capture
+and replay checks; activity counts are unavailable. Prepare still verifies restored snapshots and
+replaces their managed live files. #7 tracks full-generation upload costs.
 
 Aggregate partitions exchange no tombstones: locally deleted paths can return after restore/replay
 until GC. Single-writer snapshots replace membership, so their deletions propagate without tombstones.

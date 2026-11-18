@@ -26,8 +26,8 @@ export interface FinalizeDeltaArtifactResult {
   artifactId: number | null;
   artifactSizeBytes: number | null;
   emptyEnvelope: boolean;
-  upsertCount: number;
-  usedCount: number;
+  upsertCount: number | null;
+  usedCount: number | null;
   message: string;
 }
 export interface FinalizeActionStatus {
@@ -88,7 +88,13 @@ export function createFinalizeActionSummaryLines(s: FinalizeActionStatus): reado
     `- Restore: ${escapeSummaryText(s.baseCacheRestoreResult?.status ?? 'disabled')}`,
     `- Save: ${escapeSummaryText(save?.status ?? 'disabled')}`,
     ...(save ? [`- Save reason: ${escapeSummaryText(save.message)}`] : []),
-    `- Upserts: ${s.cacheStatistics?.upsertCount ?? 0}; used paths: ${s.cacheStatistics?.usedCount ?? 0}`,
+    ...(s.cacheStatistics
+      ? [`- Upserts: ${s.cacheStatistics.upsertCount}; used paths: ${s.cacheStatistics.usedCount}`]
+      : [
+          s.bootstrap.config.cacheEnabled && s.bootstrap.config.readOnly
+            ? '- Cache activity statistics: unavailable (not collected in read-only mode).'
+            : '- Cache activity statistics: unavailable (cache disabled).',
+        ]),
     `- GC removed: ${s.cacheGcResult?.deletedFileCount ?? 0}`,
     ...(s.deltaArtifactResult?.status === 'uploaded'
       ? [

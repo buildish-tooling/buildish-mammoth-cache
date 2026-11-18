@@ -120,6 +120,8 @@ export function projectedSnapshotStatistics(state: CutoffJournal) {
 }
 export function partitionSnapshotSummary(state: CutoffJournal): string[] {
   return state.partitionSnapshots.map((s) => {
+    if (state.policy.readOnly)
+      return `Partition '${s.partitionId}': prepare snapshot; ${s.fileCount} file(s). Post-build contents not observed (read-only).`;
     const partition = state.model.partitions.find((p) => p.id === s.partitionId)!;
     const owner = ownsSnapshot(partition, state.policy.jobMode, state.execution.jobName);
     if (

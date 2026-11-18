@@ -117,7 +117,11 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Defaults to `false` for other events.
 - A repository config file may set `true`, but cannot set `false` to lower the pull-request safety
   floor. Only a direct workflow input can make that explicit trusted-workflow choice.
-- Use this to prevent cache mutation.
+- Prevents remote cache publication and workflow-artifact exchange.
+- Finalize skips cache activity scans, publication snapshot capture and replay checks. Activity
+  statistics are reported as unavailable; snapshot counts describe prepare, not post-build contents.
+- Local restore/extraction, snapshot replacement and integrity validation, provisioning, hooks,
+  build reports and bounded lifecycle records remain active. Local cache files remain writable.
 
 ### `job-mode`
 

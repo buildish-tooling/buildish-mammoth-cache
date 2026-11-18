@@ -81,11 +81,16 @@ it('issues one-use receipts bound to CI state and freezes before callback reads'
   job.state.clear();
   expect(() => consumeCutoffPreflight(real, job.deps.runtimeHost.getState)).toThrow();
 });
-it.each(['gradle', 'maven'])(
-  'built %s post freezes before SDK event reads and skips missing ownership',
-  async (tool) => {
+it.each([
+  { tool: 'gradle', readOnly: false },
+  { tool: 'maven', readOnly: false },
+  { tool: 'gradle', readOnly: true },
+  { tool: 'maven', readOnly: true },
+])(
+  'built $tool post validates before SDK event reads (readOnly=$readOnly) and skips missing ownership',
+  async ({ tool, readOnly }) => {
     const r = await root(),
-      job = await cutoffJob(r);
+      job = await cutoffJob(r, { inputs: { 'read-only': String(readOnly) } });
     await job.prepare();
     const record = readCutoffLifecycle(job.deps.runtimeHost.getState);
     if (!record.cacheEnabled) throw new Error('enabled');
@@ -120,7 +125,7 @@ it.each(['gradle', 'maven'])(
     fs.readFileSync=function(p,...args){
       if(String(p)===process.env.GITHUB_EVENT_PATH){
         const j=JSON.parse(original(process.env.TEST_JOURNAL,'utf8'));
-        if(j.phase!=='observations-frozen') throw new Error('EARLY_EVENT_READ');
+        if(j.phase!==process.env.TEST_EXPECT_PHASE) throw new Error('EARLY_EVENT_READ');
         process.stdout.write('EVENT_AFTER_FREEZE\n'); throw new Error('STOP_AFTER_EVENT');
       }
       return original.call(this,p,...args);
@@ -131,6 +136,7 @@ it.each(['gradle', 'maven'])(
       ...process.env,
       GITHUB_EVENT_PATH: event,
       TEST_JOURNAL: journal,
+      TEST_EXPECT_PHASE: readOnly ? 'build-ready' : 'observations-frozen',
     };
     for (const [key, value] of job.state) env[`STATE_${key}`] = value;
     env[`STATE_${JOB_SINGLE_RUN_OWNER_TOKEN_STATE}`] = 'owner';

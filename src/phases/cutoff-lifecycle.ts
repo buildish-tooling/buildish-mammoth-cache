@@ -129,7 +129,7 @@ export function consumeCutoffPreflight(
     throw new Error('Invalid or consumed cutoff preflight receipt.');
   return preflight;
 }
-/** Safe before provider/config/artifact imports: uses only CI state and metadata. */
+/** Validate lifecycle state before imports; freeze publication decisions only for writers. */
 export async function preflightCutoffLifecycle(
   getState: (key: string) => string,
   now = Date.now(),
@@ -151,6 +151,7 @@ export async function preflightCutoffLifecycle(
     throw new Error('Cutoff lifecycle/journal mismatch.');
   if (journal.phase === 'prepare-pending' || journal.cutoff === null)
     throw new Error('Prepare did not establish a valid cutoff.');
+  if (journal.policy.readOnly) return issuePreflight({ record, journal });
   if (journal.selection) await verifyCutoffReplay(journal);
   else {
     const snapshot = await captureCacheMetadataSnapshot(record.model);
@@ -162,11 +163,9 @@ export async function preflightCutoffLifecycle(
       cutoffGcEnabled(journal.policy),
       journal.workers,
       record.model.partitions,
-      journal.policy.readOnly
-        ? []
-        : record.model.partitions
-            .filter((p) => ownsSnapshot(p, journal.policy.jobMode, journal.execution.jobName))
-            .map((p) => p.id),
+      record.model.partitions
+        .filter((p) => ownsSnapshot(p, journal.policy.jobMode, journal.execution.jobName))
+        .map((p) => p.id),
     );
     await freezeCutoffSelection(journal, selection, now);
   }

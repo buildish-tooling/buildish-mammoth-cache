@@ -231,11 +231,12 @@ export const cutoffJournalSchema = z
     )
       ctx.addIssue({ code: 'custom', message: 'Invalid worker publication receipt.' });
     const early = ['prepare-pending', 'build-ready'].includes(state.phase);
+    const unobserved = early || (state.policy.readOnly && state.phase === 'completed');
     const writer = state.policy.jobMode === 'distributed-worker' && !state.policy.readOnly;
     if (state.phase !== 'prepare-pending' && state.cutoff === null)
       ctx.addIssue({ code: 'custom', message: 'Missing build-ready cutoff.' });
     if (
-      early &&
+      unobserved &&
       (state.selection !== null ||
         state.observedAt !== null ||
         state.seal !== null ||
@@ -244,8 +245,13 @@ export const cutoffJournalSchema = z
         state.saved ||
         state.workerReceipt)
     )
-      ctx.addIssue({ code: 'custom', message: 'Decisions before the freeze.' });
-    if (!early && (!state.selection || state.observedAt === null))
+      ctx.addIssue({ code: 'custom', message: 'Decisions without a publication freeze.' });
+    if (state.policy.readOnly && !unobserved)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Read-only lifecycle cannot freeze publication decisions.',
+      });
+    if (!unobserved && (!state.selection || state.observedAt === null))
       ctx.addIssue({ code: 'custom', message: 'Missing frozen decisions/time.' });
     if (
       (state.phase === 'package-sealed' || (writer && state.phase === 'completed')) &&
