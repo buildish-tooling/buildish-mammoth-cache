@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { z } from 'zod';
 import type { CacheMetadataSnapshot } from './manifest';
 import { fileIdentitySchema } from './file-identity';
@@ -70,8 +71,8 @@ export function selectCutoffActivity(
   cutoffTimeSchema.parse(now);
   if (!Number.isFinite(graceDays) || graceDays < 2)
     throw new Error('GC grace must be at least two days.');
-  const upserts: CutoffTarget[] = [],
-    used: string[] = [],
+  const upserts: CutoffTarget[] = [];
+  let used: string[] = [],
     gc: CutoffTarget[] = [];
   const imported = new Set(workers.upserts),
     accessed = new Set(workers.used);
@@ -91,6 +92,44 @@ export function selectCutoffActivity(
       else if (accessed.has(e.relativePath) || e.atimeMs >= cutoff) used.push(e.relativePath);
       else if (gcEnabled && e.mtimeMs < now - graceDays * 86400_000) gc.push(target);
     }
+  // A Resolver marker describes siblings, including local installs. Never transfer a
+  // changed file without its directory's complete managed view, or GC only its marker.
+  if (snapshot.buildToolId === 'maven') {
+    const directories = new Map<string, CutoffTarget[]>();
+    for (const p of snapshot.partitions)
+      for (const e of p.entries) {
+        if (!e.relativePath.startsWith('repository/')) continue;
+        const directory = path.posix.dirname(e.relativePath);
+        const members = directories.get(directory) ?? [];
+        members.push({
+          partitionId: p.partitionId,
+          relativePath: e.relativePath,
+          identity: e.identity,
+        });
+        directories.set(directory, members);
+      }
+    const changed = new Set(upserts.map((e) => e.relativePath));
+    const read = new Set(used);
+    const garbage = new Set(gc.map((e) => e.relativePath));
+    for (const members of directories.values()) {
+      if (members.some((e) => changed.has(e.relativePath))) {
+        for (const e of members) changed.add(e.relativePath);
+      }
+      if (members.some((e) => read.has(e.relativePath))) {
+        for (const e of members) read.add(e.relativePath);
+      }
+      if (!members.every((e) => garbage.has(e.relativePath))) {
+        for (const e of members) garbage.delete(e.relativePath);
+      }
+    }
+    const all = [...directories.values()].flat();
+    const selected = new Set(upserts.map((e) => e.relativePath));
+    for (const e of all)
+      if (changed.has(e.relativePath) && !selected.has(e.relativePath)) upserts.push(e);
+    used = [...read].filter((name) => !changed.has(name)).sort((a, b) => a.localeCompare(b));
+    gc = gc.filter((e) => garbage.has(e.relativePath));
+    upserts.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  }
   return {
     upserts,
     used,

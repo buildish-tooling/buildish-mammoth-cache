@@ -18,6 +18,17 @@ limitations under the License.
 
 ## Unreleased
 
+- Preserve Maven `_remote.repositories` origin markers. Changed repository files travel with their
+  complete managed directory; aggregation rejects different worker directory views and incomplete
+  updates over existing aggregator files, including when duplicate-path overrides are enabled.
+  GC retains provenance with surviving siblings. Excluded artifact siblings cause source capture,
+  aggregation, and GC to fail before marker changes; custom-exclusion restores validate the existing
+  tree with metadata before extraction. Whole-directory exclusions remain supported. Canonically
+  order usage-only paths, including mixed-case classifiers. Use a common seeded repository and one writer
+  per changed directory, or standalone mode. The changed Maven partition fingerprint starts a cold
+  cache family; seed from a fresh dedicated Maven user home. Snapshots and local installs remain
+  included unless excluded by caller configuration. Add real Resolver regression coverage.
+
 - Replace pre-build content inventories with post-prepare cutoff activity. Worker envelopes carry
   assumed changed upserts and path-only usage, with no tombstones or historical last-use manifest.
   Timestamp GC uses old mtime plus current-build protection; filesystem/clock misses may cause

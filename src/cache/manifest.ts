@@ -15,6 +15,7 @@
  */
 
 import { fileIdentity, type FileIdentity } from './file-identity';
+import { assertCompleteMavenRepositoryDirectories, isMavenTransientFile } from './maven-repository';
 import { isCacheMetadataPath } from './metadata-paths';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -178,6 +179,7 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
     seenRelativePaths: new Set<string>(),
   }));
   const claimedPaths = new Map<string, string>();
+  const excludedMavenDirectories = new Set<string>();
 
   for (const compiledPartition of compiledPartitions) {
     for (const includePattern of compiledPartition.includePatterns) {
@@ -190,9 +192,16 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
             const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
             if (
               isCacheMetadataPath(relativePath) ||
-              compiledPartition.seenRelativePaths.has(relativePath) ||
-              matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)
-            ) {
+              compiledPartition.seenRelativePaths.has(relativePath)
+            )
+              return;
+            if (matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)) {
+              if (
+                cacheModel.buildToolId === 'maven' &&
+                relativePath.startsWith('repository/') &&
+                !isMavenTransientFile(path.posix.basename(relativePath))
+              )
+                excludedMavenDirectories.add(path.posix.dirname(relativePath));
               return;
             }
 
@@ -216,6 +225,24 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
         );
       }
     }
+  }
+
+  if (cacheModel.buildToolId === 'maven') {
+    const owns = createManagedCachePathMatcher(cacheModel);
+    const selected = new Set(claimedPaths.keys());
+    for (const name of claimedPaths.keys()) {
+      if (!name.startsWith('repository/')) continue;
+      const marker = path.posix.join(path.posix.dirname(name), '_remote.repositories');
+      if (!cacheModel.partitions.some((p) => owns(p.id, marker)))
+        throw new Error(`Maven repository partitions must include origin markers: ${marker}`);
+    }
+    // Include excluded-only directories when their marker remains in the managed surface.
+    // Whole-directory exclusions also exclude the marker, and remain supported.
+    for (const directory of excludedMavenDirectories) {
+      const marker = `${directory}/_remote.repositories`;
+      if (cacheModel.partitions.some((p) => owns(p.id, marker))) selected.add(marker);
+    }
+    await assertCompleteMavenRepositoryDirectories(cacheModel, selected);
   }
 
   return cacheModel.partitions.map((partition) => ({

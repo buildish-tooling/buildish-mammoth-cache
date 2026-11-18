@@ -26,7 +26,7 @@ ARCHIVE_OUTPUT_DIR ?= build/release-archives
 ARCHIVE_CONSUMER_NODE ?= node
 HELP_TARGETS := $(MAKEFILE_LIST)
 
-.PHONY: archive-consumer-check archive-consumer-test build check clean clean-all distribution-check help integration-test integration-test-build-reporting integration-test-distributed-reuse integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse lint-check lint-fix rat-check rebuild release-archives release-archives-test release-launcher-test release-legal-check release-legal-incompatible-license-check release-tooling-qualification release-workflow-test sanity-check smoke-test test versioned-docs-test zizmor-check
+.PHONY: archive-consumer-check archive-consumer-test build check clean clean-all distribution-check help integration-test integration-test-build-reporting integration-test-distributed-reuse integration-test-gradle-distributed-reuse integration-test-maven-distributed-reuse integration-test-maven-repository-semantics lint-check lint-fix rat-check rebuild release-archives release-archives-test release-launcher-test release-legal-check release-legal-incompatible-license-check release-tooling-qualification release-workflow-test sanity-check smoke-test test versioned-docs-test zizmor-check
 
 help: ## Show available Make targets.
 	@awk 'BEGIN {FS = ":.*## "; printf "Available targets:\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(HELP_TARGETS)
@@ -151,6 +151,9 @@ integration-test-gradle-distributed-reuse: build ## Run the local worker/aggrega
 
 integration-test-maven-distributed-reuse: build ## Run the local worker/aggregator Maven distributed-reuse integration test (requires mvn on PATH).
 	INTEGRATION_TESTS=1 $(NPM) exec -- vitest run --reporter=verbose test/integration/maven-distributed-reuse.test.ts
+
+integration-test-maven-repository-semantics: build ## Test Maven origin tracking with the installed Resolver (requires mvn, javac, java, and GNU tar; no public remotes).
+	INTEGRATION_TESTS=1 $(NPM) exec -- vitest run --reporter=verbose test/integration/maven-repository-semantics.test.ts
 
 integration-test-distributed-reuse: ## Run the local worker/aggregator Gradle + Maven distributed-reuse integration tests (requires mvn on PATH).
 	$(MAKE) integration-test-gradle-distributed-reuse

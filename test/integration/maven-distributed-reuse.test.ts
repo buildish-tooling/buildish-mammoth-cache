@@ -35,7 +35,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -98,6 +98,21 @@ async function main(): Promise<void> {
     const artifactApi = new FakeArtifactApi(path.join(stagedRoot, 'artifacts'));
     const cacheBackend = new ImmutableCacheBackend();
     const jobs = await stageJobs(stagedRoot, fixtureSourceDirectory);
+
+    // Seed common plugins/transitives once, then leave one dependency directory per worker
+    // cold. Cold independent Maven runs would rewrite shared origin-marker files differently.
+    await runMaven(
+      jobs.maven_worker_a,
+      ['-P', 'worker-a,worker-b', 'dependency:resolve'],
+      'seed-common-repository',
+    );
+    for (const directory of ['com/google/guava/guava/33.6.0-jre', 'commons-io/commons-io/2.22.0'])
+      await rm(path.join(jobs.maven_worker_a.localRepository, directory), {
+        recursive: true,
+        force: true,
+      });
+    for (const job of [jobs.maven_worker_b, jobs.maven_aggregator])
+      await cp(jobs.maven_worker_a.localRepository, job.localRepository, { recursive: true });
 
     // Worker A resolves guava and publishes a delta artifact.
     await runWorkerJob(jobs.maven_worker_a, 'worker-a', artifactApi, cacheBackend);
@@ -204,6 +219,10 @@ async function stageJob(
   const localRepository = path.join(mavenUserHome, 'repository');
   await cp(fixtureSourceDirectory, projectDirectory, { recursive: true });
   await mkdir(localRepository, { recursive: true });
+  await writeFile(
+    path.join(jobRoot, 'settings.xml'),
+    '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"/>\n',
+  );
 
   return {
     jobName,
@@ -224,6 +243,9 @@ async function stageJob(
       GITHUB_RUN_ATTEMPT: RUN_ATTEMPT,
       GITHUB_WORKSPACE: jobRoot,
       MAVEN_USER_HOME: mavenUserHome,
+      MAVEN_ARGS: '',
+      MAVEN_OPTS: `-Duser.home=${jobRoot}`,
+
       RUNNER_OS: normalizeRunnerOs(process.platform),
       RUNNER_ARCH: normalizeRunnerArch(process.arch),
     },
@@ -385,7 +407,16 @@ async function runMaven(
 ): Promise<void> {
   console.log(`\n--- ${label} ---`);
   // Inject the isolated local repository path so Maven does not fall back to $HOME/.m2.
-  const fullArgs = [...args, `-Dmaven.repo.local=${job.localRepository}`];
+  const fullArgs = [
+    '--batch-mode',
+    '--no-transfer-progress',
+    '--settings',
+    path.join(job.jobRoot, 'settings.xml'),
+    '--global-settings',
+    path.join(job.jobRoot, 'settings.xml'),
+    ...args,
+    `-Dmaven.repo.local=${job.localRepository}`,
+  ];
   const result = await runProcess('mvn', fullArgs, {
     cwd: job.projectDirectory,
     env: job.env,

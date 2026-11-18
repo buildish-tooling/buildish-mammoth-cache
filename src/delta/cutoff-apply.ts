@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { assertCompleteMavenRepositoryDirectories } from '../cache/maven-repository';
 import { randomUUID } from 'node:crypto';
 import { chmod, utimes, rename, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -46,9 +47,32 @@ export function mergeCutoffPackages(
 ): CutoffMergePlan {
   const upserts = new Map<string, CutoffMergedUpsert>(),
     used = new Set<string>();
+  const mavenDirectories = new Map<string, string>();
   for (const pkg of packages) {
     const manifest = cutoffManifestSchema.parse(pkg.manifest);
     assertCutoffPackageCompatible({ ...pkg, manifest }, model, ci);
+    if (model.buildToolId === 'maven') {
+      const directories = new Map<string, string[]>();
+      for (const p of manifest.partitions)
+        for (const entry of p.upserts) {
+          if (!entry.relativePath.startsWith('repository/')) continue;
+          const directory = path.posix.dirname(entry.relativePath);
+          const members = directories.get(directory) ?? [];
+          members.push(
+            JSON.stringify([entry.relativePath, entry.contentSha256, entry.size, entry.mode]),
+          );
+          directories.set(directory, members);
+        }
+      for (const [directory, members] of directories) {
+        const signature = JSON.stringify(members.sort());
+        const previous = mavenDirectories.get(directory);
+        if (previous !== undefined && previous !== signature)
+          throw new Error(
+            `Conflicting Maven repository directory: ${directory}. Use a common seeded repository and one writer per changed directory; duplicate-path overrides do not apply.`,
+          );
+        mavenDirectories.set(directory, signature);
+      }
+    }
     for (const p of manifest.partitions) {
       for (const name of p.usedPaths) used.add(name);
       for (const entry of p.upserts) {
@@ -73,7 +97,7 @@ export function mergeCutoffPackages(
     upserts: [...upserts.values()].sort((a, b) =>
       a.entry.relativePath.localeCompare(b.entry.relativePath),
     ),
-    used: [...used].filter((p) => !upserts.has(p)).sort(),
+    used: [...used].filter((p) => !upserts.has(p)).sort((a, b) => a.localeCompare(b)),
   };
 }
 export async function applyCutoffPlan(
@@ -102,6 +126,7 @@ export async function applyCutoffPlan(
     const stat = await regularStat(guardedPath(model.cacheRoot, name));
     before.set(name, stat ? fileIdentity(stat) : null);
   }
+  await assertCompleteMavenRepositoryDirectories(model, seen);
   for (const item of plan.upserts) {
     const name = item.entry.relativePath,
       target = guardedPath(model.cacheRoot, name),

@@ -145,9 +145,17 @@ The following paths are excluded from every active partition unconditionally and
 
 **Maven**
 
-| Pattern                         | Reason                                                                                                          |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `**/*.lastUpdated`              | Stale remote-check markers; cause silent re-resolution when shared across runners                               |
-| `**/resolver-status.properties` | Maven Resolver group-level remote-check status; per-runner state and a common distributed-merge conflict source |
-| `**/_remote.repositories`       | Records which remote a file came from; not portable across different CI environments                            |
-| `**/*.lock`                     | PID-bearing resolver lock files that cause hangs if restored on another runner                                  |
+| Pattern                         | Reason                                                                  |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `**/*.lastUpdated`              | Artifact failure/check state that can suppress retries after restore    |
+| `**/resolver-status.properties` | Metadata update-check timestamps and errors; omit to allow fresh checks |
+| `**/*.lock`                     | Transient Resolver synchronization state                                |
+
+Maven origin markers (`_remote.repositories`) remain cached. Changed files under `repository/`
+carry their complete managed directory in worker packages; different worker views of the same
+directory fail aggregation even with duplicate-path overrides. GC retains a managed directory
+while any sibling survives. Partial-directory exclusions cannot leave excluded artifact bytes
+beside a replaced or deleted marker: source capture, aggregation, and GC reject such directories,
+and custom-exclusion restores validate the existing tree before extraction. Whole-directory
+exclusions remain supported. See [Maven caching patterns](../maven-caching-patterns/) for topology,
+snapshot/local-install exclusions, and cold-seeding guidance.

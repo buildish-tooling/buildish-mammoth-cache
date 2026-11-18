@@ -201,6 +201,11 @@ runtime outputs, and these reference rows cannot silently diverge.
 - When `false`, non-identical path conflicts are errors.
 - Only relevant for distributed aggregator jobs.
 
+For Maven files under `repository/`, directory consistency takes precedence: workers updating the
+same directory must provide identical managed path sets, content, sizes, and modes. This option
+cannot select a newer conflicting origin marker or combine different directory views. See
+[Maven caching patterns](../maven-caching-patterns/).
+
 ### `github-token`
 
 - Default: unset (falls back to `GITHUB_TOKEN` when available)

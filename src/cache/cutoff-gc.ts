@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { assertCompleteMavenRepositoryDirectories } from './maven-repository';
 import { rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import { guardedPath, regularStat, verifyParents } from './guarded-files';
@@ -27,15 +28,31 @@ export async function collectCutoffGarbage(
   if (!cutoffGcEnabled(state.policy)) return null;
   if (!state.selection || state.observedAt === null)
     throw new Error('GC requires frozen decisions.');
+  await assertCompleteMavenRepositoryDirectories(
+    state.model,
+    state.selection.gc.map((e) => e.relativePath),
+  );
   if (state.phase !== 'completed' && state.phase !== 'publication-intent') {
     state.phase = 'deleting';
     await persistCutoffJournal(state);
   }
   const progress = new Set(state.deletedPaths);
-  for (const target of state.selection.gc) {
+  // If a sweep fails midway, leave provenance in place until all sibling bytes are gone.
+  const isOriginMarker = (target: { relativePath: string }) =>
+    path.posix.basename(target.relativePath) === '_remote.repositories';
+  const targets =
+    state.model.buildToolId === 'maven'
+      ? [
+          ...state.selection.gc.filter((e) => !isOriginMarker(e)),
+          ...state.selection.gc.filter(isOriginMarker),
+        ]
+      : state.selection.gc;
+  for (const target of targets) {
     await verifyParents(state.model.cacheRoot, path.posix.dirname(target.relativePath));
     const file = guardedPath(state.model.cacheRoot, target.relativePath);
     const current = await regularStat(file);
+    if (current && state.model.buildToolId === 'maven' && isOriginMarker(target))
+      await assertCompleteMavenRepositoryDirectories(state.model, [target.relativePath]);
     if (current) {
       if (
         progress.has(target.relativePath) ||

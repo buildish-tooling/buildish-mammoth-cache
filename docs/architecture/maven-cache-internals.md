@@ -20,102 +20,117 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-Understanding which parts of the Maven local repository (`~/.m2`) are safe to cache across CI
-runners and which parts cause stale-resolution or non-determinism is the foundation of this
-action's partition design for Maven.
+The Maven local repository stores downloaded artifacts, locally installed builds, and Resolver
+metadata. Mammoth preserves that distinction when caching `repository/` under the Maven user home.
 
-## Maven local repository structure
+## Coordinates identify paths, not content
 
-| Path                    | Purpose                                      | Cache for CI?    |
-| ----------------------- | -------------------------------------------- | ---------------- |
-| `repository/`           | Cached artifact and metadata store           | Yes, selectively |
-| `wrapper/dists/`        | Maven Wrapper distribution downloads         | Yes              |
-| `settings-security.xml` | Encrypted master password for `settings.xml` | No               |
+The usual layout is:
 
-## Artifact store: `repository/`
-
-Maven's artifact store uses a fully content-deterministic layout:
-
-```
+```text
 repository/<groupId path>/<artifactId>/<version>/<artifactId>-<version>.<ext>
 ```
 
-Because the path is derived solely from the artifact coordinates, the content of any given path is
-identical regardless of which runner downloaded it. This makes `repository/` fully portable across
-machines, operating systems, and architectures.
+These paths are coordinate-addressed, not content-addressed. Snapshots, local installs, and
+repositories serving different bytes for identical coordinates can overwrite the same path.
+Neither the path nor Mammoth's cache family authenticates an artifact.
 
-### What is portable
+The default `repository` partition includes releases, snapshots, plugins, local installs, Maven
+metadata, and origin markers. Existing partition exclusions can remove complete coordinate trees;
+see [Maven caching patterns](../../user/maven-caching-patterns/).
 
-| Contents                                      | Why portable                                                 |
-| --------------------------------------------- | ------------------------------------------------------------ |
-| Artifact JARs, WARs, POMs, sources, javadoc   | Content-addressed; path encodes coordinates, not host path   |
-| Plugin JARs and their dependencies            | Same content-addressed layout as regular artifacts           |
-| Release metadata (`maven-metadata-local.xml`) | Describes locally installed artifacts; stable across runners |
+## Origin markers: `_remote.repositories`
 
-### What is not portable
+Resolver's enhanced local repository manager writes a properties file beside the artifacts:
 
-| Contents                     | Reason                                                                                                                                                                                                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `*.lastUpdated` files        | Record per-runner timestamp and remote-check outcome; cause stale cache misses                                                                                                                                                                         |
-| `resolver-status.properties` | Written by Maven Resolver (Aether) at group/artifact metadata level to track which remotes were contacted; same per-runner semantics as `.lastUpdated` — a frequent distributed-merge conflict source when parallel workers both resolve Maven plugins |
-| `_remote.repositories` files | Map artifacts to source remote; invalid when remotes differ across environments                                                                                                                                                                        |
-| `*.lock` files               | PID-bearing resolver lock files; cause hangs or errors on restore                                                                                                                                                                                      |
+```properties
+example-1.0.jar>central=
+example-1.0.pom>central=
+example-1.0-tests.jar>=
+```
 
-All four categories are unconditional hard excludes in every active partition.
+The key combines a filename with a repository key. An empty repository key identifies a local
+install. Several artifact filenames and origins can share one file. Repository-key formats depend
+on Resolver version and configuration; newer versions can include a URL hash.
 
-## `*.lastUpdated` in depth
+Mammoth preserves the file verbatim. Resolver uses it to decide whether downloaded bytes are
+available under the active remote context. Changing repository IDs or effective mirror IDs can
+require a new download and can make an offline build fail. Removing the marker changes that
+behavior: in the tested Resolver, untracked bytes are accepted even when their former origin is
+absent from the build.
 
-When Maven contacts a remote repository to check for an artifact or metadata update, it writes a
-`.lastUpdated` file recording the timestamp of the check and which remote it contacted. On the
-next invocation, Maven reads this file and skips the remote check if sufficient time has not
-elapsed (controlled by `updatePolicy`).
+Markers do not establish cryptographic provenance or fully encode settings. For example, the tested
+Resolver configuration accepts the previous bytes when the repository ID stays the same and only
+its URL changes. Mammoth does not override that behavior. See the upstream
+[local repository documentation](https://maven.apache.org/resolver/local-repository.html) and
+[repository key documentation](https://maven.apache.org/resolver/repository-key-function.html).
 
-When this file is cached and restored on a different runner:
+## Directory consistency in distributed mode
 
-1. The timestamp appears recent, so Maven skips the remote check.
-2. If a newer version has since been published, Maven silently uses the stale cached artifact.
-3. If the original check was a failure (e.g. artifact not yet published), Maven continues to
-   report the artifact as missing even though it now exists remotely.
+For managed files under `repository/`, a changed file causes all managed files in its immediate
+directory to be included as upserts. This can increase payload sizes when a version has many
+classifiers. It carries the worker's artifact bytes and origin marker
+together, including siblings whose timestamps did not change. It does not replicate deletions.
 
-Excluding `.lastUpdated` files forces each runner to perform fresh remote checks, which is the
-correct behaviour for a CI environment where artifact publication is ongoing.
+If two worker packages update the same directory, they must contain identical path sets, content
+hashes, sizes, and modes for that directory. Otherwise aggregation fails before applying the plan.
+`allow-duplicate-dependent-delta-paths` cannot override this Maven directory check. Even markers
+with matching properties can conflict because Resolver writes timestamp comments; Mammoth neither
+parses nor merges those properties.
 
-## `resolver-status.properties` in depth
+Before applying any upserts, the aggregator checks all non-transient files already in each
+target directory, including files excluded from caching. An existing sibling absent from the
+worker's complete view makes the update fail before any managed files change. Source snapshots
+and payload staging likewise reject directories containing excluded artifacts while their marker
+remains managed. Whole-directory exclusions remain supported; selectively excluding classifiers,
+POMs, checksums, or other artifact files from a managed directory is rejected when those files
+are present. Resolver check-state files and locks are exempt.
 
-Maven Resolver (Aether) writes a `resolver-status.properties` file in the local repository at the
-group/artifact metadata level (e.g. `org/apache/maven/plugins/resolver-status.properties`). The
-file records, for each configured remote repository, the timestamp of the last metadata check and
-whether it succeeded or failed.
+When custom Maven exclusions are configured, base restore performs a metadata-only scan of the
+existing included trees before allowing archive extraction. This also catches directories
+containing only excluded artifacts, before a restored marker could relabel them. It adds traversal
+cost for custom exclusions, without storing a pre-build baseline or hashing pre-build contents.
+Default exclusions alone do not add this pre-restore scan. Existing package integrity and ownership
+checks still apply.
 
-This file has the same semantics as `.lastUpdated`:
+The qualified topology uses the enhanced local repository manager with its default
+`_remote.repositories` tracking filename and unsplit `repository/` layout under a dedicated Maven
+user home. Use a common seeded repository and compatible Resolver/repository configuration, with
+one writer for each changed directory. Custom marker filenames and split layouts have not been
+qualified. Workers may add different artifact/version directories. Independent workers adding different classifiers, origins,
+or local installs to the same version directory can fail aggregation. Seed shared plugin and
+transitive dependencies in one job first, serialize overlapping resolution, or use standalone mode.
+Do not run Maven concurrently with Mammoth's prepare/finalize operations. Application remains
+file-by-file, so a filesystem failure can leave a partial application requiring a fresh aggregator
+retry; this is not an atomic directory transaction.
 
-- It is per-runner state (different runners may have different remote repository configurations).
-- Restoring it on another runner suppresses fresh remote checks, potentially hiding newly published
-  artifacts or causing stale failure states to persist.
+## Activity and garbage collection
 
-Additionally, in distributed multi-job builds it is a **frequent merge conflict source**: every
-worker job that resolves any Maven plugin (which happens for nearly every Maven goal invocation)
-writes its own version of this file for the `org/apache/maven/plugins/` path. The files differ
-across workers because each worker contacts Maven Central at a different moment and accumulates
-status entries for only the plugins it used. Because the files differ in content, the aggregator
-cannot merge them without silently dropping one worker's view of the world.
+Current path-only usage of a repository file protects its managed siblings, including the marker.
+If any file in the immediate directory survives timestamp GC, the whole managed directory survives.
+If every non-transient file is eligible for GC, the directory's files can be evicted together.
+Before deleting any managed files, GC rejects a plan that would leave an excluded artifact sibling
+behind. It checks for remaining non-transient siblings again before removing a marker. Thus an old
+marker timestamp or missed marker atime cannot by itself strip origin evidence from retained bytes.
+Markers are deleted after artifact files so an interrupted GC sweep retains provenance for
+surviving bytes. Native timestamp misses can still evict a wholly inactive-looking directory and
+require downloads.
+Warm usage-only worker envelopes remain payload-free.
 
-The solution is to exclude them unconditionally so the delta never contains `resolver-status.properties`
-entries and the conflict cannot arise.
+## Excluded check state and locks
 
-## `_remote.repositories` in depth
+Three patterns remain hard exclusions in every Maven partition:
 
-After resolving an artifact from a remote repository, Maven writes a `_remote.repositories` file
-listing the remote repository ID that served the artifact. On subsequent invocations, if the local
-repository contains the artifact but `_remote.repositories` does not match the current active
-remotes, Maven re-downloads the artifact.
+| Pattern                         | Reason                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------- |
+| `**/*.lastUpdated`              | Artifact resolution failure/check state can suppress retries after restore. |
+| `**/resolver-status.properties` | Metadata update-check timestamps and errors can suppress fresh checks.      |
+| `**/*.lock`                     | Resolver synchronization state should be recreated in the consuming job.    |
 
-This file is not portable because:
-
-- Different CI environments may have different `settings.xml` configurations, different repository
-  IDs, or mirror rules that map the same URL to a different logical ID.
-- Restoring a `_remote.repositories` file from another runner may either suppress or trigger
-  unnecessary re-downloads depending on whether the repository IDs match.
+The first two exclusions discard update-check history; they do not remove Maven metadata XML or
+origin markers, and do not guarantee that every invocation downloads fresh snapshots. Resolver's
+update policy still governs resolution. Lock files have different semantics from either category;
+there is no assumption that every lock file contains a PID.
 
 ## Wrapper distributions: `wrapper/dists/`
 
@@ -123,19 +138,18 @@ When projects use the Maven Wrapper, the Wrapper script downloads the Maven dist
 `~/.m2/wrapper/dists/`. The distribution is identified by its URL, making the path
 deterministic and portable. This directory is covered by the `wrapper-dists` partition.
 
-## Portability summary
+## Compatibility and tested behavior
 
-**Safe to cache:**
+Removing the marker hard exclusion changes the partition fingerprint and therefore the Maven cache
+family. Old generations and worker packages do not match the new family; there is no fallback to
+marker-stripped entries. Cold-seed with a fresh dedicated Maven user home so an existing untracked
+local repository does not carry earlier ambiguity into the new family. Gradle's layout is unchanged.
 
-| Pattern            | Role                                  |
-| ------------------ | ------------------------------------- |
-| `repository/**`    | Immutable content-addressed artifacts |
-| `wrapper/dists/**` | Downloaded Maven distributions        |
-
-**Always excluded:**
-
-| Pattern                   | Reason                                                          |
-| ------------------------- | --------------------------------------------------------------- |
-| `**/*.lastUpdated`        | Stale remote-check markers; cause silent resolution misses      |
-| `**/_remote.repositories` | Per-remote provenance markers; not portable across environments |
-| `**/*.lock`               | PID-bearing resolver locks; cause hangs on restore              |
+`make integration-test-maven-repository-semantics` uses the installed Maven distribution's actual
+Resolver, enhanced local repository manager, and file transport against controlled local remotes.
+It also exercises Mammoth's cache archive paths, worker packages, aggregation, and cutoff GC.
+The initial evidence is Maven 3.10.0, Resolver 2.0.24, Java 21.0.12 on Linux. Same-origin offline reuse
+succeeds; changing the active origin rejects offline reuse and downloads the other remote's bytes
+online. Removing the marker instead reuses the original bytes. Local installs remain available
+across remote changes. Timestamped snapshots honor the tested `never` and `always` update policies.
+Other Maven/Resolver versions and native platforms require their own qualification.

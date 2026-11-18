@@ -18,6 +18,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { createCacheModel } from '../../../src/cache/model';
 import { MavenBuildToolAdapter } from '../../../src/build-tool/maven/adapter';
 import type { NormalizedMavenConfig } from '../../../src/config/types';
 import type { CiJobContext } from '../../../src/ci/types';
@@ -120,15 +121,45 @@ describe('MavenBuildToolAdapter', () => {
       expect(globs.some((g) => g.includes('lastUpdated'))).toBe(true);
     });
 
-    it('excludes _remote.repositories files', () => {
+    it('preserves _remote.repositories files', () => {
       const globs = new MavenBuildToolAdapter(makeConfig()).getHardCacheExcludeGlobs();
-      expect(globs.some((g) => g.includes('_remote.repositories'))).toBe(true);
+      expect(globs.some((g) => g.includes('_remote.repositories'))).toBe(false);
     });
 
     it('excludes .lock files', () => {
       const globs = new MavenBuildToolAdapter(makeConfig()).getHardCacheExcludeGlobs();
       expect(globs.some((g) => g.includes('.lock'))).toBe(true);
     });
+  });
+
+  it('uses a different family and fallback lineage from the former marker-excluding layout', async () => {
+    const config = makeConfig(),
+      adapter = new MavenBuildToolAdapter(config);
+    const legacy = new MavenBuildToolAdapter(config);
+    legacy.getHardCacheExcludeGlobs = () => [
+      ...adapter.getHardCacheExcludeGlobs(),
+      '**/_remote.repositories',
+    ];
+    const options = { env: {}, captureCommandOutput: async () => 'openjdk version "21.0.12"' };
+    const currentModel = await createCacheModel(
+      config,
+      { ...STUB_CI_CONTEXT, resolvedRefName: 'feature' },
+      adapter,
+      options,
+    );
+    const oldModel = await createCacheModel(
+      config,
+      { ...STUB_CI_CONTEXT, resolvedRefName: 'feature' },
+      legacy,
+      options,
+    );
+    expect(currentModel.partitionFingerprint).not.toBe(oldModel.partitionFingerprint);
+    expect(currentModel.cacheFamilyKey).not.toBe(oldModel.cacheFamilyKey);
+    expect(
+      currentModel.fallbackRefLineagePrefixes.every((p) =>
+        p.startsWith(currentModel.cacheFamilyKey),
+      ),
+    ).toBe(true);
   });
 
   describe('provision', () => {

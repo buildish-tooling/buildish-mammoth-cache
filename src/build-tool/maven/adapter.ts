@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { MAVEN_TRANSIENT_CACHE_EXCLUDE_GLOBS } from '../../cache/maven-repository';
 import type { CiJobContext } from '../../ci';
 import type { NormalizedMavenConfig } from '../../config/types';
 import type {
@@ -35,10 +36,8 @@ import type {
  *   enabled when the project uses `mvnw`.
  *
  * Hard excludes (applied unconditionally across every partition):
- * - `**\/*.lastUpdated` — stale remote-check markers; invalid across runners.
- * - `**\/_remote.repositories` — per-artifact remote-origin markers; can cause silent
- *   re-resolution on runners whose remote configuration differs from the build that populated
- *   the cache.
+ * - `**\/*.lastUpdated` — artifact failure/check state; omitted to allow retries.
+ * - `**\/resolver-status.properties` — remote metadata check status.
  * - `**\/*.lock` — transient resolver lock files; always runner-local.
  *
  * `provision()`, `installBuildHooks()`, and `collectBuildReport()` are intentional no-ops in v1.
@@ -106,7 +105,7 @@ const MAVEN_BUILT_IN_PARTITION_PRESETS: readonly BuiltInCachePartitionPreset[] =
     id: 'repository',
     displayName: 'Local repository',
     description:
-      'Downloaded Maven dependency artifacts, plugins, and metadata stored in the local ' +
+      'Maven dependency artifacts, local installs, plugins, and metadata stored in the local ' +
       'Maven repository.',
     defaultEnabled: true,
     relativeIncludeGlobs: ['repository/**'],
@@ -127,21 +126,13 @@ const MAVEN_BUILT_IN_PARTITION_PRESETS: readonly BuiltInCachePartitionPreset[] =
 /**
  * Glob patterns unconditionally excluded from every Maven cache partition.
  *
- * - `**\/*.lastUpdated`: written by Maven when a remote artifact check fails or succeeds.
- *   Restoring them on a different runner may suppress legitimate remote checks.
- * - `**\/resolver-status.properties`: written by Maven Resolver (Aether) at the group/artifact
- *   metadata level to track which remote repositories have been contacted and what status each
- *   returned.  Has the same per-runner semantics as `.lastUpdated` — restoring across runners
- *   causes stale remote-check suppression and produces different content across parallel worker
- *   jobs that both resolve Maven plugin metadata, making it a frequent distributed-merge conflict
- *   source.
- * - `**\/_remote.repositories`: records which remote repository each artifact was resolved from.
- *   On runners with a different repository configuration the markers can cause silent skips.
- * - `**\/*.lock`: transient file-locking artifacts used by the Maven resolver; always runner-local.
+ * - `**\/*.lastUpdated`: cached artifact resolution failures; omit them so restored caches
+ *   do not suppress retries based on a previous job's failures.
+ * - `**\/resolver-status.properties`: metadata update-check timestamps and errors; omit them
+ *   to allow fresh metadata checks in the consuming job.
+ * - `**\/*.lock`: transient resolver synchronization files.
+ *
+ * Preserve `_remote.repositories`: Resolver needs it to distinguish downloaded artifacts
+ * from local installs and to enforce the active remote-origin context.
  */
-const MAVEN_HARD_CACHE_EXCLUDE_GLOBS: readonly string[] = [
-  '**/*.lastUpdated',
-  '**/resolver-status.properties',
-  '**/_remote.repositories',
-  '**/*.lock',
-];
+const MAVEN_HARD_CACHE_EXCLUDE_GLOBS = MAVEN_TRANSIENT_CACHE_EXCLUDE_GLOBS;

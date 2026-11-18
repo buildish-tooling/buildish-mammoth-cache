@@ -15,6 +15,8 @@
  */
 
 import path from 'node:path';
+import { captureCacheMetadataSnapshot } from './manifest';
+import { MAVEN_TRANSIENT_CACHE_EXCLUDE_GLOBS } from './maven-repository';
 import { EMPTY_GENERATION_PATH } from './metadata-paths';
 import type { NormalizedActionConfig } from '../config/types';
 import type { BaseCacheBackend } from './backend';
@@ -178,6 +180,16 @@ export async function restoreBaseCache(
         : 'Base cache restore skipped because the cache backend does not support newest-prefix restore.',
     };
   }
+
+  // Custom exclusions can leave artifact bytes behind when an archive replaces their marker.
+  // Validate the existing tree with metadata only before giving the backend permission to extract.
+  if (
+    cacheModel.buildToolId === 'maven' &&
+    cacheModel.partitions.some((p) =>
+      p.relativeExcludeGlobs.some((g) => !MAVEN_TRANSIENT_CACHE_EXCLUDE_GLOBS.includes(g)),
+    )
+  )
+    await captureCacheMetadataSnapshot(cacheModel);
 
   const [primaryCandidate, ...fallbackCandidates] = restoreCandidates;
   const matchedKey = await cacheBackend.restoreCache(

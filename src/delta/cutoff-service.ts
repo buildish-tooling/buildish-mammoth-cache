@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { assertCompleteMavenRepositoryDirectories } from '../cache/maven-repository';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile, rm, opendir, lstat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -153,6 +154,10 @@ export async function stageCutoffPackage(
   );
   Object.assign(state, durable);
   if (!state.selection) throw new Error('Payload staging needs frozen observations.');
+  await assertCompleteMavenRepositoryDirectories(
+    state.model,
+    state.selection.upserts.map((e) => e.relativePath),
+  );
   // Staging inside the excluded namespace also protects overlapping RUNNER_TEMP/custom includes.
   const marker = await metadataPath(
     state.model.cacheRoot,

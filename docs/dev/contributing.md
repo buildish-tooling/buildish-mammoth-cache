@@ -38,7 +38,7 @@ defines the conduct policy and private reporting route.
 | Node.js       | as specified in `.nvmrc`                              | Use [nvm](https://github.com/nvm-sh/nvm): `nvm install && nvm use` |
 | npm           | as specified in `package.json` `packageManager` field | Provision this exact version after selecting Node.js               |
 | Java          | 21+                                                   | Required only for local integration tests; any distribution works  |
-| Maven (`mvn`) | 3.9+                                                  | Required only for the Maven distributed-reuse integration test     |
+| Maven (`mvn`) | 3.9+                                                  | Required for Maven integration tests                               |
 
 No project tooling needs to be installed globally. The setup below only updates the npm CLI in
 the selected nvm-managed Node.js installation; all project dependencies are installed locally
@@ -91,7 +91,18 @@ make integration-test
 make integration-test-build-reporting           # multi-build Gradle flow with build-reporting
 make integration-test-gradle-distributed-reuse  # worker-A → worker-B → aggregator (Gradle)
 make integration-test-maven-distributed-reuse   # worker-A → worker-B → aggregator (Maven)
+make integration-test-maven-repository-semantics # installed Resolver, controlled file remotes
 ```
+
+The repository-semantics suite requires an installed Maven 3.9+ distribution, `java`, `javac`,
+and GNU tar. It compiles a small harness against that distribution's own Resolver libraries and
+asserts that the enhanced local repository manager is used. It needs no Maven plugins or public
+remotes. Projects, remotes, local repositories, and compiled harness files stay under `build/`;
+user settings and credentials are not loaded. The suite reports the installed Maven/Resolver
+versions and covers origin changes, absent markers, mirrors, local installs, snapshots, cache archive
+restore, distributed directory conflicts, excluded-sibling preservation during aggregation/GC, and cutoff GC. The snapshot and same-ID URL assertions
+were qualified with Maven 3.10.0 / Resolver 2.0.24; qualify other versions before extending those
+conclusions. It is opt-in and does not run as part of ordinary `make check`.
 
 To keep the staged workspace on disk after a run (useful for debugging):
 
