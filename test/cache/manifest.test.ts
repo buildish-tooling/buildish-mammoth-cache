@@ -97,6 +97,7 @@ describe('captureCacheManifest', () => {
         'modules',
         'dependency-metadata',
         'kotlin-dsl',
+        'groovy-dsl',
         'build-cache',
         'wrapper-dists',
       ]);

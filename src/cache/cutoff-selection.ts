@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type { CacheMetadataSnapshot } from './manifest';
+import type { GroovyObservation } from './groovy-workspaces';
 import { fileIdentitySchema } from './file-identity';
 import { cutoffPartitionIdSchema, cutoffPathSchema, cutoffTimeSchema } from './cutoff-format';
 import type { CachePartitionDefinition } from './model';
@@ -35,6 +36,7 @@ export interface WorkerObservations {
 }
 export const EMPTY_WORKER_OBSERVATIONS: WorkerObservations = { upserts: [], used: [] };
 export interface CutoffSelection {
+  workspaces?: GroovyObservation[];
   snapshotFileCount?: number;
   snapshotByteCount?: number;
   upserts: CutoffTarget[];
@@ -60,6 +62,25 @@ export function fingerprintMetadata(
       );
       count++;
     }
+  for (const unit of snapshot.workspaces ?? []) {
+    if (unit.workspace.files.every((name) => excluded.has(name))) continue;
+    for (const directory of unit.directories) {
+      const { dev, ino, size, mode, mtimeMs, ctimeMs } = directory.identity;
+      hash.update(
+        JSON.stringify([
+          unit.partitionId,
+          directory.relativePath,
+          dev,
+          ino,
+          size,
+          mode,
+          mtimeMs,
+          ctimeMs,
+        ]) + '\n',
+      );
+      count++;
+    }
+  }
   return hash.update(String(count)).digest('hex');
 }
 export function selectCutoffActivity(
@@ -167,7 +188,44 @@ export function selectCutoffActivity(
     gc = gc.filter((e) => garbage.has(e.relativePath));
     upserts.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
   }
+  if (snapshot.workspaces?.length) {
+    const changed = new Set(upserts.map((e) => e.relativePath)),
+      read = new Set(used),
+      garbage = new Set(gc.map((e) => e.relativePath));
+    const entries = new Map(
+      snapshot.partitions.flatMap((p) =>
+        p.entries.map(
+          (e) =>
+            [
+              e.relativePath,
+              { partitionId: p.partitionId, relativePath: e.relativePath, identity: e.identity },
+            ] as const,
+        ),
+      ),
+    );
+    for (const unit of snapshot.workspaces) {
+      const names = unit.workspace.files;
+      if (
+        names.some((n) => changed.has(n)) ||
+        unit.directories.some((d) => d.identity.ctimeMs >= cutoff || d.identity.mtimeMs >= cutoff)
+      )
+        for (const name of names) changed.add(name);
+      if (names.some((n) => read.has(n))) for (const name of names) read.add(name);
+      if (names.some((n) => changed.has(n) || read.has(n)) || !names.every((n) => garbage.has(n)))
+        for (const name of names) garbage.delete(name);
+    }
+    upserts.splice(
+      0,
+      upserts.length,
+      ...[...changed]
+        .map((n) => entries.get(n)!)
+        .sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
+    );
+    used = [...read].filter((n) => !changed.has(n)).sort((a, b) => a.localeCompare(b));
+    gc = gc.filter((e) => garbage.has(e.relativePath));
+  }
   return {
+    ...(snapshot.workspaces?.length ? { workspaces: [...snapshot.workspaces] } : {}),
     snapshotFileCount,
     snapshotByteCount,
     upserts,

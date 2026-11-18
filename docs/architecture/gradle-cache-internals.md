@@ -111,14 +111,49 @@ task inputs to be path-agnostic.
 ## Version-specific caches: `caches/<version>/`
 
 For each Gradle version used, a dedicated directory records the operational state of that build tool
-version. These directories are almost entirely non-portable:
+version. Some subtrees describe local execution state and are excluded:
 
 | Pattern                               | Reason to exclude                                         |
 | ------------------------------------- | --------------------------------------------------------- |
 | `caches/[version]/execution-history/` | Stores local file-system timestamps and absolute paths    |
 | `caches/[version]/file-hashes/`       | Index of file content signatures, keyed by absolute paths |
-| `caches/[version]/kotlin-dsl/`        | Compiled build scripts; sensitive to classpath and JVM    |
 | `caches/[version]/java-compile/`      | Incremental compilation analysis data                     |
+
+## Groovy DSL workspaces
+
+The default `groovy-dsl` partition covers completed
+`caches/<version>/groovy-dsl/<32-lowercase-hex-key>/` workspaces. The outer
+`metadata.bin` records build origin and output information; it is distinct from
+`metadata/metadata.bin`. Removing it can force recompilation or fail older Gradle
+loaders. Both files travel with `classes/`, `instrumented/` and other workspace
+outputs. Empty output directories matter: losing an empty `instrumented/` directory
+caused Gradle 9.8.1 to invalidate a restored workspace in local qualification.
+
+Mammoth checks structural completeness, file membership, directory topology and
+payload integrity. It does not decode Gradle binary metadata or prove semantic
+compatibility for every Gradle release. Unknown roots and incomplete source layouts
+are skipped with bounded diagnostics. Partial configured membership fails capture.
+Cleanup state, locks and temporary roots are excluded.
+
+Workers upload complete changed workspaces. `choose-worker-directory` selects the
+smallest producer job name for overlapping views, preserving metadata and outputs
+from one producer together. Distinct workspace keys can come from different workers.
+Unused keys from another project may remain cached. No hash of `GRADLE_USER_HOME`
+is added to the family. Incoming units replace only managed workspace contents,
+with guarded staging and recoverable replacement intent. GC uses whole units.
+
+Base archives use fixed reserved payload paths and a family-bound workspace catalog;
+empty directories are reconstructed from validated metadata. This preserves the
+backend's path-derived cache version without nesting another archive. Publication
+copies and hashes all retained Groovy files into this staging area, including in
+standalone mode; workers also stage full changed units for upload.
+
+Local Linux qualification covered Gradle 8.7 and 9.8.1, relocation, and Java 21/25.
+The end-to-end Mammoth regression uses Gradle 9.8.1 with Java 21/25 and a Kotlin DSL
+control. Gradle 8.14.6 and 9.9.1 source inspection informs the metadata requirement;
+those versions were not runtime-qualified here. Native Windows/macOS and hosted
+artifact-action parity remain unqualified. These results establish reuse for the
+tested fixtures, with no general performance or universal compatibility claim.
 
 ## Journal and lock files
 
@@ -153,18 +188,27 @@ the entire configuration cache as local-only data.
 | `caches/build-cache-1/**`       | Task output snapshots           |
 | `wrapper/dists/**`              | Downloaded Gradle distributions |
 
+Compiled Kotlin DSL scripts and generated Gradle API JARs are also included by the
+`kotlin-dsl` partition; complete Groovy workspaces use the unit transport above.
+
 **Always excluded:**
 
-| Pattern                     | Reason                                           |
-| --------------------------- | ------------------------------------------------ |
-| `**/configuration-cache/**` | May contain secrets; volatile                    |
-| `**/*.lock`                 | PID-bearing; causes hangs on restore             |
-| `caches/*/cc-keystore`      | Configuration-cache encryption key material      |
-| `caches/journal-1/**`       | Local-only; propagates corruption                |
-| `caches/transforms-*/**`    | Absolute path dependencies; environment-specific |
-| `caches/[version]/**`       | Local execution history and timestamps           |
-| `daemon/**`                 | Local PIDs and ephemeral logs                    |
-| `native/**`                 | Platform-specific; regenerated on demand         |
+| Pattern                     | Reason                                      |
+| --------------------------- | ------------------------------------------- |
+| `**/configuration-cache/**` | May contain secrets; volatile               |
+| `**/*.lock`                 | PID-bearing; causes hangs on restore        |
+| `caches/*/cc-keystore`      | Configuration-cache encryption key material |
+| `caches/journal-1/**`       | Local-only; propagates corruption           |
+
+**Omitted by defaults, but configurable through custom partitions:**
+
+| Pattern                                 | Reason for default omission                                 |
+| --------------------------------------- | ----------------------------------------------------------- |
+| `caches/transforms-*/**`                | Disabled `transforms-metadata` preset; environment-specific |
+| `caches/[version]/execution-history/**` | Local execution history and timestamps                      |
+| `caches/[version]/file-hashes/**`       | Local absolute-path indexes                                 |
+| `daemon/**`                             | Local PIDs and ephemeral logs                               |
+| `native/**`                             | Platform-specific; regenerated on demand                    |
 
 Dependency metadata is cached separately as complete `dependency-metadata` snapshots under
 `caches/modules-*/metadata-*/**`. It is relocatable with compatible Gradle cache formats; locks and

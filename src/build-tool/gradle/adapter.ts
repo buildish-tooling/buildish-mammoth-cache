@@ -103,6 +103,20 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
     relativeExcludeGlobs: [],
   },
   {
+    id: 'groovy-dsl',
+    displayName: 'Groovy DSL caches',
+    description:
+      'Complete compiled Groovy script workspaces selected from one worker per workspace.',
+    defaultEnabled: true,
+    conflictHandling: 'choose-worker-directory',
+    relativeIncludeGlobs: ['caches/*/groovy-dsl/**'],
+    relativeExcludeGlobs: [
+      'caches/*/groovy-dsl/.internal/**',
+      'caches/*/groovy-dsl/*-*/**',
+      'caches/*/groovy-dsl/**/gc.properties',
+    ],
+  },
+  {
     id: 'build-cache',
     displayName: 'Local build cache',
     description: 'Reusable local task output cache entries maintained by Gradle.',

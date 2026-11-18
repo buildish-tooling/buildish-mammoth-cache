@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { recoverGroovyApplication } from '../../cache/groovy-apply';
+import { resetGroovyBaseTransport, restoreGroovyBase } from '../../cache/groovy-base';
 import { mkdir, rm } from 'node:fs/promises';
 import {
   bootstrapPhase,
@@ -95,6 +97,8 @@ export async function executeCutoffPrepareAction(
     ...dependencies,
     beforeCacheWork: async (model) => {
       await mkdir(model.cacheRoot, { recursive: true });
+      await recoverGroovyApplication(model);
+      await resetGroovyBaseTransport(model);
       journal = newCutoffJournal(
         model,
         cutoffPolicy(dependencies.config),
@@ -112,6 +116,12 @@ export async function executeCutoffPrepareAction(
       await dependencies.beforeCacheWork?.(model);
     },
   });
+  if (bootstrap.cacheModel)
+    await restoreGroovyBase(
+      bootstrap.cacheModel,
+      bootstrap.baseCacheResult?.operation === 'restore' &&
+        bootstrap.baseCacheResult.matchedKey !== null,
+    );
   await bootstrap.buildToolAdapter
     .installBuildHooks(bootstrap.ciContext)
     .catch((e: unknown) =>
@@ -121,7 +131,7 @@ export async function executeCutoffPrepareAction(
     dependent: CutoffDependentResult | null = null;
   if (!bootstrap.cacheModel) {
     persistCutoffLifecycle(
-      { schemaVersion: 4, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
+      { schemaVersion: 5, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
       dependencies.runtimeHost.saveState,
     );
   } else {
@@ -156,6 +166,7 @@ export async function executeCutoffPrepareAction(
             }
           }
         await restoreBaseCache(model, dependencies, restore.matchedKey);
+        await restoreGroovyBase(model, true);
       }
       cleanup = {
         mode: 'prune-managed',
@@ -261,7 +272,7 @@ export async function executeCutoffPrepareAction(
           if (plan.directoryConflicts) {
             const { count, details } = plan.directoryConflicts;
             dependent.warnings.push(
-              `Maven directory selection resolved ${count} conflicting directory view(s).`,
+              `${model.buildToolId === 'gradle' ? 'Groovy workspace' : 'Maven directory'} selection resolved ${count} conflicting directory view(s).`,
               ...details,
             );
             if (count > details.length)
@@ -304,7 +315,7 @@ export async function executeCutoffPrepareAction(
       dependencies.runtimeHost.warning(warning);
     persistCutoffLifecycle(
       {
-        schemaVersion: 4,
+        schemaVersion: 5,
         cacheEnabled: true,
         model: state.model,
         policy: state.policy,

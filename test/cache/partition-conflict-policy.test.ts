@@ -50,11 +50,13 @@ it('preserves literal default fingerprints and persisted partition shapes', asyn
     { phase: 'prepare', ciContext: ci, env: { GRADLE_USER_HOME: '/cache' } },
   );
   const gradle = await createCacheModel(config, ci, new GradleBuildToolAdapter(config));
-  expect(gradle.partitionFingerprint).toBe('649ae1e5162eb1ba');
+  expect(gradle.partitionFingerprint).toBe('94e9c8c680d63112');
   for (const model of [original, explicit, gradle]) {
     expect(cutoffModelSchema.parse(model)).toEqual(model);
     for (const partition of model.partitions)
-      expect(partition).not.toHaveProperty('conflictHandling');
+      if (partition.id === 'groovy-dsl')
+        expect(partition.conflictHandling).toBe('choose-worker-directory');
+      else expect(partition).not.toHaveProperty('conflictHandling');
   }
 });
 

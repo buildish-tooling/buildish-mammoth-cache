@@ -31,6 +31,9 @@ import { fileIdentity, sameFileIdentity, type FileIdentity } from '../cache/file
 import { isReplaceTargetError } from '../util/fs';
 import { portableCacheFileMode } from '../cache/file-permissions';
 import { resolveMavenDirectoryConflicts } from './maven-directory-conflicts';
+import { resolveGroovyWorkspaceConflicts } from './groovy-workspace-conflicts';
+import { applyGroovyWorkspaces, type IncomingGroovyWorkspace } from '../cache/groovy-apply';
+import { groovyWorkspaceRoot, isGroovyCachePath } from '../cache/groovy-workspaces';
 
 export interface CutoffMergedUpsert {
   partitionId: string;
@@ -38,6 +41,7 @@ export interface CutoffMergedUpsert {
   rootDirectory: string;
 }
 export interface CutoffMergePlan {
+  groovyWorkspaces?: IncomingGroovyWorkspace[];
   directoryConflicts?: { count: number; details: string[] };
   upserts: CutoffMergedUpsert[];
   used: string[];
@@ -64,6 +68,19 @@ export function mergeCutoffPackages(
     ),
     model,
   );
+  const groovy = resolveGroovyWorkspaceConflicts(
+    validated.filter(
+      (pkg) => !ordinaryProducers || ordinaryProducers.includes(pkg.metadata.producer.jobName),
+    ),
+    model,
+  );
+  for (const unit of groovy.chosen)
+    for (const entry of unit.entries)
+      upserts.set(entry.relativePath, {
+        partitionId: unit.partitionId,
+        entry,
+        rootDirectory: unit.rootDirectory,
+      });
   const snapshots = new Map<
     string,
     { partitionId: string; entries: CutoffUpsert[]; rootDirectory: string }
@@ -84,6 +101,11 @@ export function mergeCutoffPackages(
       if (ordinaryProducers && !ordinaryProducers.includes(pkg.metadata.producer.jobName)) continue;
       for (const name of p.usedPaths) used.add(name);
       for (const entry of p.upserts) {
+        if (
+          model.buildToolId === 'gradle' &&
+          groovy.roots.has(groovyWorkspaceRoot(entry.relativePath) ?? '')
+        )
+          continue;
         const winner = directories.winners.get(path.posix.dirname(entry.relativePath));
         if (winner && winner !== pkg) continue;
         const candidate = { partitionId: p.partitionId, entry, rootDirectory: pkg.rootDirectory },
@@ -111,15 +133,26 @@ export function mergeCutoffPackages(
   }
   const selectedPaths = new Set(upserts.keys());
   return {
-    ...(directories.count
-      ? { directoryConflicts: { count: directories.count, details: directories.details } }
+    ...(groovy.chosen.length ? { groovyWorkspaces: groovy.chosen } : {}),
+    ...(directories.count + groovy.count
+      ? {
+          directoryConflicts: {
+            count: directories.count + groovy.count,
+            details: [...directories.details, ...groovy.details],
+          },
+        }
       : {}),
     snapshots: [...snapshots.values()],
     upserts: [...upserts.values()].sort((a, b) =>
       a.entry.relativePath.localeCompare(b.entry.relativePath),
     ),
     used: [...used]
-      .filter((p) => !selectedPaths.has(p) && !directories.winners.has(path.posix.dirname(p)))
+      .filter(
+        (p) =>
+          !selectedPaths.has(p) &&
+          !directories.winners.has(path.posix.dirname(p)) &&
+          !groovy.roots.has(groovyWorkspaceRoot(p) ?? ''),
+      )
       .sort((a, b) => a.localeCompare(b)),
   };
 }
@@ -142,15 +175,39 @@ export async function applyCutoffPlan(
   for (const name of plan.used)
     if (!model.partitions.some((p) => owns(p.id, name)))
       throw new Error('Invalid usage ownership.');
+  const byPath = new Map(plan.upserts.map((e) => [e.entry.relativePath, e]));
+  const groovyFiles = new Set<string>();
+  for (const unit of plan.groovyWorkspaces ?? [])
+    for (const entry of unit.entries) {
+      const actual = byPath.get(entry.relativePath);
+      if (
+        !actual ||
+        actual.partitionId !== unit.partitionId ||
+        actual.rootDirectory !== unit.rootDirectory ||
+        JSON.stringify(actual.entry) !== JSON.stringify(cutoffUpsertSchema.parse(entry))
+      )
+        throw new Error('Groovy replacement differs from the merged plan.');
+      groovyFiles.add(entry.relativePath);
+    }
+  if (
+    model.buildToolId === 'gradle' &&
+    plan.upserts.some(
+      (e) => isGroovyCachePath(e.entry.relativePath) && !groovyFiles.has(e.entry.relativePath),
+    )
+  )
+    throw new Error('Groovy upsert requires a complete workspace replacement.');
   const before = new Map<string, FileIdentity | null>();
   // Validate every target and parent before the first mutation; never read target contents.
   for (const name of [...plan.upserts.map((e) => e.entry.relativePath), ...plan.used]) {
+    if (groovyFiles.has(name)) continue;
     await verifyParents(model.cacheRoot, path.posix.dirname(name));
     const stat = await regularStat(guardedPath(model.cacheRoot, name));
     before.set(name, stat ? fileIdentity(stat) : null);
   }
   await assertCompleteMavenRepositoryDirectories(model, seen);
+  await applyGroovyWorkspaces(plan.groovyWorkspaces ?? [], model);
   for (const item of plan.upserts) {
+    if (groovyFiles.has(item.entry.relativePath)) continue;
     const name = item.entry.relativePath,
       target = guardedPath(model.cacheRoot, name),
       parent = path.posix.dirname(name);

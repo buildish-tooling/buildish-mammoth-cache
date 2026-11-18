@@ -18,6 +18,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { CiJobContext } from '../ci';
+import { isGroovyPartition } from './groovy-workspaces';
 import type { BuildToolAdapter, BuiltInCachePartitionPreset } from '../build-tool/types';
 import type {
   ConfiguredCachePartitionInput,
@@ -475,16 +476,23 @@ export function validatePartitionConflictHandling(
   partitions: readonly CachePartitionDefinition[],
 ): void {
   for (const partition of partitions) {
+    const groovy = buildToolId === 'gradle' && isGroovyPartition(partition);
+    if (groovy && ((partition.publication ?? 'aggregate') !== 'aggregate' || partition.writer))
+      throw new Error(
+        `Partition '${partition.id}' Groovy workspaces require aggregate publication without a writer.`,
+      );
     if (!partition.conflictHandling) continue;
+    const maven =
+      buildToolId === 'maven' &&
+      partition.relativeIncludeGlobs.length > 0 &&
+      partition.relativeIncludeGlobs.every((glob) => glob.startsWith('repository/'));
     if (
       partition.conflictHandling !== 'choose-worker-directory' ||
-      buildToolId !== 'maven' ||
       (partition.publication ?? 'aggregate') !== 'aggregate' ||
-      !partition.relativeIncludeGlobs.length ||
-      partition.relativeIncludeGlobs.some((glob) => !glob.startsWith('repository/'))
+      (!maven && !groovy)
     )
       throw new Error(
-        `Partition '${partition.id}' choose-worker-directory requires an aggregate Maven partition rooted under repository/.`,
+        `Partition '${partition.id}' choose-worker-directory requires an aggregate Maven partition rooted under repository/ or a Gradle Groovy workspace partition.`,
       );
   }
 }

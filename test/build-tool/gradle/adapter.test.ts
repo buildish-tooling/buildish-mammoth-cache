@@ -95,6 +95,7 @@ describe('GradleBuildToolAdapter', () => {
       'dependency-metadata',
       'transforms-metadata',
       'kotlin-dsl',
+      'groovy-dsl',
       'build-cache',
       'wrapper-dists',
     ]);

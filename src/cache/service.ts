@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+import {
+  isGroovyPartition,
+  hasGroovyPartitions,
+  GROOVY_WORKSPACE_METADATA,
+} from './groovy-workspaces';
+import { GROOVY_BASE_DIRECTORY } from './groovy-base';
 import path from 'node:path';
 import { restoreDistributionLauncherPermissions } from './file-permissions';
 import { captureCacheMetadataSnapshot } from './manifest';
@@ -128,16 +134,27 @@ export type BaseCacheOperationResult = BaseCacheRestoreResult | BaseCacheSaveRes
 export function createBaseCachePaths(cacheModel: CacheModel): readonly string[] {
   const snapshots = snapshotPartitions(cacheModel);
   return [
-    ...(snapshots.length
+    ...(snapshots.length || hasGroovyPartitions(cacheModel)
       ? cacheModel.partitions
-          .filter((p) => p.publication !== 'single-writer')
+          .filter(
+            (p) =>
+              p.publication !== 'single-writer' &&
+              !(cacheModel.buildToolId === 'gradle' && isGroovyPartition(p)),
+          )
           .flatMap((p) => p.absoluteIncludeGlobs)
       : cacheModel.includePaths),
     ...cacheModel.excludePaths.map((pattern) => `!${pattern}`),
     // Exclude local journals and nested atomic-write scratch, including portable aliases.
     `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH]/**`,
     `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**`,
+    ...(hasGroovyPartitions(cacheModel) ? [`!${cacheModel.cacheRoot}/caches/*/groovy-dsl/**`] : []),
     path.join(cacheModel.cacheRoot, EMPTY_GENERATION_PATH),
+    ...(hasGroovyPartitions(cacheModel)
+      ? [
+          path.join(cacheModel.cacheRoot, GROOVY_WORKSPACE_METADATA),
+          path.join(cacheModel.cacheRoot, GROOVY_BASE_DIRECTORY, 'payload', '*.bin'),
+        ]
+      : []),
     // Stable save/restore patterns: only verified snapshot transport is re-included.
     ...snapshots.flatMap((p) => [
       path.join(cacheModel.cacheRoot, PARTITION_SNAPSHOT_DIRECTORY, p.id, 'snapshot.json'),

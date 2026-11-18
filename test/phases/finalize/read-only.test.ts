@@ -13,6 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import * as groovyBase from '../../../src/cache/groovy-base';
+import { writeMetadata } from '../../../src/cache/metadata-io';
+import { GROOVY_WORKSPACE_METADATA } from '../../../src/cache/groovy-workspaces';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -100,6 +103,7 @@ function forbidPublicationWork(job: Awaited<ReturnType<typeof jobFor>>) {
     vi.spyOn(state, 'verifyCutoffReplay').mockImplementation(fail),
     vi.spyOn(state, 'cutoffDecisionDigest').mockImplementation(fail),
     vi.spyOn(gc, 'collectCutoffGarbage').mockImplementation(fail),
+    vi.spyOn(groovyBase, 'stageGroovyBase').mockImplementation(fail),
     vi.spyOn(lifecycle, 'captureLocalPartitionSnapshots').mockImplementation(fail),
     vi.spyOn(lifecycle, 'projectedSnapshotStatistics').mockImplementation(fail),
     vi.spyOn(snapshots, 'readPartitionSnapshot').mockImplementation(fail),
@@ -215,6 +219,17 @@ it.each(['disabled', 'miss', 'hit', 'fallback', 'unavailable'] as const)(
           const cacheModel = await model.createCacheModel(job.deps.config, job.ci, job.adapter);
           for (const p of snapshots.snapshotPartitions(cacheModel))
             await snapshots.stagePartitionSnapshot(cacheModel, p.id, job.home, []);
+          await writeMetadata(
+            job.home,
+            GROOVY_WORKSPACE_METADATA,
+            {
+              schemaVersion: 1,
+              familyKey: cacheModel.cacheFamilyKey,
+              partitionFingerprint: cacheModel.partitionFingerprint,
+              units: [],
+            },
+            64 * 1024 * 1024,
+          );
           return (kind === 'fallback' ? fallback![0]! : primary) + 'seed';
         },
       );

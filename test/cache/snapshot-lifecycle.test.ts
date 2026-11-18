@@ -168,6 +168,7 @@ describe('single-writer partition lifecycle', () => {
       env: {},
     });
     const adapter = new GradleBuildToolAdapter(config);
+    job.adapter.getBuildToolId = () => 'gradle';
     job.adapter.getBuiltInPartitionPresets = () => adapter.getBuiltInPartitionPresets();
     job.adapter.getHardCacheExcludeGlobs = () => adapter.getHardCacheExcludeGlobs();
     await job.prepare();

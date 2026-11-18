@@ -37,6 +37,7 @@ The Gradle action resolves `GRADLE_USER_HOME` into these ordered partitions:
 | `dependency-metadata` | Complete dependency-resolution metadata snapshots         | enabled  |
 | `transforms-metadata` | Artifact transforms and related metadata                  | disabled |
 | `kotlin-dsl`          | Compiled Kotlin DSL scripts and generated Gradle API JARs | enabled  |
+| `groovy-dsl`          | Complete compiled Groovy DSL workspaces                   | enabled  |
 | `build-cache`         | The local Gradle build cache                              | enabled  |
 | `wrapper-dists`       | Wrapper-downloaded Gradle distributions                   | enabled  |
 
@@ -46,6 +47,23 @@ partition covers and why certain directories are excluded.
 The built-in `modules` partition covers dependency artifacts. `dependency-metadata` separately
 covers `caches/modules-*/metadata-*/**` with single-writer publication. The disabled
 `transforms-metadata` preset covers artifact transforms and their metadata, not dependency resolution.
+
+The `groovy-dsl` partition captures complete hashed workspaces under
+`caches/*/groovy-dsl/<32-hex-key>/`, including both metadata files, compiled classes,
+instrumented outputs and empty directories. It defaults to aggregate publication
+with `conflict-handling: choose-worker-directory`: one producer supplies each
+whole workspace; different workspace keys can come from different producers.
+It requires no designated writer. Partial-workspace include/exclude overrides fail
+capture. Unknown or incomplete source layouts are skipped with bounded diagnostics;
+locks, temporary workspaces and cleanup bookkeeping are excluded.
+
+Changed members select the whole workspace for upload; any observed usage protects
+the whole workspace from GC. GC removes a workspace only when every member is old
+and unprotected. Base publication stages and hashes all retained Groovy workspaces,
+including in standalone mode. This adds local copy/hash I/O. Empty directories travel
+as validated metadata alongside flat file payloads, without another archive layer.
+Set `enabled: false` on `groovy-dsl` to disable it, or set `conflict-handling: default`
+to reject conflicting complete workspace views. Single-writer publication is unsupported.
 
 ### Maven
 

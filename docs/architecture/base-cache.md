@@ -55,6 +55,27 @@ or historical access manifest for ordinary partitions. Their removed files can r
 restore/replay until GC removes them. Complete single-writer snapshots propagate removals through
 replacement membership; an absent contribution preserves the previous snapshot.
 
+## Groovy workspace units
+
+The default Gradle `groovy-dsl` partition retains complete hashed workspaces.
+Changed files or directory topology select the whole unit; usage protects all members.
+Whole-workspace conflict selection chooses one producer per root, without a designated
+partition writer. Complete unit replacement propagates removals within that root.
+
+Base save/restore uses stable reserved flat payload paths and a family-bound catalog
+at `.mammoth/groovy-workspaces-v1.json`. Live Groovy paths are omitted from backend
+patterns. Empty directories are reconstructed from catalog metadata, without another
+archive. Publication stages and hashes all retained units, including standalone mode.
+Prepare verifies and stages incoming units before guarded managed replacement. A durable
+replacement intent supports discarding recorded partial contents on next prepare;
+unknown descendants block recovery. File and directory native identities bind writable
+retries. See [delta protocol](../delta-protocol/) for validation and recovery details.
+
+Groovy GC removes a workspace only when all members are old and unprotected; it never
+ages out individual metadata or output files. Directory removal is guarded and replay
+accepts already-absent planned targets after interruption. This unit rule is separate
+from the partition-wide single-writer snapshot exemption below.
+
 ## Timestamp GC
 
 The default is `cache-gc-mode: timestamp`, with a 14-day grace and a minimum of two days.
@@ -87,14 +108,14 @@ restore/save path list, including nonempty generations, preserving the backend's
 version. Local journals and nested scratch are excluded; directory entries are excluded to prevent
 tar recursion bypassing file excludes. The marker authorizes no deletion of existing overlay files.
 
-Cache family **5**, package **5**, worker manifest **4**, CI lifecycle **4** are distinct strict
+Cache family **6**, package **6**, worker manifest **5**, CI lifecycle **5** are distinct strict
 contracts. Old families are cold misses; old packages/lifecycle records fail validation.
 
 ## Recovery and bounds
 
 `.mammoth/cutoff-state-v2/` contains a root-local journal and `current.json` pointer. It is never
 cached or sent to workers. It binds the full model/policy/execution, C, observations, native retained
-fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 2
+fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 3
 also binds baseline and selected snapshot digests, source, counts, and replacement decisions.
 Snapshot payloads are transported separately under the reserved fixed
 `.mammoth/partition-snapshots-v1/<partition>/` path; only verified manifest/payload files are included

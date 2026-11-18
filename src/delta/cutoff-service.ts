@@ -42,6 +42,7 @@ import type { WorkflowArtifactBackend, WorkflowArtifactDescriptor } from './back
 import { createDeltaArtifactNamePrefix, DELTA_ARTIFACT_RESOURCE_LIMITS } from './discovery';
 import type { CiJobContext } from '../ci';
 import { ownsSnapshot } from '../cache/partition-snapshots';
+import { assertGroovyContributions } from '../cache/groovy-workspaces';
 
 const MAX_JSON = 64 * 1024 * 1024;
 const META = 'delta-package.json',
@@ -99,7 +100,17 @@ export function cutoffPackageIdentity(pkg: Pick<CutoffPackage, 'metadata' | 'man
   return cutoffHash(serialize({ metadata: pkg.metadata, manifest: pkg.manifest }));
 }
 function checkManifestBounds(manifest: CutoffManifest): void {
-  const count = manifest.partitions.reduce((n, p) => n + p.upserts.length + p.usedPaths.length, 0);
+  const count = manifest.partitions.reduce(
+    (n, p) =>
+      n +
+      p.upserts.length +
+      p.usedPaths.length +
+      (p.workspaces ?? []).reduce(
+        (count, u) => count + u.files.length + u.emptyDirectories.length + 1,
+        0,
+      ),
+    0,
+  );
   const bytes = manifest.partitions.reduce(
     (n, p) => n + p.upserts.reduce((s, e) => s + e.size, 0),
     0,
@@ -118,7 +129,7 @@ function packageMetadata(
 ): CutoffPackageMetadata {
   const digest = cutoffHash(serialize(manifest));
   return packageSchema.parse({
-    schemaVersion: 5,
+    schemaVersion: 6,
     artifactType: 'buildish-mammoth-cache-upserts',
     artifactName: artifactName(
       ci.jobName,
@@ -170,7 +181,7 @@ export async function stageCutoffPackage(
     await mkdir(path.join(directory, 'payload'));
     const owns = createManagedCachePathMatcher(state.model);
     let manifest: CutoffManifest = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       buildToolId: state.model.buildToolId,
       partitions: state.model.partitions.map((p) => ({
         partitionId: p.id,
@@ -181,6 +192,17 @@ export async function stageCutoffPackage(
         usedPaths: state.selection!.used.filter((name) => owns(p.id, name)),
       })),
     };
+    const selectedPaths = new Set(state.selection.upserts.map((e) => e.relativePath));
+    for (const partition of manifest.partitions) {
+      const units = (state.selection.workspaces ?? [])
+        .filter(
+          (u) =>
+            u.partitionId === partition.partitionId &&
+            u.workspace.files.some((f) => selectedPaths.has(f)),
+        )
+        .map((u) => u.workspace);
+      if (units.length) partition.workspaces = units;
+    }
     let index = 0;
     const total = state.selection.upserts.reduce((n, e) => n + e.identity.size, 0);
     if (total > DELTA_ARTIFACT_RESOURCE_LIMITS.expandedPackageSizeBytes)
@@ -425,6 +447,7 @@ export function assertCutoffPackageCompatible(
   )
     throw new Error('Worker package cache/ref identity mismatch.');
   const owns = createManagedCachePathMatcher(model);
+  assertGroovyContributions(model, pkg.manifest.partitions, owns);
   for (const partition of pkg.manifest.partitions) {
     const definition = model.partitions.find((p) => p.id === partition.partitionId);
     if (

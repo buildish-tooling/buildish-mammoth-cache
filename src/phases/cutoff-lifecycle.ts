@@ -50,7 +50,7 @@ const restoreSchema = z
   .strict();
 const enabled = z
   .object({
-    schemaVersion: z.literal(4),
+    schemaVersion: z.literal(5),
     cacheEnabled: z.literal(true),
     model: cutoffModelSchema,
     policy: cutoffPolicySchema,
@@ -65,7 +65,7 @@ export const cutoffLifecycleSchema = z
     enabled,
     z
       .object({
-        schemaVersion: z.literal(4),
+        schemaVersion: z.literal(5),
         cacheEnabled: z.literal(false),
         execution: cutoffExecutionSchema,
       })
@@ -155,6 +155,7 @@ export async function preflightCutoffLifecycle(
   if (journal.selection) await verifyCutoffReplay(journal);
   else {
     const snapshot = await captureCacheMetadataSnapshot(record.model);
+    journal.snapshotWarnings.push(...(snapshot.workspaceWarnings ?? []));
     const selection = selectCutoffActivity(
       snapshot,
       journal.cutoff,

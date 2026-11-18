@@ -169,6 +169,7 @@ describe('cache identity rendering', () => {
       });
       const adapter = new GradleBuildToolAdapter(baseConfig);
       adapter.getBuildToolId = () => tool;
+      if (tool === 'maven') adapter.getBuiltInPartitionPresets = () => [];
       const previousEnv = process.env;
       process.env = env;
       try {
@@ -231,6 +232,7 @@ describe('createCachePartitions', () => {
       'modules',
       'dependency-metadata',
       'kotlin-dsl',
+      'groovy-dsl',
       'build-cache',
       'wrapper-dists',
     ]);
@@ -295,12 +297,13 @@ describe('createCachePartitions', () => {
       'modules',
       'dependency-metadata',
       'transforms-metadata',
+      'groovy-dsl',
       'build-cache',
       'wrapper-dists',
       'custom-generated-jars',
     ]);
     expect(partitions[0]?.relativeIncludeGlobs).toEqual(['caches/modules-*/files-*/**']);
-    expect(partitions[5]?.relativeIncludeGlobs).toEqual(['caches/*/generated-gradle-jars/**']);
+    expect(partitions[6]?.relativeIncludeGlobs).toEqual(['caches/*/generated-gradle-jars/**']);
   });
 
   it('rejects empty custom partitions', () => {
@@ -327,7 +330,7 @@ describe('createCacheModel', () => {
     expect(cacheModel.plannedGenerationId).toMatch(/^run-123-attempt-1-job-[a-f0-9]{12}$/u);
     expect(cacheModel.cacheRoot).toBe('/home/runner/.gradle');
     expect(cacheModel.partitionFingerprint).toMatch(/^[a-f0-9]{16}$/);
-    expect(cacheModel.partitions).toHaveLength(5);
+    expect(cacheModel.partitions).toHaveLength(6);
     expect(cacheModel.includePaths).toContain('/home/runner/.gradle/wrapper/dists/**');
     expect(cacheModel.excludePaths).toContain('/home/runner/.gradle/**/configuration-cache/**');
     expect(cacheModel.excludePaths).toContain('/home/runner/.gradle/**/*.lock');

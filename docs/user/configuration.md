@@ -247,9 +247,9 @@ workflows, skipped writers, fallback, and configuration compatibility.
 ### Partition conflict handling
 
 Each `cache-partitions` entry accepts `conflict-handling`: `default` (also the
-omitted value) or `choose-worker-directory`. Built-in partitions keep their
-existing behavior unless explicitly overridden. An explicit `default` clears an
-inherited opt-in policy.
+omitted value) or `choose-worker-directory`. The built-in Gradle `groovy-dsl` partition defaults to
+`choose-worker-directory`; other built-ins default to `default`. An explicit
+`default` clears an inherited directory-selection policy.
 
 ```yaml
 cache-partitions:
@@ -257,10 +257,21 @@ cache-partitions:
     conflict-handling: choose-worker-directory
 ```
 
-`choose-worker-directory` supports only aggregate Maven partitions whose include
-globs all start with `repository/`. Configure the same policy in every producer
-and aggregator. The policy changes the partition fingerprint and starts a new
-compatible cache family; omitted/default configuration retains existing families.
+`choose-worker-directory` supports aggregate Maven partitions whose include
+globs all start with `repository/`, and dedicated aggregate Gradle partitions
+whose includes all select `caches/<version>/groovy-dsl/` paths. Configure the same
+policy in every producer and aggregator. The effective policy changes the partition
+fingerprint and cache family.
+
+For Gradle Groovy DSL, the unit is the complete hashed workspace, including both
+metadata files and empty output directories. Conflicting producers are selected
+by the job-name ordering below. Losing views are discarded. The selected complete
+workspace replaces existing managed contents; excluded or unmanaged target
+obstacles fail before replacement. Partial-workspace overrides and single-writer
+publication are unsupported. `default` keeps whole-workspace transport but rejects
+conflicting views. See [cache partitions](../cache-partitions/) for capture and GC.
+
+For Maven, the following directory rules apply.
 
 For each immediate repository directory, choose the complete contribution from
 the producer with the smallest job name in JavaScript UTF-16 ordinal order.

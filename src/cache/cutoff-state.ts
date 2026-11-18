@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 import { randomUUID, createHash } from 'node:crypto';
+import {
+  groovyObservationSchema,
+  assertGroovyOwnership,
+  assertGroovyContributions,
+} from './groovy-workspaces';
 import { opendir, lstat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -154,6 +159,7 @@ const observationsSchema = z
   .strict();
 const selectionSchema = z
   .object({
+    workspaces: z.array(groovyObservationSchema).max(200_000).optional(),
     snapshotFileCount: z.number().int().nonnegative().optional(),
     snapshotByteCount: z.number().nonnegative().optional(),
     upserts: z.array(cutoffTargetSchema),
@@ -181,7 +187,7 @@ const partitionSnapshotRecordSchema = z
   .strict();
 export const cutoffJournalSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     invocation: z.string().uuid(),
     phase: z.enum([
       'prepare-pending',
@@ -288,6 +294,29 @@ export const cutoffJournalSchema = z
         ctx.addIssue({ code: 'custom', message: 'Duplicate usage/upsert.' });
       if (state.seal) {
         const manifest = state.seal.manifest;
+        try {
+          assertGroovyContributions(
+            state.model,
+            manifest.partitions,
+            createManagedCachePathMatcher(state.model),
+          );
+        } catch {
+          ctx.addIssue({ code: 'custom', message: 'Invalid sealed Groovy contribution.' });
+        }
+        for (const partition of manifest.partitions) {
+          const expected = (state.selection.workspaces ?? [])
+            .filter(
+              (u) =>
+                u.partitionId === partition.partitionId &&
+                u.workspace.files.some((f) => selected.has(f)),
+            )
+            .map((u) => u.workspace);
+          if (JSON.stringify(partition.workspaces ?? []) !== JSON.stringify(expected))
+            ctx.addIssue({
+              code: 'custom',
+              message: 'Sealed workspace directories differ from the freeze.',
+            });
+        }
         for (const p of manifest.partitions) {
           const definition = state.model.partitions.find((d) => d.id === p.partitionId);
           if (
@@ -342,6 +371,26 @@ export const cutoffJournalSchema = z
     for (const target of [...(state.selection?.upserts ?? []), ...(state.selection?.gc ?? [])])
       if (!owns(target.partitionId, target.relativePath))
         ctx.addIssue({ code: 'custom', message: 'Unmanaged operation path.' });
+    const targetSets = state.selection
+      ? [
+          new Set(state.selection.upserts.map((e) => e.relativePath)),
+          new Set(state.selection.gc.map((e) => e.relativePath)),
+        ]
+      : [];
+    for (const unit of state.selection?.workspaces ?? []) {
+      try {
+        assertGroovyOwnership(unit.workspace, unit.partitionId, owns);
+      } catch {
+        ctx.addIssue({ code: 'custom', message: 'Invalid frozen workspace ownership.' });
+      }
+      for (const paths of targetSets) {
+        if (
+          unit.workspace.files.some((p) => paths.has(p)) &&
+          !unit.workspace.files.every((p) => paths.has(p))
+        )
+          ctx.addIssue({ code: 'custom', message: 'Partial frozen Groovy workspace.' });
+      }
+    }
     if (state.selection) {
       const targets = [...state.selection.upserts, ...state.selection.gc].map(
         (e) => e.relativePath,
@@ -367,7 +416,7 @@ export function newCutoffJournal(
   execution: CutoffJournal['execution'],
 ): CutoffJournal {
   return cutoffJournalSchema.parse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     invocation: randomUUID(),
     phase: 'prepare-pending',
     model,
@@ -394,16 +443,30 @@ export function validateCutoffBudget(
   limits: { records: number; bytes: number } = CUTOFF_JOURNAL_LIMITS,
 ): void {
   const s = state.selection;
+  const upsertPaths = new Set(s?.upserts.map((e) => e.relativePath));
+  const workspaceRecords = (
+    units: readonly { files: readonly string[]; emptyDirectories: readonly string[] }[],
+  ) => units.reduce((n, u) => n + 1 + u.files.length + u.emptyDirectories.length, 0);
   const records =
     state.workers.upserts.length +
     state.workers.used.length +
     state.producerArtifacts.length +
     state.deletedPaths.length +
     state.partitionSnapshots.reduce((n, s) => n + s.fileCount, 0) +
+    (s?.workspaces ?? []).reduce(
+      (n, u) =>
+        n +
+        1 +
+        u.workspace.files.length +
+        u.workspace.emptyDirectories.length +
+        u.directories.length,
+      0,
+    ) +
     (s ? s.upserts.length + s.used.length + s.gc.length : 0) +
     (state.seal
       ? state.seal.manifest.partitions.reduce(
-          (n, p) => n + p.upserts.length + p.usedPaths.length,
+          (n, p) =>
+            n + p.upserts.length + p.usedPaths.length + workspaceRecords(p.workspaces ?? []),
           0,
         )
       : 0);
@@ -416,10 +479,23 @@ export function validateCutoffBudget(
     needsSeal && s
       ? {
           manifest: {
-            schemaVersion: 4,
+            schemaVersion: 5,
             buildToolId: state.model.buildToolId,
             partitions: state.model.partitions.map((p, index) => ({
               partitionId: p.id,
+              ...((s.workspaces ?? []).some(
+                (u) => u.partitionId === p.id && u.workspace.files.some((f) => upsertPaths.has(f)),
+              )
+                ? {
+                    workspaces: (s.workspaces ?? [])
+                      .filter(
+                        (u) =>
+                          u.partitionId === p.id &&
+                          u.workspace.files.some((f) => upsertPaths.has(f)),
+                      )
+                      .map((u) => u.workspace),
+                  }
+                : {}),
               ...(ownsSnapshot(p, state.policy.jobMode, state.execution.jobName)
                 ? { snapshot: true }
                 : {}),
@@ -448,7 +524,15 @@ export function validateCutoffBudget(
   };
   const reservedRecords =
     (s ? Math.max(0, s.gc.length - state.deletedPaths.length) : 0) +
-    (needsSeal && s ? s.upserts.length + s.used.length : 0);
+    (needsSeal && s
+      ? s.upserts.length +
+        s.used.length +
+        workspaceRecords(
+          (s.workspaces ?? [])
+            .filter((u) => u.workspace.files.some((f) => upsertPaths.has(f)))
+            .map((u) => u.workspace),
+        )
+      : 0);
   if (
     records + reservedRecords > limits.records ||
     Buffer.byteLength(JSON.stringify(projected)) + 1024 > limits.bytes

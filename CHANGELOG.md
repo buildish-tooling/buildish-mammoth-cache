@@ -18,6 +18,15 @@ limitations under the License.
 
 ## Unreleased
 
+- Enable a separate default Gradle `groovy-dsl` partition with whole-workspace
+  `conflict-handling: choose-worker-directory`. Preserve both metadata files, output
+  membership and empty directories from one producer per hashed workspace. Keep
+  distinct workspace keys, reject partial overrides and use whole-workspace GC.
+  Transport empty directories as validated metadata with flat payloads, without a
+  nested archive. Guarded replacement supports interruption recovery. Base publication
+  adds full Groovy copy/hash staging I/O, including standalone mode. Qualify real
+  Gradle 9.8.1 Java 21/25 distributed reuse and retain the Kotlin DSL control.
+
 - Add opt-in partition `conflict-handling: choose-worker-directory` for aggregate Maven repository
   partitions. Select a complete producer directory deterministically, including differing file sets,
   rather than mixing files or parsing origin markers. Losing classifiers, origin entries and local
@@ -47,7 +56,7 @@ limitations under the License.
   metadata is replaced before restore, including clearing it on a miss, even when ordinary cleanup
   is disabled. Snapshot partitions skip per-file GC. The guarded staged representation adds a full
   copy/hash cost in standalone mode too; distributed writers also upload complete snapshots.
-- Migrate to cache family 5, manifest 4, package 5, CI lifecycle 4 and local journal 2. Publication
+- Migrate to cache family 6, manifest 5, package 6, CI lifecycle 5 and local journal 3. Publication
   policy and writer identity affect layout compatibility. Earlier families start cold. Add guarded
   archive transport and interruption/retry coverage; preserve existing ordinary aggregation and
   Maven consistency checks. Correct the unsupported dependency-metadata absolute-path rationale.

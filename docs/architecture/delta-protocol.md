@@ -34,7 +34,7 @@ An optional partition writer may be absent; only its snapshot partitions are imp
 also declared in `dependent-jobs`. Read-only jobs skip
 artifact lookup, download, application and upload.
 
-## Package 5 and manifest 4
+## Package 6 and manifest 5
 
 The flat package contains `delta-package.json`, `delta-manifest.json` and numbered `payload/*.bin`.
 Metadata binds producer repository/workflow/job/run/attempt/source, ref, diagnostic runner platform, family/lineage/restored
@@ -78,9 +78,39 @@ See [Base cache design](../base-cache/) for bounded local recovery, GC and publi
 aggregator replay can rewrite identical upserts and save redundant complete generations.
 Read-only tracking (#6) and publication optimization (#7) remain separate follow-ups.
 
+## Complete Groovy workspace transport
+
+A Groovy partition may declare `workspaces`: sorted complete file membership and
+empty-directory paths for each hashed root. Every Groovy upsert must belong to
+exactly one structurally complete descriptor with both nonempty metadata files.
+File-only or partial contributions fail validation. Changed members select all
+members; usage protects the whole workspace. Source directory identities join the
+frozen native fingerprint, so directory-only changes also invalidate retry.
+
+After eligible attempts are selected, `choose-worker-directory` picks the smallest
+producer job name in JavaScript UTF-16 ordinal order for each workspace root.
+Different roots remain independent. `default` rejects conflicting full views;
+file-level duplicate permissions cannot combine workspace contents. Diagnostics
+bound winner/discarded-producer details. Forwarders publish their selected view
+under their own identity.
+
+Application preflights ownership and target descendants, stages and verifies a whole
+unit on the target filesystem, then records durable intent before removing old managed
+members and installing the replacement. It restores empty directories explicitly.
+Changed or excluded target obstacles fail closed. Interrupted replacement is recovered
+on the next prepare by discarding only recorded partial contents as a cache miss;
+unknown descendants block recovery. This is recoverable per-unit replacement,
+not a transaction across an entire batch of workspaces.
+
+Base transport uses `.mammoth/groovy-workspaces-v1.json` and numbered files under
+`.mammoth/groovy-base-v1/payload/`. The catalog binds family, partition fingerprint,
+complete units and payload hashes. Fixed save/restore patterns omit live Groovy paths.
+Empty directories need no nested archive. Restore validates membership and verifies
+payloads while staging each unit. New base generations copy/hash every retained unit.
+
 ## Snapshot base transport and recovery
 
-Base cache family 5 and CI lifecycle 4 use journal schema 2. Snapshot bytes live under the fixed
+Base cache family 6 and CI lifecycle 5 use journal schema 3. Snapshot bytes live under the fixed
 reserved `.mammoth/partition-snapshots-v1/<partition>/` path: `snapshot.json` and numbered payload
 files. Backend save/restore patterns are identical across owners and modes; live snapshot paths
 are omitted from the archive. Exact membership and payload hashes are verified on restore and

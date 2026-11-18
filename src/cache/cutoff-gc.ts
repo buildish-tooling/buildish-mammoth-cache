@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import { assertCompleteMavenRepositoryDirectories } from './maven-repository';
-import { rm, rmdir } from 'node:fs/promises';
+import { rm, rmdir, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { guardedPath, regularStat, verifyParents } from './guarded-files';
 import { fileIdentity, sameFileIdentity } from './file-identity';
@@ -79,6 +79,40 @@ export async function collectCutoffGarbage(
         throw e;
       }
       parent = path.dirname(parent);
+    }
+  }
+  for (const unit of state.selection.workspaces ?? []) {
+    if (!unit.workspace.files.every((name) => progress.has(name))) continue;
+    for (const directory of [...unit.directories].sort(
+      (a, b) => b.relativePath.length - a.relativePath.length,
+    )) {
+      await verifyParents(state.model.cacheRoot, path.posix.dirname(directory.relativePath));
+      const target = guardedPath(state.model.cacheRoot, directory.relativePath);
+      const current = await lstat(target).catch((e: unknown) => {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw e;
+      });
+      if (!current) continue;
+      if (
+        !current.isDirectory() ||
+        current.isSymbolicLink() ||
+        current.ino !== directory.identity.ino ||
+        current.dev !== directory.identity.dev
+      )
+        throw new Error('Frozen Groovy GC directory changed.');
+      try {
+        await rmdir(target);
+      } catch (e) {
+        // Excluded bookkeeping can keep collected workspace directories nonempty.
+        if (
+          e &&
+          typeof e === 'object' &&
+          'code' in e &&
+          ['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(String(e.code))
+        )
+          continue;
+        throw e;
+      }
     }
   }
   // The frozen plan already permits missing targets on replay. Checkpoint the whole sweep

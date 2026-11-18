@@ -447,7 +447,7 @@ describe('normalizeMavenActionConfig', () => {
     expect(config.dependentJobs).toEqual([]);
     expect(config.cacheKeyPrefix).toBe('buildish-mammoth-cache-');
     expect(config.cachePartitions).toEqual([]);
-    expect(config.cacheSchemaVersion).toBe(5);
+    expect(config.cacheSchemaVersion).toBe(6);
     expect(config.cleanupEnabled).toBe(true);
     expect(config.restoreCleanupMode).toBe('none');
     expect(config.cacheGcMode).toBe('timestamp');

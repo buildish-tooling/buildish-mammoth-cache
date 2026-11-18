@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { stageGroovyBase } from '../../cache/groovy-base';
 import { rm } from 'node:fs/promises';
 import { bootstrapPhase, type BootstrapDependencies } from '../bootstrap';
 import {
@@ -182,6 +183,7 @@ export async function executeFinalizeAction(
         throw new Error('Frozen publication identity changed.');
       // Prepare empty transport before save, but keep it excluded from all observations.
       await setEmptyGeneration(state.model.cacheRoot, remaining === 0);
+      if (!state.saved) await stageGroovyBase(state);
       if (!state.saved) {
         state.publicationKey = generation.key;
         state.phase = 'publication-intent';
