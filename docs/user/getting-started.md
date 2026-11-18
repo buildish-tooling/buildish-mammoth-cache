@@ -60,6 +60,10 @@ For Maven the action caches the Maven user home (`~/.m2` by default, or the path
 under `wrapper/dists/`. No wrapper provisioning is performed — Maven's own bootstrap is handled by
 the runner environment or `actions/setup-java`.
 
+Build-output caching requires a separately configured Maven extension. See
+[goal-level incremental caching](../maven-caching-patterns/#goal-level-incremental-caching)
+for how it relates to Mammoth's repository caching.
+
 ## Workflow shape
 
 The examples below document the action contract. Pin an exact published release or candidate

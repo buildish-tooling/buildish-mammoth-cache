@@ -29,6 +29,10 @@ tool's local artifact store across workflow runs:
 Both actions share the same two-phase prepare/finalize lifecycle and support single-job and
 distributed multi-job topologies.
 
+For Gradle, Mammoth also preserves entries from Gradle's local build cache, allowing Gradle to
+reuse task outputs. For Maven, Mammoth caches repository artifacts; build-output caching requires
+a separately configured extension.
+
 ## Single-job mode
 
 In the most common setup, the action wraps a single build job: it restores the newest compatible
