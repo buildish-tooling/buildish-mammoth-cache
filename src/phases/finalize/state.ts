@@ -38,6 +38,8 @@ const BASE_CACHE_RESTORE_STATUSES = [
   'miss',
   'current-lineage-hit',
   'fallback-lineage-hit',
+  'current-lineage-partial-hit',
+  'fallback-lineage-partial-hit',
 ] as const;
 const PRE_BUILD_CACHE_MANIFEST_FILE = 'pre-build-cache-manifest.json';
 
@@ -69,7 +71,7 @@ const baseCacheRestoreResultSchema = z
     message: z.string().min(1),
   })
   .superRefine((value, context) => {
-    const hit = value.status === 'current-lineage-hit' || value.status === 'fallback-lineage-hit';
+    const hit = value.status.endsWith('-hit');
     if (hit !== (value.matchedKey !== null && value.matchedLineagePrefix !== null)) {
       context.addIssue({
         code: 'custom',
@@ -94,7 +96,7 @@ const baseCacheRestoreResultSchema = z
         message: 'Matched generation must belong to a requested restore lineage.',
       });
     } else if (
-      (value.status === 'current-lineage-hit') !==
+      value.status.startsWith('current-lineage') !==
       (matchedCandidate.lineage === 'current-ref')
     ) {
       context.addIssue({

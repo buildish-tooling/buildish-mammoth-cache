@@ -127,7 +127,7 @@ describe('partition policy', () => {
 describe('cache identity rendering', () => {
   it('renders an action-owned cache family without ref or generation identity', () => {
     expect(renderCacheFamilyKey(baseConfig, 'gradle', 'feedcafe1234abcd')).toBe(
-      'buildish-mammoth-cache-gradle-v2-feedcafe1234abcd',
+      'buildish-mammoth-cache-gradle-v2-partitioned-v2-feedcafe1234abcd',
     );
   });
 
@@ -175,7 +175,7 @@ describe('cache identity rendering', () => {
       try {
         const model = await createCacheModel(baseConfig, baseCiContext, adapter);
         expect(model.cacheFamilyKey).toMatch(
-          new RegExp('^buildish-mammoth-cache-' + tool + '-v2-[a-f0-9]{16}$', 'u'),
+          new RegExp('^buildish-mammoth-cache-' + tool + '-v2-partitioned-v2-[a-f0-9]{16}$', 'u'),
         );
         expect(model).not.toHaveProperty('javaMajor');
       } finally {
@@ -322,9 +322,11 @@ describe('createCacheModel', () => {
   it('derives the cache model from the normalized config and ci context', async () => {
     const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {});
 
-    expect(cacheModel.cacheFamilyKey).toMatch(/^buildish-mammoth-cache-gradle-v2-[a-f0-9]{16}$/u);
+    expect(cacheModel.cacheFamilyKey).toMatch(
+      /^buildish-mammoth-cache-gradle-v2-partitioned-v2-[a-f0-9]{16}$/u,
+    );
     expect(cacheModel.currentRefLineagePrefix).toMatch(
-      /^buildish-mammoth-cache-gradle-v2-[a-f0-9]{16}-ref-feature-cache-model-[a-f0-9]{12}-gen-$/u,
+      /^buildish-mammoth-cache-gradle-v2-partitioned-v2-[a-f0-9]{16}-ref-feature-cache-model-[a-f0-9]{12}-gen-$/u,
     );
     expect(cacheModel.fallbackRefLineagePrefixes).toHaveLength(1);
     expect(cacheModel.plannedGenerationId).toMatch(/^run-123-attempt-1-job-[a-f0-9]{12}$/u);

@@ -22,6 +22,7 @@ import path from 'node:path';
 import {
   STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
   type BaseCacheBackend,
+  type BaseCacheOperationOptions,
 } from '../../cache/backend';
 
 /**
@@ -50,8 +51,8 @@ export function createGitHubBaseCacheBackend(
 ): BaseCacheBackend {
   const root = cacheRoot === undefined ? undefined : path.resolve(cacheRoot);
   let warned = false;
-  const supportsRoot = () => {
-    if (root !== undefined && /[\s"]/u.test(root)) {
+  const supportsRoot = (operationRoot = root) => {
+    if (operationRoot !== undefined && /[\s"]/u.test(operationRoot)) {
       if (!warned)
         warn(
           'Base cache unavailable: the GitHub cache toolkit cannot quote cache-root paths containing whitespace or double quotes. Use a runner/cache home without these characters. Workflow artifact exchange remains available.',
@@ -66,22 +67,36 @@ export function createGitHubBaseCacheBackend(
     isFeatureAvailable(): boolean {
       return supportsRoot() && cacheBackend.isFeatureAvailable();
     },
-    async restoreCache(paths: string[], primaryKeyPrefix: string, fallbackKeyPrefixes?: string[]) {
-      if (!supportsRoot()) return undefined;
-      return await withCacheRoot(root, paths, (relativePaths) =>
+    async restoreCache(
+      paths: string[],
+      primaryKeyPrefix: string,
+      fallbackKeyPrefixes?: string[],
+      options?: BaseCacheOperationOptions,
+    ) {
+      const operationRoot = options?.archiveRoot ?? root;
+      if (!supportsRoot(operationRoot)) return undefined;
+      return await withCacheRoot(operationRoot, paths, (relativePaths) =>
         cacheBackend.restoreCache(
           relativePaths,
           primaryKeyPrefix,
           fallbackKeyPrefixes,
-          undefined,
+          options?.lookupOnly ? { lookupOnly: true } : undefined,
           true,
         ),
       );
     },
-    async saveCache(paths: string[], key: string) {
-      if (!supportsRoot()) return -1;
-      return await withCacheRoot(root, paths, (relativePaths) =>
+    async saveCache(paths: string[], key: string, options?: BaseCacheOperationOptions) {
+      const operationRoot = options?.archiveRoot ?? root;
+      if (!supportsRoot(operationRoot)) return -1;
+      return await withCacheRoot(operationRoot, paths, (relativePaths) =>
         cacheBackend.saveCache(relativePaths, key, undefined, true),
+      );
+    },
+    async lookupCache(paths, key, options) {
+      const operationRoot = options?.archiveRoot ?? root;
+      if (!supportsRoot(operationRoot)) return undefined;
+      return await withCacheRoot(operationRoot, paths, (relativePaths) =>
+        cacheBackend.restoreCache(relativePaths, key, [], { lookupOnly: true }, true),
       );
     },
     isMissingPathsError(error: unknown): boolean {

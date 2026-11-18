@@ -14,21 +14,13 @@
  * limitations under the License.
  */
 
-import {
-  isGroovyPartition,
-  hasGroovyPartitions,
-  GROOVY_WORKSPACE_METADATA,
-} from './groovy-workspaces';
-import { GROOVY_BASE_DIRECTORY } from './groovy-base';
-import path from 'node:path';
-import { restoreDistributionLauncherPermissions } from './file-permissions';
 import { captureCacheMetadataSnapshot } from './manifest';
 import { MAVEN_TRANSIENT_CACHE_EXCLUDE_GLOBS } from './maven-repository';
-import { EMPTY_GENERATION_PATH } from './metadata-paths';
-import { PARTITION_SNAPSHOT_DIRECTORY, snapshotPartitions } from './partition-snapshots';
+import { restoreDistributionLauncherPermissions } from './file-permissions';
+import { restorePartitionedGeneration, type RestoredGeneration } from './partition-restore';
+import { generationRecordPaths, storageDigest } from './partition-format';
 import type { NormalizedActionConfig } from '../config/types';
 import type { BaseCacheBackend } from './backend';
-
 import type { CacheGeneration, CacheModel } from './model';
 
 /**
@@ -37,6 +29,8 @@ import type { CacheGeneration, CacheModel } from './model';
 export interface BaseCacheServiceDependencies {
   /** Provider-neutral cache backend used for restore and save operations. */
   readonly cacheBackend: BaseCacheBackend;
+  readonly onRestorePartitions?: (restored: RestoredGeneration) => Promise<void>;
+  readonly publishGeneration?: (generation: CacheGeneration) => Promise<number | null>;
 }
 
 /** Ordered semantic lookup candidate for one immutable cache lineage. */
@@ -64,7 +58,19 @@ export interface BaseCacheRestoreResult {
    * - `current-lineage-hit`: newest current-ref generation restored
    * - `fallback-lineage-hit`: newest default-branch generation restored
    */
-  readonly status: 'feature-unavailable' | 'miss' | 'current-lineage-hit' | 'fallback-lineage-hit';
+  readonly status:
+    | 'feature-unavailable'
+    | 'miss'
+    | 'current-lineage-hit'
+    | 'fallback-lineage-hit'
+    | 'current-lineage-partial-hit'
+    | 'fallback-lineage-partial-hit';
+  readonly selectedRecordKey?: string | null;
+  readonly baselineDigest?: string;
+  readonly partitionResults?: {
+    partitionId: string;
+    status: 'restored' | 'empty' | 'missing';
+  }[];
   /** Compatibility family used by every lookup candidate. */
   readonly cacheFamilyKey: string;
   /** Current-ref lineage prefix supplied as the primary lookup candidate. */
@@ -75,7 +81,7 @@ export interface BaseCacheRestoreResult {
   readonly matchedLineagePrefix: string | null;
   /** Ordered semantic lookup candidates supplied to the backend. */
   readonly restoreCandidates: readonly CacheRestoreCandidate[];
-  /** Ordered cache path list passed to the active cache backend, including negated excludes. */
+  /** Logical record archive paths; operation-local extraction/publication roots may differ. */
   readonly paths: readonly string[];
   /** Human-readable summary suitable for logs and job summaries. */
   readonly message: string;
@@ -116,7 +122,7 @@ export interface BaseCacheSaveResult {
   readonly generationKey: string | null;
   /** Cache identifier returned by the active backend when a new entry is successfully created. */
   readonly cacheId: number | null;
-  /** Ordered cache path list passed to the active cache backend, including negated excludes. */
+  /** Logical record archive paths; operation-local extraction/publication roots may differ. */
   readonly paths: readonly string[];
   /** Human-readable summary suitable for logs and job summaries. */
   readonly message: string;
@@ -132,37 +138,7 @@ export type BaseCacheOperationResult = BaseCacheRestoreResult | BaseCacheSaveRes
  * state such as configuration cache content or lock files.
  */
 export function createBaseCachePaths(cacheModel: CacheModel): readonly string[] {
-  const snapshots = snapshotPartitions(cacheModel);
-  return [
-    ...(snapshots.length || hasGroovyPartitions(cacheModel)
-      ? cacheModel.partitions
-          .filter(
-            (p) =>
-              p.publication !== 'single-writer' &&
-              !(cacheModel.buildToolId === 'gradle' && isGroovyPartition(p)),
-          )
-          .flatMap((p) => p.absoluteIncludeGlobs)
-      : cacheModel.includePaths),
-    ...cacheModel.excludePaths.map((pattern) => `!${pattern}`),
-    // Exclude local journals and nested atomic-write scratch, including portable aliases.
-    `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH]/**`,
-    `!${cacheModel.cacheRoot}/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**`,
-    ...(hasGroovyPartitions(cacheModel) ? [`!${cacheModel.cacheRoot}/caches/*/groovy-dsl/**`] : []),
-    path.join(cacheModel.cacheRoot, EMPTY_GENERATION_PATH),
-    ...(hasGroovyPartitions(cacheModel)
-      ? [
-          path.join(cacheModel.cacheRoot, GROOVY_WORKSPACE_METADATA),
-          path.join(cacheModel.cacheRoot, GROOVY_BASE_DIRECTORY, 'payload', '*.bin'),
-        ]
-      : []),
-    // Stable save/restore patterns: only verified snapshot transport is re-included.
-    ...snapshots.flatMap((p) => [
-      path.join(cacheModel.cacheRoot, PARTITION_SNAPSHOT_DIRECTORY, p.id, 'snapshot.json'),
-      path.join(cacheModel.cacheRoot, PARTITION_SNAPSHOT_DIRECTORY, p.id, 'payload', '*.bin'),
-    ]),
-    // A listed directory would let tar recursively bypass all the file exclusions.
-    `!${cacheModel.cacheRoot}/**/`,
-  ];
+  return generationRecordPaths(cacheModel.cacheRoot);
 }
 
 /** Creates the ordered current-ref and default-branch lineage lookup candidates. */
@@ -188,6 +164,7 @@ export async function restoreBaseCache(
   cacheModel: CacheModel,
   dependencies: BaseCacheServiceDependencies,
   exactKey?: string,
+  pinned?: BaseCacheRestoreResult['partitionResults'],
 ): Promise<BaseCacheRestoreResult> {
   const { cacheBackend } = dependencies;
   const paths = createBaseCachePaths(cacheModel);
@@ -210,8 +187,6 @@ export async function restoreBaseCache(
     };
   }
 
-  // Custom exclusions can leave artifact bytes behind when an archive replaces their marker.
-  // Validate the existing tree with metadata only before giving the backend permission to extract.
   if (
     cacheModel.buildToolId === 'maven' &&
     cacheModel.partitions.some((p) =>
@@ -219,56 +194,36 @@ export async function restoreBaseCache(
     )
   )
     await captureCacheMetadataSnapshot(cacheModel);
-
-  const [primaryCandidate, ...fallbackCandidates] = restoreCandidates;
-  const matchedKey = await cacheBackend.restoreCache(
-    [...paths],
-    exactKey ?? primaryCandidate.keyPrefix,
-    exactKey ? [] : fallbackCandidates.map((candidate) => candidate.keyPrefix),
-  );
-
-  if (exactKey && matchedKey !== exactKey)
-    throw new Error('Pinned cache generation was unavailable during cleanup.');
-  if (!matchedKey) {
-    return {
-      operation: 'restore',
-      status: 'miss',
-      cacheFamilyKey: cacheModel.cacheFamilyKey,
-      currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
-      matchedKey: null,
-      matchedLineagePrefix: null,
-      restoreCandidates,
-      paths,
-      message: `Base cache restore missed for current lineage '${cacheModel.currentRefLineagePrefix}'.`,
-    };
-  }
-
-  const matchedCandidate = restoreCandidates.find(
-    (candidate) =>
-      matchedKey.startsWith(candidate.keyPrefix) && matchedKey.length > candidate.keyPrefix.length,
-  );
-  if (!matchedCandidate) {
-    throw new Error(
-      `Cache backend returned key '${matchedKey}' outside the requested cache lineages.`,
-    );
-  }
-
-  await restoreDistributionLauncherPermissions(cacheModel);
-
+  const restored = await restorePartitionedGeneration(cacheModel, cacheBackend, exactKey, pinned);
+  await dependencies.onRestorePartitions?.(restored);
+  const candidate = restoreCandidates.find((c) => restored.selectedKey?.startsWith(c.keyPrefix));
+  const successes = restored.partitions.filter((p) => p.status !== 'missing').length;
+  const complete = !!candidate && successes === restored.partitions.length;
+  const partial = !!candidate && successes > 0 && !complete;
+  if (complete || partial) await restoreDistributionLauncherPermissions(cacheModel);
+  const origin = candidate?.lineage === 'current-ref' ? 'current-lineage' : 'fallback-lineage';
+  const status: BaseCacheRestoreResult['status'] = complete
+    ? `${origin}-hit`
+    : partial
+      ? `${origin}-partial-hit`
+      : 'miss';
+  const partitionResults = restored.partitions.map(({ partitionId, status }) => ({
+    partitionId,
+    status,
+  }));
   return {
     operation: 'restore',
-    status:
-      matchedCandidate.lineage === 'current-ref' ? 'current-lineage-hit' : 'fallback-lineage-hit',
+    status,
     cacheFamilyKey: cacheModel.cacheFamilyKey,
     currentRefLineagePrefix: cacheModel.currentRefLineagePrefix,
-    matchedKey,
-    matchedLineagePrefix: matchedCandidate.keyPrefix,
+    matchedKey: complete || partial ? restored.selectedKey : null,
+    matchedLineagePrefix: complete || partial ? candidate!.keyPrefix : null,
+    selectedRecordKey: restored.selectedKey,
+    baselineDigest: storageDigest(restored),
+    partitionResults,
     restoreCandidates,
     paths,
-    message:
-      matchedCandidate.lineage === 'current-ref'
-        ? `Base cache restore reused current-ref generation '${matchedKey}'.`
-        : `Base cache restore reused default-branch generation '${matchedKey}'.`,
+    message: `Base cache restore ${status}: ${partitionResults.map((p) => `${p.partitionId}=${p.status}`).join(', ') || 'no active partitions'}.`,
   };
 }
 
@@ -333,10 +288,12 @@ export async function saveBaseCache(
     );
   }
   assertGenerationMatchesModel(generation, cacheModel);
-  let cacheId: number;
+  let cacheId: number | null;
 
   try {
-    cacheId = await cacheBackend.saveCache([...paths], generation.key);
+    cacheId = dependencies.publishGeneration
+      ? await dependencies.publishGeneration(generation)
+      : await cacheBackend.saveCache([...paths], generation.key);
   } catch (error) {
     if (cacheBackend.isMissingPathsError(error)) {
       return createSaveResult(
@@ -354,12 +311,12 @@ export async function saveBaseCache(
     );
   }
 
-  if (cacheId > 0) {
+  if (cacheId === null || cacheId > 0) {
     return createSaveResult(
       'saved',
       generation.key,
       paths,
-      `Base cache saved under immutable generation key '${generation.key}' (cache ID ${cacheId}).`,
+      `Base cache saved under immutable generation key '${generation.key}'${cacheId === null ? ' (verified concurrent publication)' : ` (cache ID ${cacheId})`}.`,
       cacheId,
     );
   }

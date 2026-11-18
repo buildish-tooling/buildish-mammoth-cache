@@ -142,11 +142,14 @@ Unused keys from another project may remain cached. No hash of `GRADLE_USER_HOME
 is added to the family. Incoming units replace only managed workspace contents,
 with guarded staging and recoverable replacement intent. GC uses whole units.
 
-Base archives use fixed reserved payload paths and a family-bound workspace catalog;
-empty directories are reconstructed from validated metadata. This preserves the
-backend's path-derived cache version without nesting another archive. Publication
-copies and hashes all retained Groovy files into this staging area, including in
-standalone mode; workers also stage full changed units for upload.
+Each Groovy partition has an immutable base object containing native workspace paths
+and a family-bound descriptor. References carry the accepted workspace roots to keep
+SDK path versions consistent. Empty directories are reconstructed from validated
+metadata. Changed partitions are hashed/archived directly without payload staging
+copies; unchanged objects are reused. Restore moves disposable extracted inputs
+into guarded workspace staging, with verified cross-filesystem fallback where needed.
+Workers continue to stage full changed units for envelope upload. Missing base objects
+start their partitions cold without discarding unrelated validated cache partitions.
 
 Local Linux qualification covered Gradle 8.7 and 9.8.1, relocation, and Java 21/25.
 The end-to-end Mammoth regression uses Gradle 9.8.1 with Java 21/25 and a Kotlin DSL

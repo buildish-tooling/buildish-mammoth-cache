@@ -144,7 +144,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Must start with an alphanumeric character.
 - Remaining characters may only be letters, numbers, `.`, `_`, or `-`.
 - Changes only the namespace prefix. The action always appends build tool, schema,
-  partition, ref-lineage, and immutable-generation identity.
+  partition, storage-format, ref-lineage, and immutable-generation identity.
 - OS and architecture share by default for both tools. To isolate them, use a workflow input:
 
   ```yaml
@@ -201,7 +201,9 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Default: `none`
 - Supported values: `none`, `prune-managed`
 - `prune-managed` only acts after a base-cache hit.
-- It deletes files currently matched by the active managed partitions, then restores the matched base cache again.
+- It deletes files currently matched by the active managed partitions, then restores the exact
+  selected generation and its originally available partition objects again. A previously available
+  object disappearing during replay fails prepare; an originally missing partition remains cold.
 - It never deletes files outside the action-managed partition space.
 - It is intentionally an opt-in because it is more destructive and may increase restore time.
 
@@ -356,16 +358,16 @@ resolved conflicts with bounded winner/discarded-producer details.
 
 Both actions expose the same cache lifecycle outputs after prepare:
 
-| Output                           | Meaning                                                                         |
-| -------------------------------- | ------------------------------------------------------------------------------- |
-| `cache-family-key`               | Structural compatibility family, without ref or generation identity             |
-| `cache-lineage-prefix`           | Current-ref prefix used for newest-generation restore                           |
-| `base-cache-restore-status`      | `feature-unavailable`, `miss`, `current-lineage-hit`, or `fallback-lineage-hit` |
-| `restored-cache-key`             | Exact immutable generation restored, or an empty string when there was no hit   |
-| `read-only`                      | Effective write policy as `true` or `false`                                     |
-| `job-mode`                       | Effective standalone or distributed mode                                        |
-| `dependent-delta-status`         | `not-configured`, `applied`, or `skipped-read-only`                             |
-| `dependent-delta-artifact-count` | Number of worker artifacts applied during prepare                               |
+| Output                           | Meaning                                                                                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cache-family-key`               | Structural compatibility family, without ref or generation identity                                                                            |
+| `cache-lineage-prefix`           | Current-ref prefix used for newest-generation restore                                                                                          |
+| `base-cache-restore-status`      | `feature-unavailable`, `miss`, `current-lineage-hit`, `fallback-lineage-hit`, `current-lineage-partial-hit`, or `fallback-lineage-partial-hit` |
+| `restored-cache-key`             | Selected generation with at least one restored/explicit-empty partition, or empty on a miss                                                    |
+| `read-only`                      | Effective write policy as `true` or `false`                                                                                                    |
+| `job-mode`                       | Effective standalone or distributed mode                                                                                                       |
+| `dependent-delta-status`         | `not-configured`, `applied`, or `skipped-read-only`                                                                                            |
+| `dependent-delta-artifact-count` | Number of worker artifacts applied during prepare                                                                                              |
 
 Generation keys are finalize outcomes and are intentionally not planned prepare outputs. The job
 summary and finalize log report the exact key only after a successful publication.

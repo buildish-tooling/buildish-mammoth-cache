@@ -19,7 +19,15 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createGitHubBaseCacheBackend } from '../../src/ci/github/cache';
-import { restoreBaseCache } from '../../src/cache/service';
+import { restoreDistributionLauncherPermissions } from '../../src/cache/file-permissions';
+import { groovyFixtureModel, writeGroovyWorkspace } from '../support/groovy-cache';
+import { captureCacheMetadataSnapshot } from '../../src/cache/manifest';
+import { partitionObjectPaths, type PartitionDescriptor } from '../../src/cache/partition-format';
+import {
+  stagePartitionObject,
+  readPartitionObject,
+  installPartitionObject,
+} from '../../src/cache/partition-transport';
 import { cutoffFixtureModel } from '../support/cutoff-fixture';
 
 const roots: string[] = [];
@@ -153,21 +161,12 @@ it.each([
         },
       ],
     };
-    const backend = {
-      capabilities: { supportsNewestPrefixRestore: true, supportsExplicitSave: true },
-      isFeatureAvailable: () => true,
-      restoreCache: async () => {
-        for (const name of [included, excluded]) {
-          await mkdir(path.dirname(path.join(target, name)), { recursive: true });
-          await writeFile(path.join(target, name), '#!/bin/sh');
-          await chmod(path.join(target, name), 0o644);
-        }
-        return model.currentRefLineagePrefix + 'generation';
-      },
-      saveCache: async () => 1,
-      isMissingPathsError: () => false,
-    };
-    await restoreBaseCache(targetModel, { cacheBackend: backend });
+    for (const name of [included, excluded]) {
+      await mkdir(path.dirname(path.join(target, name)), { recursive: true });
+      await writeFile(path.join(target, name), '#!/bin/sh');
+      await chmod(path.join(target, name), 0o644);
+    }
+    await restoreDistributionLauncherPermissions(targetModel);
     expect((await lstat(path.join(target, included))).mode & 0o777).toBe(0o755);
     expect((await lstat(path.join(target, excluded))).mode & 0o777).toBe(0o644);
   },
@@ -193,3 +192,202 @@ it.each(['cache home', 'cache\thome', 'cache"home'])(
     expect(sdk.saveCache).not.toHaveBeenCalled();
   },
 );
+
+it('uses operation-local roots and lookup-only without changing SDK version paths', async () => {
+  const { source, target } = await fixture();
+  const calls: { paths: string[]; root: string; lookup: boolean }[] = [];
+  const sdk = {
+    isFeatureAvailable: () => true,
+    saveCache: async () => 1,
+    restoreCache: async (
+      paths: string[],
+      key: string,
+      _fallback?: string[],
+      options?: { lookupOnly?: boolean },
+    ) => {
+      calls.push({ paths, root: process.cwd(), lookup: !!options?.lookupOnly });
+      return key;
+    },
+  };
+  const backend = createGitHubBaseCacheBackend(sdk, source);
+  await backend.restoreCache([path.join(target, 'data/**')], 'exact', [], { archiveRoot: target });
+  expect(await backend.lookupCache!([path.join(source, 'data/**')], 'exact')).toBe('exact');
+  expect(calls).toEqual([
+    { paths: ['data/**'], root: target, lookup: false },
+    { paths: ['data/**'], root: source, lookup: true },
+  ]);
+});
+
+it('native partition SDK globs archive exactly scanner ownership across overlapping layouts and exclusions', async () => {
+  const { root, source, target } = await fixture();
+  for (const name of [
+    'data/a',
+    'data/b',
+    'data/skip/blocked',
+    'data/x.lock',
+    'data/.mammoth/private',
+    'data/.MAMMOTH./private',
+  ]) {
+    await mkdir(path.dirname(path.join(source, name)), { recursive: true });
+    await writeFile(path.join(source, name), name);
+  }
+  const base = cutoffFixtureModel(source);
+  const partitions = ['data', 'other'].map((id, i) => ({
+    ...base.partitions[0]!,
+    id,
+    relativeExcludeGlobs: [i ? 'data/a' : 'data/b', 'data/skip/**', '**/*.lock'],
+    absoluteExcludeGlobs: [i ? 'data/a' : 'data/b', 'data/skip/**', '**/*.lock'].map((p) =>
+      path.join(source, p),
+    ),
+  }));
+  const model = {
+    ...base,
+    partitions,
+    excludePaths: [...new Set(partitions.flatMap((p) => p.absoluteExcludeGlobs))],
+  };
+  const snapshot = await captureCacheMetadataSnapshot(model);
+  expect(snapshot.partitions.map((p) => p.entries.map((e) => e.relativePath))).toEqual([
+    ['data/a'],
+    ['data/b'],
+  ]);
+  const descriptor: PartitionDescriptor = {
+    schemaVersion: 1,
+    identity: {
+      familyKey: model.cacheFamilyKey,
+      lineagePrefix: model.currentRefLineagePrefix,
+      partitionId: 'data',
+      writerId: 'run-1',
+      decisionDigest: 'a'.repeat(64),
+    },
+    buildToolId: model.buildToolId,
+    partitionFingerprint: model.partitionFingerprint,
+    kind: 'aggregate',
+    files: [],
+    workspaces: [],
+  };
+  const reference = await stagePartitionObject(
+    model,
+    source,
+    descriptor,
+    source,
+    snapshot.partitions[0]!.entries.map((e) => ({
+      relativePath: e.relativePath,
+      sourcePath: e.relativePath,
+      size: e.size,
+      mode: e.identity.mode & 0o777,
+      mtimeMs: Math.trunc(e.mtimeMs),
+      identity: e.identity,
+    })),
+  );
+  const sdk = path.dirname(fileURLToPath(import.meta.resolve('@actions/cache'))),
+    utils = await import(pathToFileURL(path.join(sdk, 'internal/cacheUtils.js')).href),
+    tar = await import(pathToFileURL(path.join(sdk, 'internal/tar.js')).href);
+  const archive = path.join(root, 'native-archive');
+  await mkdir(archive);
+  let version: string;
+  const backend = createGitHubBaseCacheBackend(
+    {
+      isFeatureAvailable: () => true,
+      saveCache: async (patterns, key, _options, crossOs) => {
+        version = utils.getCacheVersion(patterns, 'gzip', crossOs);
+        const members = await utils.resolvePaths(patterns);
+        expect(members.sort()).toEqual([
+          '.mammoth/partition-objects-v1/data/object.json',
+          'data/a',
+        ]);
+        await tar.createTar(archive, members, 'gzip');
+        return 1;
+      },
+      restoreCache: async (patterns, key, _fallback, _options, crossOs) => {
+        expect(utils.getCacheVersion(patterns, 'gzip', crossOs)).toBe(version);
+        await tar.extractTar(path.join(archive, 'cache.tgz'), 'gzip');
+        return key;
+      },
+    },
+    source,
+  );
+  await backend.saveCache(partitionObjectPaths(source, 'data', model), reference.key);
+  await backend.restoreCache(partitionObjectPaths(target, 'data', model), reference.key, [], {
+    archiveRoot: target,
+  });
+  const targetModel = { ...model, cacheRoot: target };
+  const restored = await readPartitionObject(targetModel, target, reference);
+  const extracted = await lstat(path.join(target, 'data/a'));
+  const live = path.join(root, 'live');
+  await mkdir(live);
+  await installPartitionObject({ ...targetModel, cacheRoot: live }, target, restored);
+  expect((await lstat(path.join(live, 'data/a'))).ino).toBe(extracted.ino);
+  await expect(lstat(path.join(live, 'data/b'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('native Groovy SDK selection omits unrecognized and incomplete workspace roots', async () => {
+  const { root, source } = await fixture(),
+    unit = await writeGroovyWorkspace(source);
+  for (const name of [
+    'caches/9.8.1/groovy-dsl/unknown/file',
+    `caches/9.8.1/groovy-dsl/${'c'.repeat(32)}/metadata.bin`,
+    unit + '/gc.properties',
+  ]) {
+    await mkdir(path.dirname(path.join(source, name)), { recursive: true });
+    await writeFile(path.join(source, name), 'skip');
+  }
+  const model = await groovyFixtureModel(source, [{ id: 'groovy-dsl', excludes: [] }]),
+    snapshot = await captureCacheMetadataSnapshot(model),
+    part = snapshot.partitions[0]!;
+  const descriptor: PartitionDescriptor = {
+    schemaVersion: 1,
+    identity: {
+      familyKey: model.cacheFamilyKey,
+      lineagePrefix: model.currentRefLineagePrefix,
+      partitionId: part.partitionId,
+      writerId: 'run-1',
+      decisionDigest: 'a'.repeat(64),
+    },
+    buildToolId: model.buildToolId,
+    partitionFingerprint: model.partitionFingerprint,
+    kind: 'groovy',
+    files: [],
+    workspaces: snapshot.workspaces!.map((w) => w.workspace),
+  };
+  const reference = await stagePartitionObject(
+    model,
+    source,
+    descriptor,
+    source,
+    part.entries.map((e) => ({
+      relativePath: e.relativePath,
+      sourcePath: e.relativePath,
+      size: e.size,
+      mode: e.identity.mode & 0o777,
+      mtimeMs: Math.trunc(e.mtimeMs),
+      identity: e.identity,
+    })),
+  );
+  const sdk = path.dirname(fileURLToPath(import.meta.resolve('@actions/cache'))),
+    utils = await import(pathToFileURL(path.join(sdk, 'internal/cacheUtils.js')).href),
+    tar = await import(pathToFileURL(path.join(sdk, 'internal/tar.js')).href);
+  const archive = path.join(root, 'groovy-archive');
+  await mkdir(archive);
+  const backend = createGitHubBaseCacheBackend(
+    {
+      isFeatureAvailable: () => true,
+      restoreCache: async () => undefined,
+      saveCache: async (patterns) => {
+        const members = await utils.resolvePaths(patterns);
+        expect(members.sort()).toEqual(
+          [
+            `.mammoth/partition-objects-v1/${part.partitionId}/object.json`,
+            ...part.entries.map((e) => e.relativePath),
+          ].sort(),
+        );
+        await tar.createTar(archive, members, 'gzip');
+        return 1;
+      },
+    },
+    source,
+  );
+  await backend.saveCache(
+    partitionObjectPaths(source, part.partitionId, model, reference.workspaceRoots),
+    reference.key,
+  );
+});

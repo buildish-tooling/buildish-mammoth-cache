@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import * as groovyBase from '../../../src/cache/groovy-base';
-import { writeMetadata } from '../../../src/cache/metadata-io';
-import { GROOVY_WORKSPACE_METADATA } from '../../../src/cache/groovy-workspaces';
+import * as publication from '../../../src/cache/partition-publication';
+import * as transport from '../../../src/cache/partition-transport';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { restoreEmptyGeneration } from '../../support/immutable-cache-backend';
 import { cutoffJob } from '../../support/cutoff-job';
 import { CutoffArtifacts } from '../../support/cutoff-artifacts';
 import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
@@ -103,7 +103,9 @@ function forbidPublicationWork(job: Awaited<ReturnType<typeof jobFor>>) {
     vi.spyOn(state, 'verifyCutoffReplay').mockImplementation(fail),
     vi.spyOn(state, 'cutoffDecisionDigest').mockImplementation(fail),
     vi.spyOn(gc, 'collectCutoffGarbage').mockImplementation(fail),
-    vi.spyOn(groovyBase, 'stageGroovyBase').mockImplementation(fail),
+    vi.spyOn(publication, 'freezePartitionPublication').mockImplementation(fail),
+    vi.spyOn(publication, 'publishPartitionGeneration').mockImplementation(fail),
+    vi.spyOn(transport, 'stagePartitionObject').mockImplementation(fail),
     vi.spyOn(lifecycle, 'captureLocalPartitionSnapshots').mockImplementation(fail),
     vi.spyOn(lifecycle, 'projectedSnapshotStatistics').mockImplementation(fail),
     vi.spyOn(snapshots, 'readPartitionSnapshot').mockImplementation(fail),
@@ -214,23 +216,13 @@ it.each(['disabled', 'miss', 'hit', 'fallback', 'unavailable'] as const)(
       vi.spyOn(job.deps.cacheBackend, 'isFeatureAvailable').mockReturnValue(false);
     if (kind === 'hit' || kind === 'fallback') {
       vi.spyOn(job.deps.cacheBackend, 'restoreCache').mockImplementation(
-        async (_paths, primary, fallback) => {
-          // Empty snapshot transport is valid; restore still verifies it before consumption.
+        async (_paths, primary, fallback, options) => {
           const cacheModel = await model.createCacheModel(job.deps.config, job.ci, job.adapter);
-          for (const p of snapshots.snapshotPartitions(cacheModel))
-            await snapshots.stagePartitionSnapshot(cacheModel, p.id, job.home, []);
-          await writeMetadata(
-            job.home,
-            GROOVY_WORKSPACE_METADATA,
-            {
-              schemaVersion: 1,
-              familyKey: cacheModel.cacheFamilyKey,
-              partitionFingerprint: cacheModel.partitionFingerprint,
-              units: [],
-            },
-            64 * 1024 * 1024,
+          return restoreEmptyGeneration(
+            cacheModel,
+            options!.archiveRoot!,
+            kind === 'fallback' ? fallback![0]! : primary,
           );
-          return (kind === 'fallback' ? fallback![0]! : primary) + 'seed';
         },
       );
     }

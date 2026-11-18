@@ -18,13 +18,25 @@ limitations under the License.
 
 ## Unreleased
 
+- Save immutable partition objects independently and publish a small generation record last.
+  Reuse unchanged partition payloads across generations, publish explicit empty entries for removals,
+  and recover available partitions when another object expires. Maven coordinate owners spanning
+  partitions recover together. Preserve snapshot ownership, complete Groovy workspaces, read-only
+  finalize and frozen publication retries; confirm ambiguous saves by exact readback. The new
+  `partitioned-v2` family starts cold and uses CI lifecycle 6/local journal 4; worker formats stay
+  unchanged. Transfers remain sequential between partitions with SDK archive concurrency. This
+  adds backend requests and extraction staging space. Archive native ordinary/Groovy files and
+  existing snapshot payloads directly, with no extra save-side payload copies or hardlinks. Restore
+  uses moves on the managed filesystem, with verified recoverable cross-device copy fallback.
+  Recheck frozen sources after uploads; no measured speed or wire-byte saving is claimed.
+
 - Enable a separate default Gradle `groovy-dsl` partition with whole-workspace
   `conflict-handling: choose-worker-directory`. Preserve both metadata files, output
   membership and empty directories from one producer per hashed workspace. Keep
   distinct workspace keys, reject partial overrides and use whole-workspace GC.
   Transport empty directories as validated metadata with flat payloads, without a
-  nested archive. Guarded replacement supports interruption recovery. Base publication
-  adds full Groovy copy/hash staging I/O, including standalone mode. Qualify real
+  nested archive. Guarded replacement supports interruption recovery. Changed Groovy partitions
+  use native hash/archive publication; worker-envelope staging remains separate. Qualify real
   Gradle 9.8.1 Java 21/25 distributed reuse and retain the Kotlin DSL control.
 
 - Add opt-in partition `conflict-handling: choose-worker-directory` for aggregate Maven repository

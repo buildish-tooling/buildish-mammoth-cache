@@ -36,6 +36,7 @@ export interface WorkerObservations {
 }
 export const EMPTY_WORKER_OBSERVATIONS: WorkerObservations = { upserts: [], used: [] };
 export interface CutoffSelection {
+  members?: CutoffTarget[];
   workspaces?: GroovyObservation[];
   snapshotFileCount?: number;
   snapshotByteCount?: number;
@@ -225,6 +226,13 @@ export function selectCutoffActivity(
     gc = gc.filter((e) => garbage.has(e.relativePath));
   }
   return {
+    members: snapshot.partitions.flatMap((p) =>
+      p.entries.map((e) => ({
+        partitionId: p.partitionId,
+        relativePath: e.relativePath,
+        identity: e.identity,
+      })),
+    ),
     ...(snapshot.workspaces?.length ? { workspaces: [...snapshot.workspaces] } : {}),
     snapshotFileCount,
     snapshotByteCount,

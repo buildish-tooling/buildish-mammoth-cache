@@ -20,6 +20,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { CutoffArtifacts } from '../../support/cutoff-artifacts';
 import { stageCutoffPackage, uploadCutoffPackage } from '../../../src/delta/cutoff-service';
+import { ImmutableCacheBackend } from '../../support/immutable-cache-backend';
 import { cutoffJob } from '../../support/cutoff-job';
 import * as scanner from '../../../src/cache/manifest';
 import * as fsUtil from '../../../src/util/fs';
@@ -34,7 +35,6 @@ import {
 } from '../../../src/phases/prepare/cutoff-flow';
 import { executeFinalizeAction } from '../../../src/phases/finalize/flow';
 import { cutoffJournalPath, loadCutoffJournal } from '../../../src/cache/cutoff-state';
-import { STANDARD_BASE_CACHE_BACKEND_CAPABILITIES } from '../../../src/cache/backend';
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -97,28 +97,25 @@ it('never establishes valid CI cutoff when prepare fails', async () => {
   await expect(job.prepare()).rejects.toThrow('provision failed');
   expect(job.state.has(CUTOFF_LIFECYCLE_STATE)).toBe(false);
 });
-it('pins restore cleanup to the original generation and records cutoff after re-restore', async () => {
-  const calls: { primary: string; fallback: readonly string[] }[] = [];
-  const job = await cutoffJob(await root(), {
+it('pins restore cleanup to the selected record and original available partitions', async () => {
+  const r = await root(),
+    backend = new ImmutableCacheBackend();
+  const seed = await cutoffJob(path.join(r, 'seed'), { cacheBackend: backend });
+  await seed.prepare();
+  await mkdir(path.join(seed.home, 'data'));
+  await writeFile(path.join(seed.home, 'data/a'), 'old');
+  const published = (await executeFinalizeAction(seed.deps)).bootstrap.baseCacheResult;
+  if (published?.operation !== 'save') throw new Error('saved');
+  const restore = vi.spyOn(backend, 'restoreCache');
+  const job = await cutoffJob(path.join(r, 'reader'), {
+    cacheBackend: backend,
     inputs: { 'restore-cleanup-mode': 'prune-managed' },
-    cacheBackend: {
-      capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-      isFeatureAvailable: () => true,
-      isMissingPathsError: () => false,
-      saveCache: async () => 1,
-      restoreCache: async (_paths, primary, fallback = []) => {
-        calls.push({ primary, fallback });
-        return calls.length === 1 ? primary + 'old-generation' : primary;
-      },
-    },
   });
-  await mkdir(path.join(job.home, 'data'));
-  await writeFile(path.join(job.home, 'data/a'), 'old');
   const result = await job.prepare();
   expect(result.restoreCleanupResult?.deletedFileCount).toBe(1);
-  expect(calls).toHaveLength(2);
-  expect(calls[1]!.primary).toBe(calls[0]!.primary + 'old-generation');
-  expect(calls[1]!.fallback).toEqual([]);
+  expect(restore.mock.calls).toHaveLength(4);
+  expect(restore.mock.calls[2]![1]).toBe(published.generationKey);
+  expect(restore.mock.calls[2]![2]).toEqual([]);
 });
 it('on a hit does not invent publication evidence for untouched pre-cutoff extras', async () => {
   const job = await cutoffJob(await root());

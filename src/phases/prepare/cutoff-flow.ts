@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+import { resetPartitionRestoreStaging } from '../../cache/partition-restore';
+import { recoverInterruptedMoves } from '../../cache/guarded-files';
 import { recoverGroovyApplication } from '../../cache/groovy-apply';
-import { resetGroovyBaseTransport, restoreGroovyBase } from '../../cache/groovy-base';
+import { resetGroovyBaseTransport } from '../../cache/groovy-base';
 import { mkdir, rm } from 'node:fs/promises';
 import {
   bootstrapPhase,
@@ -95,8 +98,15 @@ export async function executeCutoffPrepareAction(
   let journal: CutoffJournal | undefined;
   const bootstrap = await bootstrapPhase('prepare', {
     ...dependencies,
+    onRestorePartitions: async (restored) => {
+      journal!.selectedRecordKey = restored.selectedKey;
+      journal!.basePartitions = restored.partitions;
+      await persistCutoffJournal(journal!);
+    },
     beforeCacheWork: async (model) => {
       await mkdir(model.cacheRoot, { recursive: true });
+      await recoverInterruptedMoves(model.cacheRoot);
+      await resetPartitionRestoreStaging(model);
       await recoverGroovyApplication(model);
       await resetGroovyBaseTransport(model);
       journal = newCutoffJournal(
@@ -116,12 +126,6 @@ export async function executeCutoffPrepareAction(
       await dependencies.beforeCacheWork?.(model);
     },
   });
-  if (bootstrap.cacheModel)
-    await restoreGroovyBase(
-      bootstrap.cacheModel,
-      bootstrap.baseCacheResult?.operation === 'restore' &&
-        bootstrap.baseCacheResult.matchedKey !== null,
-    );
   await bootstrap.buildToolAdapter
     .installBuildHooks(bootstrap.ciContext)
     .catch((e: unknown) =>
@@ -131,7 +135,7 @@ export async function executeCutoffPrepareAction(
     dependent: CutoffDependentResult | null = null;
   if (!bootstrap.cacheModel) {
     persistCutoffLifecycle(
-      { schemaVersion: 5, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
+      { schemaVersion: 6, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
       dependencies.runtimeHost.saveState,
     );
   } else {
@@ -165,8 +169,7 @@ export async function executeCutoffPrepareAction(
               count++;
             }
           }
-        await restoreBaseCache(model, dependencies, restore.matchedKey);
-        await restoreGroovyBase(model, true);
+        await restoreBaseCache(model, dependencies, restore.matchedKey, restore.partitionResults);
       }
       cleanup = {
         mode: 'prune-managed',
@@ -175,7 +178,7 @@ export async function executeCutoffPrepareAction(
         message: `Restore cleanup removed ${count} managed file(s).`,
       };
     }
-    await initializePartitionSnapshots(state, !!restore.matchedKey);
+    await initializePartitionSnapshots(state, !!restore.matchedKey, restore.partitionResults);
     const required = bootstrap.config.dependentJobs;
     const writerJobs =
       bootstrap.config.jobMode === 'distributed-aggregator'
@@ -315,7 +318,7 @@ export async function executeCutoffPrepareAction(
       dependencies.runtimeHost.warning(warning);
     persistCutoffLifecycle(
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
         cacheEnabled: true,
         model: state.model,
         policy: state.policy,

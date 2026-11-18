@@ -56,15 +56,17 @@ async function harness() {
       capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
       isFeatureAvailable: () => true,
       isMissingPathsError: () => false,
-      restoreCache: async (paths, key) => {
-        patterns.push(paths.map((p) => p.replaceAll(home, '<cache>')));
+      restoreCache: async (paths, key, _fallback, options) => {
+        const operationRoot = options?.archiveRoot ?? home;
+        patterns.push(paths.map((p) => p.replaceAll(operationRoot, '<cache>')));
         const entry = [...archives].reverse().find((e) => e.key.startsWith(key));
         if (!entry) return undefined;
-        await unpackCacheFiles(home, entry.archive);
+        await unpackCacheFiles(operationRoot, entry.archive);
         return entry.key;
       },
-      saveCache: async (paths, key) => {
-        patterns.push(paths.map((p) => p.replaceAll(home, '<cache>')));
+      saveCache: async (paths, key, options) => {
+        const operationRoot = options?.archiveRoot ?? home;
+        patterns.push(paths.map((p) => p.replaceAll(operationRoot, '<cache>')));
         const files = await (
           await glob.create(paths.join('\n'), {
             implicitDescendants: false,
@@ -73,8 +75,8 @@ async function harness() {
         ).glob();
         for (const file of files) expect((await lstat(file)).isFile()).toBe(true);
         const archive = await packCacheFiles(
-          home,
-          files.map((p) => path.relative(home, p)),
+          operationRoot,
+          files.map((p) => path.relative(operationRoot, p)),
           path.join(root, 'archives', String(archives.length)),
         );
         archives.push({ key, archive });
@@ -241,7 +243,18 @@ test.skipIf(!enabled)(
       expect(compileLines(await consumerB.run())).toEqual([]);
       await executeFinalizeAction(consumerB.deps);
       expect(f.patterns.length).toBeGreaterThan(4);
-      for (const patterns of f.patterns) expect(patterns).toEqual(f.patterns[0]);
+      for (const patterns of f.patterns) {
+        expect(
+          patterns.every((p) => !p.includes('publication-') && !p.includes('mammoth-generation-')),
+        ).toBe(true);
+        expect(
+          patterns.some((p) =>
+            /^<cache>\/\.mammoth\/(?:generations-v1\/record.json|partition-objects-v1\/[^/]+\/object.json)$/.test(
+              p,
+            ),
+          ),
+        ).toBe(true);
+      }
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

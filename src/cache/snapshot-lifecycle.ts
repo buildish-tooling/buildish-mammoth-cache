@@ -47,6 +47,7 @@ export function snapshotRecord(
 export async function initializePartitionSnapshots(
   state: CutoffJournal,
   hit: boolean,
+  results?: readonly { partitionId: string; status: string }[],
 ): Promise<void> {
   const partitions = snapshotPartitions(state.model);
   const restored = hit ? await verifySnapshotTransport(state.model) : [];
@@ -56,7 +57,13 @@ export async function initializePartitionSnapshots(
       (await stagePartitionSnapshot(state.model, partition.id, state.model.cacheRoot, []));
     await restorePartitionSnapshot(state.model, snapshot);
     state.partitionSnapshots.push(
-      snapshotRecord(snapshot, hit ? snapshot.contentDigest : null, 'seed'),
+      snapshotRecord(
+        snapshot,
+        hit && results?.find((p) => p.partitionId === partition.id)?.status !== 'missing'
+          ? snapshot.contentDigest
+          : null,
+        'seed',
+      ),
     );
     if (state.policy.jobMode !== 'standalone' && !partition.writer)
       state.snapshotWarnings.push(

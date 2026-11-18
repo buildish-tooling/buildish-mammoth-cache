@@ -22,8 +22,9 @@ limitations under the License.
 
 The action splits the build tool's cache directory into logical **partitions**. Partitions define
 which files are captured, compared, cleaned, and reported together inside one complete immutable
-cache generation. They keep unrelated file sets and ownership rules explicit; they are not saved as
-separate backend entries.
+cache generation. Each nonempty partition is saved as an independent immutable backend entry;
+a small generation record selects the complete logical view. If only A changes, Mammoth uploads
+A and the record while reusing existing B/C objects. Changed partitions are uploaded in full.
 
 ## Built-in partitions
 
@@ -59,9 +60,9 @@ locks, temporary workspaces and cleanup bookkeeping are excluded.
 
 Changed members select the whole workspace for upload; any observed usage protects
 the whole workspace from GC. GC removes a workspace only when every member is old
-and unprotected. Base publication stages and hashes all retained Groovy workspaces,
-including in standalone mode. This adds local copy/hash I/O. Empty directories travel
-as validated metadata alongside flat file payloads, without another archive layer.
+and unprotected. Base publication hashes and archives native files in each changed Groovy partition;
+unchanged partition objects are reused. Empty directories travel as validated metadata, without
+another archive layer or base-upload payload staging copy.
 Set `enabled: false` on `groovy-dsl` to disable it, or set `conflict-handling: default`
 to reject conflicting complete workspace views. Single-writer publication is unsupported.
 
@@ -261,3 +262,25 @@ the winning marker with that worker's bytes and discards losing contributions;
 it does not parse or union origin claims. This can lose offline availability or
 local installs. Target completeness, excluded-sibling checks, and package
 verification remain enforced. See [configuration](../configuration/).
+
+## Cross-generation reuse and recovery
+
+Reuse follows existing cutoff and snapshot change decisions, with membership comparison for
+removals. It does not hash every managed ordinary file before and after a build. Empty partitions
+are explicit generation entries, so an older nonempty object is never fetched as fallback.
+
+Restore uses exact objects from one selected generation. An expired object makes its partition
+cold while other validated partitions remain available; logs distinguish complete hits, partial
+hits and misses. Missing snapshot partitions start empty. Maven partitions sharing a coordinate
+directory recover together to keep artifacts and origin markers coherent. Corrupt metadata or
+payloads fail validation. Normal builds can refill missing caches; no recovery command is required.
+
+The storage format changes the action-owned family, so old monolithic caches start cold. Expect
+more backend requests, independently evictable objects and extraction staging space. Changed ordinary
+and Groovy files are hashed and archived at native paths; existing snapshot payloads are archived
+directly. Base uploads create no extra payload copies or hardlinks. Restore normally moves verified
+files from root-local staging; cross-filesystem moves use a verified, recoverable copy fallback.
+Snapshot ownership/capture retains its existing separate snapshot representation and copy cost.
+Partition transfers are sequential, with the backend SDK handling concurrency inside each archive.
+No end-to-end speed or wire-byte saving has been measured. See
+[base cache design](../../architecture/base-cache/) for publication ordering and retry behavior.

@@ -33,6 +33,12 @@ export const STANDARD_BASE_CACHE_BACKEND_CAPABILITIES: BaseCacheBackendCapabilit
   supportsExplicitSave: true,
 };
 
+/** Explicit extraction/archive root; relative request patterns remain version-stable. */
+export interface BaseCacheOperationOptions {
+  readonly archiveRoot?: string;
+  readonly lookupOnly?: boolean;
+}
+
 /**
  * Provider-neutral interface for base cache operations.
  *
@@ -50,9 +56,16 @@ export interface BaseCacheBackend {
     paths: string[],
     primaryKeyPrefix: string,
     fallbackKeyPrefixes?: string[],
+    options?: BaseCacheOperationOptions,
   ): Promise<string | undefined>;
   /** Attempts to create a new cache entry for the given key. */
-  saveCache(paths: string[], key: string): Promise<number>;
+  saveCache(paths: string[], key: string, options?: BaseCacheOperationOptions): Promise<number>;
+  /** Optional version-aware existence check; caller must require exact returned-key equality. */
+  lookupCache?(
+    paths: string[],
+    key: string,
+    options?: BaseCacheOperationOptions,
+  ): Promise<string | undefined>;
   /**
    * Returns `true` when the given error was thrown by {@link saveCache} because none of the
    * requested cache paths exist on disk yet.

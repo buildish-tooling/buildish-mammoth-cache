@@ -16,6 +16,7 @@
 import { z } from 'zod';
 import {
   cutoffModelSchema,
+  restoredPartitionBaselineDigest,
   cutoffPolicySchema,
   cutoffExecutionSchema,
   cutoffJournalPath,
@@ -34,9 +35,25 @@ export const CUTOFF_LIFECYCLE_STATE = 'buildish-mammoth-cache-cutoff-lifecycle';
 const restoreSchema = z
   .object({
     operation: z.literal('restore'),
-    status: z.enum(['miss', 'feature-unavailable', 'current-lineage-hit', 'fallback-lineage-hit']),
+    status: z.enum([
+      'miss',
+      'feature-unavailable',
+      'current-lineage-hit',
+      'fallback-lineage-hit',
+      'current-lineage-partial-hit',
+      'fallback-lineage-partial-hit',
+    ]),
     cacheFamilyKey: z.string(),
     currentRefLineagePrefix: z.string(),
+    selectedRecordKey: z.string().nullable().optional(),
+    baselineDigest: z.string().optional(),
+    partitionResults: z
+      .array(
+        z
+          .object({ partitionId: z.string(), status: z.enum(['restored', 'empty', 'missing']) })
+          .strict(),
+      )
+      .optional(),
     matchedKey: z.string().nullable(),
     matchedLineagePrefix: z.string().nullable(),
     restoreCandidates: z.array(
@@ -50,7 +67,7 @@ const restoreSchema = z
   .strict();
 const enabled = z
   .object({
-    schemaVersion: z.literal(5),
+    schemaVersion: z.literal(6),
     cacheEnabled: z.literal(true),
     model: cutoffModelSchema,
     policy: cutoffPolicySchema,
@@ -65,7 +82,7 @@ export const cutoffLifecycleSchema = z
     enabled,
     z
       .object({
-        schemaVersion: z.literal(5),
+        schemaVersion: z.literal(6),
         cacheEnabled: z.literal(false),
         execution: cutoffExecutionSchema,
       })
@@ -146,7 +163,9 @@ export async function preflightCutoffLifecycle(
     JSON.stringify(journal.execution) !== JSON.stringify(record.execution) ||
     journal.cutoff !== record.cutoff ||
     journal.restoredKey !== record.restoreResult.matchedKey ||
-    journal.restoreStatus !== record.restoreResult.status
+    journal.restoreStatus !== record.restoreResult.status ||
+    (record.restoreResult.baselineDigest !== undefined &&
+      record.restoreResult.baselineDigest !== restoredPartitionBaselineDigest(journal))
   )
     throw new Error('Cutoff lifecycle/journal mismatch.');
   if (journal.phase === 'prepare-pending' || journal.cutoff === null)

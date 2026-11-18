@@ -16,120 +16,70 @@
 
 import { it, expect, afterEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm, utimes } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import * as glob from '@actions/glob';
 import { cutoffJob } from '../support/cutoff-job';
-import { packCacheFiles, unpackCacheFiles } from '../support/archive-round-trip';
+import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
 import { executeFinalizeAction } from '../../src/phases/finalize/flow';
-import { createBaseCachePaths } from '../../src/cache/service';
-import { cutoffFixtureModel } from '../support/cutoff-fixture';
-import {
-  STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  type BaseCacheBackend,
-} from '../../src/cache/backend';
+import { GENERATION_RECORD_PATH } from '../../src/cache/partition-format';
 const roots: string[] = [];
 async function root() {
-  const r = await mkdtemp(path.join(os.tmpdir(), 'cutoff-archive-'));
+  await mkdir('build', { recursive: true });
+  const r = await mkdtemp(path.resolve('build/cutoff-archive-'));
   roots.push(r);
   return r;
 }
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((p) => rm(p, { recursive: true, force: true })));
+  for (const p of roots.splice(0)) await rm(p, { recursive: true, force: true });
 });
-async function selected(patterns: readonly string[]) {
-  return (
-    await glob.create(patterns.join('\n'), {
-      followSymbolicLinks: false,
-      implicitDescendants: false,
-    })
-  ).glob();
-}
-it('actual cache glob + GNU tar exclude root/nested journals and all directory recursion, include only sentinel exception', async () => {
+it('real partition archives exclude root/nested journals, metadata aliases and excluded files', async () => {
   const r = await root(),
-    home = path.join(r, 'cache');
-  const files = [
+    backend = new ImmutableCacheBackend(path.join(r, 'archives'));
+  const seed = await cutoffJob(path.join(r, 'seed'), { cacheBackend: backend });
+  await seed.prepare();
+  for (const name of [
     'data/a',
+    'data/x.lock',
     'data/.mammoth/write.tmp',
     'data/.MAMMOTH./x',
-    '.mammoth/cutoff-state-v1/current.json',
-    '.mammoth/empty-generation-v1',
-  ];
-  for (const f of files) {
-    await mkdir(path.dirname(path.join(home, f)), { recursive: true });
-    await writeFile(path.join(home, f), 'x');
+    '.mammoth/private.json',
+  ]) {
+    await mkdir(path.dirname(path.join(seed.home, name)), { recursive: true });
+    await writeFile(path.join(seed.home, name), 'x');
   }
-  const model = cutoffFixtureModel(home);
-  const patterns = createBaseCachePaths(model);
-  const found = await selected(patterns);
-  expect(found.map((f) => path.relative(home, f)).sort()).toEqual([
-    '.mammoth/empty-generation-v1',
-    'data/a',
-  ]);
-  const archive = await packCacheFiles(
-    home,
-    found.map((f) => path.relative(home, f)),
-    path.join(r, 'archive'),
-  );
-  const fresh = path.join(r, 'fresh');
-  await unpackCacheFiles(fresh, archive);
-  expect(await readFile(path.join(fresh, 'data/a'), 'utf8')).toBe('x');
-  await expect(readFile(path.join(fresh, 'data/.mammoth/write.tmp'))).rejects.toThrow();
-  await expect(
-    readFile(path.join(fresh, '.mammoth/cutoff-state-v1/current.json')),
-  ).rejects.toThrow();
-});
-it('publishes an empty generation after GC with identical restore/save paths and restores it instead of old data', async () => {
-  const r = await root(),
-    generations: { key: string; archive: string; paths: string[] }[] = [];
-  const home = path.join(r, 'cache');
-  const backend: BaseCacheBackend = {
-    capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-    isFeatureAvailable: () => true,
-    isMissingPathsError: () => false,
-    restoreCache: async (paths, primary) => {
-      const hit = [...generations].reverse().find((g) => g.key.startsWith(primary));
-      if (!hit) return undefined;
-      expect(paths).toEqual(hit.paths);
-      await unpackCacheFiles(home, hit.archive);
-      return hit.key;
-    },
-    saveCache: async (paths, key) => {
-      const found = await selected(paths);
-      expect(found.length).toBeGreaterThan(0);
-      const archive = await packCacheFiles(
-        home,
-        found.map((f) => path.relative(home, f)),
-        path.join(r, 'archives', String(generations.length)),
-      );
-      generations.push({ key, archive, paths: [...paths] });
-      return generations.length;
-    },
-  };
-  const seed = await cutoffJob(r, { cacheBackend: backend, inputs: { 'cache-gc-mode': 'off' } });
-  await seed.prepare();
-  await mkdir(path.join(home, 'data'));
-  await writeFile(path.join(home, 'data/old'), 'old');
   await executeFinalizeAction(seed.deps);
-  expect(generations).toHaveLength(1);
-  await utimes(path.join(home, 'data/old'), 1700000000, 1700000000);
-  const gc = await cutoffJob(r, { cacheBackend: backend });
+  expect(backend.savedKeys).toHaveLength(2);
+  const bytes = backend.entries.map((e) => e.files.map((f) => f.name).join(' ')).join(' ');
+  expect(bytes).not.toContain('private.json');
+  expect(bytes).not.toContain('write.tmp');
+  expect(bytes).not.toContain('x.lock');
+  const fresh = await cutoffJob(path.join(r, 'fresh'), { cacheBackend: backend });
+  await fresh.prepare();
+  expect(await readFile(path.join(fresh.home, 'data/a'), 'utf8')).toBe('x');
+  await expect(readFile(path.join(fresh.home, 'data/.mammoth/write.tmp'))).rejects.toThrow();
+  await expect(readFile(path.join(fresh.home, 'data/x.lock'))).rejects.toThrow();
+});
+it('publishes record-only emptiness after GC and restores it without older payload fallback', async () => {
+  const r = await root(),
+    backend = new ImmutableCacheBackend(path.join(r, 'archives'));
+  const seed = await cutoffJob(path.join(r, 'seed'), {
+    cacheBackend: backend,
+    inputs: { 'cache-gc-mode': 'off' },
+  });
+  await seed.prepare();
+  await mkdir(path.join(seed.home, 'data'));
+  await writeFile(path.join(seed.home, 'data/old'), 'old');
+  await executeFinalizeAction(seed.deps);
+  const gc = await cutoffJob(path.join(r, 'gc'), { cacheBackend: backend });
   gc.deps.now = () => Date.now() + 10000;
   await gc.prepare();
-  // Tar extraction may restore recent original mtime; make the frozen age fixture deterministic.
-  await utimes(path.join(home, 'data/old'), 1700000000, 1700000000);
-  const collected = await executeFinalizeAction(gc.deps);
-  expect(collected.cacheGcResult?.deletedFileCount).toBe(1);
-  expect(generations).toHaveLength(2);
-  expect(generations[0]!.paths).toEqual(generations[1]!.paths);
-  await rm(home, { recursive: true });
-  const fresh = await cutoffJob(r, { cacheBackend: backend });
-  const prepared = await fresh.prepare();
-  expect(prepared.bootstrap.baseCacheResult?.status).toBe('current-lineage-hit');
-  await expect(readFile(path.join(home, 'data/old'))).rejects.toThrow();
-  expect(await readFile(path.join(home, '.mammoth/empty-generation-v1'), 'utf8')).toContain(
-    'mammoth-empty-v1',
-  );
+  await utimes(path.join(gc.home, 'data/old'), 1700000000, 1700000000);
+  const result = await executeFinalizeAction(gc.deps);
+  expect(result.cacheGcResult?.deletedFileCount).toBe(1);
+  expect(result.bootstrap.baseCacheResult?.status).toBe('saved');
+  expect(backend.entries.at(-1)!.files.map((f) => f.name)).toEqual([GENERATION_RECORD_PATH]);
+  const fresh = await cutoffJob(path.join(r, 'fresh'), { cacheBackend: backend });
+  await fresh.prepare();
+  await expect(readFile(path.join(fresh.home, 'data/old'))).rejects.toThrow();
   expect((await executeFinalizeAction(fresh.deps)).bootstrap.baseCacheResult?.status).toBe(
     'not-required',
   );

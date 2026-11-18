@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   createBaseCachePaths,
@@ -22,6 +24,7 @@ import {
   restoreBaseCache,
   saveBaseCache,
 } from '../../src/cache/service';
+import { restoreEmptyGeneration } from '../support/immutable-cache-backend';
 import { createCacheGeneration, type CacheModel } from '../../src/cache/model';
 import type { NormalizedGradleConfig } from '../../src/config/types';
 import {
@@ -74,6 +77,16 @@ const cacheModel: CacheModel = {
   ],
 };
 
+const roots: string[] = [];
+beforeEach(async () => {
+  await mkdir('build', { recursive: true });
+  const root = await mkdtemp(path.resolve('build/cache-service-'));
+  roots.push(root);
+  Object.assign(cacheModel, { cacheRoot: root });
+});
+afterEach(async () => {
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
 const generation = createCacheGeneration(cacheModel, 'a'.repeat(64));
 
 function createCacheBackend(
@@ -91,15 +104,9 @@ function createCacheBackend(
 }
 
 describe('createBaseCachePaths', () => {
-  it('appends exclude globs as negated cache patterns', () => {
+  it('archives only the authoritative generation record', () => {
     expect(createBaseCachePaths(cacheModel)).toEqual([
-      '/home/runner/.gradle/caches/modules-2/**',
-      '!/home/runner/.gradle/**/configuration-cache/**',
-      '!/home/runner/.gradle/**/*.lock',
-      '!/home/runner/.gradle/**/.[mM][aA][mM][mM][oO][tT][hH]/**',
-      '!/home/runner/.gradle/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**',
-      '/home/runner/.gradle/.mammoth/empty-generation-v1',
-      '!/home/runner/.gradle/**/',
+      path.join(cacheModel.cacheRoot, '.mammoth/generations-v1/record.json'),
     ]);
   });
 });
@@ -118,7 +125,8 @@ describe('restoreBaseCache', () => {
     const result = await restoreBaseCache(cacheModel, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
-        restoreCache: async () => generation.key,
+        restoreCache: async (_paths, _primary, _fallback, options) =>
+          restoreEmptyGeneration(cacheModel, options!.archiveRoot!),
         saveCache: async () => 0,
       }),
     });
@@ -131,11 +139,17 @@ describe('restoreBaseCache', () => {
   });
 
   it('classifies default-branch fallback hits', async () => {
-    const fallbackGenerationKey = `${cacheModel.fallbackRefLineagePrefixes[0]}run-100-attempt-1-job-bbbbbbbbbbbb-${'b'.repeat(12)}`;
+    const fallbackGenerationKey = `${cacheModel.fallbackRefLineagePrefixes[0]}seed-${'b'.repeat(12)}`;
     const result = await restoreBaseCache(cacheModel, {
       cacheBackend: createCacheBackend({
         isFeatureAvailable: () => true,
-        restoreCache: async () => fallbackGenerationKey,
+        restoreCache: async (_paths, _primary, _fallback, options) =>
+          restoreEmptyGeneration(
+            cacheModel,
+            options!.archiveRoot!,
+            cacheModel.fallbackRefLineagePrefixes[0]!,
+            'b'.repeat(64),
+          ),
         saveCache: async () => 0,
       }),
     });

@@ -226,7 +226,7 @@ it('validates phase/policy/seal invariants and cannot cancel budget with duplica
     validateCutoffBudget({ ...state, deletedPaths: Array(200001).fill('data/a') }),
   ).toThrow(/actual/);
   // Nonworkers do not reserve an impossible worker seal.
-  expect(() => validateCutoffBudget(state, { records: 2, bytes: 64 * 1024 * 1024 })).not.toThrow();
+  expect(() => validateCutoffBudget(state, { records: 3, bytes: 64 * 1024 * 1024 })).not.toThrow();
 });
 it('reuses committed observations after journal write succeeds but pointer write fails', async () => {
   const { state, model } = await fixture();

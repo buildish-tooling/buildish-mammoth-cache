@@ -23,6 +23,8 @@ limitations under the License.
 Mammoth restores immutable cache generations and observes activity using a cutoff recorded after
 prepare. Ordinary aggregate partitions need no upfront artifact inventory or content-hash baseline.
 Single-writer partitions instead retain a complete authoritative snapshot for replacement.
+Each nonempty partition is an independent immutable backend object; a small generation record
+selects their exact identities. Unchanged partition payloads are reused across generations.
 
 ## Lifecycle
 
@@ -50,10 +52,11 @@ not final local contents. Read-only workers upload no envelope, and read-only ag
 dependent artifact discovery/import. Provisioning, hooks and restore validation remain active.
 
 An added file with preserved old mtime is selected when its ctime crosses C. Metadata misses remain
-possible. There is no previous-path inventory, deletion tombstone, old-target checksum comparison,
-or historical access manifest for ordinary partitions. Their removed files can return after
-restore/replay until GC removes them. Complete single-writer snapshots propagate removals through
-replacement membership; an absent contribution preserves the previous snapshot.
+possible. Successfully restored object descriptors supply portable membership; writable finalize
+compares that membership with its frozen post-GC projection, so disappearance-only changes also
+require publication. There is no historical access manifest or unconditional before/after content
+hash pass. Complete single-writer snapshots propagate removals through replacement membership;
+an absent writer contribution preserves the successfully restored snapshot.
 
 ## Groovy workspace units
 
@@ -62,14 +65,15 @@ Changed files or directory topology select the whole unit; usage protects all me
 Whole-workspace conflict selection chooses one producer per root, without a designated
 partition writer. Complete unit replacement propagates removals within that root.
 
-Base save/restore uses stable reserved flat payload paths and a family-bound catalog
-at `.mammoth/groovy-workspaces-v1.json`. Live Groovy paths are omitted from backend
-patterns. Empty directories are reconstructed from catalog metadata, without another
-archive. Publication stages and hashes all retained units, including standalone mode.
-Prepare verifies and stages incoming units before guarded managed replacement. A durable
-replacement intent supports discarding recorded partial contents on next prepare;
-unknown descendants block recovery. File and directory native identities bind writable
-retries. See [delta protocol](../delta-protocol/) for validation and recovery details.
+Base objects carry a partition-scoped descriptor under `.mammoth/partition-objects-v1/<partition>/`
+and archive accepted workspace files at their native paths. References include the accepted workspace
+roots so save and restore use identical SDK path specifications; incomplete and unknown roots are
+omitted, and bookkeeping exclusions remain enforced even with custom excludes. Empty directories
+are reconstructed from validated metadata. Only changed Groovy partitions are hashed and uploaded. Prepare verifies
+incoming units before guarded managed replacement. A durable replacement intent supports
+discarding recorded partial contents on next prepare; unknown descendants block recovery.
+File and directory native identities bind writable retries. See [delta protocol](../delta-protocol/)
+for worker-envelope validation and recovery details.
 
 Groovy GC removes a workspace only when all members are old and unprotected; it never
 ages out individual metadata or output files. Directory removal is guarded and replay
@@ -94,39 +98,69 @@ parent directories are removed, while unmanaged/excluded files remain untouched.
 
 ## Immutable generations
 
-Writable finalize saves on a nonempty miss, ordinary local/applied worker upserts, GC removal, or
-a material single-writer snapshot replacement. Snapshot-only removals independently trigger save;
-unchanged snapshot contents do not require a generation.
-Access-only observations do not require a replacement base generation. Fresh aggregator replay may
-reapply identical upserts and upload another complete generation. Required aggregator publication
-must succeed; other outcomes fail aggregation while retaining worker envelopes. Standalone backend
-failures produce warnings and preserve retry intent.
+Writable finalize publishes on a nonempty partition miss, material local/applied worker changes,
+GC removal, disappearance from restored membership, or a material single-writer replacement.
+Usage-only observations and unchanged selected snapshots do not require publication. A cold,
+entirely empty cache, including a layout with zero active partitions, remains a no-op.
 
-Publication after removal of the last managed file, including an empty writer snapshot, uses the constant `.mammoth/empty-generation-v1` marker so subsequent
-restore does not choose the old snapshot. Its optional include is always present in the same ordered
-restore/save path list, including nonempty generations, preserving the backend's path-derived
-version. Local journals and nested scratch are excluded; directory entries are excluded to prevent
-tar recursion bypassing file excludes. The marker authorizes no deletion of existing overlay files.
+The authoritative archive contains only `.mammoth/generations-v1/record.json`. It binds the
+family/layout, exact generation identity, and an ordered object reference or explicit empty
+entry for each active partition. Empty entries supersede older payloads without an empty-object
+upload. Ordinary existing runner files still follow default overlay semantics; an empty entry
+does not authorize sweeping local cache content.
 
-Cache family **6**, package **6**, worker manifest **5**, CI lifecycle **5** are distinct strict
-contracts. Old families are cold misses; old packages/lifecycle records fail validation.
+Each partition object contains a reserved `object.json` descriptor plus its native managed files.
+Single-writer objects use their existing frozen snapshot payload paths directly.
+The descriptor binds object identity, ownership, portable membership, sizes, modes, mtimes and
+payload hashes, plus complete Groovy workspace metadata where applicable. Changed partitions
+are hashed and archived directly in full; unchanged partitions are not staged or uploaded.
+Snapshot owners still capture their complete local snapshot to determine material changes.
+Ordinary aggregate partitions do not inherit the worker-envelope expanded-byte ceiling.
+
+Restore selects a current-ref record before default-branch fallback, then requests only its exact
+objects. It validates isolated staged transports before installation. Missing/evicted objects
+are cold partitions with no reusable reference or inherited membership. Available objects remain
+usable: outcomes distinguish complete hit, partial hit and all-partitions miss. Explicit empty
+entries count as successful restores; a valid zero-partition record is a complete hit. Malformed
+records or corrupt payloads fail validation rather than masquerading as eviction.
+
+Maven coordinate siblings can span aggregate partitions. Connected owners form bounded recovery
+groups recorded with the generation: if any member is unavailable, the entire group starts cold.
+Unrelated partitions still restore. No partition falls back to an older generation after the
+record was selected. Default-branch object references retain their original identities and remain
+subject to backend branch visibility; writing a ref name into a key grants no additional access.
+
+Finalize freezes the record, object decisions and immutable keys locally before the first upload.
+Changed objects are saved first; reused objects and prior successful upload receipts are checked
+with exact version-aware lookup-only requests where supported. Ambiguous saves require isolated
+full readback and validation. The record is saved last, so one successful object cannot count as
+complete publication. Required aggregator publication failures retain worker envelopes and fail
+aggregation; standalone failures warn and retain retry intent. Eviction after publication can
+still occur, and restore handles it per partition. Orphan backend objects expire normally.
+
+The action-owned `partitioned-v2` family discriminator prevents old monolithic archives from
+matching, even when a consumer pins its schema input. Cache schema **6**, package **6**, worker
+manifest **5**, CI lifecycle **6** and journal **4** are distinct contracts. Migration starts cold;
+worker-envelope semantics are unchanged by the base-storage split.
 
 ## Recovery and bounds
 
 `.mammoth/cutoff-state-v2/` contains a root-local journal and `current.json` pointer. It is never
 cached or sent to workers. It binds the full model/policy/execution, C, observations, native retained
-fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 3
+fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 4
 also binds baseline and selected snapshot digests, source, counts, and replacement decisions.
-Snapshot payloads are transported separately under the reserved fixed
-`.mammoth/partition-snapshots-v1/<partition>/` path; only verified manifest/payload files are included
-in the base archive, using stable save/restore patterns. Live nonwriter snapshot paths are omitted. The fingerprint
+Verified selected snapshots are reconstructed locally under
+`.mammoth/partition-snapshots-v1/<partition>/` before existing replacement initialization.
+Full restored descriptors and frozen publication plans stay in the journal; the 64 KiB CI-state
+envelope carries compact status and a digest binding the baseline to its invocation.
+The fingerprint
 excludes atime for Mammoth's own reads and planned deletions for partial-GC recovery. For writable retries, changed retained
 native metadata, new files, or replaced targets require a fresh prepare. Read-only journals retain
 prepare identity and per-partition snapshot summaries, with no per-file finalize decisions.
 
 Worker canonical manifest/package identity is sealed before upload; regeneration must match it.
-Base retries reuse their nonce/key. Locally recorded success can be reused; remote success with a
-lost local receipt remains uncertain. Retained worker envelopes permit fresh aggregate recovery.
+Base retries reuse their frozen keys and record; ambiguous remote success is confirmed by exact
+readback. Locally recorded complete success can be reused. Retained worker envelopes permit fresh aggregate recovery.
 
 GC records deletion intent before the sweep and checkpoints progress once after it finishes,
 keeping complete-journal writes constant per sweep. An interruption can leave uncheckpointed
@@ -135,7 +169,8 @@ their frozen native metadata. Recreated or changed files fail closed.
 
 Journals are bounded to **200,000 records and 64 MiB**, reserving seal/progress growth before payload
 reads or mutation. After durable replacement+pointer publication, obsolete owned regular journals
-are retired. Pre-write orphan cleanup bounds repeated pointer failures to current plus one candidate.
+and superseded invocation publication-staging directories are retired. Failed staging remains
+available for the current invocation retry. Pre-write orphan cleanup bounds repeated pointer failures to current plus one candidate.
 A corrupt pointer conservatively preserves unknown journals until successful replacement, an
 explicit retention exception. Unknown files, directories and symlinks are not silently removed.
 
@@ -145,20 +180,32 @@ at any path component. This covers portable aliases and target-local atomic-writ
 ## Restore cleanup and costs
 
 Opt-in `restore-cleanup-mode: prune-managed` runs only after a hit, prunes regular managed files with
-native checks, then re-restores the exact original key. Missing/different generation fails prepare.
+native checks, then re-restores the exact record and original available partition set. Loss of a
+previously available object or a different generation fails prepare; originally missing partitions
+remain cold during this pinned replay.
 That optional traversal is cleanup, not a baseline inventory. Single-writer partitions independently
 clear preexisting managed members before restore and validate/restore their staged authoritative
 snapshots, including when ordinary cleanup is disabled.
 
-For ordinary partitions, prepare performs no baseline artifact scan/hash. Single-writer snapshots
-require transport verification at prepare and full snapshot capture/staging for publication; this
-adds copy/hash I/O even in writable standalone mode. Writable finalize selects metadata and validates
-replay metadata; selected worker sources are copied/hashed once. Incoming payload verification is
-separate and remains required for read-only consumers. Read-only finalize performs no managed-payload
-scan or hashing for publication or statistics; explicit restore cleanup and snapshot replacement
-can still traverse files during prepare. `off` retains writable tracking costs. Complete generations
-may be uploaded after assumed upserts even when a content diff could prove redundancy. Full-generation
-publication optimization remains separate (#7). There is no new bypass or storage service.
+Prepare verifies downloaded payload hashes in isolated extraction roots under the cache root's
+reserved metadata, then renames ordinary files into place. Groovy application consumes disposable
+extracted inputs by moves into its existing guarded workspace staging. Snapshot transport trees
+are renamed into the existing local snapshot representation; its original replacement/capture
+copying remains. No new payload copy or hardlink staging is required for base uploads: ordinary
+and Groovy files are archived natively, and selected snapshot payloads are archived where they
+already reside. Source identity is rechecked after uploads, including ambiguous-save readback,
+before the generation record may be published. Hardlinks would share mutations and alter ctime.
+
+A nested destination mount can require verified copying on EXDEV. Reserved destination-local
+scratch and a durable root-local cleanup intent preserve the old target until copy completion;
+prepare recovers interrupted fallback scratch before observations. New prepares also discard only
+owned abandoned extraction roots. Normal same-filesystem restores use moves with no byte copies.
+Read-only finalize still does no publication scan, hashing, plan construction or save.
+
+Partition calls remain sequential because the GitHub adapter serializes cwd/workspace changes;
+the SDK retains concurrency within each archive. There are more backend requests, extraction staging
+space and independently evictable objects. No net speed or measured wire-byte saving is promised.
+There is no new consumer tool, configuration requirement, backend cleanup service or per-file store.
 
 Local Linux archive/ZIP/native tests and real Gradle/Maven reuse establish correctness, not
 multi-gigabyte affordability. Native Windows/macOS timestamp and replacement validation remains open.

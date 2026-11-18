@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { restoreEmptyGeneration } from '../support/immutable-cache-backend';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -308,13 +309,14 @@ describe('bootstrap helpers', () => {
     const summaryLines: string[] = [];
     let writeCalls = 0;
     const savedState = new Map<string, string>();
+    let restoredModel = cacheModel;
     const cacheBackend: BaseCacheBackend = {
       capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
       isFeatureAvailable(): boolean {
         return true;
       },
-      async restoreCache(_paths: string[], primaryKey: string): Promise<string | undefined> {
-        return `${primaryKey}run-122-attempt-1-job-bbbbbbbbbbbb-bbbbbbbbbbbb`;
+      async restoreCache(_paths, primaryKey, _fallback, options) {
+        return restoreEmptyGeneration(restoredModel, options!.archiveRoot!, primaryKey);
       },
       async saveCache(): Promise<number> {
         throw new Error('saveCache should not be called during main bootstrap');
@@ -395,11 +397,14 @@ describe('bootstrap helpers', () => {
       const status = await bootstrapPhase('prepare', {
         cacheBackend,
         ...deps,
+        beforeCacheWork: async (model) => {
+          restoredModel = model;
+        },
       });
 
       expect(status.message).toBe('Prepared prepare phase for push on main in standalone mode.');
       expect(status.cacheModel?.currentRefLineagePrefix).toMatch(
-        /^buildish-mammoth-cache-gradle-v6-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
+        /^buildish-mammoth-cache-gradle-v6-partitioned-v2-[a-f0-9]{16}-ref-main-[a-f0-9]{12}-gen-$/u,
       );
       expect(status.baseCacheResult?.status).toBe('current-lineage-hit');
       expect(status.toolProvisioning.items).toHaveLength(1);

@@ -141,6 +141,7 @@ it('keeps the marker if GC stops while deleting sibling artifacts', async () => 
   state.policy.jobMode = 'standalone';
   state.selection!.gc = state.selection!.upserts;
   state.selection!.upserts = [];
+  state.selection!.members = state.selection!.members!.filter((e) => e.relativePath !== sourcesJar);
   await persistCutoffJournal(state);
   // Force the artifact guard to fail; the marker must not have been deleted first.
   await utimes(path.join(root, jar), 1700000000, 1700000000);
@@ -228,6 +229,7 @@ it('rejects a frozen GC plan that would leave an excluded sibling without its ma
   state.policy.jobMode = 'standalone';
   state.selection!.gc = state.selection!.upserts.filter((e) => e.relativePath !== sourcesJar);
   state.selection!.upserts = [];
+  state.selection!.members = state.selection!.members!.filter((e) => e.relativePath !== sourcesJar);
   await persistCutoffJournal(state);
   await expect(collectCutoffGarbage(state)).rejects.toThrow(
     /Incomplete Maven repository directory/u,

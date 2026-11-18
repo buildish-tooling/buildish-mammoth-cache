@@ -23,7 +23,7 @@ import { canonicalTimestampMs } from '../util/timestamps';
 export const CUTOFF_CACHE_SCHEMA_VERSION = 6;
 export const CUTOFF_MANIFEST_SCHEMA_VERSION = 5;
 export const CUTOFF_PACKAGE_SCHEMA_VERSION = 6;
-export const CUTOFF_LIFECYCLE_SCHEMA_VERSION = 5;
+export const CUTOFF_LIFECYCLE_SCHEMA_VERSION = 6;
 export const cutoffPathSchema = z.string().refine((value) => {
   try {
     validateNormalizedRelativePosixPath(value, 'Cutoff path', 'cache root');

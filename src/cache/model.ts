@@ -250,6 +250,7 @@ export function renderCacheFamilyKey(
   const cacheFamilyKey = [
     `${config.cacheKeyPrefix}${buildToolId}`,
     `v${config.cacheSchemaVersion}`,
+    'partitioned-v2',
     partitionFingerprint,
   ].join('-');
 

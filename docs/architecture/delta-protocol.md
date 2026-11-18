@@ -75,8 +75,9 @@ Single-writer snapshots propagate removals through complete membership, without 
 Checksums establish package integrity, not producer trust or authorization.
 
 See [Base cache design](../base-cache/) for bounded local recovery, GC and publication. Fresh
-aggregator replay can rewrite identical upserts and save redundant complete generations.
-Read-only tracking (#6) and publication optimization (#7) remain separate follow-ups.
+aggregator replay can conservatively classify identical upserts as changed. Only affected
+partitions are uploaded; unrelated base objects remain referenced. Read-only finalize skips
+publication observations and envelope upload.
 
 ## Complete Groovy workspace transport
 
@@ -102,20 +103,24 @@ on the next prepare by discarding only recorded partial contents as a cache miss
 unknown descendants block recovery. This is recoverable per-unit replacement,
 not a transaction across an entire batch of workspaces.
 
-Base transport uses `.mammoth/groovy-workspaces-v1.json` and numbered files under
-`.mammoth/groovy-base-v1/payload/`. The catalog binds family, partition fingerprint,
-complete units and payload hashes. Fixed save/restore patterns omit live Groovy paths.
-Empty directories need no nested archive. Restore validates membership and verifies
-payloads while staging each unit. New base generations copy/hash every retained unit.
+Base storage uses a descriptor under `.mammoth/partition-objects-v1/<partition>/`
+and native payload paths. Groovy references carry accepted complete workspace roots
+so native archive path versions match on restore; descriptors bind membership and
+empty directories. Base publication hashes/uploads changed native files without a
+new staging copy. Worker envelopes retain their existing complete-unit transport.
 
 ## Snapshot base transport and recovery
 
-Base cache family 6 and CI lifecycle 5 use journal schema 3. Snapshot bytes live under the fixed
-reserved `.mammoth/partition-snapshots-v1/<partition>/` path: `snapshot.json` and numbered payload
-files. Backend save/restore patterns are identical across owners and modes; live snapshot paths
-are omitted from the archive. Exact membership and payload hashes are verified on restore and
-before publication. Preexisting managed snapshot files are cleared before restore; a miss starts
-empty. Other partitions retain their ordinary archive globs.
+The `partitioned-v2` storage family discriminator, CI lifecycle 6 and journal schema 4
+isolate the new base format. Worker manifest/package formats remain 5/6. A small
+`.mammoth/generations-v1/record.json` selects exact independent partition objects.
+Verified snapshot object transport is renamed into the existing local
+`.mammoth/partition-snapshots-v1/<partition>/` transport before replacement. Preexisting
+managed snapshot files are cleared before restore; unavailable snapshots start empty,
+while other validated partitions remain usable. Exact membership and payload hashes
+are verified before installation and publication. Maven cross-partition directory
+owners recover as a group when one object is unavailable. See
+[base cache design](../base-cache/) for record-last publication and eviction recovery.
 
 The journal binds the baseline content digest, selected snapshot digest/source, membership counts,
 and material replacement decision. Local writer capture copies all frozen members, including old

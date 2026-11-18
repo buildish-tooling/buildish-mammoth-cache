@@ -43,13 +43,14 @@ test.skipIf(!executable || !java21 || !java25)(
       capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
       isFeatureAvailable: () => true,
       isMissingPathsError: () => false,
-      restoreCache: async (_paths, key) => {
+      restoreCache: async (_paths, key, _fallback, options) => {
         const hit = [...entries].reverse().find((entry) => entry.key.startsWith(key));
         if (!hit) return undefined;
-        await unpackCacheFiles(home, hit.archive);
+        await unpackCacheFiles(options?.archiveRoot ?? home, hit.archive);
         return hit.key;
       },
-      saveCache: async (patterns, key) => {
+      saveCache: async (patterns, key, options) => {
+        const sourceRoot = options?.archiveRoot ?? home;
         const files = await (
           await glob.create(patterns.join('\n'), {
             implicitDescendants: false,
@@ -57,8 +58,8 @@ test.skipIf(!executable || !java21 || !java25)(
           })
         ).glob();
         const archive = await packCacheFiles(
-          home,
-          files.map((file) => path.relative(home, file)),
+          sourceRoot,
+          files.map((file) => path.relative(sourceRoot, file)),
           path.join(root, 'archives', String(entries.length)),
         );
         entries.push({ key, archive });

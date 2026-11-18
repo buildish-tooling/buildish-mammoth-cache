@@ -28,7 +28,6 @@ import {
   verifySnapshotTransport,
   PARTITION_SNAPSHOT_DIRECTORY,
 } from '../../src/cache/partition-snapshots';
-import { createBaseCachePaths } from '../../src/cache/service';
 import { packCacheFiles, unpackCacheFiles } from '../support/archive-round-trip';
 
 const roots: string[] = [];
@@ -135,7 +134,11 @@ describe('complete partition snapshot transport', () => {
     await writeFile(path.join(root, 'data/index.bin'), 'nonwriter local changes');
     await mkdir(path.join(root, '.mammoth/cutoff-state-v1'), { recursive: true });
     await writeFile(path.join(root, '.mammoth/cutoff-state-v1/private.json'), 'never archive');
-    const patterns = createBaseCachePaths(model);
+    const patterns = [
+      path.join(root, PARTITION_SNAPSHOT_DIRECTORY, 'data/snapshot.json'),
+      path.join(root, PARTITION_SNAPSHOT_DIRECTORY, 'data/payload/*.bin'),
+      `!${root}/**/`,
+    ];
     const files = await (
       await glob.create(patterns.join('\n'), {
         followSymbolicLinks: false,
@@ -152,6 +155,10 @@ describe('complete partition snapshot transport', () => {
     expect(restored?.digest).toBe(snapshot.digest);
     await restorePartitionSnapshot(destination.model, restored!);
     expect(await readFile(path.join(destination.root, 'data/index.bin'), 'utf8')).toBe('selected');
-    expect(createBaseCachePaths(model)).toEqual(patterns);
+    expect([
+      path.join(root, PARTITION_SNAPSHOT_DIRECTORY, 'data/snapshot.json'),
+      path.join(root, PARTITION_SNAPSHOT_DIRECTORY, 'data/payload/*.bin'),
+      `!${root}/**/`,
+    ]).toEqual(patterns);
   });
 });

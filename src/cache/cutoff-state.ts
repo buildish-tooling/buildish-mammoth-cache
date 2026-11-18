@@ -13,6 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import {
+  partitionBaselineSchema,
+  generationRecordSchema,
+  partitionDescriptorSchema,
+  storageDigest,
+  validateGenerationRecord,
+  validatePartitionDescriptor,
+} from './partition-format';
 import { randomUUID, createHash } from 'node:crypto';
 import {
   groovyObservationSchema,
@@ -159,6 +167,7 @@ const observationsSchema = z
   .strict();
 const selectionSchema = z
   .object({
+    members: z.array(cutoffTargetSchema).optional(),
     workspaces: z.array(groovyObservationSchema).max(200_000).optional(),
     snapshotFileCount: z.number().int().nonnegative().optional(),
     snapshotByteCount: z.number().nonnegative().optional(),
@@ -187,7 +196,7 @@ const partitionSnapshotRecordSchema = z
   .strict();
 export const cutoffJournalSchema = z
   .object({
-    schemaVersion: z.literal(3),
+    schemaVersion: z.literal(4),
     invocation: z.string().uuid(),
     phase: z.enum([
       'prepare-pending',
@@ -204,6 +213,18 @@ export const cutoffJournalSchema = z
     cutoff: z.number().finite().nonnegative().nullable(),
     workers: observationsSchema,
     producerArtifacts: z.array(text),
+    selectedRecordKey: text.nullable().default(null),
+    basePartitions: z.array(partitionBaselineSchema).default([]),
+    publicationPlan: z
+      .object({
+        record: generationRecordSchema,
+        descriptors: z.array(partitionDescriptorSchema),
+        changedIds: z.array(cutoffPartitionIdSchema),
+      })
+      .strict()
+      .nullable()
+      .default(null),
+    partitionReceipts: z.array(cutoffPartitionIdSchema).default([]),
     partitionSnapshots: z.array(partitionSnapshotRecordSchema).default([]),
     snapshotWarnings: z.array(text).default([]),
     restoredKey: text.nullable(),
@@ -212,6 +233,8 @@ export const cutoffJournalSchema = z
       'feature-unavailable',
       'current-lineage-hit',
       'fallback-lineage-hit',
+      'current-lineage-partial-hit',
+      'fallback-lineage-partial-hit',
     ]),
     observedAt: z.number().finite().nonnegative().nullable(),
     selection: selectionSchema.nullable(),
@@ -226,6 +249,50 @@ export const cutoffJournalSchema = z
   })
   .strict()
   .superRefine((state, ctx) => {
+    try {
+      for (const base of state.basePartitions) {
+        if (!state.model.partitions.some((p) => p.id === base.partitionId))
+          throw new Error('Unknown baseline partition.');
+        if (base.reference && base.descriptor)
+          validatePartitionDescriptor(state.model, base.descriptor, base.reference);
+      }
+      if (
+        new Set(state.basePartitions.map((p) => p.partitionId)).size !== state.basePartitions.length
+      )
+        throw new Error('Duplicate baseline partition.');
+      if (state.publicationPlan) {
+        const plan = state.publicationPlan;
+        validateGenerationRecord(state.model, plan.record, plan.record.key);
+        if (
+          state.publicationKey !== plan.record.key ||
+          state.policy.readOnly ||
+          state.policy.jobMode === 'distributed-worker'
+        )
+          throw new Error('Publication plan policy/key mismatch.');
+        for (const entry of plan.record.partitions)
+          if (entry.kind === 'object') {
+            const descriptor = plan.descriptors.find(
+              (d) => d.identity.partitionId === entry.partitionId,
+            );
+            if (!descriptor) throw new Error('Missing planned descriptor.');
+            validatePartitionDescriptor(state.model, descriptor, entry.reference);
+          }
+        const ids = plan.record.partitions
+          .filter((p) => p.kind === 'object')
+          .map((p) => p.partitionId);
+        if (
+          plan.descriptors.length !== ids.length ||
+          new Set(plan.changedIds).size !== plan.changedIds.length ||
+          plan.changedIds.some((id) => !ids.includes(id)) ||
+          new Set(state.partitionReceipts).size !== state.partitionReceipts.length ||
+          state.partitionReceipts.some((id) => !plan.changedIds.includes(id))
+        )
+          throw new Error('Invalid publication progress.');
+      } else if (state.partitionReceipts.length)
+        throw new Error('Receipts without publication plan.');
+    } catch (error) {
+      ctx.addIssue({ code: 'custom', message: (error as Error).message });
+    }
     const snapshotIds = snapshotPartitions(state.model).map((p) => p.id);
     if (
       new Set(state.partitionSnapshots.map((s) => s.partitionId)).size !==
@@ -368,7 +435,11 @@ export const cutoffJournalSchema = z
         for (const name of p.usedPaths)
           if (!owns(p.partitionId, name))
             ctx.addIssue({ code: 'custom', message: 'Unmanaged sealed usage.' });
-    for (const target of [...(state.selection?.upserts ?? []), ...(state.selection?.gc ?? [])])
+    for (const target of [
+      ...(state.selection?.members ?? []),
+      ...(state.selection?.upserts ?? []),
+      ...(state.selection?.gc ?? []),
+    ])
       if (!owns(target.partitionId, target.relativePath))
         ctx.addIssue({ code: 'custom', message: 'Unmanaged operation path.' });
     const targetSets = state.selection
@@ -416,7 +487,7 @@ export function newCutoffJournal(
   execution: CutoffJournal['execution'],
 ): CutoffJournal {
   return cutoffJournalSchema.parse({
-    schemaVersion: 3,
+    schemaVersion: 4,
     invocation: randomUUID(),
     phase: 'prepare-pending',
     model,
@@ -448,6 +519,9 @@ export function validateCutoffBudget(
     units: readonly { files: readonly string[]; emptyDirectories: readonly string[] }[],
   ) => units.reduce((n, u) => n + 1 + u.files.length + u.emptyDirectories.length, 0);
   const records =
+    state.basePartitions.reduce((n, p) => n + 1 + (p.descriptor?.files.length ?? 0), 0) +
+    (state.publicationPlan?.descriptors.reduce((n, p) => n + 1 + p.files.length, 0) ?? 0) +
+    (s?.members?.length ?? 0) +
     state.workers.upserts.length +
     state.workers.used.length +
     state.producerArtifacts.length +
@@ -548,6 +622,16 @@ async function retire(root: string, keep: ReadonlySet<string>): Promise<void> {
   );
   if (!file) return;
   for await (const entry of await opendir(path.dirname(file))) {
+    if (entry.name.startsWith('publication-')) {
+      const invocation = entry.name.slice('publication-'.length);
+      const journal = `journal-${invocation}.json`;
+      if (JOURNAL_PATTERN.test(journal) && !keep.has(journal)) {
+        const target = path.join(path.dirname(file), entry.name),
+          st = await lstat(target);
+        if (st.isDirectory() && !st.isSymbolicLink()) await rm(target, { recursive: true });
+      }
+      continue;
+    }
     if (!JOURNAL_PATTERN.test(entry.name) || keep.has(entry.name)) continue;
     const target = path.join(path.dirname(file), entry.name),
       st = await lstat(target);
@@ -669,6 +753,7 @@ export function cutoffDecisionDigest(state: CutoffJournal): string {
     .update(
       JSON.stringify({
         invocation: state.invocation,
+        restoredPartitions: restoredPartitionBaselineDigest(state),
         cutoff: state.cutoff,
         policy: state.policy,
         selection: state.selection,
@@ -684,4 +769,8 @@ export function assertPrepareWorkerBudget(
   artifacts: string[],
 ): void {
   validateCutoffBudget({ ...state, workers, producerArtifacts: artifacts });
+}
+
+export function restoredPartitionBaselineDigest(state: CutoffJournal): string {
+  return storageDigest({ selectedKey: state.selectedRecordKey, partitions: state.basePartitions });
 }

@@ -19,7 +19,6 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'no
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, afterAll, it, expect } from 'vitest';
-import * as glob from '@actions/glob';
 import { captureCacheMetadataSnapshot } from '../../src/cache/manifest';
 import { selectCutoffActivity } from '../../src/cache/cutoff-selection';
 import {
@@ -27,13 +26,20 @@ import {
   freezeCutoffSelection,
   newCutoffJournal,
   persistCutoffJournal,
+  cutoffDecisionDigest,
 } from '../../src/cache/cutoff-state';
 import { collectCutoffGarbage } from '../../src/cache/cutoff-gc';
 import { cutoffFixturePolicy } from '../support/cutoff-fixture';
-import { createBaseCachePaths } from '../../src/cache/service';
 import { stageCutoffPackage } from '../../src/delta/cutoff-service';
 import { mergeCutoffPackages, applyCutoffPlan } from '../../src/delta/cutoff-apply';
 import { mavenFixtureModel, mavenFixtureState } from '../support/maven-cache';
+import { createCacheGeneration } from '../../src/cache/model';
+import {
+  freezePartitionPublication,
+  publishPartitionGeneration,
+} from '../../src/cache/partition-publication';
+import { restoreBaseCache } from '../../src/cache/service';
+import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
 import { packCacheFiles, unpackCacheFiles } from '../support/archive-round-trip';
 
 const exec = promisify(execFile);
@@ -115,12 +121,10 @@ it.each([false, true])(
   'matches native origin resolution through real cache globs and tar (exclude markers: %s)',
   async (excluded) => {
     const model = await mavenFixtureModel(path.join(root, 'seed'));
-    const files = await (
-      await glob.create(createBaseCachePaths(model).join('\n'), {
-        followSymbolicLinks: false,
-        implicitDescendants: false,
-      })
-    ).glob();
+    const snapshot = await captureCacheMetadataSnapshot(model);
+    const files = snapshot.partitions.flatMap((p) =>
+      p.entries.map((e) => path.join(model.cacheRoot, e.relativePath)),
+    );
     expect(files).toContain(path.join(root, 'seed', marker));
     const selected = files.filter((f) => !excluded || !f.endsWith('/_remote.repositories'));
     const archive = await packCacheFiles(
@@ -384,6 +388,9 @@ it('refuses GC of a marker when real excluded sources would survive', async () =
   state.policy.jobMode = 'standalone';
   state.selection!.gc = state.selection!.upserts.filter((e) => e.relativePath !== sourcesArtifact);
   state.selection!.upserts = [];
+  state.selection!.members = state.selection!.members!.filter(
+    (e) => e.relativePath !== sourcesArtifact,
+  );
   await persistCutoffJournal(state);
   const before = await readFile(path.join(home, marker), 'utf8');
   await expect(collectCutoffGarbage(state)).rejects.toThrow(
@@ -501,4 +508,18 @@ it('can discard an unretrievable local install when the remote worker wins its d
   expect(await readFile(path.join(model.cacheRoot, marker), 'utf8')).toBe(
     await readFile(path.join(root, 'policy-remote-winner', marker), 'utf8'),
   );
+});
+
+it('preserves native Maven origin resolution through independent partition-object archives', async () => {
+  const { state, model } = await mavenFixtureState(path.join(root, 'seed'));
+  state.policy.jobMode = 'standalone';
+  const backend = new ImmutableCacheBackend(path.join(root, 'partition-archives'));
+  const generation = createCacheGeneration(model, cutoffDecisionDigest(state));
+  await freezePartitionPublication(state, generation);
+  await publishPartitionGeneration(state, backend);
+  const target = await mavenFixtureModel(path.join(root, 'partition-restored'));
+  expect((await restoreBaseCache(target, { cacheBackend: backend })).status).toBe(
+    'current-lineage-hit',
+  );
+  expect(await resolve('partition-restored', release, { offline: true })).toBe('A');
 });

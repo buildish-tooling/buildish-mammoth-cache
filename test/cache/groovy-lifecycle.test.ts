@@ -17,7 +17,6 @@ import { mkdir, mkdtemp, rm, readFile, writeFile, utimes, lstat } from 'node:fs/
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import * as glob from '@actions/glob';
 import * as guarded from '../../src/cache/guarded-files';
 import { groovyFixtureModel, writeGroovyWorkspace } from '../support/groovy-cache';
 import { cutoffFixtureCi, cutoffFixturePolicy } from '../support/cutoff-fixture';
@@ -35,15 +34,15 @@ import { collectCutoffGarbage } from '../../src/cache/cutoff-gc';
 import { stageCutoffPackage, verifyCutoffPackage } from '../../src/delta/cutoff-service';
 import { mergeCutoffPackages, applyCutoffPlan } from '../../src/delta/cutoff-apply';
 import {
-  stageGroovyBase,
-  restoreGroovyBase,
-  resetGroovyBaseTransport,
-} from '../../src/cache/groovy-base';
+  freezePartitionPublication,
+  publishPartitionGeneration,
+} from '../../src/cache/partition-publication';
+import { createCacheGeneration } from '../../src/cache/model';
+import { cutoffDecisionDigest } from '../../src/cache/cutoff-state';
+import { restoreBaseCache } from '../../src/cache/service';
+import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
 import { recoverGroovyApplication } from '../../src/cache/groovy-apply';
 import { writeMetadata } from '../../src/cache/metadata-io';
-import { createBaseCachePaths } from '../../src/cache/service';
-import { GROOVY_WORKSPACE_METADATA } from '../../src/cache/groovy-workspaces';
-import { packCacheFiles, unpackCacheFiles } from '../support/archive-round-trip';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -176,51 +175,55 @@ it('does not replace a file occupying a workspace root', async () => {
   );
   expect(await readFile(path.join(target, unit), 'utf8')).toBe('unmanaged obstruction');
 });
-it('transfers complete units and directories through stable file-only base archive patterns', async () => {
+it('round-trips complete units and empty directories through a partition archive', async () => {
   const root = await fixture(),
     unit = await writeGroovyWorkspace(root, undefined, undefined, true);
   const { state, model } = await freeze(root, 'standalone', [], 'standalone');
-  const paths = createBaseCachePaths(model);
-  await stageGroovyBase(state);
-  await verifyCutoffReplay(state);
-  expect(createBaseCachePaths(model)).toEqual(paths);
-  const files = await (
-    await glob.create(paths.join('\n'), { implicitDescendants: false, followSymbolicLinks: false })
-  ).glob();
-  expect(files.some((p) => p.includes('/caches/'))).toBe(false);
-  const archive = await packCacheFiles(
-    root,
-    files.map((p) => path.relative(root, p)),
-    path.join(await fixture(), 'archive'),
+  const backend = new ImmutableCacheBackend(path.join(await fixture(), 'archives'));
+  await freezePartitionPublication(
+    state,
+    createCacheGeneration(model, cutoffDecisionDigest(state)),
   );
+  await verifyCutoffReplay(state);
+  await publishPartitionGeneration(state, backend);
   const target = await fixture(),
     restored = await groovyFixtureModel(target);
-  await unpackCacheFiles(target, archive);
-  await restoreGroovyBase(restored, true);
+  expect((await restoreBaseCache(restored, { cacheBackend: backend })).status).toBe(
+    'current-lineage-hit',
+  );
   expect((await lstat(path.join(target, unit, 'instrumented/proj'))).isDirectory()).toBe(true);
   expect((await captureCacheMetadataSnapshot(restored)).workspaces![0]!.workspace).toEqual(
     state.selection!.workspaces![0]!.workspace,
   );
-  await resetGroovyBaseTransport(restored);
-  await expect(restoreGroovyBase(restored, true)).rejects.toThrow(/metadata is missing/);
-});
-it('fails family and traversal sidecar checks before changing target data', async () => {
-  const root = await fixture(),
-    unit = await writeGroovyWorkspace(root);
-  const { model, state } = await freeze(root, 'standalone', [], 'standalone');
-  await stageGroovyBase(state);
-  const catalog = JSON.parse(await readFile(path.join(root, GROOVY_WORKSPACE_METADATA), 'utf8'));
-  await writeMetadata(
-    root,
-    GROOVY_WORKSPACE_METADATA,
-    { ...catalog, familyKey: 'foreign' },
-    64 * 1024 * 1024,
+  expect(backend.entries.flatMap((e) => e.files).some((f) => f.name.startsWith('caches/'))).toBe(
+    true,
   );
-  await expect(restoreGroovyBase(model, true)).rejects.toThrow(/family/);
-  catalog.units[0].workspace.emptyDirectories = ['../escape'];
-  await writeMetadata(root, GROOVY_WORKSPACE_METADATA, catalog, 64 * 1024 * 1024);
-  await expect(restoreGroovyBase(model, true)).rejects.toThrow();
-  expect(await readFile(path.join(root, unit, 'metadata.bin'), 'utf8')).toBe('origin-compiled');
+});
+it('rejects foreign and traversal-bearing partition descriptors before replacing workspace contents', async () => {
+  const root = await fixture();
+  await writeGroovyWorkspace(root);
+  const { state, model } = await freeze(root, 'standalone', [], 'standalone');
+  const backend = new ImmutableCacheBackend();
+  await freezePartitionPublication(
+    state,
+    createCacheGeneration(model, cutoffDecisionDigest(state)),
+  );
+  await publishPartitionGeneration(state, backend);
+  const file = backend.entries
+    .flatMap((e) => e.files)
+    .find((f) => f.name.endsWith('/object.json'))!;
+  const descriptor = JSON.parse(file.bytes.toString()),
+    target = await fixture(),
+    unit = await writeGroovyWorkspace(target, undefined, 'old'),
+    restored = await groovyFixtureModel(target);
+  file.bytes = Buffer.from(
+    JSON.stringify({ ...descriptor, identity: { ...descriptor.identity, familyKey: 'foreign' } }),
+  );
+  await expect(restoreBaseCache(restored, { cacheBackend: backend })).rejects.toThrow(/family/);
+  descriptor.workspaces[0].emptyDirectories = ['../escape'];
+  file.bytes = Buffer.from(JSON.stringify(descriptor));
+  await expect(restoreBaseCache(restored, { cacheBackend: backend })).rejects.toThrow();
+  expect(await readFile(path.join(target, unit, 'metadata.bin'), 'utf8')).toBe('origin-old');
 });
 it('protects a whole unit if only one member was accessed and collects it only as a unit', async () => {
   const root = await fixture();
@@ -386,8 +389,12 @@ it.each(['gc.properties', 'instrumented/proj/workspace.lock'])(
     for (const name of managed)
       await expect(lstat(path.join(root, name))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(excluded, 'utf8')).toBe('local bookkeeping');
-    await stageGroovyBase(recovered);
-    const catalog = JSON.parse(await readFile(path.join(root, GROOVY_WORKSPACE_METADATA), 'utf8'));
-    expect(catalog.units).toEqual([]);
+    await freezePartitionPublication(
+      recovered,
+      createCacheGeneration(model, cutoffDecisionDigest(recovered)),
+    );
+    expect(recovered.publicationPlan!.record.partitions.every((p) => p.kind === 'empty')).toBe(
+      true,
+    );
   },
 );

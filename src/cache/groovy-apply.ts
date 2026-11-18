@@ -27,7 +27,13 @@ import {
   type GroovyWorkspace,
 } from './groovy-workspaces';
 import { createManagedCachePathMatcher } from './manifest';
-import { guardedPath, verifyParents, regularStat, copyGuardedFile } from './guarded-files';
+import {
+  guardedPath,
+  verifyParents,
+  regularStat,
+  copyGuardedFile,
+  moveGuardedFile,
+} from './guarded-files';
 import { fileIdentity, sameFileIdentity } from './file-identity';
 import { readMetadata, writeMetadata, metadataPath } from './metadata-io';
 import { portableCacheFileMode } from './file-permissions';
@@ -167,6 +173,7 @@ function treeIdentity(tree: Awaited<ReturnType<typeof inspectGroovyTree>>): stri
 export async function applyGroovyWorkspaces(
   units: readonly IncomingGroovyWorkspace[],
   model: CacheModel,
+  consumeSources = false,
 ): Promise<void> {
   if (units.length && model.buildToolId !== 'gradle')
     throw new Error('Groovy replacement requires a Gradle cache.');
@@ -201,10 +208,16 @@ export async function applyGroovyWorkspaces(
         const destination = stage + entry.relativePath.slice(root.length);
         await verifyParents(model.cacheRoot, path.posix.dirname(destination), true);
         const target = guardedPath(model.cacheRoot, destination);
-        await copyGuardedFile(unit.rootDirectory, entry.payloadPath, target, {
-          size: entry.size,
-          contentSha256: entry.contentSha256,
-        });
+        const expected = { size: entry.size, contentSha256: entry.contentSha256 };
+        if (consumeSources)
+          await moveGuardedFile(
+            unit.rootDirectory,
+            entry.payloadPath,
+            target,
+            expected,
+            model.cacheRoot,
+          );
+        else await copyGuardedFile(unit.rootDirectory, entry.payloadPath, target, expected);
         await chmod(target, portableCacheFileMode(entry.mode, 'gradle', entry.relativePath));
         await utimes(target, new Date(entry.mtimeMs), new Date(entry.mtimeMs));
       }

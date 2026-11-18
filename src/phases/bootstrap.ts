@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { restoreBaseCache, type BaseCacheOperationResult } from '../cache/service';
+import {
+  restoreBaseCache,
+  type BaseCacheServiceDependencies,
+  type BaseCacheOperationResult,
+} from '../cache/service';
 import type { CiExecutionUrls, CiJobContext, CiPlatformAdapter } from '../ci';
 import { createCacheModel, type CacheModel } from '../cache/model';
 import type { NormalizedActionConfig } from '../config/types';
@@ -90,6 +94,7 @@ export type BootstrapHost = HostInputSource & HostStateStore & HostReporter;
  */
 export interface BootstrapDependencies {
   /** Exclusive internal prepare boundary before provisioning/restore. */
+  readonly onRestorePartitions?: BaseCacheServiceDependencies['onRestorePartitions'];
   readonly beforeCacheWork?: (model: CacheModel) => Promise<void>;
   /** Runtime host implementation used for input discovery, non-fatal reporting, and state. */
   readonly runtimeHost: BootstrapHost;
@@ -306,6 +311,7 @@ async function runBaseCachePhase(
   if (phase === 'prepare') {
     const restoreResult = await restoreBaseCache(cacheModel, {
       cacheBackend: dependencies.cacheBackend,
+      onRestorePartitions: dependencies.onRestorePartitions,
     });
 
     return restoreResult;

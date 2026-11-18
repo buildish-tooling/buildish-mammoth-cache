@@ -13,7 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { stageGroovyBase } from '../../cache/groovy-base';
+import {
+  changedPartitionIds,
+  freezePartitionPublication,
+  publishPartitionGeneration,
+  partitionPublicationLines,
+  cleanPublishedPartitionStaging,
+} from '../../cache/partition-publication';
 import { rm } from 'node:fs/promises';
 import { bootstrapPhase, type BootstrapDependencies } from '../bootstrap';
 import {
@@ -30,7 +36,6 @@ import {
   cutoffDecisionDigest,
 } from '../../cache/cutoff-state';
 import { collectCutoffGarbage } from '../../cache/cutoff-gc';
-import { setEmptyGeneration } from '../../cache/empty-generation';
 import { createCacheGeneration } from '../../cache/model';
 import { saveBaseCache, createBaseCachePaths, type BaseCacheSaveResult } from '../../cache/service';
 import { stageCutoffPackage, uploadCutoffPackage } from '../../delta/cutoff-service';
@@ -110,6 +115,9 @@ export async function executeFinalizeAction(
     if (state.phase !== 'completed') {
       state.phase = 'completed';
       await persistCutoffJournal(state);
+      await cleanPublishedPartitionStaging(state).catch((e: unknown) =>
+        d.runtimeHost.warning(`Could not remove publication staging: ${String(e)}`),
+      );
     }
     bootstrap = { ...bootstrap, baseCacheResult: save };
   } else if (state) {
@@ -162,33 +170,14 @@ export async function executeFinalizeAction(
       };
     }
     await verifyCutoffReplay(state);
-    const remaining = projectedSnapshotStatistics(state).fileCount - selection.gc.length;
-    const required =
-      !!state.publicationKey ||
-      selection.upserts.some(
-        (e) =>
-          state.model.partitions.find((p) => p.id === e.partitionId)?.publication !==
-          'single-writer',
-      ) ||
-      state.partitionSnapshots.some((s) => s.changed) ||
-      state.workers.upserts.length > 0 ||
-      state.deletedPaths.length > 0 ||
-      ((state.restoreStatus === 'miss' || state.restoreStatus === 'feature-unavailable') &&
-        remaining > 0);
+    const required = !!state.publicationKey || changedPartitionIds(state).length > 0;
     const eligible = !state.policy.readOnly && state.policy.jobMode !== 'distributed-worker';
     const generation =
       required && eligible ? createCacheGeneration(state.model, cutoffDecisionDigest(state)) : null;
     if (generation) {
       if (state.publicationKey && state.publicationKey !== generation.key)
         throw new Error('Frozen publication identity changed.');
-      // Prepare empty transport before save, but keep it excluded from all observations.
-      await setEmptyGeneration(state.model.cacheRoot, remaining === 0);
-      if (!state.saved) await stageGroovyBase(state);
-      if (!state.saved) {
-        state.publicationKey = generation.key;
-        state.phase = 'publication-intent';
-        await persistCutoffJournal(state);
-      }
+      if (!state.saved) await freezePartitionPublication(state, generation);
     }
     let save: BaseCacheSaveResult;
     if (state.saved) {
@@ -206,7 +195,10 @@ export async function executeFinalizeAction(
           state.model,
           new Map(state.partitionSnapshots.map((s) => [s.partitionId, s.digest])),
         );
-      save = await saveBaseCache(bootstrap.config, state.model, () => generation, d);
+      save = await saveBaseCache(bootstrap.config, state.model, () => generation, {
+        ...d,
+        publishGeneration: () => publishPartitionGeneration(state, d.cacheBackend),
+      });
     }
     if (eligible && required && save.status !== 'saved') {
       if (state.policy.jobMode === 'distributed-aggregator')
@@ -219,6 +211,9 @@ export async function executeFinalizeAction(
       state.saved = save.status === 'saved';
       state.phase = 'completed';
       await persistCutoffJournal(state);
+      await cleanPublishedPartitionStaging(state).catch((e: unknown) =>
+        d.runtimeHost.warning(`Could not remove publication staging: ${String(e)}`),
+      );
     }
     bootstrap = { ...bootstrap, baseCacheResult: save };
   }
@@ -232,7 +227,9 @@ export async function executeFinalizeAction(
           ...projectedSnapshotStatistics(state),
         }
       : null,
-    partitionSnapshotLines: state ? partitionSnapshotSummary(state) : [],
+    partitionSnapshotLines: state
+      ? [...partitionSnapshotSummary(state), ...partitionPublicationLines(state)]
+      : [],
     deltaArtifactResult,
     buildReport,
     ...bootstrap.ciExecutionUrls,

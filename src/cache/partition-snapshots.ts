@@ -242,7 +242,7 @@ export async function stagePartitionSnapshot(
         payloadPath: `payload/${String(i + 1).padStart(6, '0')}.bin`,
         contentSha256: 'f'.repeat(64),
         size: entry.size,
-        mode: entry.mode,
+        mode: portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath),
         mtimeMs: entry.mtimeMs,
       })),
     };

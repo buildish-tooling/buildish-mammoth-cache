@@ -82,13 +82,14 @@ async function fixture(writer: string | null = 'master', secondWriter = false) {
     capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
     isFeatureAvailable: () => true,
     isMissingPathsError: () => false,
-    restoreCache: async (_patterns, primary, fallback = []) => {
+    restoreCache: async (_patterns, primary, fallback = [], options) => {
+      const targetRoot = options?.archiveRoot ?? home;
       const entry = [primary, ...fallback].flatMap((key) =>
         [...entries].reverse().filter((e) => e.key.startsWith(key)),
       )[0];
       if (!entry) return undefined;
       for (const file of entry.files) {
-        const target = path.join(home, file.name);
+        const target = path.join(targetRoot, file.name);
         await mkdir(path.dirname(target), { recursive: true });
         await writeFile(target, file.bytes);
         await chmod(target, file.mode);
@@ -96,7 +97,8 @@ async function fixture(writer: string | null = 'master', secondWriter = false) {
       }
       return entry.key;
     },
-    saveCache: async (patterns, key) => {
+    saveCache: async (patterns, key, options) => {
+      const sourceRoot = options?.archiveRoot ?? home;
       const files = await (
         await glob.create(patterns.join('\n'), {
           implicitDescendants: false,
@@ -108,7 +110,7 @@ async function fixture(writer: string | null = 'master', secondWriter = false) {
         const st = await stat(file);
         if (!st.isFile()) throw new Error('Directory in archive');
         archived.push({
-          name: path.relative(home, file),
+          name: path.relative(sourceRoot, file),
           bytes: await readFile(file),
           mode: st.mode & 0o777,
           mtime: st.mtime,

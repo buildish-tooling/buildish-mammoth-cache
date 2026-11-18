@@ -65,12 +65,12 @@ it('freezes before report content reads, publishes new bytes, and reuses local s
   };
   const first = await executeFinalizeAction(job.deps);
   expect(first.bootstrap.baseCacheResult?.status).toBe('saved');
-  expect(save).toHaveBeenCalledTimes(1);
+  expect(save).toHaveBeenCalledTimes(2);
   expect(scan).not.toHaveBeenCalled();
   expect(first.cacheStatistics?.upsertCount).toBe(1);
   expect(job.summaries.join('\n')).toContain('retained build report');
   await executeFinalizeAction(job.deps);
-  expect(save).toHaveBeenCalledTimes(1);
+  expect(save).toHaveBeenCalledTimes(2);
 });
 it.each(['off', 'timestamp'])(
   'retains only one completed local journal across repeated %s lifecycles',
@@ -124,9 +124,9 @@ it('deletes frozen old targets despite Mammoth report atime and publishes an emp
   expect(result.cacheGcResult?.deletedFileCount).toBe(1);
   expect(result.bootstrap.baseCacheResult?.status).toBe('saved');
   await expect(readFile(path.join(job.home, 'data/old'))).rejects.toThrow();
-  expect(
-    JSON.parse(await readFile(path.join(job.home, '.mammoth/empty-generation-v1'), 'utf8')),
-  ).toBe('mammoth-empty-v1');
+  expect((await journal(job)).publicationPlan!.record.partitions).toEqual([
+    { partitionId: 'data', kind: 'empty' },
+  ]);
 });
 it('keeps imported paths protected before aggregate cutoff, including upstream used-only records', async () => {
   const r = await root(),
@@ -272,12 +272,11 @@ it('does not publish an empty pristine miss or invent an empty marker', async ()
 });
 it('keeps an unchanged cache hit and a usage-only hit without publishing replacements', async () => {
   const job = await cutoffJob(await root(), { inputs: { 'cache-gc-mode': 'off' } });
-  vi.spyOn(job.deps.cacheBackend, 'restoreCache').mockImplementation(
-    async (_paths, primary) => primary + 'seed',
-  );
   await data(job, 'data/old');
   await utimes(path.join(job.home, 'data/old'), 1700000000, 1700000000);
   job.deps.now = () => Date.now() + 10000;
+  await job.prepare();
+  await executeFinalizeAction(job.deps);
   await job.prepare();
   const save = vi.spyOn(job.deps.cacheBackend, 'saveCache');
   expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
@@ -309,9 +308,6 @@ it.each([true, false])(
     const job = await cutoffJob(await root(), {
       inputs: { 'cache-gc-mode': 'off', 'read-only': String(readOnly) },
     });
-    vi.spyOn(job.deps.cacheBackend, 'restoreCache').mockImplementation(
-      async (_paths, primary) => primary + 'seed',
-    );
     const payload = Buffer.from('cache bytes');
     await mkdir(path.join(job.home, 'data'), { recursive: true });
     await Promise.all(
@@ -321,6 +317,11 @@ it.each([true, false])(
         await utimes(file, 1700000000, 1700000000);
       }),
     );
+    const seedConfig = { ...job.deps.config, readOnly: false };
+    const prepareFlow = await import('../../../src/phases/prepare/cutoff-flow');
+    job.deps.now = () => Date.now() + 10000;
+    await prepareFlow.executeCutoffPrepareAction({ ...job.deps, config: seedConfig });
+    await executeFinalizeAction({ ...job.deps, config: seedConfig });
     const scan = vi.spyOn(scans, 'captureCacheMetadataSnapshot');
     const hash = vi.spyOn(scans, 'captureCacheManifest');
     const guarded = await import('../../../src/cache/guarded-files');
@@ -329,6 +330,7 @@ it.each([true, false])(
     job.deps.now = () => Date.now() + 10000;
     await job.prepare();
     expect(scan).not.toHaveBeenCalled();
+    copy.mockClear(); // Prepare verifies and installs restored payload; finalize remains lean.
     const result = await executeFinalizeAction(job.deps);
     expect(result.cacheStatistics?.fileCount ?? null).toBe(readOnly ? null : 4);
     expect(copy).not.toHaveBeenCalled();

@@ -15,6 +15,7 @@
  */
 
 import path from 'node:path';
+import { ImmutableCacheBackend } from './immutable-cache-backend';
 import { mkdir } from 'node:fs/promises';
 import { normalizeSharedActionConfig } from '../../src/config/normalize';
 import { readGradleActionInputs } from '../../src/build-tool/gradle/config';
@@ -25,10 +26,7 @@ import {
   executeCutoffPrepareAction,
   type CutoffPrepareDependencies,
 } from '../../src/phases/prepare/cutoff-flow';
-import {
-  STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  type BaseCacheBackend,
-} from '../../src/cache/backend';
+import { type BaseCacheBackend } from '../../src/cache/backend';
 import type { WorkflowArtifactBackend } from '../../src/delta/backend';
 
 export async function cutoffJob(
@@ -96,13 +94,7 @@ export async function cutoffJob(
       return { anyBuildFailed: false, warnings: [], summaryLines: [], logLines: [], builds: [] };
     },
   };
-  const cacheBackend = options.cacheBackend ?? {
-    capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-    isFeatureAvailable: () => true,
-    isMissingPathsError: () => false,
-    restoreCache: async () => undefined,
-    saveCache: async () => 1,
-  };
+  const cacheBackend = options.cacheBackend ?? new ImmutableCacheBackend();
   const deps: CutoffPrepareDependencies = {
     runtimeHost,
     config,
