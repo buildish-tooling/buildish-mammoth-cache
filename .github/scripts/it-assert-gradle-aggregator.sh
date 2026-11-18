@@ -16,7 +16,15 @@
 
 set -euo pipefail
 
-test "$ACTION_BASE_CACHE_RESTORE_STATUS" = 'miss'
+# A new run has no generation in its isolated family; reruns may restore an earlier attempt.
+if [ "$GITHUB_RUN_ATTEMPT" = '1' ]; then
+  test "$ACTION_BASE_CACHE_RESTORE_STATUS" = 'miss'
+else
+  case "$ACTION_BASE_CACHE_RESTORE_STATUS" in
+    miss | current-lineage-hit) ;;
+    *) exit 1 ;;
+  esac
+fi
 test "$ACTION_JOB_MODE" = 'distributed-aggregator'
 test "$ACTION_DEPENDENT_DELTA_STATUS" = 'applied'
 test "$ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT" = '2'

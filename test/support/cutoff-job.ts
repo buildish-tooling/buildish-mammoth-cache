@@ -35,6 +35,7 @@ export async function cutoffJob(
   root: string,
   options: {
     name?: string;
+    runAttempt?: number;
     inputs?: Record<string, string>;
     cacheBackend?: BaseCacheBackend;
     artifactBackend?: WorkflowArtifactBackend;
@@ -46,7 +47,11 @@ export async function cutoffJob(
   await mkdir(root, { recursive: true });
   const home = path.join(root, 'cache');
   await mkdir(home, { recursive: true });
-  const ci = { ...cutoffFixtureCi(root, options.name ?? 'build'), workspace: root };
+  const ci = {
+    ...cutoffFixtureCi(root, options.name ?? 'build'),
+    workspace: root,
+    runAttempt: options.runAttempt ?? 1,
+  };
   const state = new Map<string, string>(),
     warnings: string[] = [],
     logs: string[] = [],

@@ -29,6 +29,7 @@ import {
   CUTOFF_LIFECYCLE_STATE,
 } from '../../../src/phases/cutoff-lifecycle';
 import { createCutoffPrepareOutputs } from '../../../src/phases/prepare/cutoff-flow';
+import { executeFinalizeAction } from '../../../src/phases/finalize/flow';
 import { cutoffJournalPath, loadCutoffJournal } from '../../../src/cache/cutoff-state';
 import { STANDARD_BASE_CACHE_BACKEND_CAPABILITIES } from '../../../src/cache/backend';
 const roots: string[] = [];
@@ -192,6 +193,66 @@ it('forwards imported old upserts and usage across worker-to-worker-to-aggregato
   }
   expect(artifacts.artifacts).toHaveLength(2);
 });
+it.each([
+  { label: 'accepts a stable family', prefix: 'it-distributed-1-', compatible: true },
+  { label: 'rejects a different family', prefix: 'it-distributed-1-2-', compatible: false },
+])(
+  '$label when a selective rerun combines producer attempts 2 and 1',
+  async ({ prefix, compatible }) => {
+    const r = await root(),
+      artifacts = new CutoffArtifacts(path.join(r, 'artifacts'));
+    for (const [name, attempt] of [
+      ['worker-a', 1],
+      ['worker-a', 2],
+      ['worker-b', 1],
+    ] as const) {
+      const worker = await cutoffJob(path.join(r, `${name}-${attempt}`), {
+        name,
+        runAttempt: attempt,
+        inputs: { 'job-mode': 'distributed-worker', 'cache-key-prefix': 'it-distributed-1-' },
+        artifactBackend: artifacts,
+      });
+      await worker.prepare();
+      await mkdir(path.join(worker.home, 'data'));
+      await writeFile(path.join(worker.home, 'data', name), `attempt-${attempt}`);
+      expect((await executeFinalizeAction(worker.deps)).deltaArtifactResult?.status).toBe(
+        'uploaded',
+      );
+    }
+    const aggregator = await cutoffJob(path.join(r, 'aggregator'), {
+      name: 'aggregator',
+      runAttempt: 2,
+      inputs: {
+        'job-mode': 'distributed-aggregator',
+        'dependent-jobs': 'worker-a,worker-b',
+        'cache-key-prefix': prefix,
+      },
+      artifactBackend: artifacts,
+    });
+    if (!compatible) {
+      await expect(aggregator.prepare()).rejects.toThrow(
+        'Worker package cache/ref identity mismatch.',
+      );
+      await expect(readFile(path.join(aggregator.home, 'data/worker-a'))).rejects.toThrow();
+      return;
+    }
+    const prepared = await aggregator.prepare();
+    expect(prepared.dependentDeltaResult).toMatchObject({
+      status: 'applied',
+      appliedArtifactCount: 2,
+      selectedProducers: [
+        { jobName: 'worker-a', runAttempt: 2 },
+        { jobName: 'worker-b', runAttempt: 1 },
+      ],
+    });
+    expect(await readFile(path.join(aggregator.home, 'data/worker-a'), 'utf8')).toBe('attempt-2');
+    expect(await readFile(path.join(aggregator.home, 'data/worker-b'), 'utf8')).toBe('attempt-1');
+    expect((await executeFinalizeAction(aggregator.deps)).bootstrap.baseCacheResult).toMatchObject({
+      status: 'saved',
+      generationKey: expect.stringContaining('run-1-attempt-2-job-'),
+    });
+  },
+);
 it('excludes real Gradle capture scripts and report scratch through finalize cleanup with custom includes', async () => {
   const job = await cutoffJob(await root());
   const { GradleBuildToolAdapter } = await import('../../../src/build-tool/gradle/adapter');

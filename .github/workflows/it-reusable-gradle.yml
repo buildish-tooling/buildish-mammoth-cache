@@ -30,8 +30,9 @@ name: IT Mammoth Cache for Gradle (Reusable)
 #
 # Isolation/safety notes:
 # - Every scenario stages a fresh fixture copy into a unique per-job build directory.
-# - Every cache-key-prefix includes github.run_id/github.run_attempt, so parallel workflow runs,
-#   retries, and sequential branch builds do not reuse writable cache keys accidentally.
+# - Every cache family includes github.run_id to isolate workflow runs. Distributed families stay
+#   stable across attempts so selective reruns can consume retained worker envelopes. Other
+#   scenarios also include github.run_attempt to isolate their cache round-trip assertions.
 # - Distributed artifact exchange stays within the current workflow run only; the action never uses
 #   cross-run `findBy` lookups here.
 # - The Windows smoke job intentionally runs under `shell: bash` and executes `./gradlew`, so the
@@ -199,7 +200,7 @@ jobs:
         with:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
-          cache-key-prefix: it-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
@@ -210,8 +211,8 @@ jobs:
         run: ./gradlew --info --no-daemon ${{ matrix.worker.task }}
 
   # Aggregator waits for both workers, downloads their current-run artifacts, applies both deltas,
-  # and confirms the restored dependency jars are reused without being downloaded again before
-  # post-action cleanup removes consumed worker artifacts.
+  # and confirms the restored dependency jars are reused without being downloaded again. Worker
+  # artifacts remain available for selective reruns.
   aggregator:
     name: Linux distributed aggregator (download+merge worker deltas)
     if: inputs.run-writable-scenarios
@@ -239,7 +240,7 @@ jobs:
           base-directory: build/integration-fixtures/aggregator
           job-mode: distributed-aggregator
           dependent-jobs: worker_a,worker_b
-          cache-key-prefix: it-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
@@ -336,7 +337,7 @@ jobs:
         with:
           base-directory: build/integration-fixtures/pull-request-worker
           job-mode: distributed-worker
-          cache-key-prefix: it-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-pr-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
@@ -374,7 +375,7 @@ jobs:
           base-directory: build/integration-fixtures/pull-request
           job-mode: distributed-aggregator
           dependent-jobs: pull_request_worker
-          cache-key-prefix: it-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-pr-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}

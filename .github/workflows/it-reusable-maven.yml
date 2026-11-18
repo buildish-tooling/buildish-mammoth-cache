@@ -32,8 +32,9 @@ name: IT Mammoth Cache for Maven (Reusable)
 #
 # Isolation/safety notes:
 # - Every scenario stages a fresh fixture copy into a unique per-job build directory.
-# - Every cache-key-prefix includes github.run_id/github.run_attempt, so parallel workflow runs,
-#   retries, and sequential branch builds do not reuse writable cache keys accidentally.
+# - Every cache family includes github.run_id to isolate workflow runs. Distributed families stay
+#   stable across attempts so selective reruns can consume retained worker envelopes. Other
+#   scenarios also include github.run_attempt to isolate their cache round-trip assertions.
 # - Distributed artifact exchange stays within the current workflow run only.
 
 on:
@@ -194,7 +195,7 @@ jobs:
         with:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
-          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
@@ -205,8 +206,8 @@ jobs:
         run: mvn -P ${{ matrix.worker.profile }} dependency:resolve
 
   # Aggregator waits for both workers, downloads their current-run artifacts, applies both deltas,
-  # and confirms the merged dependencies resolve offline before post-action cleanup removes consumed
-  # worker artifacts.
+  # and confirms the merged dependencies resolve offline. Worker artifacts remain available for
+  # selective reruns.
   maven_aggregator:
     name: Linux Maven distributed aggregator (download+merge worker deltas)
     if: inputs.run-writable-scenarios
@@ -234,7 +235,7 @@ jobs:
           base-directory: build/integration-fixtures/maven-aggregator
           job-mode: distributed-aggregator
           dependent-jobs: maven_worker_a,maven_worker_b
-          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
@@ -330,7 +331,7 @@ jobs:
         with:
           base-directory: build/integration-fixtures/maven-pull-request-worker
           job-mode: distributed-worker
-          cache-key-prefix: it-maven-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-maven-pr-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
@@ -368,7 +369,7 @@ jobs:
           base-directory: build/integration-fixtures/maven-pull-request
           job-mode: distributed-aggregator
           dependent-jobs: maven_pull_request_worker
-          cache-key-prefix: it-maven-pr-${{ github.run_id }}-${{ github.run_attempt }}-
+          cache-key-prefix: it-maven-pr-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
