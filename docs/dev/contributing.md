@@ -100,7 +100,12 @@ asserts that the enhanced local repository manager is used. It needs no Maven pl
 remotes. Projects, remotes, local repositories, and compiled harness files stay under `build/`;
 user settings and credentials are not loaded. The suite reports the installed Maven/Resolver
 versions and covers origin changes, absent markers, mirrors, local installs, snapshots, cache archive
-restore, distributed directory conflicts, excluded-sibling preservation during aggregation/GC, and cutoff GC. The snapshot and same-ID URL assertions
+restore, distributed directory conflicts, excluded-sibling preservation during aggregation/GC, and cutoff GC.
+The archive test compares online bytes and origin entries against an independently populated native
+repository rather than requiring a fresh download across origins: Resolver 1.9.27 can retain the
+cached bytes after an existence check, while Resolver 2.0.24 defaults to downloading them again.
+Offline origin rejection remains required when markers are retained.
+The snapshot and same-ID URL assertions
 were qualified with Maven 3.10.0 / Resolver 2.0.24; qualify other versions before extending those
 conclusions. It is opt-in and does not run as part of ordinary `make check`.
 

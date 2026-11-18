@@ -148,8 +148,19 @@ local repository does not carry earlier ambiguity into the new family. Gradle's 
 `make integration-test-maven-repository-semantics` uses the installed Maven distribution's actual
 Resolver, enhanced local repository manager, and file transport against controlled local remotes.
 It also exercises Mammoth's cache archive paths, worker packages, aggregation, and cutoff GC.
-The initial evidence is Maven 3.10.0, Resolver 2.0.24, Java 21.0.12 on Linux. Same-origin offline reuse
-succeeds; changing the active origin rejects offline reuse and downloads the other remote's bytes
-online. Removing the marker instead reuses the original bytes. Local installs remain available
+The archive test compares restored repositories with independently populated native repositories,
+including artifact bytes and origin entries. It requires same-origin offline reuse and rejects
+different-origin offline reuse while markers are retained. Removing the marker instead permits
+offline reuse of the original bytes across origins.
+
+Online byte selection remains Resolver behavior. Probes with Maven 3.9.15 components and Resolver
+1.9.27 retain the cached bytes after checking that the artifact exists at the other remote, adding
+that remote to the origin entries. Maven 3.10.0 / Resolver 2.0.24 defaults to downloading the other
+remote's bytes. Both behaviors occur with native and restored repositories. See Resolver's
+[existence-check relabel configuration](https://maven.apache.org/resolver-archives/resolver-2.0.24/configuration.html).
+Preserving markers does not guarantee a fresh download when changing origins.
+
+The full suite was initially qualified with Maven 3.10.0, Resolver 2.0.24, Java 21.0.12 on Linux.
+Local installs remain available
 across remote changes. Timestamped snapshots honor the tested `never` and `always` update policies.
 Other Maven/Resolver versions and native platforms require their own qualification.

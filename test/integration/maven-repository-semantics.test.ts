@@ -111,16 +111,17 @@ async function cloneSeed(name: string) {
   await cp(path.join(root, 'seed'), path.join(root, name), { recursive: true });
 }
 
-it('preserves origin checks through real cache globs and a tar restore; excluding markers changes resolution', async () => {
-  const model = await mavenFixtureModel(path.join(root, 'seed'));
-  const files = await (
-    await glob.create(createBaseCachePaths(model).join('\n'), {
-      followSymbolicLinks: false,
-      implicitDescendants: false,
-    })
-  ).glob();
-  expect(files).toContain(path.join(root, 'seed', marker));
-  for (const excluded of [false, true]) {
+it.each([false, true])(
+  'matches native origin resolution through real cache globs and tar (exclude markers: %s)',
+  async (excluded) => {
+    const model = await mavenFixtureModel(path.join(root, 'seed'));
+    const files = await (
+      await glob.create(createBaseCachePaths(model).join('\n'), {
+        followSymbolicLinks: false,
+        implicitDescendants: false,
+      })
+    ).glob();
+    expect(files).toContain(path.join(root, 'seed', marker));
     const selected = files.filter((f) => !excluded || !f.endsWith('/_remote.repositories'));
     const archive = await packCacheFiles(
       model.cacheRoot,
@@ -129,20 +130,53 @@ it('preserves origin checks through real cache globs and a tar restore; excludin
     );
     const local = `restored-${excluded}`;
     await unpackCacheFiles(path.join(root, local), archive);
+    const native = `native-${excluded}`;
+    // Resolve independently: this control has never passed through Mammoth or an archive.
+    expect(await resolve(native)).toBe('A');
     if (excluded) {
-      expect(
-        await resolve(local, release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
-      ).toBe('A');
-      expect(await resolve(local, release, { id: 'origin-b', remote: 'remote-b' })).toBe('A');
+      await rm(path.join(root, native, marker));
+      await expect(readFile(path.join(root, local, marker))).rejects.toThrow();
     } else {
-      expect(await resolve(local, release, { offline: true })).toBe('A');
-      await expect(
-        resolve(local, release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
-      ).rejects.toThrow(/offline mode/u);
-      expect(await resolve(local, release, { id: 'origin-b', remote: 'remote-b' })).toBe('B');
+      expect(await readFile(path.join(root, local, marker), 'utf8')).toBe(
+        await readFile(path.join(root, 'seed', marker), 'utf8'),
+      );
     }
-  }
-});
+    for (const repository of [native, local]) {
+      expect(await resolve(repository, release, { offline: true })).toBe('A');
+      const differentOrigin = { id: 'origin-b', remote: 'remote-b' };
+      if (excluded) {
+        expect(await resolve(repository, release, { ...differentOrigin, offline: true })).toBe('A');
+      } else {
+        await expect(
+          resolve(repository, release, { ...differentOrigin, offline: true }),
+        ).rejects.toThrow(/offline mode/u);
+      }
+    }
+    // A fresh B repository proves that the controlled remote serves distinct bytes.
+    const differentOrigin = { id: 'origin-b', remote: 'remote-b' };
+    expect(await resolve(`fresh-b-${excluded}`, release, differentOrigin)).toBe('B');
+    // Resolver 1.9.27 can relabel A after an existence check; 2.0.24 downloads B.
+    // Mammoth must preserve the installed Resolver's native behavior in either case.
+    const nativeBytes = await resolve(native, release, differentOrigin);
+    expect(await resolve(local, release, differentOrigin)).toBe(nativeBytes);
+    if (excluded) expect(nativeBytes).toBe('A');
+    else {
+      const entries = async (repository: string) =>
+        (await readFile(path.join(root, repository, marker), 'utf8'))
+          .split(/\r?\n/u)
+          .filter((line) => line && !line.startsWith('#'))
+          .sort();
+      // Ignore Resolver's generated timestamp comment, retaining every origin entry.
+      expect(await entries(local)).toEqual(await entries(native));
+    }
+    for (const repository of [native, local]) {
+      expect(await readFile(path.join(root, repository, artifact), 'utf8')).toBe(nativeBytes);
+      expect(await resolve(repository, release, { ...differentOrigin, offline: true })).toBe(
+        nativeBytes,
+      );
+    }
+  },
+);
 it('records same-ID changed-URL fallback and changed effective mirror-ID behavior', async () => {
   await cloneSeed('url-change');
   // Resolver 2.0.24 defaults to a same-ID fallback despite URL-qualified tracking keys.
