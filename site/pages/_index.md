@@ -44,6 +44,18 @@ Mammoth Cache currently targets dependency and build-tool cache orchestration on
 it is not a general build-output cache, build sandbox, or dependency-provenance verifier.
 Distributed use requires a dedicated aggregator job. Other CI providers remain future work.
 
+## Licensing and maintenance independence
+
+Mammoth's own code is [Apache-2.0 licensed](https://github.com/buildish-tooling/buildish-mammoth-cache/blob/main/LICENSE)
+for public, private and commercial builds. You can inspect it, modify it, maintain a fork and
+redistribute it subject to the license conditions. The cache orchestration is included under
+that license, with no separate Mammoth caching subscription.
+
+Bundled dependencies retain their own licenses and notices. GitHub cache/artifact service terms,
+limits and charges still apply, as do the applicable terms for downloaded tools and any build
+services you choose to use. Licensing independence and caching performance are separate adoption
+considerations.
+
 ## Highlights
 
 🔁 **Distributed deltas** — worker artifacts package only files changed relative to their restored

@@ -59,3 +59,23 @@ graph LR
     W3["Worker C\nbuild + delta"] -- "Δ artifact C" --> AGG
     AGG["Aggregator\nmerge + save"] --> BC2["Base cache\n(this run)"]
 ```
+
+## Licensing and maintenance independence
+
+Mammoth's own code is [Apache-2.0 licensed](https://github.com/buildish-tooling/buildish-mammoth-cache/blob/main/LICENSE).
+The same license covers its cache orchestration in public and private repositories, including
+commercial builds. You can inspect and modify the implementation, maintain a fork, and redistribute
+it subject to the license conditions, including applicable license, notice and change-marking
+requirements. Using the caching implementation requires no separate Mammoth caching subscription.
+
+Bundled dependencies retain their own licenses and attribution requirements; consult the
+[distribution license inventory](https://github.com/buildish-tooling/buildish-mammoth-cache/blob/main/legal/github/LICENSE)
+and [notices](https://github.com/buildish-tooling/buildish-mammoth-cache/blob/main/legal/github/NOTICE)
+for the version you use. GitHub cache/artifact services keep their own terms, limits and charges.
+Downloaded JDKs, Gradle/Maven distributions and separately used build services also retain their
+applicable terms.
+
+When choosing a cache implementation, consider the rights to inspect, fix and maintain it, any
+separate provider agreements, and the effort required to migrate if its availability, terms or
+pricing change. Evaluate feature coverage and measured performance separately; an open-source
+license alone does not establish either.
