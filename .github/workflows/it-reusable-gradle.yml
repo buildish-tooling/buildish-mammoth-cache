@@ -19,7 +19,7 @@ name: IT Mammoth Cache for Gradle (Reusable)
 #
 # Scenario layout:
 # - standalone_round_trip exercises a writable Linux cache round-trip by capturing the
-#   action-generated cache key, saving a cache snapshot immediately, wiping Gradle user home,
+#   action-generated cache key, saving a cache snapshot immediately, wiping the cached subtrees,
 #   restoring that exact key, and proving the fixture resolves offline.
 # - worker_a + worker_b -> aggregator exercises distributed worker delta publication plus
 #   same-run aggregator download/merge/apply using deterministic worker job names.
@@ -143,10 +143,11 @@ jobs:
             ~/.gradle/wrapper
           key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
 
-      - name: Wipe Gradle user home to prove restore
+      - name: Wipe cached Gradle subtrees to prove restore
         run: |
-          rm -rf "$HOME/.gradle"
-          mkdir -p "$HOME/.gradle"
+          # Keep the active invocation's .mammoth lifecycle and snapshot transport for post.
+          rm -rf "$HOME/.gradle/caches" "$HOME/.gradle/wrapper"
+          mkdir -p "$HOME/.gradle/caches" "$HOME/.gradle/wrapper"
 
       - name: Restore exact standalone cache snapshot
         id: restore
