@@ -50,11 +50,15 @@ it('preserves literal default fingerprints and persisted partition shapes', asyn
     { phase: 'prepare', ciContext: ci, env: { GRADLE_USER_HOME: '/cache' } },
   );
   const gradle = await createCacheModel(config, ci, new GradleBuildToolAdapter(config));
-  expect(gradle.partitionFingerprint).toBe('26cbbec02299aabe');
+  expect(gradle.partitionFingerprint).toBe('691842db2b4a565e');
   for (const model of [original, explicit, gradle]) {
     expect(cutoffModelSchema.parse(model)).toEqual(model);
     for (const partition of model.partitions)
-      if (partition.id === 'groovy-dsl' || partition.id === 'kotlin-dsl')
+      if (
+        partition.id === 'groovy-dsl' ||
+        partition.id === 'kotlin-dsl' ||
+        partition.id === 'transforms-metadata'
+      )
         expect(partition.conflictHandling).toBe('choose-worker-directory');
       else if (partition.id === 'build-cache')
         expect(partition.conflictHandling).toBe('choose-worker-entry');
@@ -166,9 +170,9 @@ it('limits per-entry selection to aggregate Gradle build-cache prefixes and pres
       { id: 'custom', includes, 'conflict-handling': 'choose-worker-entry' },
     ]);
     expect(cutoffModelSchema.parse(model)).toEqual(model);
-    expect(model.cacheFamilyKey).toContain('-v7-');
+    expect(model.cacheFamilyKey).toContain('-v8-');
     expect(
-      model.fallbackRefLineagePrefixes.every((p) => p.includes('-v7-') && !p.includes('-v6-')),
+      model.fallbackRefLineagePrefixes.every((p) => p.includes('-v8-') && !p.includes('-v7-')),
     ).toBe(true);
   }
   for (const definition of [

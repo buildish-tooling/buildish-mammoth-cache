@@ -60,6 +60,7 @@ async function fixture() {
     partitionFingerprint: 'layout',
     buildToolId: 'test',
     includePaths: [include],
+    hardCacheExcludeGlobs: [],
     excludePaths: [],
     partitions: [
       {

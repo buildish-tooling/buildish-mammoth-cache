@@ -208,6 +208,7 @@ function createCacheModel(cacheRoot: string, includes = ['caches/**']): CacheMod
       },
     ],
     includePaths: includes.map((include) => path.join(cacheRoot, include)),
+    hardCacheExcludeGlobs: [],
     excludePaths: [path.join(cacheRoot, '**/*.lock')],
   };
 }

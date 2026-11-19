@@ -72,6 +72,7 @@ const cacheModel: CacheModel = {
   partitionFingerprint: 'feedcafe1234abcd',
   partitions: [],
   includePaths: ['/home/runner/.gradle/caches/modules-2/**'],
+  hardCacheExcludeGlobs: [],
   excludePaths: [
     '/home/runner/.gradle/**/configuration-cache/**',
     '/home/runner/.gradle/**/*.lock',
@@ -107,7 +108,7 @@ function createCacheBackend(
 describe('createBaseCachePaths', () => {
   it('archives only the authoritative generation record', () => {
     expect(createBaseCachePaths(cacheModel)).toEqual([
-      path.join(cacheModel.cacheRoot, '.mammoth/generations-v2/record.json'),
+      path.join(cacheModel.cacheRoot, '.mammoth/generations-v3/record.json'),
     ]);
   });
 });

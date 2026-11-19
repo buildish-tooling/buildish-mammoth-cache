@@ -83,12 +83,16 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'transforms-metadata',
+    conflictHandling: 'choose-worker-directory',
     displayName: 'Transforms and metadata',
-    description:
-      'Artifact transforms and related metadata that can be fast but environment-sensitive to reuse.',
-    defaultEnabled: false,
-    relativeIncludeGlobs: ['caches/transforms-*/**'],
-    relativeExcludeGlobs: [],
+    description: 'Complete artifact-transform workspaces selected from one worker per workspace.',
+    defaultEnabled: true,
+    relativeIncludeGlobs: ['caches/transforms-*/**', 'caches/*/transforms/**'],
+    relativeExcludeGlobs: [
+      'caches/transforms-*/gc.properties',
+      'caches/transforms-*/.internal/**',
+      'caches/*/transforms/.internal/**',
+    ],
   },
   {
     id: 'kotlin-dsl',

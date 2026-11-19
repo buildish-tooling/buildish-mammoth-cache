@@ -91,14 +91,50 @@ transforms through
 [`@CacheableTransform`](https://docs.gradle.org/current/javadoc/org/gradle/api/artifacts/transform/CacheableTransform.html).
 Reuse depends on the transform's implementation and correctly declared inputs and normalization.
 
-Mammoth's optional `transforms-metadata` preset is disabled by default and currently matches only
-`caches/transforms-*/**`. Direct workspace transport, restoration and distributed conflict handling
-have not yet been qualified. This conservative default does not disable Gradle's artifact transforms
-or establish that all transform workspaces are unsafe to relocate.
+The enabled `transforms-metadata` partition captures complete immutable workspaces
+under `caches/transforms-4/<32-hex-key>/` and
+`caches/<version>/transforms/<32-hex-key>/`. The shared store was used by Gradle 8.7;
+[Gradle 8.8's user-home services](https://github.com/gradle/gradle/blob/v8.8.0/platforms/software/dependency-management/src/main/java/org/gradle/api/internal/artifacts/DependencyManagementGradleUserHomeScopeServices.java)
+switch to the version-scoped store. Older `transforms-1`, `-2` and `-3` layouts,
+unknown roots and temporary workspace suffixes are skipped with bounded warnings.
+This is a structural support contract, not universal Gradle/plugin compatibility.
+Mutable project-local transform workspaces are outside this user-home partition.
 
-Cacheable transforms can also store their outputs in Gradle's build cache. Mammoth's enabled
-`build-cache` partition can carry those entries independently of the disabled transform-workspace
-preset.
+Each supported workspace retains nonempty `metadata.bin`, regular `results.bin`,
+`transformed/`, every additional output file and empty output directories. A transform
+registering no outputs can have an empty `results.bin`; this is valid. Mammoth never
+strips origin metadata or rewrites Gradle metadata to make independent producers agree.
+It selects one complete producer per key using `choose-worker-directory`, preserving
+disjoint keys. Strict conflict handling remains available. Usage and GC operate on
+whole units, as for the DSL workspace partitions.
+
+Transform output filenames are not cleanup markers: a nested `gc.properties` is
+preserved through worker artifacts and native base archives. A workspace containing
+mandatory-excluded output (such as `.lock`, configuration-cache or reserved Mammoth
+metadata descendants) is skipped as a whole. User includes/excludes that select only
+part of an otherwise complete workspace fail capture. Known bookkeeping outside
+workspace roots is excluded; unknown/incomplete units never fall back to file capture.
+
+Cacheable transforms can also store outputs in Gradle's build cache, which the
+`build-cache` partition transports independently. Direct workspace transport can
+add reuse for transforms without `@CacheableTransform`. This does not imply that
+all such outputs are appropriate to share: private dependencies or sensitive values
+written into outputs are visible to the cache and worker-artifact readers. Transform
+workspaces do not serialize the configuration cache's configured task graph. See
+[the threat model](../../threat-model/) for the confidentiality boundary.
+
+Maintained local qualification covers Linux, JDK 21, Gradle 8.7 and 9.8.1, independent
+producers and relocated fresh readers, using a real JAR-expansion transform with
+cacheable/non-cacheable, empty-directory and no-output variants. The 9.8.1 reader
+also exercises JDK 25 when available. A build-cache-disabled reader proves direct
+workspace reuse. The fixture is controlled build logic, not third-party plugin or
+all-OS qualification; no general performance claim follows from it.
+
+Capturing workspaces adds metadata scans, hashing of changed partitions, archive
+bytes and transfer I/O, potentially alongside build-cache copies of the same outputs.
+Measure the tradeoff for the build. Disable this partition with `enabled: false` if
+those costs outweigh reuse. The cache schema 8 transition cold-starts previous Gradle
+and Maven families, including old opt-in/custom transform captures; there is no migration.
 
 ## Build cache: `caches/build-cache-1/`
 
@@ -224,14 +260,16 @@ the entire configuration cache as local-only data.
 
 ## Portability summary
 
-**Safe to cache:**
+**Included by default, subject to the compatibility and content rules above:**
 
-| Pattern                         | Role                            |
-| ------------------------------- | ------------------------------- |
-| `caches/modules-*/files-2.1/**` | Immutable external artifacts    |
-| `caches/jars-*/**`              | Cached plugin JARs              |
-| `caches/build-cache-1/**`       | Task output snapshots           |
-| `wrapper/dists/**`              | Downloaded Gradle distributions |
+| Pattern                                | Role                                     |
+| -------------------------------------- | ---------------------------------------- |
+| `caches/modules-*/files-2.1/**`        | Immutable external artifacts             |
+| `caches/jars-*/**`                     | Cached plugin JARs                       |
+| `caches/build-cache-1/**`              | Task output snapshots                    |
+| `wrapper/dists/**`                     | Downloaded Gradle distributions          |
+| `caches/transforms-4/<key>/**`         | Complete recognized transform workspaces |
+| `caches/<version>/transforms/<key>/**` | Complete recognized transform workspaces |
 
 Compiled Kotlin DSL scripts and generated Gradle API JARs are also included by the
 `kotlin-dsl` partition; recognized Kotlin and Groovy workspaces use the complete-unit
@@ -248,13 +286,12 @@ transport above.
 
 **Omitted by defaults, but configurable through custom partitions:**
 
-| Pattern                                 | Reason for default omission                               |
-| --------------------------------------- | --------------------------------------------------------- |
-| `caches/transforms-*/**`                | Disabled preset; direct workspace reuse not yet qualified |
-| `caches/[version]/execution-history/**` | Local execution history and timestamps                    |
-| `caches/[version]/file-hashes/**`       | Local absolute-path indexes                               |
-| `daemon/**`                             | Local PIDs and ephemeral logs                             |
-| `native/**`                             | Platform-specific; regenerated on demand                  |
+| Pattern                                 | Reason for default omission              |
+| --------------------------------------- | ---------------------------------------- |
+| `caches/[version]/execution-history/**` | Local execution history and timestamps   |
+| `caches/[version]/file-hashes/**`       | Local absolute-path indexes              |
+| `daemon/**`                             | Local PIDs and ephemeral logs            |
+| `native/**`                             | Platform-specific; regenerated on demand |
 
 Dependency metadata is cached separately as complete `dependency-metadata` snapshots under
 `caches/modules-*/metadata-*/**`. It is relocatable with compatible Gradle cache formats; locks and

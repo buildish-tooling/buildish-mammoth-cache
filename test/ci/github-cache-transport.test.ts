@@ -273,7 +273,7 @@ it('native partition SDK globs archive exactly scanner ownership across overlapp
     ['data/b'],
   ]);
   const descriptor: PartitionDescriptor = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     identity: {
       familyKey: model.cacheFamilyKey,
       lineagePrefix: model.currentRefLineagePrefix,
@@ -314,7 +314,7 @@ it('native partition SDK globs archive exactly scanner ownership across overlapp
         version = utils.getCacheVersion(patterns, 'gzip', crossOs);
         const members = await utils.resolvePaths(patterns);
         expect(members.sort()).toEqual([
-          '.mammoth/partition-objects-v2/data/object.json',
+          '.mammoth/partition-objects-v3/data/object.json',
           'data/a',
         ]);
         await tar.createTar(archive, members, 'gzip');
@@ -357,7 +357,7 @@ it('native Groovy SDK selection omits unrecognized and incomplete workspace root
     snapshot = await captureCacheMetadataSnapshot(model),
     part = snapshot.partitions[0]!;
   const descriptor: PartitionDescriptor = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     identity: {
       familyKey: model.cacheFamilyKey,
       lineagePrefix: model.currentRefLineagePrefix,
@@ -398,7 +398,7 @@ it('native Groovy SDK selection omits unrecognized and incomplete workspace root
         const members = await utils.resolvePaths(patterns);
         expect(members.sort()).toEqual(
           [
-            `.mammoth/partition-objects-v2/${part.partitionId}/object.json`,
+            `.mammoth/partition-objects-v3/${part.partitionId}/object.json`,
             ...part.entries.map((e) => e.relativePath),
           ].sort(),
         );

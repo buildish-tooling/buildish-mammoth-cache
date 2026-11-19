@@ -40,7 +40,7 @@ export function kotlinFixtureModel(root: string, overrides: object[] = []) {
 }
 export async function writeKotlinWorkspace(
   root: string,
-  kind: Exclude<ImmutableWorkspace['kind'], 'groovy'> = 'kotlin-script',
+  kind: Exclude<ImmutableWorkspace['kind'], 'groovy' | 'artifact-transform'> = 'kotlin-script',
   key = 'a'.repeat(32),
   content = 'compiled',
   empty = false,

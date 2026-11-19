@@ -129,7 +129,7 @@ function packageMetadata(
 ): CutoffPackageMetadata {
   const digest = cutoffHash(serialize(manifest));
   return packageSchema.parse({
-    schemaVersion: 7,
+    schemaVersion: 8,
     artifactType: 'buildish-mammoth-cache-upserts',
     artifactName: artifactName(
       ci.jobName,
@@ -181,7 +181,7 @@ export async function stageCutoffPackage(
     await mkdir(path.join(directory, 'payload'));
     const owns = createManagedCachePathMatcher(state.model);
     let manifest: CutoffManifest = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       buildToolId: state.model.buildToolId,
       partitions: state.model.partitions.map((p) => ({
         partitionId: p.id,

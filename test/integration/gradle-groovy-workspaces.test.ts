@@ -266,7 +266,7 @@ test.skipIf(!enabled)(
         ).toBe(true);
         expect(
           patterns.some((p) =>
-            /^<cache>\/\.mammoth\/(?:generations-v2\/record.json|partition-objects-v2\/[^/]+\/object.json)$/.test(
+            /^<cache>\/\.mammoth\/(?:generations-v3\/record.json|partition-objects-v3\/[^/]+\/object.json)$/.test(
               p,
             ),
           ),

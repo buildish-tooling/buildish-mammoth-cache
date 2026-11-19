@@ -135,7 +135,7 @@ export async function executeCutoffPrepareAction(
     dependent: CutoffDependentResult | null = null;
   if (!bootstrap.cacheModel) {
     persistCutoffLifecycle(
-      { schemaVersion: 7, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
+      { schemaVersion: 8, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
       dependencies.runtimeHost.saveState,
     );
   } else {
@@ -318,7 +318,7 @@ export async function executeCutoffPrepareAction(
       dependencies.runtimeHost.warning(warning);
     persistCutoffLifecycle(
       {
-        schemaVersion: 7,
+        schemaVersion: 8,
         cacheEnabled: true,
         model: state.model,
         policy: state.policy,

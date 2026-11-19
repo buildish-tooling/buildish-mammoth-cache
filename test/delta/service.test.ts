@@ -868,6 +868,7 @@ function createFixtureCacheModel(gradleUserHome: string): CacheModel {
     partitionFingerprint: 'fixture-partitions',
     partitions,
     includePaths: partitions.flatMap((partition) => partition.absoluteIncludeGlobs),
+    hardCacheExcludeGlobs: [],
     excludePaths: [...new Set(partitions.flatMap((partition) => partition.absoluteExcludeGlobs))],
   };
 }

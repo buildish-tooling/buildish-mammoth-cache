@@ -92,6 +92,7 @@ export const cutoffModelSchema = z
     partitions: z.array(partitionSchema),
     includePaths: z.array(text),
     excludePaths: z.array(text),
+    hardCacheExcludeGlobs: z.array(glob),
   })
   .strict()
   .superRefine((model, ctx) => {
@@ -100,6 +101,12 @@ export const cutoffModelSchema = z
     } catch (error) {
       ctx.addIssue({ code: 'custom', message: (error as Error).message });
     }
+    if (
+      model.partitions.some((p) =>
+        model.hardCacheExcludeGlobs.some((g) => !p.relativeExcludeGlobs.includes(g)),
+      )
+    )
+      ctx.addIssue({ code: 'custom', message: 'Missing hard cache exclusion.' });
     const ids = model.partitions.map((p) => p.id);
     if (new Set(ids).size !== ids.length)
       ctx.addIssue({ code: 'custom', message: 'Duplicate partitions.' });
@@ -196,7 +203,7 @@ const partitionSnapshotRecordSchema = z
   .strict();
 export const cutoffJournalSchema = z
   .object({
-    schemaVersion: z.literal(5),
+    schemaVersion: z.literal(6),
     invocation: z.string().uuid(),
     phase: z.enum([
       'prepare-pending',
@@ -487,7 +494,7 @@ export function newCutoffJournal(
   execution: CutoffJournal['execution'],
 ): CutoffJournal {
   return cutoffJournalSchema.parse({
-    schemaVersion: 5,
+    schemaVersion: 6,
     invocation: randomUUID(),
     phase: 'prepare-pending',
     model,
@@ -553,7 +560,7 @@ export function validateCutoffBudget(
     needsSeal && s
       ? {
           manifest: {
-            schemaVersion: 6,
+            schemaVersion: 7,
             buildToolId: state.model.buildToolId,
             partitions: state.model.partitions.map((p, index) => ({
               partitionId: p.id,

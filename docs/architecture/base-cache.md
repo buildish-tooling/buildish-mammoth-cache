@@ -58,15 +58,15 @@ require publication. There is no historical access manifest or unconditional bef
 hash pass. Complete single-writer snapshots propagate removals through replacement membership;
 an absent writer contribution preserves the successfully restored snapshot.
 
-## Gradle DSL workspace units
+## Gradle immutable workspace units
 
-The default Gradle `groovy-dsl` and `kotlin-dsl` partitions retain complete hashed
-workspaces for supported Groovy, Kotlin script and Kotlin accessor layouts.
+The default Gradle `groovy-dsl`, `kotlin-dsl` and `transforms-metadata` partitions retain complete hashed
+workspaces for supported Groovy, Kotlin script/accessor and artifact-transform layouts.
 Changed files or directory topology select the whole unit; usage protects all members.
 Whole-workspace conflict selection chooses one producer per root, without a designated
 partition writer. Complete unit replacement propagates removals within that root.
 
-Base objects carry a partition-scoped descriptor under `.mammoth/partition-objects-v2/<partition>/`
+Base objects carry a partition-scoped descriptor under `.mammoth/partition-objects-v3/<partition>/`
 and archive accepted workspace files at their native paths. References include the accepted workspace
 roots and exact ordinary-file paths so mixed Kotlin partitions retain legacy scripts and
 generated API JARs, and save and restore use identical SDK path specifications; incomplete and unknown roots are
@@ -105,7 +105,7 @@ GC removal, disappearance from restored membership, or a material single-writer 
 Usage-only observations and unchanged selected snapshots do not require publication. A cold,
 entirely empty cache, including a layout with zero active partitions, remains a no-op.
 
-The authoritative archive contains only `.mammoth/generations-v2/record.json`. It binds the
+The authoritative archive contains only `.mammoth/generations-v3/record.json`. It binds the
 family/layout, exact generation identity, and an ordered object reference or explicit empty
 entry for each active partition. Empty entries supersede older payloads without an empty-object
 upload. Ordinary existing runner files still follow default overlay semantics; an empty entry
@@ -140,17 +140,17 @@ complete publication. Required aggregator publication failures retain worker env
 aggregation; standalone failures warn and retain retry intent. Eviction after publication can
 still occur, and restore handles it per partition. Orphan backend objects expire normally.
 
-The action-owned `partitioned-v2` family discriminator prevents old monolithic archives from
-matching, even when a consumer pins its schema input. Cache schema **7**, package **7**, worker
-manifest **6**, CI lifecycle **7**, journal **5**, and generation/partition descriptor
-version **2** are distinct contracts. Migration starts cold; old worker packages and
+The action-owned `partitioned-v3` family discriminator prevents old monolithic archives from
+matching, even when a consumer pins its schema input. Cache schema **8**, package **8**, worker
+manifest **7**, CI lifecycle **8**, journal **6**, and generation/partition descriptor
+version **3** are distinct contracts. Migration starts cold; old worker packages and
 local invocation state are rejected rather than reinterpreted as complete workspace captures.
 
 ## Recovery and bounds
 
 `.mammoth/cutoff-state-v2/` contains a root-local journal and `current.json` pointer. It is never
 cached or sent to workers. It binds the full model/policy/execution, C, observations, native retained
-fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 5
+fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 6
 also binds baseline and selected snapshot digests, source, counts, and replacement decisions.
 Verified selected snapshots are reconstructed locally under
 `.mammoth/partition-snapshots-v1/<partition>/` before existing replacement initialization.

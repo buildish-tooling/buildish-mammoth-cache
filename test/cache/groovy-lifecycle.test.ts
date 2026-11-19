@@ -275,9 +275,9 @@ it('recovers a recorded interrupted replacement as a cache miss without acceptin
   await rm(path.join(root, unit, 'metadata.bin'));
   await writeMetadata(
     root,
-    '.mammoth/workspace-apply-v2/intent.json',
+    '.mammoth/workspace-apply-v3/intent.json',
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       familyKey: model.cacheFamilyKey,
       partitionId: 'groovy-dsl',
       root: unit,

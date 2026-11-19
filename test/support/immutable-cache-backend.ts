@@ -173,7 +173,7 @@ export async function restoreEmptyGeneration(
     root,
     GENERATION_RECORD_PATH,
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       familyKey: model.cacheFamilyKey,
       buildToolId: model.buildToolId,
       partitionFingerprint: model.partitionFingerprint,

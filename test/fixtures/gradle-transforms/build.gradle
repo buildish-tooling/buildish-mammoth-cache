@@ -1,0 +1,97 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import org.gradle.api.artifacts.transform.*
+import org.gradle.api.artifacts.type.ArtifactTypeDefinition
+import org.gradle.api.file.FileSystemLocation
+import org.gradle.api.provider.Property
+import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.*
+import java.nio.file.Files
+import java.util.zip.ZipFile
+
+interface ExpandParameters extends TransformParameters {
+    @Input Property<String> getOutputKind()
+}
+abstract class ExpandJar implements TransformAction<ExpandParameters> {
+    @InputArtifact @PathSensitive(PathSensitivity.NAME_ONLY)
+    abstract Provider<FileSystemLocation> getInputArtifact()
+
+    void transform(TransformOutputs outputs) {
+        println('TRANSFORM_EXECUTED ' + inputArtifact.get().asFile.name)
+        if (parameters.outputKind.get() == 'none') return
+        def destination = outputs.dir('expanded')
+        if (parameters.outputKind.get() == 'empty') return
+        new ZipFile(inputArtifact.get().asFile).withCloseable { jar ->
+            jar.entries().each { entry ->
+                def target = new File(destination, entry.name)
+                if (entry.directory) target.mkdirs()
+                else {
+                    target.parentFile.mkdirs()
+                    jar.getInputStream(entry).withCloseable { input -> Files.copy(input, target.toPath()) }
+                }
+            }
+        }
+    }
+}
+@CacheableTransform
+abstract class CacheableExpandJar extends ExpandJar {}
+
+// Deliberately lacks @CacheableTransform to distinguish workspace reuse from build-cache reuse.
+abstract class NonCacheableExpandJar extends ExpandJar {}
+
+def artifactType = ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE
+def outputKind = providers.gradleProperty('outputKind').getOrElse('files')
+configurations {
+    expanded {
+        canBeConsumed = false
+        canBeResolved = true
+        attributes.attribute(artifactType, 'expanded')
+    }
+}
+dependencies {
+    registerTransform(providers.gradleProperty('cacheable').getOrElse('true').toBoolean() ? CacheableExpandJar : NonCacheableExpandJar) {
+        from.attribute(artifactType, 'jar')
+        to.attribute(artifactType, 'expanded')
+        parameters.outputKind.set(outputKind)
+    }
+    expanded files(providers.gradleProperty('artifact').getOrElse('input.jar'))
+}
+@CacheableTask
+abstract class CacheControl extends DefaultTask {
+    @Input abstract Property<String> getText()
+    @OutputFile abstract org.gradle.api.file.RegularFileProperty getDestination()
+    @TaskAction void write() { destination.get().asFile.text = text.get() }
+}
+tasks.register('cacheControl', CacheControl) {
+    text.set('build-cache-control')
+    destination.set(layout.buildDirectory.file('control.txt'))
+}
+tasks.register('probe') {
+    dependsOn 'cacheControl'
+    def artifacts = configurations.expanded
+    doLast {
+        def files = artifacts.files
+        if (outputKind == 'none') assert files.empty
+        else files.each { directory ->
+            if (outputKind == 'files') {
+                assert new File(directory, 'resource.txt').text == 'portable-transform-input\n'
+                assert new File(directory, 'nested/gc.properties').text == 'real-transform-output\n'
+                assert new File(directory, 'nested/empty').isDirectory()
+            } else assert directory.isDirectory()
+        }
+        println('RESULT_OK')
+    }
+}

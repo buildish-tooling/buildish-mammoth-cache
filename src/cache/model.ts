@@ -114,6 +114,8 @@ export interface CacheModel {
    * Always includes the shared exclusions for configuration-cache content and `*.lock` files.
    */
   readonly excludePaths: readonly string[];
+  /** Adapter hard excludes, retained separately for complete-unit validation. */
+  readonly hardCacheExcludeGlobs: readonly string[];
 }
 
 /**
@@ -231,6 +233,7 @@ export async function createCacheModel(
     runnerArch: ciContext.runnerArch,
     safeRefName: ciContext.safeRefName,
     partitionFingerprint,
+    hardCacheExcludeGlobs: adapter.getHardCacheExcludeGlobs(),
     partitions,
     includePaths: partitions.flatMap((partition) => partition.absoluteIncludeGlobs),
     excludePaths: deduplicatePaths(
@@ -250,7 +253,7 @@ export function renderCacheFamilyKey(
   const cacheFamilyKey = [
     `${config.cacheKeyPrefix}${buildToolId}`,
     `v${config.cacheSchemaVersion}`,
-    'partitioned-v2',
+    'partitioned-v3',
     partitionFingerprint,
   ].join('-');
 

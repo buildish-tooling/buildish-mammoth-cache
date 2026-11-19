@@ -25,6 +25,7 @@ import {
 } from './cutoff-format';
 import {
   workspaceSchema,
+  isTransformWorkspace,
   workspaceRoot,
   isWorkspaceCachePath,
   isWorkspacePartition,
@@ -34,8 +35,8 @@ import { createManagedCachePathMatcher } from './manifest';
 import { DELTA_ARTIFACT_RESOURCE_LIMITS } from '../delta/discovery';
 import type { CacheModel } from './model';
 
-export const GENERATION_RECORD_PATH = '.mammoth/generations-v2/record.json';
-export const PARTITION_OBJECT_DIRECTORY = '.mammoth/partition-objects-v2';
+export const GENERATION_RECORD_PATH = '.mammoth/generations-v3/record.json';
+export const PARTITION_OBJECT_DIRECTORY = '.mammoth/partition-objects-v3';
 export const PARTITION_STORAGE_LIMITS = { bytes: 64 * 1024 * 1024, records: 200_000 } as const;
 const keySchema = z.string().regex(/^[A-Za-z0-9._:-]{1,512}$/u);
 const writerSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,160}$/u);
@@ -50,7 +51,7 @@ export const objectIdentitySchema = z
   .strict();
 export const partitionDescriptorSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     identity: objectIdentitySchema,
     buildToolId: z.string().min(1),
     partitionFingerprint: z.string().min(1),
@@ -85,7 +86,7 @@ export const generationEntrySchema = z.discriminatedUnion('kind', [
 ]);
 export const generationRecordSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     familyKey: keySchema,
     buildToolId: z.string().min(1),
     partitionFingerprint: z.string().min(1),
@@ -172,10 +173,12 @@ export function partitionObjectPaths(
           ).map((p) => path.join(root, p)),
           ...partition.relativeExcludeGlobs.map((p) => '!' + path.join(root, p)),
           ...(kind === 'workspace'
-            ? workspaceRoots!.flatMap((p) => [
-                `!${path.join(root, p)}/**/gc.properties`,
-                `!${path.join(root, p)}/**/*.lock`,
-              ])
+            ? workspaceRoots!
+                .filter((p) => !isTransformWorkspace(p))
+                .flatMap((p) => [
+                  `!${path.join(root, p)}/**/gc.properties`,
+                  `!${path.join(root, p)}/**/*.lock`,
+                ])
             : []),
           `!${root}/**/.[mM][aA][mM][mM][oO][tT][hH]/**`,
           `!${root}/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**`,

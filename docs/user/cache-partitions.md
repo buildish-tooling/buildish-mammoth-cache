@@ -32,22 +32,38 @@ A and the record while reusing existing B/C objects. Changed partitions are uplo
 
 The Gradle action resolves `GRADLE_USER_HOME` into these ordered partitions:
 
-| Partition             | Contents                                                  | Default  |
-| --------------------- | --------------------------------------------------------- | -------- |
-| `modules`             | Dependency artifacts, JARs, and resource stores           | enabled  |
-| `dependency-metadata` | Complete dependency-resolution metadata snapshots         | enabled  |
-| `transforms-metadata` | Artifact transforms and related metadata                  | disabled |
-| `kotlin-dsl`          | Compiled Kotlin DSL scripts and generated Gradle API JARs | enabled  |
-| `groovy-dsl`          | Complete compiled Groovy DSL workspaces                   | enabled  |
-| `build-cache`         | The local Gradle build cache                              | enabled  |
-| `wrapper-dists`       | Wrapper-downloaded Gradle distributions                   | enabled  |
+| Partition             | Contents                                                  | Default |
+| --------------------- | --------------------------------------------------------- | ------- |
+| `modules`             | Dependency artifacts, JARs, and resource stores           | enabled |
+| `dependency-metadata` | Complete dependency-resolution metadata snapshots         | enabled |
+| `transforms-metadata` | Complete artifact-transform workspaces                    | enabled |
+| `kotlin-dsl`          | Compiled Kotlin DSL scripts and generated Gradle API JARs | enabled |
+| `groovy-dsl`          | Complete compiled Groovy DSL workspaces                   | enabled |
+| `build-cache`         | The local Gradle build cache                              | enabled |
+| `wrapper-dists`       | Wrapper-downloaded Gradle distributions                   | enabled |
 
 See [Gradle cache internals](../../architecture/gradle-cache-internals/) for details on what each
 partition covers and why certain directories are excluded.
 
 The built-in `modules` partition covers dependency artifacts. `dependency-metadata` separately
-covers `caches/modules-*/metadata-*/**` with single-writer publication. The disabled
-`transforms-metadata` preset covers artifact transforms and their metadata, not dependency resolution.
+covers `caches/modules-*/metadata-*/**` with single-writer publication.
+`transforms-metadata` covers derived transform workspaces, not dependency resolution.
+
+The transform partition defaults to `choose-worker-directory` and captures complete
+`caches/transforms-4/<32-hex-key>/` and `caches/<version>/transforms/<32-hex-key>/`
+units, including `metadata.bin`, `results.bin`, outputs and empty directories.
+Unknown/incomplete layouts and mandatory-excluded outputs are skipped with bounded
+warnings; partial user ownership fails. Nested output `gc.properties` files are retained.
+Its selection, replacement and GC semantics match the DSL complete-workspace rules below.
+Set `enabled: false` on `transforms-metadata` to disable it or
+`conflict-handling: default` to reject differing same-key workspace views.
+
+Direct capture includes outputs of non-build-cacheable transforms. These may contain
+private dependency content or data written by build logic: cache and artifact readers
+must be allowed to see those contents. This partition adds scans, hashing, archive and
+transfer I/O, and may duplicate build-cache output bytes. No speedup is guaranteed.
+Cache schema 8 intentionally starts new Gradle and Maven families, including previously
+configured transform partitions; old file-only captures are not promoted to complete units.
 
 The `groovy-dsl` partition captures complete hashed workspaces under
 `caches/*/groovy-dsl/<32-hex-key>/`, including both metadata files, compiled classes,

@@ -123,6 +123,8 @@ export async function captureCacheManifest(
     cacheModel,
     partitions,
     createManagedCachePathMatcher(cacheModel),
+    [],
+    createCacheGlobMatcher(cacheModel.hardCacheExcludeGlobs),
   );
   return {
     schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
@@ -151,6 +153,7 @@ export async function captureCacheMetadataSnapshot(
     partitions,
     createManagedCachePathMatcher(cacheModel),
     warnings,
+    createCacheGlobMatcher(cacheModel.hardCacheExcludeGlobs),
   );
   return {
     buildToolId: cacheModel.buildToolId,
@@ -159,6 +162,11 @@ export async function captureCacheMetadataSnapshot(
     ...(workspaces.length ? { workspaces } : {}),
     ...(warnings.length ? { workspaceWarnings: warnings } : {}),
   };
+}
+
+export function createCacheGlobMatcher(patterns: readonly string[]) {
+  const compiled = patterns.map(compileGlobPattern);
+  return (name: string): boolean => matchesAnyCompiledGlob(name, compiled);
 }
 
 /** Match managed ownership without filesystem discovery. */

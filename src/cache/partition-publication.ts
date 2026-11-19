@@ -117,7 +117,7 @@ export async function freezePartitionPublication(
   const descriptors: PartitionDescriptor[] = [],
     changedIds: string[] = [];
   const record: NonNullable<CutoffJournal['publicationPlan']>['record'] = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     familyKey: state.model.cacheFamilyKey,
     buildToolId: state.model.buildToolId,
     partitionFingerprint: state.model.partitionFingerprint,
@@ -164,7 +164,7 @@ export async function freezePartitionPublication(
     const kind = partitionTransportKind(state.model, partition.id);
     const removed = new Set(state.selection.gc.map((e) => e.relativePath));
     const descriptor: PartitionDescriptor = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       identity: {
         familyKey: state.model.cacheFamilyKey,
         lineagePrefix: generation.lineagePrefix,

@@ -87,11 +87,13 @@ publication observations and envelope upload.
 
 ## Complete Gradle workspace transport
 
-A DSL partition may declare typed `workspaces`: sorted complete file membership
+A Gradle workspace partition may declare typed `workspaces`: sorted complete file membership
 and empty-directory paths for each hashed root. Every recognized workspace upsert
 must belong to exactly one structurally complete descriptor. Groovy requires both
 nonempty metadata files; Kotlin scripts and accessor variants have layout-specific
-required outputs. Ordinary legacy scripts and generated API JARs remain separate
+required outputs. Transforms retain `metadata.bin`, `results.bin`, `transformed/`
+and complete output membership. Nested transform output `gc.properties` is retained;
+mandatory-excluded output makes the whole transform unit unsupported. Ordinary legacy scripts and generated API JARs remain separate
 strict members within Kotlin partitions.
 File-only or partial contributions fail validation. Changed members select all
 members; usage protects the whole workspace. Source directory identities join the
@@ -112,7 +114,7 @@ on the next prepare by discarding only recorded partial contents as a cache miss
 unknown descendants block recovery. This is recoverable per-unit replacement,
 not a transaction across an entire batch of workspaces.
 
-Base storage uses a descriptor under `.mammoth/partition-objects-v2/<partition>/`
+Base storage uses a descriptor under `.mammoth/partition-objects-v3/<partition>/`
 and native payload paths. Workspace references carry accepted complete roots and
 exact ordinary-file paths so native archive path versions match on restore; descriptors bind membership and
 empty directories. Base publication hashes/uploads changed native files without a
@@ -120,9 +122,9 @@ new staging copy. Worker envelopes retain their existing complete-unit transport
 
 ## Snapshot base transport and recovery
 
-Cache schema 7, CI lifecycle 7 and journal schema 5 isolate the typed workspace
-format. Worker manifest/package versions are 6/7; partition descriptors and
-generation records use version 2. A small `.mammoth/generations-v2/record.json`
+Cache schema 8, CI lifecycle 8 and journal schema 6 isolate the typed workspace
+format. Worker manifest/package versions are 7/8; partition descriptors and
+generation records use version 3. A small `.mammoth/generations-v3/record.json`
 selects exact independent partition objects. Previous cache families are not used
 as fallbacks, so this causes a one-time cold start for both Gradle and Maven.
 Old local invocation state and mixed-format worker packages are rejected rather

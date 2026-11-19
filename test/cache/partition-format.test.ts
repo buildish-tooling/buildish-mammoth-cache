@@ -37,7 +37,7 @@ function fixture() {
     decisionDigest: 'a'.repeat(64),
   };
   const descriptor: PartitionDescriptor = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     identity,
     buildToolId: model.buildToolId,
     partitionFingerprint: model.partitionFingerprint,
@@ -61,7 +61,7 @@ function fixture() {
   };
   const generation = createCacheGeneration(model, 'c'.repeat(64));
   const record: GenerationRecord = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     familyKey: model.cacheFamilyKey,
     buildToolId: model.buildToolId,
     partitionFingerprint: model.partitionFingerprint,

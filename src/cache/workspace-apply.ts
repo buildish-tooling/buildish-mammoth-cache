@@ -39,7 +39,7 @@ import { readMetadata, writeMetadata, metadataPath } from './metadata-io';
 import { portableCacheFileMode } from './file-permissions';
 import { isMissingPathError } from '../util/fs';
 
-const INTENT = '.mammoth/workspace-apply-v2/intent.json';
+const INTENT = '.mammoth/workspace-apply-v3/intent.json';
 const MAX_BYTES = 64 * 1024 * 1024;
 export interface IncomingWorkspace {
   partitionId: string;
@@ -49,7 +49,7 @@ export interface IncomingWorkspace {
 }
 const intentSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     familyKey: z.string(),
     partitionId: z.string(),
     root: z.string(),
@@ -121,11 +121,13 @@ async function deleteTree(
 }
 /** A failed prepare cannot publish; the next prepare discards only its recorded partial unit. */
 export async function recoverWorkspaceApplication(model: CacheModel): Promise<void> {
-  if (
-    (await readMetadata(model.cacheRoot, '.mammoth/groovy-apply-v1/intent.json', MAX_BYTES)) !==
-    null
-  )
-    throw new Error('Incompatible previous-format workspace replacement intent.');
+  for (const previous of [
+    '.mammoth/groovy-apply-v1/intent.json',
+    '.mammoth/workspace-apply-v2/intent.json',
+  ]) {
+    if ((await readMetadata(model.cacheRoot, previous, MAX_BYTES)) !== null)
+      throw new Error('Incompatible previous-format workspace replacement intent.');
+  }
   const raw = await readMetadata(model.cacheRoot, INTENT, MAX_BYTES);
   if (raw === null) return;
   const intent = intentSchema.parse(JSON.parse(raw));
@@ -244,7 +246,7 @@ export async function applyWorkspaces(
         model.cacheRoot,
         INTENT,
         intentSchema.parse({
-          schemaVersion: 2,
+          schemaVersion: 3,
           familyKey: model.cacheFamilyKey,
           partitionId: unit.partitionId,
           root,

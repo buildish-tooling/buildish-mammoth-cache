@@ -28,6 +28,7 @@ export async function groovyFixtureModel(root: string, overrides: object[] = [])
   const disabled = [
     'modules',
     'dependency-metadata',
+    'transforms-metadata',
     'kotlin-dsl',
     'build-cache',
     'wrapper-dists',

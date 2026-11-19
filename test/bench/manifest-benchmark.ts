@@ -256,6 +256,7 @@ function createBenchmarkCacheModel(gradleUserHome: string): CacheModel {
     partitionFingerprint: 'benchmark-partitions',
     partitions,
     includePaths: partitions.flatMap((partition) => partition.absoluteIncludeGlobs),
+    hardCacheExcludeGlobs: [],
     excludePaths: [...new Set(partitions.flatMap((partition) => partition.absoluteExcludeGlobs))],
   };
 }

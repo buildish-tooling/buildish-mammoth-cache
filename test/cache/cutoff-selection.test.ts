@@ -96,7 +96,7 @@ describe('cutoff metadata contracts', () => {
   });
   it('distinguishes absent and empty snapshots and rejects partial usage snapshots', () => {
     const manifest = (p: object) => ({
-      schemaVersion: 6,
+      schemaVersion: 7,
       buildToolId: 'test',
       partitions: [{ partitionId: 'data', upserts: [], usedPaths: [], ...p }],
     });
@@ -136,7 +136,7 @@ describe('cutoff metadata contracts', () => {
   });
   it('rejects old/deletion/precondition/native fields and reserved or duplicate paths', () => {
     const valid = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       buildToolId: 'test',
       partitions: [
         {
@@ -191,6 +191,7 @@ describe('cutoff metadata contracts', () => {
       .mockRejectedValue(new Error('unexpected content read'));
     const model = {
       cacheRoot: root,
+      hardCacheExcludeGlobs: [],
       buildToolId: 'test',
       partitions: [{ id: 'data', relativeIncludeGlobs: ['**'], relativeExcludeGlobs: [] }],
     } as unknown as CacheModel;

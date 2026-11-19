@@ -96,6 +96,7 @@ describe('captureCacheManifest', () => {
       expect(manifest.partitions.map((partition) => partition.partitionId)).toEqual([
         'modules',
         'dependency-metadata',
+        'transforms-metadata',
         'kotlin-dsl',
         'groovy-dsl',
         'build-cache',
@@ -110,7 +111,7 @@ describe('captureCacheManifest', () => {
     });
   });
 
-  it('supports opting into the transforms partition explicitly', async () => {
+  it('does not capture unknown transform roots even with explicit opt-in', async () => {
     await withGradleUserHome(async (gradleUserHome) => {
       await writeTrackedFile(gradleUserHome, 'caches/transforms-4/example/transform.bin', 'xform');
 
@@ -122,9 +123,7 @@ describe('captureCacheManifest', () => {
       expect(
         manifest.partitions.find((partition) => partition.partitionId === 'transforms-metadata')
           ?.entries,
-      ).toEqual([
-        expect.objectContaining({ relativePath: 'caches/transforms-4/example/transform.bin' }),
-      ]);
+      ).toEqual([]);
     });
   });
 
@@ -494,6 +493,7 @@ function createTestCacheModel(
     partitionFingerprint: 'feedcafe1234abcd',
     partitions: resolvedPartitions,
     includePaths: resolvedPartitions.flatMap((partition) => partition.absoluteIncludeGlobs),
+    hardCacheExcludeGlobs: [],
     excludePaths: [
       ...new Set(resolvedPartitions.flatMap((partition) => partition.absoluteExcludeGlobs)),
     ],
@@ -520,6 +520,7 @@ function createOverlappingCacheModel(gradleUserHome: string): CacheModel {
     partitionFingerprint: 'overlapfingerprint',
     partitions,
     includePaths: partitions.flatMap((partition) => partition.absoluteIncludeGlobs),
+    hardCacheExcludeGlobs: [],
     excludePaths: [],
   };
 }

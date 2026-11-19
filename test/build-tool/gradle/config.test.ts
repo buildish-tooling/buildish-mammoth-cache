@@ -248,7 +248,7 @@ describe('normalizeActionConfig', () => {
       workerArtifactRetentionDays: 7,
       allowDuplicateDependentDeltaPaths: false,
       cacheKeyPrefix: 'buildish-mammoth-cache-',
-      cacheSchemaVersion: 7,
+      cacheSchemaVersion: 8,
       cachePartitions: [],
       restoreCleanupMode: 'none',
       cacheGcMode: 'timestamp',

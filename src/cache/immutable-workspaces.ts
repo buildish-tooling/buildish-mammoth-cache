@@ -25,18 +25,23 @@ import { validateNormalizedRelativePosixPath } from '../util/paths';
 
 export const GROOVY_WORKSPACE_METADATA = '.mammoth/groovy-workspaces-v1.json';
 export const WORKSPACE_LIMIT = 200_000;
-const prefix = /^caches\/[^/]+\/(?:groovy-dsl|kotlin-dsl)(?:\/|$)/u;
+const prefix = /^caches\/(?:[^/]+\/(?:groovy-dsl|kotlin-dsl|transforms)|transforms-[^/]+)(?:\/|$)/u;
+export const isTransformWorkspace = (root: string): boolean =>
+  /^caches\/(?:transforms-4|[^/]+\/transforms)\/[a-f0-9]{32}$/u.test(root);
 const rootPattern =
-  /^(caches\/[^/]+\/(?:groovy-dsl\/[a-f0-9]{32}|kotlin-dsl\/(?:scripts\/[a-f0-9]{32}|accessors\/[a-f0-9]{32}(?:-PS)?)))(?:\/|$)/u;
+  /^(caches\/(?:[^/]+\/(?:groovy-dsl\/[a-f0-9]{32}|kotlin-dsl\/(?:scripts\/[a-f0-9]{32}|accessors\/[a-f0-9]{32}(?:-PS)?))|(?:transforms-4|[^/]+\/transforms)\/[a-f0-9]{32}))(?:\/|$)/u;
 export const isWorkspaceCachePath = (name: string): boolean => prefix.test(name);
 export const workspaceRoot = (name: string): string | null => rootPattern.exec(name)?.[1] ?? null;
 const partitionPath = (name: string): boolean =>
-  /^caches\/[^/]+\/(?:groovy-dsl|kotlin-dsl|scripts|generated-gradle-jars)\//u.test(name);
+  /^caches\/(?:[^/]+\/(?:groovy-dsl|kotlin-dsl|scripts|generated-gradle-jars|transforms)|transforms-[^/]+)\//u.test(
+    name,
+  );
 export const isWorkspacePartition = (p: CachePartitionDefinition): boolean =>
   p.relativeIncludeGlobs.length > 0 && p.relativeIncludeGlobs.every(partitionPath);
 export const hasWorkspacePartitions = (model: CacheModel): boolean =>
   model.buildToolId === 'gradle' && model.partitions.some(isWorkspacePartition);
 export function workspaceKind(root: string, files: readonly string[] = []) {
+  if (isTransformWorkspace(root)) return 'artifact-transform' as const;
   if (root.includes('/groovy-dsl/')) return 'groovy' as const;
   if (root.includes('/kotlin-dsl/scripts/')) return 'kotlin-script' as const;
   if (root.endsWith('-PS')) return 'kotlin-plugin-spec-accessors' as const;
@@ -48,7 +53,8 @@ export function isWorkspaceBookkeeping(name: string): boolean {
   return (
     isCacheMetadataPath(name) ||
     name.endsWith('.lock') ||
-    path.posix.basename(name) === 'gc.properties'
+    (path.posix.basename(name) === 'gc.properties' &&
+      !isTransformWorkspace(workspaceRoot(name) ?? ''))
   );
 }
 const workspacePath = z.string().refine((name) => {
@@ -69,6 +75,7 @@ const orderedPaths = z
 export const workspaceSchema = z
   .object({
     kind: z.enum([
+      'artifact-transform',
       'groovy',
       'kotlin-script',
       'kotlin-accessor-jars',
@@ -100,22 +107,26 @@ export const workspaceSchema = z
     if (unit.kind !== workspaceKind(unit.root, unit.files))
       ctx.addIssue({ code: 'custom', message: 'Workspace kind/root mismatch.' });
     const requiredFiles =
-      unit.kind === 'groovy'
-        ? ['metadata.bin', 'metadata/metadata.bin']
-        : unit.kind === 'kotlin-accessor-jars'
-          ? ['metadata.bin', 'classes.jar', 'sources.jar']
-          : ['metadata.bin'];
+      unit.kind === 'artifact-transform'
+        ? ['metadata.bin', 'results.bin']
+        : unit.kind === 'groovy'
+          ? ['metadata.bin', 'metadata/metadata.bin']
+          : unit.kind === 'kotlin-accessor-jars'
+            ? ['metadata.bin', 'classes.jar', 'sources.jar']
+            : ['metadata.bin'];
     if (requiredFiles.some((p) => !files.has(unit.root + '/' + p)))
       ctx.addIssue({ code: 'custom', message: 'Workspace required files are missing.' });
     const requiredDirectories =
-      unit.kind === 'groovy'
-        ? ['classes', 'instrumented', 'metadata']
-        : unit.kind === 'kotlin-script'
-          ? ['classes', 'instrumented/classes']
-          : unit.kind === 'kotlin-plugin-spec-accessors' ||
-              unit.kind === 'kotlin-accessor-directories'
-            ? ['classes', 'sources']
-            : [];
+      unit.kind === 'artifact-transform'
+        ? ['transformed']
+        : unit.kind === 'groovy'
+          ? ['classes', 'instrumented', 'metadata']
+          : unit.kind === 'kotlin-script'
+            ? ['classes', 'instrumented/classes']
+            : unit.kind === 'kotlin-plugin-spec-accessors' ||
+                unit.kind === 'kotlin-accessor-directories'
+              ? ['classes', 'sources']
+              : [];
     for (const directory of requiredDirectories) {
       const name = unit.root + '/' + directory;
       if (
@@ -162,11 +173,14 @@ export function assertWorkspaceOwnership(
     throw new Error('Gradle workspace cannot have partial or ambiguous partition ownership.');
 }
 
+class UnsupportedTransformOutput extends Error {}
+
 /** A no-follow, metadata-only inventory; directory identities freeze topology as well as files. */
 export async function inspectWorkspaceTree(
   cacheRoot: string,
   root: string,
   ignoreBookkeeping = true,
+  rejectPath?: (name: string) => boolean,
 ) {
   guardedPath(cacheRoot, root);
   await verifyParents(cacheRoot, path.posix.dirname(root));
@@ -176,6 +190,7 @@ export async function inspectWorkspaceTree(
   const visit = async (relative: string, depth: number): Promise<void> => {
     if (depth > 100 || files.length + directories.length >= WORKSPACE_LIMIT)
       throw new Error('Gradle workspace exceeds traversal limits.');
+    if (rejectPath?.(relative)) throw new UnsupportedTransformOutput();
     const st = await lstat(guardedPath(cacheRoot, relative));
     if (st.isSymbolicLink() || (!st.isDirectory() && !st.isFile()))
       throw new Error('Gradle workspace contains a link or special file.');
@@ -213,6 +228,7 @@ export async function captureImmutableWorkspaces<T extends { relativePath: strin
   partitions: { partitionId: string; entries: T[] }[],
   owns: (id: string, name: string) => boolean,
   warnings: string[] = [],
+  mandatoryExcluded: (name: string) => boolean = (name) => name.endsWith('.lock'),
 ): Promise<WorkspaceObservation[]> {
   if (model.buildToolId !== 'gradle') return [];
   const warn = (message: string) => {
@@ -234,7 +250,10 @@ export async function captureImmutableWorkspaces<T extends { relativePath: strin
     partitions.flatMap((p) =>
       p.entries
         .filter((e) => isWorkspaceCachePath(e.relativePath) && !workspaceRoot(e.relativePath))
-        .map((e) => e.relativePath.split('/').slice(0, 4).join('/')),
+        .map((e) => {
+          const parts = e.relativePath.split('/');
+          return parts.slice(0, parts[1]?.startsWith('transforms-') ? 3 : 4).join('/');
+        }),
     ),
   );
   for (const root of unknown) warn('Skipped unrecognized Gradle cache tree: ' + root.slice(0, 256));
@@ -246,7 +265,20 @@ export async function captureImmutableWorkspaces<T extends { relativePath: strin
   const acceptedFiles = new Set<string>();
   const observations: WorkspaceObservation[] = [];
   for (const root of [...roots].sort((a, b) => a.localeCompare(b))) {
-    const tree = await inspectWorkspaceTree(model.cacheRoot, root);
+    const transform = isTransformWorkspace(root);
+    let tree;
+    try {
+      tree = await inspectWorkspaceTree(
+        model.cacheRoot,
+        root,
+        !transform,
+        transform ? (name) => isCacheMetadataPath(name) || mandatoryExcluded(name) : undefined,
+      );
+    } catch (error) {
+      if (!(error instanceof UnsupportedTransformOutput)) throw error;
+      warn('Skipped Gradle transform workspace with mandatory-excluded outputs: ' + root);
+      continue;
+    }
     if (!tree) {
       warn('Skipped vanished Gradle workspace: ' + root);
       continue;

@@ -40,6 +40,7 @@ export function cutoffFixtureModel(root: string): CacheModel {
     partitionFingerprint: 'layout',
     buildToolId: 'test',
     includePaths: [include],
+    hardCacheExcludeGlobs: [],
     excludePaths: [],
     partitions: [
       {

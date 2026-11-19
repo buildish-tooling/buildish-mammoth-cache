@@ -263,7 +263,7 @@ workflows, skipped writers, fallback, and configuration compatibility.
 
 Each `cache-partitions` entry accepts `conflict-handling`: `default`,
 `choose-worker-directory`, or `choose-worker-entry`. Omission inherits the preset
-policy. The built-in Gradle `groovy-dsl` and `kotlin-dsl` partitions default to
+policy. The built-in Gradle `groovy-dsl`, `kotlin-dsl` and `transforms-metadata` partitions default to
 `choose-worker-directory`; `build-cache` defaults to `choose-worker-entry`.
 Other built-ins and custom partitions default to strict handling. Explicit
 `default` clears an inherited selection policy.
@@ -275,15 +275,16 @@ cache-partitions:
 ```
 
 `choose-worker-directory` supports aggregate Maven partitions whose include
-globs all start with `repository/`, and aggregate Gradle partitions whose includes select DSL workspaces or the
+globs all start with `repository/`, and aggregate Gradle partitions whose includes select DSL/transform workspaces or the
 ordinary legacy-script/generated-API-JAR paths in the built-in Kotlin partition.
 Selection applies only to recognized workspace roots; ordinary files remain strict. Configure the same
 policy in every producer and aggregator. The effective policy changes the partition
 fingerprint and cache family.
 
-For Gradle DSL caches, the unit is the complete hashed workspace, including its
+For Gradle DSL and transform caches, the unit is the complete hashed workspace, including its
 metadata, output files and empty output directories. Groovy requires both metadata
-files; Kotlin uses its layout-specific required outputs. Conflicting producers are selected
+files; Kotlin uses its layout-specific required outputs; transforms require nonempty
+`metadata.bin`, regular `results.bin` and `transformed/`. Conflicting producers are selected
 by the job-name ordering below. Losing views are discarded. The selected complete
 workspace replaces existing managed contents; excluded or unmanaged target
 obstacles fail before replacement. Partial-workspace overrides and single-writer

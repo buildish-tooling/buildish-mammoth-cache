@@ -240,6 +240,30 @@ Size, shape, and rate assumptions:
   worker. Selected artifacts are capped at 2 GiB reported size, 4 GiB expanded size, and 200,000
   manifest entries. Local recovery journals are limited to 200,000 records and 64 MiB with growth reservations and obsolete-checkpoint retirement. Cache-root scanning remains subject to host/backend capacity. _(documented)_
 
+### Artifact-transform workspace contents
+
+The default Gradle `transforms-metadata` partition transports recognized complete
+artifact-transform workspaces through base caches and same-run worker artifacts.
+This includes derived outputs of transforms that have not opted into Gradle's build
+cache. Workspaces contain output files and execution metadata; this feature does not
+serialize the configuration cache's configured task graph or include its encryption
+key. Existing configuration-cache and key exclusions remain enforced. _(documented)_
+
+Transform outputs can contain private dependency contents or sensitive values written
+by build/plugin logic. Neither `@CacheableTransform` nor its absence establishes that
+those files are safe for a particular reader. Operators must authorize all base-cache
+and worker-artifact readers for the captured data, considering their CI backend's
+actual cache/artifact visibility; a read-only consumer can still read restored content.
+Disable the partition when its contents are inappropriate to share. There is no
+secret-free-content guarantee, secret scanner or additional confidentiality boundary
+provided by workspace selection. _(documented)_
+
+Workspace membership, payload hashes and deterministic whole-producer selection
+protect consistency and integrity within the existing trusted-producer model. They do
+not prove semantic equivalence or confidentiality of same-key outputs. This expands
+transported derived content under the existing trust boundaries; it does not make
+untrusted build execution safe. _(documented)_
+
 ## 7. Adversary Model
 
 In-scope adversaries:
@@ -300,7 +324,7 @@ A corrupt current pointer preserves unknown journals until successful replacemen
 - No guarantee that the contents of a restored dependency cache are semantically safe, up to date, license-compliant, or free of malicious artifacts. _(inferred)_
 - No end-to-end cryptographic authenticity for Maven/Gradle dependency artifacts beyond what Maven/Gradle/repository configuration already provides. _(inferred)_
 - No protection if operators grant write tokens/secrets to untrusted workflows or override `read-only=false` for untrusted PRs. _(inferred)_
-- No guarantee that custom cache partitions are secret-free. Hard excludes cover known built-in unsafe paths, not all possible project-specific secrets. _(documented)_
+- No guarantee that built-in or custom cache partitions are secret-free. Hard excludes cover known built-in unsafe paths, not all possible project-specific secrets. _(documented)_
 - No constant-time, cryptographic, authentication, authorization, or access-control guarantees for its own APIs; it relies on GitHub Actions permissions and repository policy. _(inferred)_
 - No promise that concurrent writers make newest-prefix restore globally deterministic; current-ref and default-branch candidates remain compatibility-bounded. _(documented)_
 - No global resource-exhaustion guarantee for arbitrarily large cache roots or manifest capture.
