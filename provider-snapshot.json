@@ -6,7 +6,7 @@
       "type": "git-tags",
       "displayName": "Mammoth Cache Git tags",
       "baseUrl": "https://github.com/buildish-tooling/buildish-mammoth-cache",
-      "fetchedAt": "2026-11-17T13:44:00.722376+00:00"
+      "fetchedAt": "2026-11-19T15:22:21.275556+00:00"
     }
   ],
   "records": [
@@ -66,17 +66,59 @@
         "root": "docs",
         "ref": "48994f88da02c380b39e717b8fa7aee7f57ce446"
       }
+    },
+    {
+      "provider": "mammoth-cache-tags",
+      "kind": "released",
+      "componentSlug": "mammoth-cache",
+      "artifactKey": "mammoth-cache",
+      "version": "0.2.0",
+      "tag": "v0.2.0",
+      "commitSha": "2252f3d8421eb0fe15cbb8a00b9c42531a425bf7",
+      "externalId": "git:buildish-mammoth-cache:v0.2.0",
+      "externalUrl": "https://github.com/buildish-tooling/buildish-mammoth-cache/releases/tag/v0.2.0",
+      "releaseLine": "0.2",
+      "publicationState": "published",
+      "publishedAt": "2026-11-19T10:08:21Z",
+      "docsSource": {
+        "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
+        "root": "docs",
+        "ref": "2252f3d8421eb0fe15cbb8a00b9c42531a425bf7"
+      }
+    },
+    {
+      "provider": "mammoth-cache-tags",
+      "kind": "released",
+      "componentSlug": "mammoth-cache",
+      "artifactKey": "mammoth-cache",
+      "version": "0.2.1",
+      "tag": "v0.2.1",
+      "commitSha": "764097ac7b840113b968f23b0966bb8386ce1e8f",
+      "externalId": "git:buildish-mammoth-cache:v0.2.1",
+      "externalUrl": "https://github.com/buildish-tooling/buildish-mammoth-cache/releases/tag/v0.2.1",
+      "releaseLine": "0.2",
+      "publicationState": "published",
+      "publishedAt": "2026-11-19T15:21:01Z",
+      "docsSource": {
+        "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
+        "root": "docs",
+        "ref": "764097ac7b840113b968f23b0966bb8386ce1e8f"
+      }
     }
   ],
   "artifacts": [
     {
       "componentSlug": "mammoth-cache",
       "artifactKey": "mammoth-cache",
-      "latestStable": "0.1.2",
+      "latestStable": "0.2.1",
       "releaseLines": [
         {
           "key": "0.1",
           "latest": "0.1.2"
+        },
+        {
+          "key": "0.2",
+          "latest": "0.2.1"
         }
       ]
     }
