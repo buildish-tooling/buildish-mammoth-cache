@@ -38,6 +38,38 @@ for (let attempt = 1; attempt <= 3; attempt++) {
       `https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${version}/apache-maven-${version}-bin.tar.gz`,
       { signal: globalThis.AbortSignal.timeout(60_000) },
     );
+    if (!response.ok) {
+      const headers = Object.fromEntries(
+        [
+          'server',
+          'content-type',
+          'age',
+          'cache-control',
+          'via',
+          'x-cache',
+          'cf-cache-status',
+          'cf-ray',
+          'x-request-id',
+        ]
+          .map((name) => [name, response.headers.get(name)])
+          .filter(([, value]) => value !== null),
+      );
+      process.stderr.write(
+        `Maven HTTP failure: ${JSON.stringify({ attempt, status: response.status, url: response.url, headers })}\n`,
+      );
+      const reader = response.body?.getReader();
+      try {
+        const chunk = await reader?.read();
+        const excerpt = new globalThis.TextDecoder().decode(chunk?.value?.subarray(0, 1024));
+        process.stderr.write(
+          `Maven response body (up to 1024 bytes): ${JSON.stringify(excerpt)}\n`,
+        );
+      } catch (error) {
+        process.stderr.write(`Maven response body unavailable: ${error}\n`);
+      } finally {
+        await reader?.cancel().catch(() => undefined);
+      }
+    }
     assert(response.ok, `Maven download failed: ${response.status}`);
     bytes = Buffer.from(await response.arrayBuffer());
     break;
