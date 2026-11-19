@@ -79,19 +79,26 @@ completeness. Different Gradle cache formats can coexist; use Gradle's compatibi
 See [Distributed multi-job builds](../../user/distributed-jobs/#gradle-metadata-writer) for writer
 configuration and skipped-writer examples.
 
-## Artifact transforms: `caches/transforms-*/`
+## Artifact transforms
 
-Artifact transforms (used by plugins such as the Android Gradle Plugin) convert dependencies from one
-form to another. Results are stored under `caches/transforms-3/` (or `transforms-4` in newer Gradle).
+[Artifact transforms](https://docs.gradle.org/current/userguide/artifact_transforms.html) adapt
+resolved dependencies before tasks consume them, for example by unpacking a JAR or rewriting its
+bytecode. Gradle stores their derived outputs in transform workspaces. Their location varies by
+Gradle version; layouts include `caches/transforms-*/` and `caches/<version>/transforms/`.
 
-Transforms are non-portable for three reasons:
+Transform outputs are not inherently non-portable. Gradle supports caching reproducible, relocatable
+transforms through
+[`@CacheableTransform`](https://docs.gradle.org/current/javadoc/org/gradle/api/artifacts/transform/CacheableTransform.html).
+Reuse depends on the transform's implementation and correctly declared inputs and normalization.
 
-1. Transformed outputs often embed absolute paths back to the source artifact location.
-2. Many transforms depend on the JDK version; a result from JDK 11 may be invalid under JDK 17.
-3. Each `transforms-*/` directory contains a `results.bin` index that is sensitive to the local
-   file-system layout and corrupts easily across machines.
+Mammoth's optional `transforms-metadata` preset is disabled by default and currently matches only
+`caches/transforms-*/**`. Direct workspace transport, restoration and distributed conflict handling
+have not yet been qualified. This conservative default does not disable Gradle's artifact transforms
+or establish that all transform workspaces are unsafe to relocate.
 
-This action excludes transforms from all cache partitions.
+Cacheable transforms can also store their outputs in Gradle's build cache. Mammoth's enabled
+`build-cache` partition can carry those entries independently of the disabled transform-workspace
+preset.
 
 ## Build cache: `caches/build-cache-1/`
 
@@ -205,13 +212,13 @@ Compiled Kotlin DSL scripts and generated Gradle API JARs are also included by t
 
 **Omitted by defaults, but configurable through custom partitions:**
 
-| Pattern                                 | Reason for default omission                                 |
-| --------------------------------------- | ----------------------------------------------------------- |
-| `caches/transforms-*/**`                | Disabled `transforms-metadata` preset; environment-specific |
-| `caches/[version]/execution-history/**` | Local execution history and timestamps                      |
-| `caches/[version]/file-hashes/**`       | Local absolute-path indexes                                 |
-| `daemon/**`                             | Local PIDs and ephemeral logs                               |
-| `native/**`                             | Platform-specific; regenerated on demand                    |
+| Pattern                                 | Reason for default omission                               |
+| --------------------------------------- | --------------------------------------------------------- |
+| `caches/transforms-*/**`                | Disabled preset; direct workspace reuse not yet qualified |
+| `caches/[version]/execution-history/**` | Local execution history and timestamps                    |
+| `caches/[version]/file-hashes/**`       | Local absolute-path indexes                               |
+| `daemon/**`                             | Local PIDs and ephemeral logs                             |
+| `native/**`                             | Platform-specific; regenerated on demand                  |
 
 Dependency metadata is cached separately as complete `dependency-metadata` snapshots under
 `caches/modules-*/metadata-*/**`. It is relocatable with compatible Gradle cache formats; locks and
