@@ -33,7 +33,7 @@ export class CutoffArtifacts implements WorkflowArtifactBackend {
     root: string,
     options?: { retentionDays?: number; compressionLevel?: number },
   ) {
-    if (options?.retentionDays !== 7) throw new Error('Expected seven day retention.');
+    if (!options?.retentionDays) throw new Error('Expected explicit retention.');
     if (this.artifacts.some((a) => a.name === name)) throw new Error('Artifact already exists.');
     const id = this.artifacts.length + 1;
     await mkdir(this.storage, { recursive: true });

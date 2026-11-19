@@ -144,7 +144,7 @@ it('round-trips a real installed ZIP archive and explicitly restores upsert mode
       throw new Error('must retain worker');
     },
   };
-  const uploaded = await uploadCutoffPackage(backend, pkg);
+  const uploaded = await uploadCutoffPackage(backend, pkg, 7);
   const downloaded = await downloadCutoffPackage(
     backend,
     uploaded,

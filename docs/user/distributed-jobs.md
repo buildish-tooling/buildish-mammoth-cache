@@ -336,9 +336,22 @@ failed-job rerun safely mixes rerun workers with retained earlier attempts; and 
 rerun reuses retained worker envelopes. Selection never crosses workflow run IDs.
 
 Mammoth retains worker envelopes after failed and successful aggregation, including when no new
-cache generation is needed. Workers request seven days of artifact retention. Retry availability
+cache generation is needed. Workers request seven days of artifact retention by default. Set
+`worker-artifact-retention-days` on either action to request a shorter period, for example one day
+to reduce artifact residence:
+
+```yaml
+- uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+  with:
+    job-mode: distributed-worker
+    worker-artifact-retention-days: 1
+```
+
+Shorter retention narrows the selective or aggregator-only retry window and can require rerunning
+expired workers. Base cache expiry and timestamp GC are independent. Retry availability
 ends when the backend expires or removes the artifacts, the workflow run is deleted, or a user or
-administrator removes them; availability for a full seven days is not guaranteed. Retention uses
+administrator removes them. Repository, organization, and backend limits can shorten the requested
+period; availability for the full period is not guaranteed. Retention uses
 temporary artifact storage until removal. Temporary upload/download staging is cleaned after use. Authoritative partition snapshot transport
 is retained locally for publication and retries and is reset at the next prepare.
 

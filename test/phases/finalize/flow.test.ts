@@ -128,37 +128,49 @@ it('deletes frozen old targets despite Mammoth report atime and publishes an emp
     { partitionId: 'data', kind: 'empty' },
   ]);
 });
-it('keeps imported paths protected before aggregate cutoff, including upstream used-only records', async () => {
-  const r = await root(),
-    artifacts = new CutoffArtifacts(path.join(r, 'artifacts'));
-  const worker = await cutoffJob(path.join(r, 'worker'), {
-    name: 'worker',
-    inputs: { 'job-mode': 'distributed-worker' },
-    artifactBackend: artifacts,
-  });
-  await worker.prepare();
-  await data(worker, 'data/imported');
-  await utimes(path.join(worker.home, 'data/imported'), 1700000000, 1700000000);
-  const published = await executeFinalizeAction(worker.deps);
-  expect(published.deltaArtifactResult?.status).toBe('uploaded');
-  // Same invocation retries retain envelope and stable identity.
-  await executeFinalizeAction(worker.deps);
-  expect(artifacts.artifacts).toHaveLength(1);
-  const aggregate = await cutoffJob(path.join(r, 'aggregate'), {
-    inputs: { 'job-mode': 'distributed-aggregator', 'dependent-jobs': 'worker' },
-    artifactBackend: artifacts,
-  });
-  aggregate.deps.now = () => Date.now() + 10000;
-  await aggregate.prepare();
-  const final = await executeFinalizeAction(aggregate.deps);
-  expect(final.cacheGcResult?.deletedFileCount).toBe(0);
-  expect(final.bootstrap.baseCacheResult?.status).toBe('saved');
-  expect(await readFile(path.join(aggregate.home, 'data/imported'), 'utf8')).toBe('bytes');
-  // Fresh aggregator replay still succeeds and republishes applied upserts.
-  await aggregate.prepare();
-  await executeFinalizeAction(aggregate.deps);
-  expect(artifacts.artifacts).toHaveLength(1);
-});
+it.each(['', '1'])(
+  'keeps imported paths protected and retryable with worker retention input %j',
+  async (retention) => {
+    const r = await root(),
+      artifacts = new CutoffArtifacts(path.join(r, 'artifacts'));
+    const worker = await cutoffJob(path.join(r, 'worker'), {
+      name: 'worker',
+      inputs: {
+        'job-mode': 'distributed-worker',
+        'worker-artifact-retention-days': retention,
+      },
+      artifactBackend: artifacts,
+    });
+    await worker.prepare();
+    await data(worker, 'data/imported');
+    await utimes(path.join(worker.home, 'data/imported'), 1700000000, 1700000000);
+    const upload = vi.spyOn(artifacts, 'uploadArtifact');
+    const published = await executeFinalizeAction(worker.deps);
+    expect(upload.mock.calls[0]?.[3]).toEqual({
+      retentionDays: retention ? 1 : 7,
+      compressionLevel: 1,
+    });
+    expect(published.deltaArtifactResult?.status).toBe('uploaded');
+    // Same invocation retries retain envelope and stable identity.
+    await executeFinalizeAction(worker.deps);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(artifacts.artifacts).toHaveLength(1);
+    const aggregate = await cutoffJob(path.join(r, 'aggregate'), {
+      inputs: { 'job-mode': 'distributed-aggregator', 'dependent-jobs': 'worker' },
+      artifactBackend: artifacts,
+    });
+    aggregate.deps.now = () => Date.now() + 10000;
+    await aggregate.prepare();
+    const final = await executeFinalizeAction(aggregate.deps);
+    expect(final.cacheGcResult?.deletedFileCount).toBe(0);
+    expect(final.bootstrap.baseCacheResult?.status).toBe('saved');
+    expect(await readFile(path.join(aggregate.home, 'data/imported'), 'utf8')).toBe('bytes');
+    // Fresh aggregator replay still succeeds and republishes applied upserts.
+    await aggregate.prepare();
+    await executeFinalizeAction(aggregate.deps);
+    expect(artifacts.artifacts).toHaveLength(1);
+  },
+);
 it.each([0, -1])(
   'fails aggregation on required publication decline %s and retries the frozen key',
   async (decline) => {

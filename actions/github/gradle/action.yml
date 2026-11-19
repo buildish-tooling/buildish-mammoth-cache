@@ -38,6 +38,9 @@ inputs:
   dependent-jobs:
     description: Comma- or newline-separated worker job names consumed by a distributed aggregator.
     required: false
+  worker-artifact-retention-days:
+    description: Requested worker artifact retention in whole days (1–400). Backend limits may shorten it; shorter retention narrows the retry window.
+    required: false
   allow-duplicate-dependent-delta-paths:
     description: Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.
     required: false

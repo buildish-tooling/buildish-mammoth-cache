@@ -14,16 +14,54 @@
  * limitations under the License.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 import { parseCachePartitionsInput } from '../../src/config/shared';
 import { readActionInputs, resolveActionInputsFromConfigFile } from '../../src/config/inputs';
+import { normalizeSharedActionConfig } from '../../src/config/normalize';
+import { cutoffFixtureCi } from '../support/cutoff-fixture';
 
 describe('canonical raw action inputs', () => {
+  it.each(['gradle', 'maven'] as const)(
+    'preserves %s worker retention precedence when GitHub supplies metadata defaults',
+    async (buildTool) => {
+      const descriptor = parseYaml(
+        await readFile(`actions/github/${buildTool}/action.yml`, 'utf8'),
+      ) as { inputs: Record<string, { default?: string | number | boolean }> };
+      await withConfigFile(
+        'cache.yml',
+        'worker-artifact-retention-days: 1\n',
+        async (workspace) => {
+          for (const directValue of [undefined, '7']) {
+            const workflowInputs: Record<string, string> = { 'config-file': 'cache.yml' };
+            if (directValue !== undefined) {
+              workflowInputs['worker-artifact-retention-days'] = directValue;
+            }
+            const direct = readActionInputs(buildTool, {
+              getInput: (name) =>
+                workflowInputs[name] ?? String(descriptor.inputs[name]?.default ?? ''),
+            });
+            const resolved = await resolveActionInputsFromConfigFile(buildTool, direct, {
+              workspace,
+            });
+            for (const phase of ['prepare', 'finalize'] as const) {
+              const config = normalizeSharedActionConfig(resolved, {
+                phase,
+                ciContext: cutoffFixtureCi(workspace),
+              });
+              expect(config.workerArtifactRetentionDays).toBe(directValue === undefined ? 1 : 7);
+            }
+          }
+        },
+      );
+    },
+  );
+
   it('returns the original input object without touching the filesystem when config-file is unset', async () => {
     const directInputs = readActionInputs('maven', { getInput: () => '' });
     const resolvedInputs = await resolveActionInputsFromConfigFile('maven', directInputs, {

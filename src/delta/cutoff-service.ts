@@ -287,11 +287,12 @@ export async function stageCutoffPackage(
 export async function uploadCutoffPackage(
   backend: WorkflowArtifactBackend,
   pkg: StagedCutoffPackage,
+  retentionDays: number,
 ): Promise<WorkflowArtifactDescriptor> {
   if (!backend.capabilities.supportsRetentionDays)
     throw new Error('Artifact backend lacks retention support.');
   return backend.uploadArtifact(pkg.metadata.artifactName, pkg.files, pkg.rootDirectory, {
-    retentionDays: 7,
+    retentionDays,
     compressionLevel: 1,
   });
 }

@@ -25,6 +25,7 @@ export type RawActionInputProperty =
   | 'readOnly'
   | 'jobMode'
   | 'dependentJobs'
+  | 'workerArtifactRetentionDays'
   | 'allowDuplicateDependentDeltaPaths'
   | 'cacheKeyPrefix'
   | 'cachePartitions'
@@ -46,6 +47,8 @@ interface PublicActionInputContractBase {
   readonly name: string;
   readonly tools: readonly ActionBuildTool[];
   readonly default?: string;
+  /** Default applied after config-file resolution, omitted from action metadata. */
+  readonly runtimeDefault?: string;
   readonly description: string;
 }
 
@@ -138,6 +141,16 @@ export const PUBLIC_ACTION_INPUTS = [
     configFileValueKind: 'list',
     description:
       'Comma- or newline-separated worker job names consumed by a distributed aggregator.',
+  },
+  {
+    name: 'worker-artifact-retention-days',
+    property: 'workerArtifactRetentionDays',
+    tools: BOTH,
+    runtimeDefault: '7',
+    configFile: 'allowed',
+    configFileValueKind: 'number',
+    description:
+      'Requested worker artifact retention in whole days (1–400). Backend limits may shorten it; shorter retention narrows the retry window.',
   },
   {
     name: 'allow-duplicate-dependent-delta-paths',
@@ -401,7 +414,7 @@ export function renderPublicActionContractReference(): string {
   const inputs: readonly PublicActionInputContract[] = PUBLIC_ACTION_INPUTS;
   const inputRows = inputs.map((input) => {
     const variants = input.tools.map(capitalize).join(', ');
-    const defaultValue = input.default === undefined ? 'event-dependent or unset' : input.default;
+    const defaultValue = input.default ?? input.runtimeDefault ?? 'event-dependent or unset';
     const configFile = input.configFile === 'allowed' ? 'yes' : 'no';
     return `| \`${input.name}\` | ${variants} | \`${defaultValue}\` | ${configFile} | ${input.description} |`;
   });

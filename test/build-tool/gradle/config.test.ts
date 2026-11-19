@@ -245,6 +245,7 @@ describe('normalizeActionConfig', () => {
       cacheEnabled: true,
       readOnly: false,
       jobMode: 'standalone',
+      workerArtifactRetentionDays: 7,
       allowDuplicateDependentDeltaPaths: false,
       cacheKeyPrefix: 'buildish-mammoth-cache-',
       cacheSchemaVersion: 6,
@@ -256,6 +257,26 @@ describe('normalizeActionConfig', () => {
       defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
     });
   });
+
+  it.each(['1', '400'])('accepts worker artifact retention of %s days', (input) => {
+    const config = normalizeActionConfig(
+      readActionInputs(createInputProvider({ 'worker-artifact-retention-days': input })),
+      { phase: 'prepare', ciContext: baseCiContext, env: {} },
+    );
+    expect(config.workerArtifactRetentionDays).toBe(Number(input));
+  });
+
+  it.each(['0', '-1', '1.5', '1day', 'NaN', 'Infinity', '1e2', '0x10', '401'])(
+    'rejects invalid worker artifact retention %s',
+    (input) => {
+      expect(() =>
+        normalizeActionConfig(
+          readActionInputs(createInputProvider({ 'worker-artifact-retention-days': input })),
+          { phase: 'prepare', ciContext: baseCiContext, env: {} },
+        ),
+      ).toThrow('worker-artifact-retention-days must be a whole number between 1 and 400.');
+    },
+  );
 
   it('parses cache partition overrides and restore cleanup mode', () => {
     const config = normalizeActionConfig(

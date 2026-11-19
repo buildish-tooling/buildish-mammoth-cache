@@ -18,6 +18,11 @@ limitations under the License.
 
 ## Unreleased
 
+- Add `worker-artifact-retention-days` to the Gradle and Maven actions, defaulting to `7`.
+  Request `1` day for shorter worker artifact residence with a narrower selective/aggregator-only
+  retry window. Backend limits and removal can shorten availability further. Cache expiry and
+  timestamp GC remain independent; successful aggregation still retains worker envelopes.
+
 - Save immutable partition objects independently and publish a small generation record last.
   Reuse unchanged partition payloads across generations, publish explicit empty entries for removals,
   and recover available partitions when another object expires. Maven coordinate owners spanning
@@ -94,7 +99,7 @@ limitations under the License.
 - Keep full-generation publication optimization separate (#7). No storage redesign is introduced.
 
 - Retain distributed worker envelopes after failed and successful aggregation so aggregator-only
-  retries can recover without rerunning workers. Workers still request seven-day retention, subject
+  retries can recover without rerunning workers. Workers request seven-day retention by default, subject
   to backend expiry or removal and workflow-run deletion. This uses temporary artifact storage;
   local staging and download directories are still cleaned up.
 

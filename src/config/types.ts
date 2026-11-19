@@ -128,6 +128,8 @@ export interface RawSharedActionInputs {
   readonly jobMode: string;
   /** Raw comma/newline-separated `dependent-jobs` input. Empty string later defaults to none. */
   readonly dependentJobs: string;
+  /** Raw worker artifact retention in days. Empty string later defaults to `'7'`. */
+  readonly workerArtifactRetentionDays: string;
   /** Raw `allow-duplicate-dependent-delta-paths` input. Empty string later defaults to `'false'`. */
   readonly allowDuplicateDependentDeltaPaths: string;
   /** Raw `cache-key-prefix` input. Empty string uses the shared default namespace prefix. */
@@ -217,6 +219,8 @@ export interface NormalizedActionConfig {
    * Defaults to an empty list and may only be non-empty for distributed job modes.
    */
   readonly dependentJobs: readonly string[];
+  /** Requested worker artifact retention in whole days (1–400). Defaults to 7; backend limits apply. */
+  readonly workerArtifactRetentionDays: number;
   /**
    * Whether aggregators may resolve non-identical overlapping dependent delta paths by choosing the
    * newest-mtime entry instead of failing.

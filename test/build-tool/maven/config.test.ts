@@ -444,6 +444,7 @@ describe('normalizeMavenActionConfig', () => {
     expect(config.cacheEnabled).toBe(true);
     expect(config.readOnly).toBe(false);
     expect(config.jobMode).toBe('standalone');
+    expect(config.workerArtifactRetentionDays).toBe(7);
     expect(config.dependentJobs).toEqual([]);
     expect(config.cacheKeyPrefix).toBe('buildish-mammoth-cache-');
     expect(config.cachePartitions).toEqual([]);

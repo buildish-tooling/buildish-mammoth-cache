@@ -45,6 +45,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `read-only`                             | Gradle, Maven | `event-dependent or unset`                    | yes         | Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor. |
 | `job-mode`                              | Gradle, Maven | `standalone`                                  | yes         | Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.                                                                                          |
 | `dependent-jobs`                        | Gradle, Maven | `event-dependent or unset`                    | yes         | Comma- or newline-separated worker job names consumed by a distributed aggregator.                                                                                           |
+| `worker-artifact-retention-days`        | Gradle, Maven | `7`                                           | yes         | Requested worker artifact retention in whole days (1–400). Backend limits may shorten it; shorter retention narrows the retry window.                                        |
 | `allow-duplicate-dependent-delta-paths` | Gradle, Maven | `false`                                       | yes         | Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.  |
 | `cache-key-prefix`                      | Gradle, Maven | `buildish-mammoth-cache-`                     | yes         | Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically.                                         |
 | `cache-partitions`                      | Gradle, Maven | `event-dependent or unset`                    | yes         | JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.                                                                |
@@ -137,6 +138,18 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Default: empty
 - Comma- or newline-separated job names.
 - Only valid with distributed job modes.
+
+### `worker-artifact-retention-days`
+
+- Default: `7`
+- Positive whole-number days from `1` to `400`. Repository, organization, and backend limits may
+  shorten the requested period; availability for the full period is not guaranteed.
+- Applies to new distributed worker artifact uploads for both Gradle and Maven. Producers may
+  request different periods without affecting cache identity or envelope compatibility.
+- Shorter retention reduces artifact residence and narrows the selective or aggregator-only retry
+  window. Expired workers must be rerun before aggregation can succeed.
+- Successful aggregation retains worker envelopes. Base cache expiry and timestamp GC are independent.
+- For a one-day example, see [distributed jobs](../distributed-jobs/#requirements-and-constraints).
 
 ### `cache-key-prefix`
 

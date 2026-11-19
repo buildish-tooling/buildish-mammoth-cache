@@ -26,13 +26,19 @@ Workers exchange assumed changed files and path-only usage. The active implement
 ## Completion and selection
 
 Every writable worker uploads a completion envelope, even with no observations. Names bind
-producer/run/attempt, family and manifest digest. Envelopes request seven-day retention and remain
+producer/run/attempt, family and manifest digest. Envelopes request seven-day retention by default,
+configurable with `worker-artifact-retention-days`, and remain
 after successful/failed aggregation, subject to expiry, external removal or workflow-run deletion.
 The aggregate selects one envelope per requested producer, preferring the latest eligible attempt
 no newer than its own. Missing required producers and ambiguous/incompatible producers fail prepare.
 An optional partition writer may be absent; only its snapshot partitions are imported unless it is
 also declared in `dependent-jobs`. Read-only jobs skip
 artifact lookup, download, application and upload.
+
+Retention changes only the requested artifact residence, subject to backend and organization limits.
+It is not a family/layout dimension or an envelope compatibility requirement. Shorter residence
+narrows the retry window and may require rerunning expired workers. Base cache expiry and timestamp
+GC are independent.
 
 ## Package 6 and manifest 5
 

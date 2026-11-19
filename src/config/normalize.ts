@@ -54,6 +54,9 @@ export function normalizeSharedActionConfig(
     readOnly: resolveReadOnlyInput(rawInputs, rawInputs.readOnly, options.ciContext),
     jobMode,
     dependentJobs,
+    workerArtifactRetentionDays: parseWorkerArtifactRetentionDays(
+      rawInputs.workerArtifactRetentionDays || '7',
+    ),
     allowDuplicateDependentDeltaPaths: parseBooleanInput(
       rawInputs.allowDuplicateDependentDeltaPaths || 'false',
       'allow-duplicate-dependent-delta-paths',
@@ -74,6 +77,15 @@ export function normalizeSharedActionConfig(
     ),
     cacheGcOlderThanDays: parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14'),
   };
+}
+
+function parseWorkerArtifactRetentionDays(input: string): number {
+  const trimmed = input.trim();
+  const value = Number(trimmed);
+  if (!/^[0-9]+$/u.test(trimmed) || !Number.isInteger(value) || value < 1 || value > 400) {
+    throw new Error('worker-artifact-retention-days must be a whole number between 1 and 400.');
+  }
+  return value;
 }
 
 function parseCacheGcOlderThanDays(input: string): number {

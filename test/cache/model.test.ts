@@ -34,6 +34,7 @@ const baseConfig: NormalizedGradleConfig = {
   readOnly: false,
   jobMode: 'standalone',
   dependentJobs: [],
+  workerArtifactRetentionDays: 7,
   allowDuplicateDependentDeltaPaths: false,
   cacheKeyPrefix: 'buildish-mammoth-cache-',
   cachePartitions: [],

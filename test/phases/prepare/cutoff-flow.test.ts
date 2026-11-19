@@ -159,7 +159,7 @@ it('forwards imported old upserts and usage across worker-to-worker-to-aggregato
   const first = await preflightCutoffLifecycle(a.deps.runtimeHost.getState);
   spy.mockRestore();
   const pkg = await stageCutoffPackage(first.journal!, a.ci);
-  await uploadCutoffPackage(artifacts, pkg);
+  await uploadCutoffPackage(artifacts, pkg, 7);
   await rm(pkg.rootDirectory, { recursive: true });
   for (const [name, dependency, mode] of [
     ['worker-b', 'worker-a', 'distributed-worker'],
@@ -187,7 +187,7 @@ it('forwards imported old upserts and usage across worker-to-worker-to-aggregato
       const pre = await preflightCutoffLifecycle(job.deps.runtimeHost.getState);
       const forwarded = await stageCutoffPackage(pre.journal!, job.ci);
       expect(forwarded.manifest.partitions[0]!.usedPaths).toEqual(['data/used']);
-      await uploadCutoffPackage(artifacts, forwarded);
+      await uploadCutoffPackage(artifacts, forwarded, 7);
       await rm(forwarded.rootDirectory, { recursive: true });
     }
   }

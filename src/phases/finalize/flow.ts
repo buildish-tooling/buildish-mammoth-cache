@@ -131,7 +131,12 @@ export async function executeFinalizeAction(
       const pkg = state.workerReceipt ? null : await stageCutoffPackage(state, bootstrap.ciContext);
       try {
         const uploaded =
-          state.workerReceipt ?? (await uploadCutoffPackage(d.artifactBackend, pkg!));
+          state.workerReceipt ??
+          (await uploadCutoffPackage(
+            d.artifactBackend,
+            pkg!,
+            bootstrap.config.workerArtifactRetentionDays,
+          ));
         state.workerReceipt = { name: uploaded.name, id: uploaded.id, size: uploaded.size };
         await persistCutoffJournal(state);
         deltaArtifactResult = {
