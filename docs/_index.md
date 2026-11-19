@@ -33,6 +33,9 @@ For Gradle, Mammoth also preserves entries from Gradle's local build cache, allo
 reuse task outputs. For Maven, Mammoth caches repository artifacts; build-output caching requires
 a separately configured extension.
 
+Use [Adoption and Migration](user/adoption/) to choose a topology, understand costs and plan a
+small pilot, then follow [Getting Started](user/getting-started/) for workflow wiring.
+
 ## Single-job mode
 
 In the most common setup, the action wraps a single build job: it restores the newest compatible
@@ -53,7 +56,9 @@ This action solves that with a **delta exchange** model:
 - A dedicated **aggregator job**, which runs after all workers complete, downloads every delta,
   merges them, and saves the merged result as the new base cache entry.
 
-The result: every parallel job's dependency downloads are captured in one merged generation.
+Aggregate partitions combine workers' contributions subject to conflict policies; single-writer
+metadata partitions retain their designated writer's view. See
+[Adoption and Migration](user/adoption/) for the coverage tradeoffs.
 
 ```mermaid
 graph LR

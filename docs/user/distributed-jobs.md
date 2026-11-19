@@ -322,10 +322,11 @@ only see one of them.
 **The aggregator must declare `needs` for every consumed worker and optional metadata writer.** This ensures all deltas are uploaded
 before the aggregator starts and consumes them during prepare.
 
-**A writable aggregator should use `if: always()` together with its trusted-event condition.** The
-aggregator must run after a failed worker so it can report the missing envelope instead of being
-silently skipped. Pull-request aggregators may be omitted entirely; if they do run, their read-only
-result is the explicit no-op described above.
+**Choose whether aggregation should run after worker failures.** Use `if: always()` together with
+trusted event/ref conditions when you want to consume valid envelopes from failed builds or report
+missing envelopes. A skipped worker or a missing post upload, including after cancellation, leaves
+a required envelope absent. Pull-request aggregators may be omitted entirely; if they do run, their
+read-only result is the explicit no-op described above.
 
 **Workers do not need the aggregator in their `needs`.** Workers are independent of each other;
 only the aggregator depends on all workers.

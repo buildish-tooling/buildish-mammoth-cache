@@ -30,5 +30,6 @@ prepare/finalize design and most configuration options:
 - **Gradle** — adds secure wrapper JAR provisioning and caches `GRADLE_USER_HOME`.
 - **Maven** — caches the Maven local repository (`~/.m2` by default).
 
-Start with [Getting Started](getting-started/) if you are new to the action, or jump directly to
+Start with [Adoption and Migration](adoption/) to choose a topology and plan a pilot, then use
+[Getting Started](getting-started/) for workflow wiring. Jump directly to
 [Configuration](configuration/) for a full input reference.

@@ -23,7 +23,7 @@ limitations under the License.
 Gradle dependency metadata is cached by default in `dependency-metadata`. A standalone job owns
 its complete snapshot automatically. On prepare, preexisting managed metadata is replaced; cache
 misses start that partition empty, and displaced files produce a warning and GitHub summary.
-For multiple jobs, [select a metadata writer](../distributed-jobs/#gradle-metadata-writer) using the
+For distributed jobs, [select a metadata writer](../distributed-jobs/#gradle-metadata-writer) using the
 same partition configuration in every job. Without one, Mammoth retains the previous snapshot and
 warns that local metadata updates will not be published.
 
@@ -65,6 +65,9 @@ Build-output caching requires a separately configured Maven extension. See
 for how it relates to Mammoth's repository caching.
 
 ## Workflow shape
+
+For an existing workflow, first use [Adoption and Migration](../adoption/) to choose cache owners,
+preserve write restrictions and define a small pilot.
 
 The examples below document the action contract. Pin an exact published release or candidate
 ref containing the generated `dist/` bundles, and place the action step _before_ your build
