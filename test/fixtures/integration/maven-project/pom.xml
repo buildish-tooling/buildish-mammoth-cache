@@ -36,8 +36,8 @@
   </build>
 
   <!--
-    Three profiles, each declaring exactly one dependency, mirroring the Gradle fixture's
-    standalone / workerA / workerB configurations.  The profiles are mutually independent so
+    Four profiles, each declaring exactly one dependency, mirroring the Gradle fixture's
+    standalone / workerA / workerB / workerC configurations.  The profiles are mutually independent so
     any combination can be activated together (e.g. -P worker-a,worker-b in the aggregator job).
   -->
   <profiles>
@@ -76,6 +76,18 @@
           <groupId>commons-io</groupId>
           <artifactId>commons-io</artifactId>
           <version>2.22.0</version>
+          <scope>compile</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
+    <profile>
+      <id>worker-c</id>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.commons</groupId>
+          <artifactId>commons-collections4</artifactId>
+          <version>4.5.0</version>
           <scope>compile</scope>
         </dependency>
       </dependencies>

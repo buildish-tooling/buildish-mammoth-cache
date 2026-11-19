@@ -18,6 +18,14 @@ description: >-
   Set up Node.js, install action dependencies, bundle the action, and configure
   Java for an integration test job. Callers must run actions/checkout first.
 
+inputs:
+  java-version:
+    description: Java runtime for the job, retained after composite setup.
+    default: '25'
+  maven:
+    description: Provision the pinned Maven distribution in runner temp.
+    default: 'false'
+
 runs:
   using: composite
   steps:
@@ -35,8 +43,27 @@ runs:
       shell: bash
       run: npm run bundle
 
-    - name: Set up Java 25
+    - name: Set up selected Java
       uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
       with:
         distribution: temurin
-        java-version: '25'
+        java-version: ${{ inputs.java-version }}
+
+    - name: Provision pinned Maven
+      if: inputs.maven == 'true'
+      shell: bash
+      run: node .github/scripts/it-setup-maven.mjs
+
+    - name: Verify actual runtime
+      shell: bash
+      env:
+        EXPECTED_JAVA: ${{ inputs.java-version }}
+        EXPECT_MAVEN: ${{ inputs.maven }}
+      run: |
+        node -p "process.platform + ' ' + process.arch"
+        java -version
+        java -XshowSettings:properties -version 2>&1 | grep -E "java.specification.version = ${EXPECTED_JAVA}[[:space:]]*$"
+        if [[ "$EXPECT_MAVEN" == true ]]; then
+          mvn --version | tee "$RUNNER_TEMP/mammoth-maven-version.log"
+          grep -F 'Apache Maven 3.10.0' "$RUNNER_TEMP/mammoth-maven-version.log"
+        fi

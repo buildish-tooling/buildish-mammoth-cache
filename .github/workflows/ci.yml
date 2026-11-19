@@ -211,17 +211,60 @@ jobs:
           cache: ${{ github.ref == 'refs/heads/main' && 'npm' || '' }}
           cache-dependency-path: '**/package-lock.json'
 
+      - name: Set up Java 25 for cache sharing tests
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Retain Java 25 home
+        run: echo "BUILDISH_TEST_JAVA_25_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
       - name: Set up Java 21
         uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '21'
 
+      - name: Retain Java 21 home
+        run: echo "BUILDISH_TEST_JAVA_21_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Provision pinned Maven
+        run: node .github/scripts/it-setup-maven.mjs
+
       - name: Build the project
         run: make build
 
-      - name: Run local integration tests
-        run: make integration-test
+      - name: Stage Gradle bootstrap fixture
+        env:
+          ACTION_DIRECTORY: .
+          FIXTURE_SOURCE_DIRECTORY: test/fixtures/integration/gradle-project
+        run: bash .github/scripts/stage-fixture.sh local-integration-bootstrap
+
+      - name: Provision the fixture wrapper
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by the preceding step
+        with:
+          base-directory: build/integration-fixtures/local-integration-bootstrap
+          cache-enabled: false
+          read-only: true
+
+      - name: Provision installed Gradle for the opt-in sharing suites
+        working-directory: build/integration-fixtures/local-integration-bootstrap
+        run: |
+          ./gradlew --version
+          gradle_executable="$(find "$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin" -type f -path '*/bin/gradle' -print -quit)"
+          test -x "$gradle_executable"
+          echo "BUILDISH_TEST_GRADLE_EXECUTABLE=$gradle_executable" >> "$GITHUB_ENV"
+
+      - name: Require installed tools and run local integration tests
+        run: |
+          test -x "$BUILDISH_TEST_GRADLE_EXECUTABLE"
+          test -x "$BUILDISH_TEST_JAVA_21_HOME/bin/javac"
+          test -x "$BUILDISH_TEST_JAVA_25_HOME/bin/javac"
+          "$BUILDISH_TEST_GRADLE_EXECUTABLE" --version
+          java -version
+          mvn --version
+          make integration-test
 
   integration-trusted-gradle:
     name: Trusted GitHub integration scenarios (Gradle)

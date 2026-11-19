@@ -27,4 +27,4 @@ else
 fi
 test "$ACTION_JOB_MODE" = 'distributed-aggregator'
 test "$ACTION_DEPENDENT_DELTA_STATUS" = 'applied'
-test "$ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT" = '2'
+test "$ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT" = '3'

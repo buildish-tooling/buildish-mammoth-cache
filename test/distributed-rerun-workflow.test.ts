@@ -64,7 +64,7 @@ it.each(['gradle', 'maven'])(
             ACTION_BASE_CACHE_RESTORE_STATUS: status,
             ACTION_JOB_MODE: 'distributed-aggregator',
             ACTION_DEPENDENT_DELTA_STATUS: 'applied',
-            ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: '2',
+            ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: '3',
           },
         });
         expect(result.error).toBeUndefined();
@@ -77,14 +77,138 @@ it.each(['gradle', 'maven'])(
 
 it('Maven writable workers and aggregator explicitly share the directory conflict policy', async () => {
   const workflow = parse(await readFile('.github/workflows/it-reusable-maven.yml', 'utf8')) as {
+    env: Record<string, string>;
     jobs: Record<string, { steps: { with?: Record<string, string> }[] }>;
   };
   for (const name of ['maven_workers', 'maven_aggregator']) {
     const action = workflow.jobs[name]!.steps.find((s) =>
       s.with?.['job-mode']?.startsWith('distributed-'),
     );
-    expect(JSON.parse(action!.with!['cache-partitions']!)).toEqual([
-      { id: 'repository', 'conflict-handling': 'choose-worker-directory' },
+    expect(action!.with!['cache-partitions']).toBe('${{ env.IT_CACHE_PARTITIONS }}');
+    expect(JSON.parse(workflow.env.IT_CACHE_PARTITIONS!)).toContainEqual({
+      id: 'repository',
+      'conflict-handling': 'choose-worker-directory',
+    });
+  }
+});
+
+// Protect the transport graph and native invocation boundaries, without emulating an OS.
+it.each(['gradle', 'maven'])(
+  '%s native readers wait for publication and share its family',
+  async (tool) => {
+    const workflow = parse(await readFile(`.github/workflows/it-reusable-${tool}.yml`, 'utf8'));
+    const prefix = tool === 'maven' ? 'maven_' : '';
+    const workers = workflow.jobs[prefix + 'workers'];
+    const aggregator = workflow.jobs[prefix + 'aggregator'];
+    const reader = workflow.jobs[prefix + 'standalone_cross_platform'];
+    expect(aggregator.needs).toEqual([prefix + 'workers']);
+    expect(reader.needs).toEqual([prefix + 'aggregator']);
+    expect(reader.if).toContain('inputs.run-cross-platform');
+    expect(reader.if).toContain('inputs.run-writable-scenarios');
+    expect(workers.strategy.matrix.worker.map((w: { id: string }) => w.id)).toEqual(
+      ['a', 'b', 'c'].map((id) => prefix + 'worker_' + id),
+    );
+    expect(reader.strategy.matrix.reader).toEqual([
+      { id: 'windows', os: 'windows-2025', arch: 'x64', java: '21' },
+      { id: 'macos', os: 'macos-15', arch: 'arm64', java: '25' },
     ]);
+    const action = (job: typeof aggregator) =>
+      job.steps.find((s: { uses?: string }) => s.uses === `./actions/github/${tool}`);
+    for (const job of [workers, aggregator, reader]) {
+      expect(action(job).with['cache-partitions']).toBe('${{ env.IT_CACHE_PARTITIONS }}');
+      expect(action(job).with['cache-key-prefix']).toBe(
+        action(aggregator).with['cache-key-prefix'],
+      );
+    }
+    expect(action(reader).with['read-only']).toBe(true);
+    for (const job of [workers, reader]) {
+      const native = job.steps.find((s: { name: string }) => s.name.includes('(Windows)'));
+      expect(native.if).toBe("runner.os == 'Windows'");
+      expect(native.shell).toBe('pwsh');
+      expect(native.run).toContain(tool === 'gradle' ? './gradlew.bat' : 'mvn.cmd');
+      expect(native.run).toContain('$LASTEXITCODE');
+    }
+    const partitions = JSON.parse(workflow.env.IT_CACHE_PARTITIONS);
+    expect(partitions).toContainEqual({
+      id: 'it-portability',
+      includes: ['it-portability/**'],
+      publication: 'aggregate',
+    });
+    if (tool === 'gradle')
+      expect(partitions).toContainEqual({ id: 'dependency-metadata', writer: 'aggregator' });
+  },
+);
+
+it('keeps native write jobs out of PR routing and requires local integration tool homes', async () => {
+  const workflow = parse(await readFile('.github/workflows/ci.yml', 'utf8'));
+  expect(Object.keys(workflow.on).sort()).toEqual(['pull_request', 'push']);
+  for (const tool of ['gradle', 'maven']) {
+    const pr = workflow.jobs[`integration-pr-${tool}`];
+    expect(pr.if).toBe("github.event_name == 'pull_request'");
+    expect(pr.with['run-writable-scenarios']).toBe(false);
+    expect(pr.with['run-cross-platform']).toBe(false);
+    expect(workflow.jobs[`integration-trusted-${tool}`].if).toBe(
+      "github.event_name != 'pull_request'",
+    );
+    expect(workflow.jobs.required_checks.needs).toContain(`integration-trusted-${tool}`);
+    expect(workflow.jobs.required_checks.needs).toContain(`integration-pr-${tool}`);
+  }
+  const local = workflow.jobs['local-integration-tests'].steps
+    .map((s: { run?: string }) => s.run || '')
+    .join('\n');
+  for (const value of [
+    'BUILDISH_TEST_GRADLE_EXECUTABLE',
+    'BUILDISH_TEST_JAVA_21_HOME',
+    'BUILDISH_TEST_JAVA_25_HOME',
+  ]) {
+    expect(local).toContain(`test -x "$${value}`);
+  }
+  const setup = parse(await readFile('.github/actions/it-setup/action.yml', 'utf8'));
+  expect(
+    setup.runs.steps.find((s: { uses?: string }) => s.uses?.startsWith('actions/setup-java@')).with[
+      'java-version'
+    ],
+  ).toBe('${{ inputs.java-version }}');
+});
+
+it.each(['gradle', 'maven'])(
+  '%s initializes runner-dependent cache roots in steps',
+  async (tool) => {
+    const workflow = parse(await readFile(`.github/workflows/it-reusable-${tool}.yml`, 'utf8'));
+    const prefix = tool === 'maven' ? 'maven_' : '';
+    const home = tool === 'gradle' ? 'GRADLE_USER_HOME' : 'MAVEN_USER_HOME';
+    for (const job of Object.values(workflow.jobs) as { env?: Record<string, string> }[]) {
+      expect(JSON.stringify(job.env || {})).not.toContain('runner.');
+    }
+    for (const name of ['workers', 'aggregator', 'standalone_cross_platform']) {
+      const steps = workflow.jobs[prefix + name].steps;
+      const initialize = steps.findIndex(
+        (step: { env?: Record<string, string> }) => step.env?.IT_CACHE_HOME,
+      );
+      const setup = steps.findIndex(
+        (step: { uses?: string }) => step.uses === '$/.github/actions/it-setup',
+      );
+      expect(initialize).toBeGreaterThanOrEqual(0);
+      expect(initialize).toBeLessThan(setup);
+      expect(steps[initialize].env.IT_CACHE_HOME).toContain('${{ runner.temp }}');
+      expect(steps[initialize].run).toContain(home + '=%s');
+      expect(steps[initialize].run).toContain('"$GITHUB_ENV"');
+    }
+  },
+);
+
+it('inspects transported Groovy workspaces before any fixture build can repair them', async () => {
+  const workflow = parse(await readFile('.github/workflows/it-reusable-gradle.yml', 'utf8'));
+  for (const name of ['aggregator', 'standalone_cross_platform']) {
+    const steps = workflow.jobs[name].steps;
+    const inspection = steps.findIndex((step: { run?: string }) =>
+      step.run?.includes('it-cache-fixture.mjs groovy'),
+    );
+    const firstBuild = steps.findIndex(
+      (step: { run?: string }) =>
+        step.run?.includes('it-verify-worker-deltas.sh') || step.run?.includes('./gradlew'),
+    );
+    expect(inspection).toBeGreaterThanOrEqual(0);
+    expect(firstBuild).toBeGreaterThan(inspection);
   }
 });

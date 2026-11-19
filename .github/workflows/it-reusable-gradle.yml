@@ -21,12 +21,12 @@ name: IT Mammoth Cache for Gradle (Reusable)
 # - standalone_round_trip exercises a writable Linux cache round-trip by capturing the
 #   action-generated cache key, saving a cache snapshot immediately, wiping the cached subtrees,
 #   restoring that exact key, and proving the fixture resolves offline.
-# - worker_a + worker_b -> aggregator exercises distributed worker delta publication plus
+# - worker_a + worker_b + worker_c -> aggregator exercises distributed worker delta publication plus
 #   same-run aggregator download/merge/apply using deterministic worker job names.
 # - duplicate_invocation_guard proves duplicate same-job action usage is rejected.
 # - pull_request_worker -> pull_request_read_only checks the full PR read-only distributed topology
 #   under minimal permissions: no worker upload and an explicit aggregator no-op.
-# - standalone_cross_platform is a lightweight smoke check on macOS/Windows only.
+# - standalone_cross_platform restores the Linux publication in fresh Windows/macOS jobs.
 #
 # Isolation/safety notes:
 # - Every scenario stages a fresh fixture copy into a unique per-job build directory.
@@ -35,8 +35,7 @@ name: IT Mammoth Cache for Gradle (Reusable)
 #   scenarios also include github.run_attempt to isolate their cache round-trip assertions.
 # - Distributed artifact exchange stays within the current workflow run only; the action never uses
 #   cross-run `findBy` lookups here.
-# - The Windows smoke job intentionally runs under `shell: bash` and executes `./gradlew`, so the
-#   fixture does not currently need a `gradlew.bat` launcher.
+# - Windows builds use the native batch launcher under PowerShell; Bash only stages fixtures.
 
 on:
   workflow_call:
@@ -73,8 +72,8 @@ on:
         type: boolean
       run-cross-platform:
         description: >-
-          Run the lightweight standalone macOS/Windows smoke scenario that verifies wrapper setup
-          and action/runtime compatibility without enabling writable cross-platform coverage.
+          Run native Windows/macOS workers and fresh readers through the existing
+          distributed graph; false retains Linux-only distributed checks.
         required: false
         default: false
         type: boolean
@@ -87,6 +86,8 @@ permissions:
 env:
   ACTION_DIRECTORY: .
   FIXTURE_SOURCE_DIRECTORY: test/fixtures/integration/gradle-project
+  IT_CACHE_PARTITIONS: >-
+    [{"id":"dependency-metadata","writer":"aggregator"},{"id":"it-portability","includes":["it-portability/**"],"publication":"aggregate"}]
 
 jobs:
   # Performs a deterministic same-job save -> wipe -> restore cycle using the action-generated
@@ -168,18 +169,37 @@ jobs:
         env:
           STEPS_RESTORE_OUTPUTS_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
 
-  # Workers A and B each publish one independent same-run delta artifact for the aggregator.
-  # They run in parallel via a matrix; both must complete before the aggregator starts.
+  # Each worker publishes an independent same-run delta artifact for the aggregator.
+  # Reuse the distributed graph: native workers on main, Linux workers on release branches.
   workers:
-    name: Linux distributed ${{ matrix.worker.label }} (publish delta artifact)
+    name: Gradle distributed ${{ matrix.worker.id }} (${{ matrix.worker.os }}, Java ${{ matrix.worker.java }})
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-26.04
+    runs-on: ${{ matrix.worker.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         worker:
-          - { id: worker_a, label: 'worker A', task: resolveWorkerA }
-          - { id: worker_b, label: 'worker B', task: resolveWorkerB }
+          - id: worker_a
+            fixture: worker_a
+            os: ubuntu-26.04
+            arch: x64
+            java: '21'
+            task: resolveWorkerA
+          - id: worker_b
+            fixture: worker_b
+            os: ${{ inputs.run-cross-platform && 'windows-2025' || 'ubuntu-26.04' }}
+            arch: x64
+            java: '25'
+            task: resolveWorkerB
+          - id: worker_c
+            fixture: worker_c
+            os: ${{ inputs.run-cross-platform && 'macos-15' || 'ubuntu-26.04' }}
+            arch: ${{ inputs.run-cross-platform && 'arm64' || 'x64' }}
+            java: '21'
+            task: resolveWorkerC
+    env:
+      EXPECTED_ARCH: ${{ matrix.worker.arch }}
     defaults:
       run:
         shell: bash
@@ -189,35 +209,74 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-gradle-${{ matrix.worker.id }}
+        run: printf 'GRADLE_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          java-version: ${{ matrix.worker.java }}
+          maven: 'false'
+
+      - name: Verify runner architecture
+        run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
+
+      - name: Expose GnuPG on Windows PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
 
       - name: Prepare Mammoth Cache for Gradle
+        id: prepare
         uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
-          cache-key-prefix: it-distributed-${{ github.run_id }}-
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
+          cache-key-prefix: it-gradle-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
           github-job-name: ${{ matrix.worker.id }}
 
-      - name: Produce worker cache delta
-        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
-        run: ./gradlew --info --no-daemon ${{ matrix.worker.task }}
+      - name: Seed worker filesystem contribution
+        run: node .github/scripts/it-cache-fixture.mjs seed gradle ${{ matrix.worker.fixture }}
 
-  # Aggregator waits for both workers, downloads their current-run artifacts, applies both deltas,
-  # and confirms the restored dependency jars are reused without being downloaded again. Worker
-  # artifacts remain available for selective reruns.
+      - name: Produce worker dependency and seed portable output on worker A (POSIX)
+        if: runner.os != 'Windows'
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        env:
+          WORKER_TASK: ${{ matrix.worker.task }}
+          WORKER_ID: ${{ matrix.worker.id }}
+        run: |
+          tasks=("$WORKER_TASK")
+          if [[ "$WORKER_ID" == worker_a ]]; then tasks+=(portable); fi
+          ./gradlew --info --no-daemon --console=plain --build-cache "${tasks[@]}"
+
+      - name: Produce worker dependency (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        env:
+          WORKER_TASK: ${{ matrix.worker.task }}
+        run: |
+          & ./gradlew.bat --info --no-daemon --console=plain --build-cache $env:WORKER_TASK
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # The job finishes its normal action post publication before fresh readers start.
   aggregator:
-    name: Linux distributed aggregator (download+merge worker deltas)
+    name: Linux Gradle distributed aggregator (merge and publish)
     if: inputs.run-writable-scenarios
     needs: [workers]
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_ARCH: x64
     defaults:
       run:
         shell: bash
@@ -227,8 +286,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-gradle-aggregator
+        run: printf 'GRADLE_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          java-version: '21'
+          maven: 'false'
+
+      - name: Verify runner architecture
+        run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
+
+      - name: Expose GnuPG on Windows PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh aggregator
@@ -239,24 +314,52 @@ jobs:
         with:
           base-directory: build/integration-fixtures/aggregator
           job-mode: distributed-aggregator
-          dependent-jobs: worker_a,worker_b
-          cache-key-prefix: it-distributed-${{ github.run_id }}-
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
+          cache-key-prefix: it-gradle-distributed-${{ github.run_id }}-
+          dependent-jobs: worker_a,worker_b,worker_c
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
           github-job-name: aggregator
 
-      - name: Verify dependent worker delta jars are reused without re-download
-        working-directory: build/integration-fixtures/aggregator
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/it-verify-worker-deltas.sh"
-
-      - name: Assert both worker artifacts were consumed
+      - name: Assert aggregator action outputs
         env:
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
           ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
           ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-gradle-aggregator.sh
+
+      - name: Inspect restored Groovy workspaces before Gradle can rebuild them
+        run: node .github/scripts/it-cache-fixture.mjs groovy gradle
+
+      - name: Build the designated metadata snapshot without re-downloading worker JARs
+        working-directory: build/integration-fixtures/aggregator
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/it-verify-worker-deltas.sh"
+
+      - name: Assert every worker filesystem contribution
+        run: node .github/scripts/it-cache-fixture.mjs assert gradle
+
+      - name: Execute restored POSIX distribution launcher
+        if: runner.os != 'Windows'
+        run: node .github/scripts/it-cache-fixture.mjs launcher gradle
+
+      - name: Verify restored dependencies and portable output offline (POSIX)
+        if: runner.os != 'Windows'
+        working-directory: build/integration-fixtures/aggregator
+        run: ./gradlew --offline --info --no-daemon --console=plain --build-cache resolveWorkerA resolveWorkerB resolveWorkerC portable 2>&1 | tee verify.log
+
+      - name: Verify restored dependencies and portable output offline (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/integration-fixtures/aggregator
+        run: |
+          & ./gradlew.bat --offline --info --no-daemon --console=plain --build-cache resolveWorkerA resolveWorkerB resolveWorkerC portable 2>&1 | Tee-Object -FilePath verify.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assert dependency resolution and portable task cache hit
+        run: node .github/scripts/it-cache-fixture.mjs gradle-log gradle build/integration-fixtures/aggregator/verify.log
 
   # Proves that two action invocations in the same GitHub job cannot race or double-run post-work.
   duplicate_invocation_guard:
@@ -394,16 +497,21 @@ jobs:
           ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-gradle-pr.sh
 
-  # Lightweight macOS/Windows smoke coverage only. This runs under bash on both platforms and uses
-  # `./gradlew`, so the fixture intentionally relies on the POSIX launcher rather than `gradlew.bat`.
+  # Repurpose the native smoke jobs as fresh readers of the Linux publication.
   standalone_cross_platform:
-    name: Cross-platform standalone smoke (${{ matrix.os }})
-    if: inputs.run-cross-platform
-    runs-on: ${{ matrix.os }}
+    name: Gradle fresh reader (${{ matrix.reader.os }}, Java ${{ matrix.reader.java }})
+    if: inputs.run-cross-platform && inputs.run-writable-scenarios
+    needs: [aggregator]
+    runs-on: ${{ matrix.reader.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        reader:
+          - { id: windows, os: windows-2025, arch: x64, java: '21' }
+          - { id: macos, os: macos-15, arch: arm64, java: '25' }
+    env:
+      EXPECTED_ARCH: ${{ matrix.reader.arch }}
     defaults:
       run:
         shell: bash
@@ -413,28 +521,73 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-gradle-reader-${{ matrix.reader.id }}
+        run: printf 'GRADLE_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          java-version: ${{ matrix.reader.java }}
+          maven: 'false'
+
+      - name: Verify runner architecture
+        run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
 
       - name: Expose GnuPG on Windows PATH
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: ./.github/scripts/expose-gpg-windows.ps1
 
-      - name: Stage fixture
-        run: bash .github/scripts/stage-fixture.sh cross-platform-${{ matrix.os }}
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh reader-${{ matrix.reader.id }}
 
       - name: Prepare Mammoth Cache for Gradle
+        id: prepare
         uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
-          base-directory: build/integration-fixtures/cross-platform-${{ matrix.os }}
-          cache-key-prefix: it-cross-platform-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-
+          base-directory: build/integration-fixtures/reader-${{ matrix.reader.id }}
+          job-mode: standalone
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
+          cache-key-prefix: it-gradle-distributed-${{ github.run_id }}-
           read-only: true
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
-          github-job-name: standalone_cross_platform
+          github-job-name: reader-${{ matrix.reader.id }}
 
-      - name: Verify Gradle runs on this runner
-        working-directory: build/integration-fixtures/cross-platform-${{ matrix.os }}
-        run: ./gradlew --info --version
+      - name: Assert reader action outputs
+        env:
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
+        run: node .github/scripts/it-cache-fixture.mjs reader gradle
+
+      - name: Assert every worker filesystem contribution
+        run: node .github/scripts/it-cache-fixture.mjs assert gradle
+
+      - name: Execute restored POSIX distribution launcher
+        if: runner.os != 'Windows'
+        run: node .github/scripts/it-cache-fixture.mjs launcher gradle
+
+      - name: Inspect restored Groovy workspaces before Gradle can rebuild them
+        run: node .github/scripts/it-cache-fixture.mjs groovy gradle
+
+      - name: Verify restored dependencies and portable output offline (POSIX)
+        if: runner.os != 'Windows'
+        working-directory: build/integration-fixtures/reader-${{ matrix.reader.id }}
+        run: ./gradlew --offline --info --no-daemon --console=plain --build-cache resolveWorkerA resolveWorkerB resolveWorkerC portable 2>&1 | tee verify.log
+
+      - name: Verify restored dependencies and portable output offline (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/integration-fixtures/reader-${{ matrix.reader.id }}
+        run: |
+          & ./gradlew.bat --offline --info --no-daemon --console=plain --build-cache resolveWorkerA resolveWorkerB resolveWorkerC portable 2>&1 | Tee-Object -FilePath verify.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assert dependency resolution and portable task cache hit
+        run: node .github/scripts/it-cache-fixture.mjs gradle-log gradle build/integration-fixtures/reader-${{ matrix.reader.id }}/verify.log

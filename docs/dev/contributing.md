@@ -109,6 +109,55 @@ The snapshot and same-ID URL assertions
 were qualified with Maven 3.10.0 / Resolver 2.0.24; qualify other versions before extending those
 conclusions. It is opt-in and does not run as part of ordinary `make check`.
 
+The Java-sharing, Groovy-workspace and metadata-eviction suites also use an already installed
+Gradle via `BUILDISH_TEST_GRADLE_EXECUTABLE`. Set `BUILDISH_TEST_JAVA_21_HOME` and
+`BUILDISH_TEST_JAVA_25_HOME` to full installed JDK homes for the Java-sharing/Groovy cases.
+These cases skip locally when their tools are absent. The designated CI integration step
+provisions Gradle 9.6.1 and both JDKs and fails if these paths are missing.
+
+### GitHub integration graph
+
+The existing Gradle and Maven reusable workflows retain their standalone round-trip,
+duplicate-invocation and fork-safe PR scenarios. On default-branch pushes, their distributed
+worker/aggregator graph also exercises native runner interoperability:
+
+| Stage        | Runner           | Java |
+| ------------ | ---------------- | ---- |
+| Worker A     | Ubuntu 26.04 x64 | 21   |
+| Worker B     | Windows 2025 x64 | 25   |
+| Worker C     | macOS 15 ARM64   | 21   |
+| Aggregator   | Ubuntu 26.04 x64 | 21   |
+| Fresh reader | Windows 2025 x64 | 21   |
+| Fresh reader | macOS 15 ARM64   | 25   |
+
+The readers repurpose the earlier native smoke jobs and wait for the aggregator's normal
+post-job publication. They restore into isolated cache/project locations, require a Mammoth
+cache hit and resolve all three workers' dependencies offline. Release-branch pushes retain
+Linux distributed checks without native readers; PR scenarios remain read-only.
+The Gradle fixture pins 9.6.1; Maven jobs provision a checksum-pinned 3.10.0 distribution
+into runner temp. Windows builds use native batch launchers under PowerShell.
+
+Gradle's aggregator is the explicit dependency-metadata writer. It first resolves metadata
+online while rejecting JAR re-downloads, then verifies dependencies offline. Readers also
+check restored Groovy metadata/empty output directories and a deliberately portable task's
+`FROM-CACHE` result. Only worker A seeds that task: independently produced Gradle cache
+archives can differ in invocation metadata despite identical outputs. Environment-sensitive
+tasks may legitimately recompile. Maven keeps
+origin markers and explicitly uses the existing `choose-worker-directory` conflict policy;
+this checks artifact resolution, not Maven task-output caching.
+
+A small custom partition checks each worker's contribution using names with spaces, accents,
+Unicode and punctuation, plus empty/binary files. POSIX consumers check executable bits and
+run restored scripts. The restored Gradle distribution launcher also runs on POSIX. Windows checks file bytes;
+arbitrary executable-bit preservation through
+Windows republishing is outside this graph. Cache roots use ordinary paths.
+
+Review workflow routing, setup order, native launchers, quoting and assertions before pushing;
+use existing static checks and focused local tests. Local review and Linux tests cannot prove
+native Windows/macOS behavior or GitHub cache/artifact transport. A passing hosted run is
+required for that evidence. The graph does not cover every OS as publisher/aggregator, every
+directed OS pair or a Gradle/Maven version matrix.
+
 To keep the staged workspace on disk after a run (useful for debugging):
 
 ```bash

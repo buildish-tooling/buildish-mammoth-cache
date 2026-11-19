@@ -21,13 +21,13 @@ name: IT Mammoth Cache for Maven (Reusable)
 # - maven_standalone_round_trip exercises a writable Linux cache round-trip by capturing the
 #   action-generated cache key, saving a cache snapshot immediately, wiping the Maven local
 #   repository, restoring that exact key, and proving the fixture resolves offline.
-# - maven_worker_a + maven_worker_b -> maven_aggregator exercises distributed worker delta
+# - maven_worker_a + maven_worker_b + maven_worker_c -> maven_aggregator exercises distributed worker delta
 #   publication plus same-run aggregator download/merge/apply using deterministic worker job names.
-#   Assertion: both worker-profile dependencies resolve offline in the aggregator after merge.
+#   Assertion: all worker-profile dependencies resolve offline in the aggregator after merge.
 # - maven_duplicate_invocation_guard proves duplicate same-job action usage is rejected.
 # - maven_pull_request_worker -> maven_pull_request_read_only checks the full PR read-only
 #   distributed topology under minimal permissions.
-# - maven_standalone_cross_platform is a lightweight smoke check on macOS/Windows only.
+# - maven_standalone_cross_platform verifies the Linux publication in fresh Windows/macOS jobs.
 #   Maven (from setup-java) is available on all runners; no GnuPG setup is required.
 #
 # Isolation/safety notes:
@@ -72,7 +72,8 @@ on:
         type: boolean
       run-cross-platform:
         description: >-
-          Run the lightweight standalone macOS/Windows smoke scenario.
+          Run native Windows/macOS workers and fresh readers through the existing
+          distributed graph; false retains Linux-only distributed checks.
         required: false
         default: false
         type: boolean
@@ -83,6 +84,8 @@ permissions:
 env:
   ACTION_DIRECTORY: .
   FIXTURE_SOURCE_DIRECTORY: test/fixtures/integration/maven-project
+  IT_CACHE_PARTITIONS: >-
+    [{"id":"repository","conflict-handling":"choose-worker-directory"},{"id":"it-portability","includes":["it-portability/**"],"publication":"aggregate"}]
 
 jobs:
   # Performs a deterministic same-job save -> wipe -> restore cycle using the action-generated
@@ -102,6 +105,8 @@ jobs:
 
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-standalone-round-trip
@@ -163,18 +168,37 @@ jobs:
         env:
           STEPS_RESTORE_OUTPUTS_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
 
-  # Workers A and B each publish one independent same-run delta artifact for the aggregator.
-  # They run in parallel via a matrix; both must complete before the aggregator starts.
+  # Each worker publishes an independent same-run delta artifact for the aggregator.
+  # Reuse the distributed graph: native workers on main, Linux workers on release branches.
   maven_workers:
-    name: Linux Maven distributed ${{ matrix.worker.label }} (publish delta artifact)
+    name: Maven distributed ${{ matrix.worker.id }} (${{ matrix.worker.os }}, Java ${{ matrix.worker.java }})
     if: inputs.run-writable-scenarios
-    runs-on: ubuntu-26.04
+    runs-on: ${{ matrix.worker.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         worker:
-          - { id: maven_worker_a, label: 'worker A', profile: worker-a }
-          - { id: maven_worker_b, label: 'worker B', profile: worker-b }
+          - id: maven_worker_a
+            fixture: worker_a
+            os: ubuntu-26.04
+            arch: x64
+            java: '21'
+            profile: worker-a
+          - id: maven_worker_b
+            fixture: worker_b
+            os: ${{ inputs.run-cross-platform && 'windows-2025' || 'ubuntu-26.04' }}
+            arch: x64
+            java: '25'
+            profile: worker-b
+          - id: maven_worker_c
+            fixture: worker_c
+            os: ${{ inputs.run-cross-platform && 'macos-15' || 'ubuntu-26.04' }}
+            arch: ${{ inputs.run-cross-platform && 'arm64' || 'x64' }}
+            java: '21'
+            profile: worker-c
+    env:
+      EXPECTED_ARCH: ${{ matrix.worker.arch }}
     defaults:
       run:
         shell: bash
@@ -184,36 +208,65 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-${{ matrix.worker.id }}
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          java-version: ${{ matrix.worker.java }}
+          maven: 'true'
+
+      - name: Verify runner architecture
+        run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
 
       - name: Prepare Mammoth Cache for Maven
+        id: prepare
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
-          cache-partitions: '[{"id":"repository","conflict-handling":"choose-worker-directory"}]'
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
           github-job-name: ${{ matrix.worker.id }}
 
-      - name: Produce worker cache delta
-        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
-        run: mvn -P ${{ matrix.worker.profile }} dependency:resolve
+      - name: Seed worker filesystem contribution
+        run: node .github/scripts/it-cache-fixture.mjs seed maven ${{ matrix.worker.fixture }}
 
-  # Aggregator waits for both workers, downloads their current-run artifacts, applies both deltas,
-  # and confirms the merged dependencies resolve offline. Worker artifacts remain available for
-  # selective reruns.
+      - name: Produce worker dependency (POSIX)
+        if: runner.os != 'Windows'
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        env:
+          WORKER_PROFILE: ${{ matrix.worker.profile }}
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P "$WORKER_PROFILE" dependency:resolve
+
+      - name: Produce worker dependency (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        env:
+          WORKER_PROFILE: ${{ matrix.worker.profile }}
+        run: |
+          & mvn.cmd -B "-Dmaven.repo.local=$env:MAVEN_USER_HOME/repository" -P $env:WORKER_PROFILE dependency:resolve
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # The job finishes its normal action post publication before fresh readers start.
   maven_aggregator:
-    name: Linux Maven distributed aggregator (download+merge worker deltas)
+    name: Linux Maven distributed aggregator (merge and publish)
     if: inputs.run-writable-scenarios
     needs: [maven_workers]
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_ARCH: x64
     defaults:
       run:
         shell: bash
@@ -223,41 +276,61 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-aggregator
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          java-version: '21'
+          maven: 'true'
+
+      - name: Verify runner architecture
+        run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
 
       - name: Stage fixture
-        run: bash .github/scripts/stage-fixture.sh maven-aggregator
+        run: bash .github/scripts/stage-fixture.sh maven_aggregator
 
       - name: Prepare Mammoth Cache for Maven
         id: prepare
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
-          base-directory: build/integration-fixtures/maven-aggregator
+          base-directory: build/integration-fixtures/maven_aggregator
           job-mode: distributed-aggregator
-          cache-partitions: '[{"id":"repository","conflict-handling":"choose-worker-directory"}]'
-          dependent-jobs: maven_worker_a,maven_worker_b
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
+          dependent-jobs: maven_worker_a,maven_worker_b,maven_worker_c
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
           github-job-name: maven_aggregator
 
-      - name: Verify worker A dependency (guava) resolves offline after delta merge
-        working-directory: build/integration-fixtures/maven-aggregator
-        run: mvn -P worker-a dependency:resolve --offline
-
-      - name: Verify worker B dependency (commons-io) resolves offline after delta merge
-        working-directory: build/integration-fixtures/maven-aggregator
-        run: mvn -P worker-b dependency:resolve --offline
-
-      - name: Assert both worker artifacts were consumed
+      - name: Assert aggregator action outputs
         env:
           ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
           ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
           ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
           ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-maven-aggregator.sh
+
+      - name: Assert every worker filesystem contribution
+        run: node .github/scripts/it-cache-fixture.mjs assert maven
+
+      - name: Resolve all worker dependencies offline (POSIX)
+        if: runner.os != 'Windows'
+        working-directory: build/integration-fixtures/maven_aggregator
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P worker-a,worker-b,worker-c dependency:resolve --offline
+
+      - name: Resolve all worker dependencies offline (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/integration-fixtures/maven_aggregator
+        run: |
+          & mvn.cmd -B "-Dmaven.repo.local=$env:MAVEN_USER_HOME/repository" -P worker-a,worker-b,worker-c dependency:resolve --offline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # Proves that two action invocations in the same GitHub job cannot race or double-run post-work.
   maven_duplicate_invocation_guard:
@@ -275,6 +348,8 @@ jobs:
 
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-duplicate-guard
@@ -324,6 +399,8 @@ jobs:
 
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-pull-request-worker
@@ -360,6 +437,8 @@ jobs:
 
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-pull-request
@@ -390,15 +469,21 @@ jobs:
           ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-maven-pr.sh
 
-  # Lightweight macOS/Windows smoke coverage. No GnuPG setup required for Maven.
+  # Repurpose the native smoke jobs as fresh readers of the Linux publication.
   maven_standalone_cross_platform:
-    name: Maven cross-platform standalone smoke (${{ matrix.os }})
-    if: inputs.run-cross-platform
-    runs-on: ${{ matrix.os }}
+    name: Maven fresh reader (${{ matrix.reader.os }}, Java ${{ matrix.reader.java }})
+    if: inputs.run-cross-platform && inputs.run-writable-scenarios
+    needs: [maven_aggregator]
+    runs-on: ${{ matrix.reader.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        reader:
+          - { id: windows, os: windows-2025, arch: x64, java: '21' }
+          - { id: macos, os: macos-15, arch: arm64, java: '25' }
+    env:
+      EXPECTED_ARCH: ${{ matrix.reader.arch }}
     defaults:
       run:
         shell: bash
@@ -408,22 +493,58 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-reader-${{ matrix.reader.id }}
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
+        with:
+          java-version: ${{ matrix.reader.java }}
+          maven: 'true'
 
-      - name: Stage fixture
-        run: bash .github/scripts/stage-fixture.sh maven-cross-platform-${{ matrix.os }}
+      - name: Verify runner architecture
+        run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
+
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh maven_reader-${{ matrix.reader.id }}
 
       - name: Prepare Mammoth Cache for Maven
+        id: prepare
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
-          base-directory: build/integration-fixtures/maven-cross-platform-${{ matrix.os }}
-          cache-key-prefix: it-maven-cross-platform-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-
+          base-directory: build/integration-fixtures/maven_reader-${{ matrix.reader.id }}
+          job-mode: standalone
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
+          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
           read-only: true
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
-          github-job-name: maven_standalone_cross_platform
+          github-job-name: maven_reader-${{ matrix.reader.id }}
 
-      - name: Verify Maven runs on this runner
-        run: mvn --version
+      - name: Assert reader action outputs
+        env:
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
+        run: node .github/scripts/it-cache-fixture.mjs reader maven
+
+      - name: Assert every worker filesystem contribution
+        run: node .github/scripts/it-cache-fixture.mjs assert maven
+
+      - name: Resolve all worker dependencies offline (POSIX)
+        if: runner.os != 'Windows'
+        working-directory: build/integration-fixtures/maven_reader-${{ matrix.reader.id }}
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P worker-a,worker-b,worker-c dependency:resolve --offline
+
+      - name: Resolve all worker dependencies offline (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/integration-fixtures/maven_reader-${{ matrix.reader.id }}
+        run: |
+          & mvn.cmd -B "-Dmaven.repo.local=$env:MAVEN_USER_HOME/repository" -P worker-a,worker-b,worker-c dependency:resolve --offline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

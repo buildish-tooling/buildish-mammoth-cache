@@ -54,6 +54,20 @@ it('relocates a real toolkit tar archive with stable version inputs, exclusions 
   await writeFile(path.join(source, 'data/a'), 'portable');
   await chmod(path.join(source, 'data/a'), 0o755);
   await writeFile(path.join(source, 'data/excluded'), 'excluded');
+  const trickyNames = [
+    'nested directory/file with spaces.txt',
+    'Grüße für Jörg/français été à Noël cœur.txt',
+    '資料/cache 🦣.bin',
+    "a & b #1 + 50% = (ok) [x] 'quote' $cash !.txt",
+    '-leading-dash.txt',
+    'empty file',
+  ];
+  for (const name of trickyNames) {
+    const file = path.join(source, 'data', name);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, name === 'empty file' ? Buffer.alloc(0) : Buffer.from([0, 255, 13, 10]));
+  }
+
   const paths = (base: string) => [
     path.join(base, 'data/**'),
     '!' + path.join(base, 'data/excluded'),
@@ -67,7 +81,9 @@ it('relocates a real toolkit tar archive with stable version inputs, exclusions 
         expect(crossOs).toBe(true);
         version = utils.getCacheVersion(patterns, 'gzip', crossOs);
         const members = await utils.resolvePaths(patterns);
-        expect(members).toEqual(['data/a']);
+        expect(members.sort()).toEqual(
+          ['data/a', ...trickyNames.map((name) => 'data/' + name)].sort(),
+        );
         await tar.createTar(archive, members, 'gzip');
         return 1;
       },
@@ -92,6 +108,12 @@ it('relocates a real toolkit tar archive with stable version inputs, exclusions 
   await createGitHubBaseCacheBackend(backend, source).saveCache(paths(source), 'family');
   await createGitHubBaseCacheBackend(backend, target).restoreCache(paths(target), 'family');
   expect(await readFile(path.join(target, 'data/a'), 'utf8')).toBe('portable');
+  for (const name of trickyNames) {
+    expect(await readFile(path.join(target, 'data', name))).toEqual(
+      name === 'empty file' ? Buffer.alloc(0) : Buffer.from([0, 255, 13, 10]),
+    );
+  }
+
   expect((await lstat(path.join(target, 'data/a'))).mode & 0o111).not.toBe(0);
   await expect(lstat(path.join(target, 'data/excluded'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(process.cwd()).toBe(cwd);
