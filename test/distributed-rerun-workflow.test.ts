@@ -15,7 +15,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -212,3 +213,43 @@ it('inspects transported Groovy workspaces before any fixture build can repair t
     expect(firstBuild).toBeGreaterThan(inspection);
   }
 });
+
+it.skipIf(process.platform === 'win32')(
+  'accepts native Maven Central origin keys and rejects a different URL',
+  async () => {
+    const root = await mkdtemp(path.resolve('build/maven-marker-fixture-'));
+    const env = { ...process.env, MAVEN_USER_HOME: root };
+    const run = (...args: string[]) =>
+      spawnSync(process.execPath, ['.github/scripts/it-cache-fixture.mjs', ...args], {
+        env,
+        encoding: 'utf8',
+      });
+    try {
+      for (const worker of ['worker_a', 'worker_b', 'worker_c']) {
+        expect(run('seed', 'maven', worker).status).toBe(0);
+      }
+      const artifacts = [
+        ['com/google/guava/guava/33.6.0-jre', 'guava-33.6.0-jre.jar'],
+        ['commons-io/commons-io/2.22.0', 'commons-io-2.22.0.jar'],
+        ['org/apache/commons/commons-collections4/4.5.0', 'commons-collections4-4.5.0.jar'],
+      ];
+      // Actual tracking key observed in Maven 3.10.0's hosted worker artifact.
+      const central = 'central-8fac3ebd6edbaca3c794783fa38088af0aa128e7';
+      for (const [directory, jar] of artifacts) {
+        const target = path.join(root, 'repository', directory!);
+        await mkdir(target, { recursive: true });
+        await writeFile(path.join(target, jar!), 'artifact');
+        await writeFile(path.join(target, '_remote.repositories'), `${jar}>${central}=\r\n`);
+      }
+      const restored = run('assert', 'maven');
+      expect(restored.status, restored.stderr).toBe(0);
+      const marker = path.join(root, 'repository', artifacts[0]![0]!, '_remote.repositories');
+      for (const origin of ['central', 'central-0000000000000000000000000000000000000000', '']) {
+        await writeFile(marker, `${artifacts[0]![1]}>${origin}=\n`);
+        expect(run('assert', 'maven').status, `Unexpected origin accepted: ${origin}`).not.toBe(0);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

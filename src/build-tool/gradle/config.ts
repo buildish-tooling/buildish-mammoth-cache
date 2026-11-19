@@ -160,7 +160,10 @@ function joinWithinBaseDirectory(baseDirectory: string, relativePath: string): s
 }
 
 function normalizeGradleUserHome(input: string, env: NodeJS.ProcessEnv | undefined): string {
-  const supportedDefault = env?.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle');
+  // Persisted cache roots require an absolute path with native separators.
+  const supportedDefault = path.resolve(
+    env?.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle'),
+  );
   const trimmed = input.trim();
   if (trimmed.length === 0) return supportedDefault;
   if (path.resolve(trimmed) !== path.resolve(supportedDefault)) {

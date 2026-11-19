@@ -19,6 +19,7 @@
 // Small filesystem assertions shared by the existing native integration jobs.
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { chmod, glob, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -78,6 +79,9 @@ if (operation === 'seed') {
     }
   }
   if (tool === 'maven') {
+    // Maven 3.10's Resolver qualifies origin keys with the configured repository URL.
+    const central =
+      'central-' + createHash('sha1').update('https://repo.maven.apache.org/maven2').digest('hex');
     for (const [directory, jar] of [
       ['com/google/guava/guava/33.6.0-jre', 'guava-33.6.0-jre.jar'],
       ['commons-io/commons-io/2.22.0', 'commons-io-2.22.0.jar'],
@@ -86,9 +90,10 @@ if (operation === 'seed') {
       const artifact = path.join(root, 'repository', directory);
       assert((await stat(path.join(artifact, jar))).size > 0);
       assert(
-        (await readFile(path.join(artifact, '_remote.repositories'), 'utf8')).includes(
-          jar + '>central=',
-        ),
+        (await readFile(path.join(artifact, '_remote.repositories'), 'utf8'))
+          .split(/\r?\n/u)
+          .includes(jar + '>' + central + '='),
+        `Expected Central origin marker for ${directory}/${jar}`,
       );
     }
   }

@@ -408,6 +408,22 @@ describe('normalizeActionConfig', () => {
     expect(config.allowDuplicateDependentDeltaPaths).toBe(true);
   });
 
+  it.each(['', 'explicit'])(
+    'normalizes the environment-selected Gradle home (%s input)',
+    (input) => {
+      const home = path.join(os.tmpdir(), 'mammoth-cache-home') + '/./gradle/';
+      const config = normalizeActionConfig(
+        readActionInputs(createInputProvider(input ? { 'gradle-user-home': home } : {})),
+        {
+          phase: 'prepare',
+          ciContext: baseCiContext,
+          env: { GRADLE_USER_HOME: home },
+        },
+      );
+      expect(config.gradleUserHome).toBe(path.resolve(home));
+    },
+  );
+
   it('defaults to read-only on pull requests', () => {
     const config = normalizeActionConfig(readActionInputs(emptyInputProvider()), {
       phase: 'prepare',
