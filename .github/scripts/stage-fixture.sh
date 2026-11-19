@@ -31,6 +31,16 @@ rm -rf "$fixture_dir"
 mkdir -p "$fixture_dir"
 cp -R "${FIXTURE_SOURCE_DIRECTORY}/." "$fixture_dir"
 
+# Gradle fingerprints script bytes: checkout CRLF must not change the portable task key.
+node --input-type=module - "$fixture_dir" <<'NODE'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+for (const name of ['build.gradle', 'settings.gradle', 'gradlew']) {
+  const file = path.join(process.argv[2], name);
+  if (existsSync(file)) writeFileSync(file, readFileSync(file, 'utf8').replace(/\r\n/g, '\n'));
+}
+NODE
+
 if [ -f "$fixture_dir/gradlew" ]; then
   chmod +x "$fixture_dir/gradlew"
 fi

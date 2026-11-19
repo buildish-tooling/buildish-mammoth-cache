@@ -253,3 +253,47 @@ it.skipIf(process.platform === 'win32')(
     }
   },
 );
+
+it('stages identical Gradle source bytes despite checkout line endings', async () => {
+  const root = await mkdtemp(path.resolve('build/fixture-line-endings-'));
+  try {
+    const source = path.join(root, 'source');
+    await mkdir(source);
+    const scripts = ['build.gradle', 'settings.gradle', 'gradlew'];
+    for (const name of scripts) {
+      const text = await readFile(
+        path.join('test/fixtures/integration/gradle-project', name),
+        'utf8',
+      );
+      await writeFile(
+        path.join(source, name),
+        text.replace(/\r\n/gu, '\n').replace(/\n/gu, '\r\n'),
+      );
+    }
+    const binary = Buffer.from([0, 13, 10, 255]);
+    await writeFile(path.join(source, 'payload.bin'), binary);
+    await writeFile(path.join(source, 'gradlew.bat'), '@echo off\r\n');
+    await writeFile(path.join(source, 'pom.xml'), '<project/>\r\n');
+    const result = spawnSync('bash', ['.github/scripts/stage-fixture.sh', 'line-endings'], {
+      env: { ...process.env, ACTION_DIRECTORY: root, FIXTURE_SOURCE_DIRECTORY: source },
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const staged = path.join(root, 'build/integration-fixtures/line-endings');
+    for (const name of scripts) {
+      expect(await readFile(path.join(staged, name))).toEqual(
+        Buffer.from(
+          (
+            await readFile(path.join('test/fixtures/integration/gradle-project', name), 'utf8')
+          ).replace(/\r\n/gu, '\n'),
+        ),
+      );
+      expect(await readFile(path.join(source, name), 'utf8')).toContain('\r\n');
+    }
+    expect(await readFile(path.join(staged, 'payload.bin'))).toEqual(binary);
+    expect(await readFile(path.join(staged, 'gradlew.bat'), 'utf8')).toBe('@echo off\r\n');
+    expect(await readFile(path.join(staged, 'pom.xml'), 'utf8')).toBe('<project/>\r\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
