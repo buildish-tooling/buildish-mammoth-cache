@@ -20,6 +20,35 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+## Expected child-build failures in the Gradle summary
+
+Mammoth automatically suppresses build-result capture for Gradle builds launched by `Test`
+tasks, including TestKit fixtures. Tests can deliberately invoke failing builds with
+`buildAndFail()`; the enclosing test task determines whether those outcomes are correct.
+The enclosing build is still reported, so an unexpected test failure remains visible.
+
+Builds launched by `Exec` and other tasks remain reportable by default. If a task deliberately
+launches a failing Gradle build and checks its outcome, set
+`BUILDISH_MAMMOTH_CACHE_GRADLE_SKIP_BUILD_RESULT_CAPTURE=true` in the child process environment:
+
+```kotlin
+tasks.register<Exec>("verifyExpectedFailure") {
+  commandLine("./gradlew", "-p", "fixture", "someTask")
+  environment("BUILDISH_MAMMOTH_CACHE_GRADLE_SKIP_BUILD_RESULT_CAPTURE", "true")
+  isIgnoreExitValue = true
+  doLast {
+    check(executionResult.get().exitValue == 1) {
+      "Expected the fixture build to exit with code 1"
+    }
+  }
+}
+```
+
+For other process-launching tasks, pass the same variable through their process environment
+API. The opt-out applies to descendants that inherit the environment and suppresses reporting
+only; dependency caching remains enabled. Test code that replaces a child process environment
+must preserve the variable to retain automatic suppression.
+
 ## Cache miss on every build
 
 **Symptom:** The job summary shows "Base cache: miss" or "Base cache: partial hit" every run,

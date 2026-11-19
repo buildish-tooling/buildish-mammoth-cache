@@ -23,6 +23,7 @@ import { test } from 'vitest';
 
 import { createGitHubPlatform, createGitHubReportSink } from '../../src/ci/github';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import { loadGradleBuildReport } from '../../src/build-tool/gradle/build-results';
 import {
   normalizeGradleActionConfig,
   readGradleActionInputs,
@@ -85,7 +86,6 @@ async function main(): Promise<void> {
       { args: ['help'], label: 'Baseline help build' },
       { args: ['publishFakeBuildScan'], label: 'Publish fake Build Scan' },
       { args: ['publishFakeBuildScanFailure'], label: 'Fail fake Build Scan publication' },
-      { args: ['failingVerification'], expectedExitCode: 1, label: 'Fail verification task' },
     ];
 
     await executePrepareAction({
@@ -108,6 +108,42 @@ async function main(): Promise<void> {
       await runGradle(runtime, invocation.args, invocation.label, invocation.expectedExitCode ?? 0);
     }
 
+    const testArgs = [
+      ':tests:test',
+      '--configuration-cache',
+      '--configuration-cache-problems=fail',
+      '-Dorg.gradle.isolated-projects=true',
+    ];
+    const firstTestOutput = await runGradle(runtime, testArgs, 'Store isolated test configuration');
+    assert.match(firstTestOutput, /Configuration cache entry stored/u);
+    const secondTestOutput = await runGradle(
+      runtime,
+      testArgs,
+      'Reuse isolated test configuration',
+    );
+    assert.match(secondTestOutput, /Reusing configuration cache/u);
+    // Both executions must actually run the Test task, rather than skip it as up-to-date.
+    for (const output of [firstTestOutput, secondTestOutput]) {
+      assert.match(output, /expected TestKit failures were asserted/u);
+    }
+    const successfulReport = await loadGradleBuildReport({
+      tempDirectory: runtime.env.RUNNER_TEMP!,
+    });
+    assert.deepEqual(successfulReport.warnings, []);
+    assert.ok(successfulReport.builds.some((build) => build.requestedTasks === ':tests:test'));
+    assert.ok(
+      successfulReport.builds.every((build) => build.rootProjectName === 'mammoth-cache-gradle-it'),
+    );
+    assert.ok(successfulReport.builds.every((build) => !build.buildFailed));
+
+    await runGradle(
+      runtime,
+      [...testArgs, '-PbreakFixtureAssertion=true'],
+      'Report an unexpected test failure',
+      1,
+    );
+    await runGradle(runtime, ['failingVerification'], 'Fail verification task', 1);
+
     const finalizeStatus = await executeFinalizeAction({
       artifactBackend: unavailableArtifactApi(),
       cacheBackend: unavailableCacheApi(),
@@ -129,9 +165,17 @@ async function main(): Promise<void> {
       'utf8',
     );
 
-    assert.equal(finalizeStatus.buildReport.builds.length, 4);
-    assert.equal(finalizeStatus.buildReport.builds.filter((build) => !build.buildFailed).length, 3);
-    assert.equal(finalizeStatus.buildReport.builds.filter((build) => build.buildFailed).length, 1);
+    assert.equal(finalizeStatus.buildReport.builds.length, successfulReport.builds.length + 2);
+    assert.equal(
+      finalizeStatus.buildReport.builds.filter((build) => !build.buildFailed).length,
+      successfulReport.builds.length,
+    );
+    assert.equal(finalizeStatus.buildReport.builds.filter((build) => build.buildFailed).length, 2);
+    assert.ok(
+      finalizeStatus.buildReport.builds.some(
+        (build) => build.buildFailed && build.requestedTasks === ':tests:test',
+      ),
+    );
     assert.ok(
       finalizeStatus.buildReport.builds.some(
         (build) => build.buildScanUri === 'https://scans.gradle.com/s/fake-published-scan',
@@ -241,7 +285,7 @@ async function stageProject(
 async function writeFixtureProject(projectDirectory: string): Promise<void> {
   await writeFile(
     path.join(projectDirectory, 'settings.gradle'),
-    `rootProject.name = 'mammoth-cache-gradle-it'\n`,
+    `rootProject.name = 'mammoth-cache-gradle-it'\ninclude 'tests'\n`,
     'utf8',
   );
   await writeFile(
@@ -281,6 +325,68 @@ async function writeFixtureProject(projectDirectory: string): Promise<void> {
   await writeFile(
     path.join(buildSrcDirectory, 'src', 'main', 'groovy', 'fixture', 'FakeBuildScanPlugin.groovy'),
     `package fixture\n\nimport org.gradle.api.GradleException\nimport org.gradle.api.Plugin\nimport org.gradle.api.Project\n\nclass FakeBuildScanPlugin implements Plugin<Project> {\n    @Override\n    void apply(Project project) {\n        def extension = project.extensions.create('buildScan', FakeBuildScanExtension)\n        project.tasks.register('publishFakeBuildScan') {\n            doLast {\n                extension.publish('https://scans.gradle.com/s/fake-published-scan')\n            }\n        }\n        project.tasks.register('publishFakeBuildScanFailure') {\n            doLast {\n                extension.fail(new RuntimeException('simulated Build Scan publication failure'))\n            }\n        }\n        project.tasks.register('failingVerification') {\n            doLast {\n                throw new GradleException('simulated task failure')\n            }\n        }\n    }\n}\n\nclass FakeBuildScanExtension {\n    private Closure<?> publishedCallback\n    private Closure<?> errorCallback\n\n    void buildScanPublished(Closure<?> callback) {\n        publishedCallback = callback\n    }\n\n    void onError(Closure<?> callback) {\n        errorCallback = callback\n    }\n\n    void publish(String uri) {\n        publishedCallback?.call(new FakePublishedBuildScan(uri))\n    }\n\n    void fail(Throwable error) {\n        errorCallback?.call(error)\n    }\n}\n\nclass FakePublishedBuildScan {\n    final URI buildScanUri\n\n    FakePublishedBuildScan(String uri) {\n        this.buildScanUri = new URI(uri)\n    }\n}\n`,
+    'utf8',
+  );
+  await writeTestKitFixture(projectDirectory);
+}
+
+async function writeTestKitFixture(projectDirectory: string): Promise<void> {
+  const testProjectDirectory = path.join(projectDirectory, 'tests');
+  const sources = path.join(testProjectDirectory, 'src', 'test', 'java');
+  await mkdir(sources, { recursive: true });
+  await writeFile(
+    path.join(testProjectDirectory, 'build.gradle'),
+    `plugins { id 'java' }
+repositories { mavenCentral() }
+dependencies {
+    testImplementation gradleTestKit()
+    testImplementation 'junit:junit:4.13.2'
+}
+tasks.named('test', Test) {
+    systemProperty 'fixture.gradle.home', gradle.gradleHomeDir.absolutePath
+    systemProperty 'fixture.gradle.user.home', gradle.gradleUserHomeDir.absolutePath
+    systemProperty 'fixture.directory', layout.buildDirectory.dir('fixtures').get().asFile.absolutePath
+    systemProperty 'fixture.breakAssertion', providers.gradleProperty('breakFixtureAssertion').getOrElse('false')
+    outputs.upToDateWhen { false }
+    testLogging.showStandardStreams = true
+}
+`,
+    'utf8',
+  );
+  await writeFile(
+    path.join(sources, 'BuildReportingTest.java'),
+    `import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.gradle.testkit.runner.GradleRunner;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class BuildReportingTest {
+  @Test
+  public void expectedFailuresDoNotBecomeJobFailures() throws Exception {
+    assertFalse("unexpected test failure", Boolean.getBoolean("fixture.breakAssertion"));
+    assertEquals("true", System.getenv("BUILDISH_MAMMOTH_CACHE_GRADLE_SKIP_BUILD_RESULT_CAPTURE"));
+    Path fixtures = new File(System.getProperty("fixture.directory")).toPath();
+    Files.createDirectories(fixtures);
+    Path fixture = Files.createTempDirectory(fixtures, "negative-");
+    Files.writeString(fixture.resolve("settings.gradle"), "rootProject.name = 'negative-test-fixture'\\n");
+    Files.writeString(fixture.resolve("build.gradle"),
+      "tasks.register('expectedFailure') { doLast { throw new GradleException('expected fixture failure') } }\\n");
+    GradleRunner runner = GradleRunner.create()
+      .withProjectDir(fixture.toFile())
+      .withGradleInstallation(new File(System.getProperty("fixture.gradle.home")))
+      .withTestKitDir(fixtures.resolve("test-kit").toFile())
+      .withArguments("expectedFailure", "--gradle-user-home", System.getProperty("fixture.gradle.user.home"),
+      "--configuration-cache", "--configuration-cache-problems=fail", "-Dorg.gradle.isolated-projects=true");
+    assertTrue(runner.buildAndFail().getOutput().contains("expected fixture failure"));
+    String reused = runner.buildAndFail().getOutput();
+    assertTrue(reused.contains("expected fixture failure"));
+    assertTrue(reused.contains("Reusing configuration cache"));
+    System.out.println("expected TestKit failures were asserted");
+  }
+}
+`,
     'utf8',
   );
 }
@@ -381,7 +487,7 @@ async function runGradle(
   args: readonly string[],
   label: string,
   expectedExitCode = 0,
-): Promise<void> {
+): Promise<string> {
   console.log(`\n--- ${label} ---`);
   const result = await runProcess('./gradlew', args, {
     cwd: runtime.projectDirectory,
@@ -392,6 +498,7 @@ async function runGradle(
     expectedExitCode,
     `Gradle command '${label}' exited with ${result.exitCode}. Output:\n${result.output}`,
   );
+  return result.output;
 }
 
 function unavailableCacheApi(): BaseCacheBackend {

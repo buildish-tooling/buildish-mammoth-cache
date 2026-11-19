@@ -113,14 +113,26 @@ if (System.properties[skipEnvKey] ?: System.getenv(skipEnvKey)) {
     return
 }
 
-// Only the outermost Gradle invocation participates in capture
-if (gradle.getParent() != null) {
-    return
-}
-
 // Require Gradle 7.0 or newer for BuildService support
 if (GradleVersion.current().baseVersion < GradleVersion.version("7.0")) {
     logger.warn("buildish/mammoth-cache/gradle: Gradle build-result capture requires Gradle 7.0+; current version is ${'$'}{GradleVersion.current().version}. Skipping capture.")
+    return
+}
+
+// Test fixtures may deliberately fail. Their enclosing test task owns the outcome.
+// Configure included-build projects too, even though their own results are not captured.
+if (GradleVersion.current().baseVersion >= GradleVersion.version("8.8")) {
+    gradle.lifecycle.beforeProject { project ->
+        TestBuildResultCapture.suppress(project)
+    }
+} else {
+    gradle.beforeProject { project ->
+        TestBuildResultCapture.suppress(project)
+    }
+}
+
+// Only the outermost Gradle invocation participates in capture
+if (gradle.getParent() != null) {
     return
 }
 
@@ -159,6 +171,14 @@ projectsEvaluated { g ->
     g.rootProject.pluginManager.withPlugin(DEVELOCITY_PLUGIN) {
         if (g.rootProject.pluginManager.hasPlugin(SCAN_PLUGIN)) return
         onScanReady()
+    }
+}
+
+class TestBuildResultCapture {
+    static void suppress(org.gradle.api.Project project) {
+        project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->
+            task.environment("${SKIP_CAPTURE_ENVIRONMENT_VARIABLE}", "true")
+        }
     }
 }
 
