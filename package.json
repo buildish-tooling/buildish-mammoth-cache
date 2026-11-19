@@ -1,6 +1,6 @@
 {
   "name": "buildish-mammoth-cache",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "scripts": {
     "test": "vitest run",
     "clean": "node -e \"for (const path of [\\\"dist\\\",\\\"coverage\\\"]) { require(\\\"fs\\\").rmSync(path, { recursive: true, force: true }); }\"",
