@@ -20,12 +20,12 @@ import { z } from 'zod';
 import type { CacheModel } from './model';
 import type { CutoffUpsert } from './cutoff-format';
 import {
-  groovyWorkspaceRoot,
-  groovyWorkspaceSchema,
-  inspectGroovyTree,
-  assertGroovyOwnership,
-  type GroovyWorkspace,
-} from './groovy-workspaces';
+  workspaceRoot,
+  workspaceSchema,
+  inspectWorkspaceTree,
+  assertWorkspaceOwnership,
+  type ImmutableWorkspace,
+} from './immutable-workspaces';
 import { createManagedCachePathMatcher } from './manifest';
 import {
   guardedPath,
@@ -39,17 +39,17 @@ import { readMetadata, writeMetadata, metadataPath } from './metadata-io';
 import { portableCacheFileMode } from './file-permissions';
 import { isMissingPathError } from '../util/fs';
 
-const INTENT = '.mammoth/groovy-apply-v1/intent.json';
+const INTENT = '.mammoth/workspace-apply-v2/intent.json';
 const MAX_BYTES = 64 * 1024 * 1024;
-export interface IncomingGroovyWorkspace {
+export interface IncomingWorkspace {
   partitionId: string;
-  workspace: GroovyWorkspace;
+  workspace: ImmutableWorkspace;
   entries: readonly CutoffUpsert[];
   rootDirectory: string;
 }
 const intentSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     familyKey: z.string(),
     partitionId: z.string(),
     root: z.string(),
@@ -64,7 +64,7 @@ async function clearIntent(model: CacheModel) {
   await rm(file, { force: true });
 }
 async function removeScratch(model: CacheModel, relative: string) {
-  const tree = await inspectGroovyTree(model.cacheRoot, relative, false);
+  const tree = await inspectWorkspaceTree(model.cacheRoot, relative, false);
   if (tree) await rm(guardedPath(model.cacheRoot, relative), { recursive: true });
 }
 function allowedStage(root: string, stage: string): boolean {
@@ -75,29 +75,31 @@ function allowedStage(root: string, stage: string): boolean {
   );
 }
 async function targetTree(model: CacheModel, partitionId: string, root: string) {
-  if (groovyWorkspaceRoot(root) !== root) throw new Error('Invalid Groovy replacement root.');
-  const tree = await inspectGroovyTree(model.cacheRoot, root, false);
+  if (workspaceRoot(root) !== root) throw new Error('Invalid Gradle replacement root.');
+  const tree = await inspectWorkspaceTree(model.cacheRoot, root, false);
   const owns = createManagedCachePathMatcher(model);
   if (tree && !tree.directories.some((d) => d.relativePath === root))
-    throw new Error('Groovy workspace target is not a directory.');
+    throw new Error('Gradle workspace target is not a directory.');
   if (
     tree &&
     (tree.files.some((f) => !owns(partitionId, f.relativePath)) ||
-      tree.directories.some((d) => !owns(partitionId, d.relativePath + '/.groovy-directory-probe')))
+      tree.directories.some(
+        (d) => !owns(partitionId, d.relativePath + '/.workspace-directory-probe'),
+      ))
   )
-    throw new Error('Groovy replacement is obstructed by excluded or unmanaged descendants.');
+    throw new Error('Gradle replacement is obstructed by excluded or unmanaged descendants.');
   return tree;
 }
 async function deleteTree(
   model: CacheModel,
   root: string,
-  tree: NonNullable<Awaited<ReturnType<typeof inspectGroovyTree>>>,
+  tree: NonNullable<Awaited<ReturnType<typeof inspectWorkspaceTree>>>,
 ) {
   for (const entry of tree.files) {
     await verifyParents(model.cacheRoot, path.posix.dirname(entry.relativePath));
     const current = await regularStat(guardedPath(model.cacheRoot, entry.relativePath));
     if (!current || !sameFileIdentity(entry.identity, fileIdentity(current), true))
-      throw new Error('Groovy replacement target changed.');
+      throw new Error('Gradle replacement target changed.');
     await rm(guardedPath(model.cacheRoot, entry.relativePath));
   }
   for (const entry of [...tree.directories].sort(
@@ -111,14 +113,19 @@ async function deleteTree(
       current.ino !== entry.identity.ino ||
       current.dev !== entry.identity.dev
     )
-      throw new Error('Groovy replacement directory changed.');
+      throw new Error('Gradle replacement directory changed.');
     await rmdir(guardedPath(model.cacheRoot, entry.relativePath));
   }
   if (tree.directories.every((d) => d.relativePath !== root))
     throw new Error('Replacement did not inventory its root.');
 }
 /** A failed prepare cannot publish; the next prepare discards only its recorded partial unit. */
-export async function recoverGroovyApplication(model: CacheModel): Promise<void> {
+export async function recoverWorkspaceApplication(model: CacheModel): Promise<void> {
+  if (
+    (await readMetadata(model.cacheRoot, '.mammoth/groovy-apply-v1/intent.json', MAX_BYTES)) !==
+    null
+  )
+    throw new Error('Incompatible previous-format workspace replacement intent.');
   const raw = await readMetadata(model.cacheRoot, INTENT, MAX_BYTES);
   if (raw === null) return;
   const intent = intentSchema.parse(JSON.parse(raw));
@@ -126,7 +133,7 @@ export async function recoverGroovyApplication(model: CacheModel): Promise<void>
   if (
     intent.familyKey !== model.cacheFamilyKey ||
     model.buildToolId !== 'gradle' ||
-    groovyWorkspaceRoot(intent.root) !== intent.root ||
+    workspaceRoot(intent.root) !== intent.root ||
     !allowedStage(intent.root, intent.stage) ||
     !owns(intent.partitionId, intent.root + '/metadata.bin') ||
     intent.allowedFiles.some(
@@ -135,10 +142,10 @@ export async function recoverGroovyApplication(model: CacheModel): Promise<void>
     intent.allowedDirectories.some(
       (p) =>
         (p !== intent.root && !p.startsWith(intent.root + '/')) ||
-        !owns(intent.partitionId, p + '/.groovy-directory-probe'),
+        !owns(intent.partitionId, p + '/.workspace-directory-probe'),
     )
   )
-    throw new Error('Invalid interrupted Groovy replacement intent.');
+    throw new Error('Invalid interrupted Gradle replacement intent.');
   const tree = await targetTree(model, intent.partitionId, intent.root);
   if (tree) {
     const files = new Set(intent.allowedFiles),
@@ -147,13 +154,13 @@ export async function recoverGroovyApplication(model: CacheModel): Promise<void>
       tree.files.some((f) => !files.has(f.relativePath)) ||
       tree.directories.some((d) => !dirs.has(d.relativePath))
     )
-      throw new Error('Interrupted Groovy replacement has unexpected descendants.');
+      throw new Error('Interrupted Gradle replacement has unexpected descendants.');
     await deleteTree(model, intent.root, tree);
   }
   await removeScratch(model, intent.stage);
   await clearIntent(model);
 }
-function treeIdentity(tree: Awaited<ReturnType<typeof inspectGroovyTree>>): string {
+function treeIdentity(tree: Awaited<ReturnType<typeof inspectWorkspaceTree>>): string {
   return JSON.stringify(
     tree
       ? [...tree.files, ...tree.directories].map(({ relativePath, identity: i }) => [
@@ -170,26 +177,26 @@ function treeIdentity(tree: Awaited<ReturnType<typeof inspectGroovyTree>>): stri
 }
 
 /** Preflight every destination before changing any unit; publish only complete staged trees. */
-export async function applyGroovyWorkspaces(
-  units: readonly IncomingGroovyWorkspace[],
+export async function applyWorkspaces(
+  units: readonly IncomingWorkspace[],
   model: CacheModel,
   consumeSources = false,
 ): Promise<void> {
   if (units.length && model.buildToolId !== 'gradle')
-    throw new Error('Groovy replacement requires a Gradle cache.');
+    throw new Error('Gradle replacement requires a Gradle cache.');
   const owns = createManagedCachePathMatcher(model);
   const roots = new Set<string>();
   const before = new Map<string, string>();
   for (const unit of units) {
-    groovyWorkspaceSchema.parse(unit.workspace);
-    assertGroovyOwnership(unit.workspace, unit.partitionId, owns);
-    if (roots.has(unit.workspace.root)) throw new Error('Duplicate Groovy replacement root.');
+    workspaceSchema.parse(unit.workspace);
+    assertWorkspaceOwnership(unit.workspace, unit.partitionId, owns);
+    if (roots.has(unit.workspace.root)) throw new Error('Duplicate Gradle replacement root.');
     roots.add(unit.workspace.root);
     if (
       JSON.stringify(unit.entries.map((e) => e.relativePath).sort((a, b) => a.localeCompare(b))) !==
       JSON.stringify(unit.workspace.files)
     )
-      throw new Error('Incomplete Groovy replacement payload.');
+      throw new Error('Incomplete Gradle replacement payload.');
     before.set(
       unit.workspace.root,
       treeIdentity(await targetTree(model, unit.partitionId, unit.workspace.root)),
@@ -223,21 +230,21 @@ export async function applyGroovyWorkspaces(
       }
       const old = await targetTree(model, unit.partitionId, root);
       if (treeIdentity(old) !== before.get(root))
-        throw new Error('Groovy replacement target changed during staging.');
-      const staged = await inspectGroovyTree(model.cacheRoot, stage, false);
-      if (!staged) throw new Error('Groovy replacement staging disappeared.');
+        throw new Error('Gradle replacement target changed during staging.');
+      const staged = await inspectWorkspaceTree(model.cacheRoot, stage, false);
+      if (!staged) throw new Error('Gradle replacement staging disappeared.');
       if (
         JSON.stringify(staged.files.map((f) => root + f.relativePath.slice(stage.length))) !==
           JSON.stringify(unit.workspace.files) ||
         JSON.stringify(staged.emptyDirectories.map((d) => root + d.slice(stage.length))) !==
           JSON.stringify(unit.workspace.emptyDirectories)
       )
-        throw new Error('Groovy staging membership changed.');
+        throw new Error('Gradle staging membership changed.');
       await writeMetadata(
         model.cacheRoot,
         INTENT,
         intentSchema.parse({
-          schemaVersion: 1,
+          schemaVersion: 2,
           familyKey: model.cacheFamilyKey,
           partitionId: unit.partitionId,
           root,
@@ -262,7 +269,7 @@ export async function applyGroovyWorkspaces(
         if (isMissingPathError(e)) return null;
         throw e;
       });
-      if (occupied) throw new Error('Groovy replacement root was recreated.');
+      if (occupied) throw new Error('Gradle replacement root was recreated.');
       await rename(guardedPath(model.cacheRoot, stage), guardedPath(model.cacheRoot, root));
       await clearIntent(model);
       intentWritten = false;

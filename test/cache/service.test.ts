@@ -107,7 +107,7 @@ function createCacheBackend(
 describe('createBaseCachePaths', () => {
   it('archives only the authoritative generation record', () => {
     expect(createBaseCachePaths(cacheModel)).toEqual([
-      path.join(cacheModel.cacheRoot, '.mammoth/generations-v1/record.json'),
+      path.join(cacheModel.cacheRoot, '.mammoth/generations-v2/record.json'),
     ]);
   });
 });

@@ -58,24 +58,26 @@ require publication. There is no historical access manifest or unconditional bef
 hash pass. Complete single-writer snapshots propagate removals through replacement membership;
 an absent writer contribution preserves the successfully restored snapshot.
 
-## Groovy workspace units
+## Gradle DSL workspace units
 
-The default Gradle `groovy-dsl` partition retains complete hashed workspaces.
+The default Gradle `groovy-dsl` and `kotlin-dsl` partitions retain complete hashed
+workspaces for supported Groovy, Kotlin script and Kotlin accessor layouts.
 Changed files or directory topology select the whole unit; usage protects all members.
 Whole-workspace conflict selection chooses one producer per root, without a designated
 partition writer. Complete unit replacement propagates removals within that root.
 
-Base objects carry a partition-scoped descriptor under `.mammoth/partition-objects-v1/<partition>/`
+Base objects carry a partition-scoped descriptor under `.mammoth/partition-objects-v2/<partition>/`
 and archive accepted workspace files at their native paths. References include the accepted workspace
-roots so save and restore use identical SDK path specifications; incomplete and unknown roots are
+roots and exact ordinary-file paths so mixed Kotlin partitions retain legacy scripts and
+generated API JARs, and save and restore use identical SDK path specifications; incomplete and unknown roots are
 omitted, and bookkeeping exclusions remain enforced even with custom excludes. Empty directories
-are reconstructed from validated metadata. Only changed Groovy partitions are hashed and uploaded. Prepare verifies
+are reconstructed from validated metadata. Only changed workspace partitions are hashed and uploaded. Prepare verifies
 incoming units before guarded managed replacement. A durable replacement intent supports
 discarding recorded partial contents on next prepare; unknown descendants block recovery.
 File and directory native identities bind writable retries. See [delta protocol](../delta-protocol/)
 for worker-envelope validation and recovery details.
 
-Groovy GC removes a workspace only when all members are old and unprotected; it never
+Workspace GC removes a workspace only when all members are old and unprotected; it never
 ages out individual metadata or output files. Directory removal is guarded and replay
 accepts already-absent planned targets after interruption. This unit rule is separate
 from the partition-wide single-writer snapshot exemption below.
@@ -103,7 +105,7 @@ GC removal, disappearance from restored membership, or a material single-writer 
 Usage-only observations and unchanged selected snapshots do not require publication. A cold,
 entirely empty cache, including a layout with zero active partitions, remains a no-op.
 
-The authoritative archive contains only `.mammoth/generations-v1/record.json`. It binds the
+The authoritative archive contains only `.mammoth/generations-v2/record.json`. It binds the
 family/layout, exact generation identity, and an ordered object reference or explicit empty
 entry for each active partition. Empty entries supersede older payloads without an empty-object
 upload. Ordinary existing runner files still follow default overlay semantics; an empty entry
@@ -112,7 +114,7 @@ does not authorize sweeping local cache content.
 Each partition object contains a reserved `object.json` descriptor plus its native managed files.
 Single-writer objects use their existing frozen snapshot payload paths directly.
 The descriptor binds object identity, ownership, portable membership, sizes, modes, mtimes and
-payload hashes, plus complete Groovy workspace metadata where applicable. Changed partitions
+payload hashes, plus typed complete Groovy/Kotlin workspace metadata where applicable. Changed partitions
 are hashed and archived directly in full; unchanged partitions are not staged or uploaded.
 Snapshot owners still capture their complete local snapshot to determine material changes.
 Ordinary aggregate partitions do not inherit the worker-envelope expanded-byte ceiling.
@@ -139,15 +141,16 @@ aggregation; standalone failures warn and retain retry intent. Eviction after pu
 still occur, and restore handles it per partition. Orphan backend objects expire normally.
 
 The action-owned `partitioned-v2` family discriminator prevents old monolithic archives from
-matching, even when a consumer pins its schema input. Cache schema **6**, package **6**, worker
-manifest **5**, CI lifecycle **6** and journal **4** are distinct contracts. Migration starts cold;
-worker-envelope semantics are unchanged by the base-storage split.
+matching, even when a consumer pins its schema input. Cache schema **7**, package **7**, worker
+manifest **6**, CI lifecycle **7**, journal **5**, and generation/partition descriptor
+version **2** are distinct contracts. Migration starts cold; old worker packages and
+local invocation state are rejected rather than reinterpreted as complete workspace captures.
 
 ## Recovery and bounds
 
 `.mammoth/cutoff-state-v2/` contains a root-local journal and `current.json` pointer. It is never
 cached or sent to workers. It binds the full model/policy/execution, C, observations, native retained
-fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 4
+fingerprint, frozen GC plan, package seal, publication intent and local receipts. Journal schema 5
 also binds baseline and selected snapshot digests, source, counts, and replacement decisions.
 Verified selected snapshots are reconstructed locally under
 `.mammoth/partition-snapshots-v1/<partition>/` before existing replacement initialization.
@@ -188,11 +191,11 @@ clear preexisting managed members before restore and validate/restore their stag
 snapshots, including when ordinary cleanup is disabled.
 
 Prepare verifies downloaded payload hashes in isolated extraction roots under the cache root's
-reserved metadata, then renames ordinary files into place. Groovy application consumes disposable
+reserved metadata, then renames ordinary files into place. Workspace application consumes disposable
 extracted inputs by moves into its existing guarded workspace staging. Snapshot transport trees
 are renamed into the existing local snapshot representation; its original replacement/capture
 copying remains. No new payload copy or hardlink staging is required for base uploads: ordinary
-and Groovy files are archived natively, and selected snapshot payloads are archived where they
+and workspace files are archived natively, and selected snapshot payloads are archived where they
 already reside. Source identity is rechecked after uploads, including ambiguous-save readback,
 before the generation record may be published. Hardlinks would share mutations and alter ctime.
 

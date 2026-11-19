@@ -96,7 +96,7 @@ describe('cutoff metadata contracts', () => {
   });
   it('distinguishes absent and empty snapshots and rejects partial usage snapshots', () => {
     const manifest = (p: object) => ({
-      schemaVersion: 5,
+      schemaVersion: 6,
       buildToolId: 'test',
       partitions: [{ partitionId: 'data', upserts: [], usedPaths: [], ...p }],
     });
@@ -136,7 +136,7 @@ describe('cutoff metadata contracts', () => {
   });
   it('rejects old/deletion/precondition/native fields and reserved or duplicate paths', () => {
     const valid = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       buildToolId: 'test',
       partitions: [
         {

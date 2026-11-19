@@ -50,12 +50,14 @@ it('preserves literal default fingerprints and persisted partition shapes', asyn
     { phase: 'prepare', ciContext: ci, env: { GRADLE_USER_HOME: '/cache' } },
   );
   const gradle = await createCacheModel(config, ci, new GradleBuildToolAdapter(config));
-  expect(gradle.partitionFingerprint).toBe('94e9c8c680d63112');
+  expect(gradle.partitionFingerprint).toBe('26cbbec02299aabe');
   for (const model of [original, explicit, gradle]) {
     expect(cutoffModelSchema.parse(model)).toEqual(model);
     for (const partition of model.partitions)
-      if (partition.id === 'groovy-dsl')
+      if (partition.id === 'groovy-dsl' || partition.id === 'kotlin-dsl')
         expect(partition.conflictHandling).toBe('choose-worker-directory');
+      else if (partition.id === 'build-cache')
+        expect(partition.conflictHandling).toBe('choose-worker-entry');
       else expect(partition).not.toHaveProperty('conflictHandling');
   }
 });
@@ -148,4 +150,41 @@ it('persists and reloads the effective opt-in policy in a real journal', async (
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+it('limits per-entry selection to aggregate Gradle build-cache prefixes and preserves strict overrides', async () => {
+  const ci = cutoffFixtureCi('/cache');
+  const modelFor = async (partitions: object[]) => {
+    const config = normalizeGradleActionConfig(
+      readGradleActionInputs(createTestRuntimeHost({ inputs: input(partitions) })),
+      { phase: 'prepare', ciContext: ci, env: { GRADLE_USER_HOME: '/cache' } },
+    );
+    return createCacheModel(config, ci, new GradleBuildToolAdapter(config));
+  };
+  for (const includes of [['caches/build-cache-*/**'], ['caches/build-cache-1/**']]) {
+    const model = await modelFor([
+      { id: 'custom', includes, 'conflict-handling': 'choose-worker-entry' },
+    ]);
+    expect(cutoffModelSchema.parse(model)).toEqual(model);
+    expect(model.cacheFamilyKey).toContain('-v7-');
+    expect(
+      model.fallbackRefLineagePrefixes.every((p) => p.includes('-v7-') && !p.includes('-v6-')),
+    ).toBe(true);
+  }
+  for (const definition of [
+    { id: 'custom', includes: ['caches/**'] },
+    { id: 'custom', includes: ['caches/build-cache-*/**', 'other/**'] },
+    { id: 'build-cache', publication: 'single-writer' },
+  ])
+    await expect(
+      modelFor([{ ...definition, 'conflict-handling': 'choose-worker-entry' }]),
+    ).rejects.toThrow(/conflict policy/);
+  const defaults = await modelFor([]),
+    strict = await modelFor([
+      { id: 'kotlin-dsl', 'conflict-handling': 'default' },
+      { id: 'build-cache', 'conflict-handling': 'default' },
+    ]);
+  expect(defaults.cacheFamilyKey).not.toBe(strict.cacheFamilyKey);
+  for (const id of ['kotlin-dsl', 'build-cache'])
+    expect(strict.partitions.find((p) => p.id === id)).not.toHaveProperty('conflictHandling');
 });

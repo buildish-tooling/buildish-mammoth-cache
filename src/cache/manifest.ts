@@ -15,7 +15,7 @@
  */
 
 import { fileIdentity, type FileIdentity } from './file-identity';
-import { captureGroovyWorkspaces, type GroovyObservation } from './groovy-workspaces';
+import { captureImmutableWorkspaces, type WorkspaceObservation } from './immutable-workspaces';
 import { assertCompleteMavenRepositoryDirectories, isMavenTransientFile } from './maven-repository';
 import { isCacheMetadataPath } from './metadata-paths';
 import { lstat, readdir } from 'node:fs/promises';
@@ -67,7 +67,7 @@ export interface CachePartitionMetadata {
 }
 
 export interface CacheMetadataSnapshot {
-  readonly workspaces?: readonly GroovyObservation[];
+  readonly workspaces?: readonly WorkspaceObservation[];
   readonly workspaceWarnings?: readonly string[];
   readonly buildToolId: string;
   readonly cacheRoot: string;
@@ -119,7 +119,11 @@ export async function captureCacheManifest(
     resolveManifestScanConcurrency(options.maxConcurrency),
   );
 
-  await captureGroovyWorkspaces(cacheModel, partitions, createManagedCachePathMatcher(cacheModel));
+  await captureImmutableWorkspaces(
+    cacheModel,
+    partitions,
+    createManagedCachePathMatcher(cacheModel),
+  );
   return {
     schemaVersion: CACHE_MANIFEST_SCHEMA_VERSION,
     buildToolId: cacheModel.buildToolId,
@@ -142,7 +146,7 @@ export async function captureCacheMetadataSnapshot(
     resolveManifestScanConcurrency(options.maxConcurrency),
   );
   const warnings: string[] = [];
-  const workspaces = await captureGroovyWorkspaces(
+  const workspaces = await captureImmutableWorkspaces(
     cacheModel,
     partitions,
     createManagedCachePathMatcher(cacheModel),

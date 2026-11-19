@@ -42,7 +42,7 @@ import type { WorkflowArtifactBackend, WorkflowArtifactDescriptor } from './back
 import { createDeltaArtifactNamePrefix, DELTA_ARTIFACT_RESOURCE_LIMITS } from './discovery';
 import type { CiJobContext } from '../ci';
 import { ownsSnapshot } from '../cache/partition-snapshots';
-import { assertGroovyContributions } from '../cache/groovy-workspaces';
+import { assertWorkspaceContributions } from '../cache/immutable-workspaces';
 
 const MAX_JSON = 64 * 1024 * 1024;
 const META = 'delta-package.json',
@@ -129,7 +129,7 @@ function packageMetadata(
 ): CutoffPackageMetadata {
   const digest = cutoffHash(serialize(manifest));
   return packageSchema.parse({
-    schemaVersion: 6,
+    schemaVersion: 7,
     artifactType: 'buildish-mammoth-cache-upserts',
     artifactName: artifactName(
       ci.jobName,
@@ -181,7 +181,7 @@ export async function stageCutoffPackage(
     await mkdir(path.join(directory, 'payload'));
     const owns = createManagedCachePathMatcher(state.model);
     let manifest: CutoffManifest = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       buildToolId: state.model.buildToolId,
       partitions: state.model.partitions.map((p) => ({
         partitionId: p.id,
@@ -448,7 +448,7 @@ export function assertCutoffPackageCompatible(
   )
     throw new Error('Worker package cache/ref identity mismatch.');
   const owns = createManagedCachePathMatcher(model);
-  assertGroovyContributions(model, pkg.manifest.partitions, owns);
+  assertWorkspaceContributions(model, pkg.manifest.partitions, owns);
   for (const partition of pkg.manifest.partitions) {
     const definition = model.partitions.find((p) => p.id === partition.partitionId);
     if (

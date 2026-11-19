@@ -115,6 +115,14 @@ runs with `PathSensitivity.RELATIVE` or `NAME_ONLY`, the cache entry is portable
 `caches/build-cache-1/` is a good candidate for caching provided build authors have configured
 task inputs to be path-agnostic.
 
+Independent builds can write different origin metadata into archives with the
+same key. Mammoth's built-in `build-cache` partition therefore selects one
+producer's whole, unchanged archive per direct 32-hex key. The smallest producer
+job name wins; distinct keys remain additive. This also resolves differing output
+bytes under the same key, assuming correctly declared, reproducible work. Mammoth
+does not unpack or normalize these archives. Set `conflict-handling: default` to
+reject differing duplicates instead.
+
 ## Version-specific caches: `caches/<version>/`
 
 For each Gradle version used, a dedicated directory records the operational state of that build tool
@@ -125,6 +133,33 @@ version. Some subtrees describe local execution state and are excluded:
 | `caches/[version]/execution-history/` | Stores local file-system timestamps and absolute paths    |
 | `caches/[version]/file-hashes/`       | Index of file content signatures, keyed by absolute paths |
 | `caches/[version]/java-compile/`      | Incremental compilation analysis data                     |
+
+## Kotlin DSL workspaces
+
+Independent producers can generate the same workspace key with different origin
+metadata. The built-in `kotlin-dsl` partition captures complete immutable units
+under `caches/<version>/kotlin-dsl/` and selects one producer per root with
+`choose-worker-directory`. It retains all metadata, files and empty directories.
+The supported layouts are:
+
+- `scripts/<32-hex>/`: nonempty `metadata.bin`, `classes/` and
+  `instrumented/classes/` directories, with other outputs such as `reports/`.
+- `accessors/<32-hex>/`: nonempty `metadata.bin`, `classes.jar` and `sources.jar`.
+- `accessors/<32-hex>/` with directory outputs: nonempty `metadata.bin`,
+  `classes/` and `sources/`, as declared by the
+  [Gradle 9.6.1 accessor implementation](https://github.com/gradle/gradle/blob/v9.6.1/platforms/core-configuration/kotlin-dsl/src/main/kotlin/org/gradle/kotlin/dsl/accessors/AccessorsClassPath.kt).
+- `accessors/<32-hex>-PS/`: nonempty `metadata.bin`, `classes/` and `sources/`
+  directories.
+
+The JAR and `-PS` layouts were observed with Gradle 9.8.1;
+the unsuffixed directory variant also has synthetic coverage based on the source above; unknown or incomplete modern
+layouts are skipped with bounded warnings. Partial ownership fails capture.
+Required directories may be empty. Legacy `caches/<version>/scripts/` content and
+generated Gradle API JARs retain ordinary strict handling in the same partition.
+Native references carry workspace roots and exact ordinary-file paths so both
+surfaces survive publication and restore. The guarded replacement, recovery and
+whole-unit GC mechanics are shared with Groovy below. `default` retains complete
+capture but rejects conflicting views, including origin-only differences.
 
 ## Groovy DSL workspaces
 
@@ -199,7 +234,8 @@ the entire configuration cache as local-only data.
 | `wrapper/dists/**`              | Downloaded Gradle distributions |
 
 Compiled Kotlin DSL scripts and generated Gradle API JARs are also included by the
-`kotlin-dsl` partition; complete Groovy workspaces use the unit transport above.
+`kotlin-dsl` partition; recognized Kotlin and Groovy workspaces use the complete-unit
+transport above.
 
 **Always excluded:**
 

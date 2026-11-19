@@ -99,7 +99,7 @@ export async function collectCutoffGarbage(
         current.ino !== directory.identity.ino ||
         current.dev !== directory.identity.dev
       )
-        throw new Error('Frozen Groovy GC directory changed.');
+        throw new Error('Frozen Gradle GC directory changed.');
       try {
         await rmdir(target);
       } catch (e) {

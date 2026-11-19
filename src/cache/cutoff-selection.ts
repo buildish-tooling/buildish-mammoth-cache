@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type { CacheMetadataSnapshot } from './manifest';
-import type { GroovyObservation } from './groovy-workspaces';
+import type { WorkspaceObservation } from './immutable-workspaces';
 import { fileIdentitySchema } from './file-identity';
 import { cutoffPartitionIdSchema, cutoffPathSchema, cutoffTimeSchema } from './cutoff-format';
 import type { CachePartitionDefinition } from './model';
@@ -37,7 +37,7 @@ export interface WorkerObservations {
 export const EMPTY_WORKER_OBSERVATIONS: WorkerObservations = { upserts: [], used: [] };
 export interface CutoffSelection {
   members?: CutoffTarget[];
-  workspaces?: GroovyObservation[];
+  workspaces?: WorkspaceObservation[];
   snapshotFileCount?: number;
   snapshotByteCount?: number;
   upserts: CutoffTarget[];

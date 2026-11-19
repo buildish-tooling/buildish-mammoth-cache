@@ -90,7 +90,8 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
     if (
       partition['conflict-handling'] !== undefined &&
       partition['conflict-handling'] !== 'default' &&
-      partition['conflict-handling'] !== 'choose-worker-directory'
+      partition['conflict-handling'] !== 'choose-worker-directory' &&
+      partition['conflict-handling'] !== 'choose-worker-entry'
     )
       throw new Error(`Invalid conflict-handling policy for partition '${id}'.`);
     return {

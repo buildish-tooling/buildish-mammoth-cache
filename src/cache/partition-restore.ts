@@ -89,7 +89,13 @@ export async function restorePartitionedGeneration(
       const root = path.join(scratch, entry.partitionId);
       await mkdir(root);
       const matched = await backend.restoreCache(
-        partitionObjectPaths(root, entry.partitionId, model, entry.reference.workspaceRoots),
+        partitionObjectPaths(
+          root,
+          entry.partitionId,
+          model,
+          entry.reference.workspaceRoots,
+          entry.reference.ordinaryPaths,
+        ),
         entry.reference.key,
         [],
         { archiveRoot: root },

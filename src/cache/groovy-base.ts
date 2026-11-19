@@ -18,17 +18,17 @@ import path from 'node:path';
 import type { CacheModel } from './model';
 import {
   GROOVY_WORKSPACE_METADATA,
-  hasGroovyPartitions,
-  inspectGroovyTree,
-} from './groovy-workspaces';
+  hasWorkspacePartitions,
+  inspectWorkspaceTree,
+} from './immutable-workspaces';
 import { readMetadata, metadataPath } from './metadata-io';
 
 // Remove only known previous-format local transport; new objects use partition-owned staging.
 const GROOVY_BASE_DIRECTORY = '.mammoth/groovy-base-v1';
 const MAX_BYTES = 64 * 1024 * 1024;
 export async function resetGroovyBaseTransport(model: CacheModel): Promise<void> {
-  if (!hasGroovyPartitions(model)) return;
-  const tree = await inspectGroovyTree(model.cacheRoot, GROOVY_BASE_DIRECTORY, false);
+  if (!hasWorkspacePartitions(model)) return;
+  const tree = await inspectWorkspaceTree(model.cacheRoot, GROOVY_BASE_DIRECTORY, false);
   if (tree) await rm(path.join(model.cacheRoot, GROOVY_BASE_DIRECTORY), { recursive: true });
   const old = await metadataPath(model.cacheRoot, GROOVY_WORKSPACE_METADATA).catch((e: unknown) => {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;

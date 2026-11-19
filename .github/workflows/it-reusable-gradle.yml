@@ -247,25 +247,22 @@ jobs:
       - name: Seed worker filesystem contribution
         run: node .github/scripts/it-cache-fixture.mjs seed gradle ${{ matrix.worker.fixture }}
 
-      - name: Produce worker dependency and seed portable output on worker A (POSIX)
+      - name: Produce worker dependency and portable output independently (POSIX)
         if: runner.os != 'Windows'
         working-directory: build/integration-fixtures/${{ matrix.worker.id }}
         env:
           WORKER_TASK: ${{ matrix.worker.task }}
-          WORKER_ID: ${{ matrix.worker.id }}
         run: |
-          tasks=("$WORKER_TASK")
-          if [[ "$WORKER_ID" == worker_a ]]; then tasks+=(portable); fi
-          ./gradlew --info --no-daemon --console=plain --build-cache "${tasks[@]}"
+          ./gradlew --info --no-daemon --console=plain --build-cache "$WORKER_TASK" portable
 
-      - name: Produce worker dependency (Windows)
+      - name: Produce worker dependency and portable output independently (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: build/integration-fixtures/${{ matrix.worker.id }}
         env:
           WORKER_TASK: ${{ matrix.worker.task }}
         run: |
-          & ./gradlew.bat --info --no-daemon --console=plain --build-cache $env:WORKER_TASK
+          & ./gradlew.bat --info --no-daemon --console=plain --build-cache $env:WORKER_TASK portable
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # The job finishes its normal action post publication before fresh readers start.

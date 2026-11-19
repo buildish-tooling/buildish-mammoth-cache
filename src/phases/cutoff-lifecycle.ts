@@ -67,7 +67,7 @@ const restoreSchema = z
   .strict();
 const enabled = z
   .object({
-    schemaVersion: z.literal(6),
+    schemaVersion: z.literal(7),
     cacheEnabled: z.literal(true),
     model: cutoffModelSchema,
     policy: cutoffPolicySchema,
@@ -82,7 +82,7 @@ export const cutoffLifecycleSchema = z
     enabled,
     z
       .object({
-        schemaVersion: z.literal(6),
+        schemaVersion: z.literal(7),
         cacheEnabled: z.literal(false),
         execution: cutoffExecutionSchema,
       })

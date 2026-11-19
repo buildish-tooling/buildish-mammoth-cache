@@ -15,22 +15,23 @@
  */
 import type { CacheModel } from '../cache/model';
 import type { CutoffPackage } from './cutoff-service';
-import type { IncomingGroovyWorkspace } from '../cache/groovy-apply';
+import type { IncomingWorkspace } from '../cache/workspace-apply';
 
 /** Choose one complete subtree, even if only its outer origin metadata differs. */
-export function resolveGroovyWorkspaceConflicts(
-  packages: readonly CutoffPackage[],
-  model: CacheModel,
-) {
-  const groups = new Map<string, { pkg: CutoffPackage; unit: IncomingGroovyWorkspace }[]>();
-  const chosen: IncomingGroovyWorkspace[] = [],
+export function resolveWorkspaceConflicts(packages: readonly CutoffPackage[], model: CacheModel) {
+  const groups = new Map<string, { pkg: CutoffPackage; unit: IncomingWorkspace }[]>();
+  const chosen: IncomingWorkspace[] = [],
     details: string[] = [];
   let count = 0;
   for (const pkg of packages)
-    for (const partition of pkg.manifest.partitions)
-      for (const workspace of partition.workspaces ?? []) {
-        const members = new Set(workspace.files);
-        const entries = partition.upserts.filter((e) => members.has(e.relativePath));
+    for (const partition of pkg.manifest.partitions) {
+      if (!partition.workspaces?.length) continue;
+      const upsertsByPath = new Map(partition.upserts.map((entry) => [entry.relativePath, entry]));
+      for (const workspace of partition.workspaces) {
+        const entries = workspace.files.flatMap((name) => {
+          const entry = upsertsByPath.get(name);
+          return entry ? [entry] : [];
+        });
         const group = groups.get(workspace.root) ?? [];
         group.push({
           pkg,
@@ -43,6 +44,7 @@ export function resolveGroovyWorkspaceConflicts(
         });
         groups.set(workspace.root, group);
       }
+    }
   for (const [root, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
     group.sort((a, b) =>
       a.pkg.metadata.producer.jobName < b.pkg.metadata.producer.jobName
@@ -52,10 +54,10 @@ export function resolveGroovyWorkspaceConflicts(
           : 0,
     );
     if (new Set(group.map((g) => g.pkg.metadata.producer.jobName)).size !== group.length)
-      throw new Error('Ambiguous Groovy workspace producer contributions.');
+      throw new Error('Ambiguous Gradle workspace producer contributions.');
     const winner = group[0]!,
       definition = model.partitions.find((p) => p.id === winner.unit.partitionId)!;
-    const signature = (u: IncomingGroovyWorkspace) =>
+    const signature = (u: IncomingWorkspace) =>
       JSON.stringify([
         u.workspace,
         u.entries.map((e) => [e.relativePath, e.contentSha256, e.size, e.mode]),
@@ -63,13 +65,13 @@ export function resolveGroovyWorkspaceConflicts(
     const expected = signature(winner.unit),
       conflict = group.some((g) => signature(g.unit) !== expected);
     if (conflict && definition.conflictHandling !== 'choose-worker-directory')
-      throw new Error('Conflicting Groovy workspace: ' + root);
+      throw new Error('Conflicting Gradle workspace: ' + root);
     chosen.push(winner.unit);
     if (conflict) {
       count++;
       if (details.length < 10)
         details.push(
-          `Groovy workspace '${root}': selected '${winner.pkg.metadata.producer.jobName.slice(0, 80)}'; discarded ${group
+          `Gradle workspace '${root}': selected '${winner.pkg.metadata.producer.jobName.slice(0, 80)}'; discarded ${group
             .slice(1, 6)
             .map((g) => g.pkg.metadata.producer.jobName.slice(0, 80))
             .join(', ')}.`,

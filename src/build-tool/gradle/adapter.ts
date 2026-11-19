@@ -92,6 +92,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'kotlin-dsl',
+    conflictHandling: 'choose-worker-directory',
     displayName: 'Kotlin DSL caches',
     description: 'Compiled Kotlin DSL scripts and generated Gradle API jars.',
     defaultEnabled: true,
@@ -118,6 +119,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'build-cache',
+    conflictHandling: 'choose-worker-entry',
     displayName: 'Local build cache',
     description: 'Reusable local task output cache entries maintained by Gradle.',
     defaultEnabled: true,

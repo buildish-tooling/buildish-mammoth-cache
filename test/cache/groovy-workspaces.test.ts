@@ -17,7 +17,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { captureCacheMetadataSnapshot } from '../../src/cache/manifest';
-import { groovyWorkspaceSchema } from '../../src/cache/groovy-workspaces';
+import { workspaceSchema } from '../../src/cache/immutable-workspaces';
 import { groovyFixtureModel, writeGroovyWorkspace } from '../support/groovy-cache';
 
 const roots: string[] = [];
@@ -118,8 +118,7 @@ it.each(['../escape', 'classes/proj/Script.class', 'instrumented', 'metadata.bin
     const unit = (await captureCacheMetadataSnapshot(await groovyFixtureModel(root)))
       .workspaces![0]!.workspace;
     expect(
-      groovyWorkspaceSchema.safeParse({ ...unit, emptyDirectories: [unit.root + '/' + member] })
-        .success,
+      workspaceSchema.safeParse({ ...unit, emptyDirectories: [unit.root + '/' + member] }).success,
     ).toBe(false);
   },
 );
@@ -135,7 +134,7 @@ it('does not accept files in place of required output directories', async () => 
     (await captureCacheMetadataSnapshot(await groovyFixtureModel(root))).workspaces,
   ).toBeUndefined();
   expect(
-    groovyWorkspaceSchema.safeParse({
+    workspaceSchema.safeParse({
       root: unit,
       files: [
         unit + '/classes',

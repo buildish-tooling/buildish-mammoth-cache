@@ -41,7 +41,7 @@ import { createCacheGeneration } from '../../src/cache/model';
 import { cutoffDecisionDigest } from '../../src/cache/cutoff-state';
 import { restoreBaseCache } from '../../src/cache/service';
 import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
-import { recoverGroovyApplication } from '../../src/cache/groovy-apply';
+import { recoverWorkspaceApplication } from '../../src/cache/workspace-apply';
 import { writeMetadata } from '../../src/cache/metadata-io';
 
 const roots: string[] = [];
@@ -112,10 +112,10 @@ it('keeps one complete winner and its empty directories while removing stale man
   const model = await groovyFixtureModel(target);
   const plan = mergeCutoffPackages([b.pkg, a.pkg], model, cutoffFixtureCi(target));
   expect(plan.directoryConflicts?.count).toBe(1);
-  expect(
-    mergeCutoffPackages([a.pkg, b.pkg], model, cutoffFixtureCi(target)).groovyWorkspaces,
-  ).toEqual(plan.groovyWorkspaces);
-  expect(plan.groovyWorkspaces![0]!.rootDirectory).toBe(a.pkg.rootDirectory);
+  expect(mergeCutoffPackages([a.pkg, b.pkg], model, cutoffFixtureCi(target)).workspaces).toEqual(
+    plan.workspaces,
+  );
+  expect(plan.workspaces![0]!.rootDirectory).toBe(a.pkg.rootDirectory);
   await applyCutoffPlan(plan, model);
   expect(await readFile(path.join(target, unit, 'instrumented/proj/Script.class'), 'utf8')).toBe(
     'A',
@@ -133,7 +133,7 @@ it('rejects differences under an explicit strict policy rather than mixing works
   const a = await worker('worker-a', 'A', strict),
     b = await worker('worker-b', 'B', strict);
   expect(() => mergeCutoffPackages([a.pkg, b.pkg], a.model, a.ci, true)).toThrow(
-    /Conflicting Groovy workspace/,
+    /Conflicting Gradle workspace/,
   );
 });
 it('retains distinct keys from different workers and rejects file-only imported views', async () => {
@@ -143,7 +143,7 @@ it('retains distinct keys from different workers and rejects file-only imported 
   const b = await freeze(root, 'worker-b'),
     pkg = await stageCutoffPackage(b.state, b.ci);
   const plan = mergeCutoffPackages([a.pkg, pkg], a.model, a.ci);
-  expect(plan.groovyWorkspaces).toHaveLength(2);
+  expect(plan.workspaces).toHaveLength(2);
   const incomplete = {
     ...a.pkg,
     manifest: {
@@ -275,9 +275,9 @@ it('recovers a recorded interrupted replacement as a cache miss without acceptin
   await rm(path.join(root, unit, 'metadata.bin'));
   await writeMetadata(
     root,
-    '.mammoth/groovy-apply-v1/intent.json',
+    '.mammoth/workspace-apply-v2/intent.json',
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       familyKey: model.cacheFamilyKey,
       partitionId: 'groovy-dsl',
       root: unit,
@@ -287,10 +287,10 @@ it('recovers a recorded interrupted replacement as a cache miss without acceptin
     },
     64 * 1024 * 1024,
   );
-  await recoverGroovyApplication(model);
+  await recoverWorkspaceApplication(model);
   await expect(lstat(path.join(root, unit))).rejects.toMatchObject({ code: 'ENOENT' });
   await expect(lstat(path.join(root, stage))).rejects.toMatchObject({ code: 'ENOENT' });
-  await recoverGroovyApplication(model);
+  await recoverWorkspaceApplication(model);
 });
 
 it('expands a seeded one-file change into a complete verified worker view', async () => {

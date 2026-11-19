@@ -24,16 +24,18 @@ import {
   cutoffPathSchema,
 } from './cutoff-format';
 import {
-  groovyWorkspaceSchema,
-  isGroovyPartition,
-  assertGroovyContributions,
-} from './groovy-workspaces';
+  workspaceSchema,
+  workspaceRoot,
+  isWorkspaceCachePath,
+  isWorkspacePartition,
+  assertWorkspaceContributions,
+} from './immutable-workspaces';
 import { createManagedCachePathMatcher } from './manifest';
 import { DELTA_ARTIFACT_RESOURCE_LIMITS } from '../delta/discovery';
 import type { CacheModel } from './model';
 
-export const GENERATION_RECORD_PATH = '.mammoth/generations-v1/record.json';
-export const PARTITION_OBJECT_DIRECTORY = '.mammoth/partition-objects-v1';
+export const GENERATION_RECORD_PATH = '.mammoth/generations-v2/record.json';
+export const PARTITION_OBJECT_DIRECTORY = '.mammoth/partition-objects-v2';
 export const PARTITION_STORAGE_LIMITS = { bytes: 64 * 1024 * 1024, records: 200_000 } as const;
 const keySchema = z.string().regex(/^[A-Za-z0-9._:-]{1,512}$/u);
 const writerSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,160}$/u);
@@ -48,15 +50,15 @@ export const objectIdentitySchema = z
   .strict();
 export const partitionDescriptorSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     identity: objectIdentitySchema,
     buildToolId: z.string().min(1),
     partitionFingerprint: z.string().min(1),
-    kind: z.enum(['aggregate', 'single-writer', 'groovy']),
+    kind: z.enum(['aggregate', 'single-writer', 'workspace']),
     files: z
       .array(cutoffUpsertSchema.extend({ payloadPath: z.string().min(1) }))
       .max(PARTITION_STORAGE_LIMITS.records),
-    workspaces: z.array(groovyWorkspaceSchema).max(PARTITION_STORAGE_LIMITS.records),
+    workspaces: z.array(workspaceSchema).max(PARTITION_STORAGE_LIMITS.records),
   })
   .strict();
 export const partitionReferenceSchema = z
@@ -64,8 +66,9 @@ export const partitionReferenceSchema = z
     identity: objectIdentitySchema,
     key: keySchema,
     descriptorDigest: cutoffDigestSchema,
+    ordinaryPaths: z.array(cutoffPathSchema).max(PARTITION_STORAGE_LIMITS.records).optional(),
     workspaceRoots: z
-      .array(z.string().regex(/^caches\/[A-Za-z0-9._-]+\/groovy-dsl\/[a-f0-9]{32}$/u))
+      .array(cutoffPathSchema.refine((p) => workspaceRoot(p) === p))
       .max(PARTITION_STORAGE_LIMITS.records)
       .optional(),
   })
@@ -82,7 +85,7 @@ export const generationEntrySchema = z.discriminatedUnion('kind', [
 ]);
 export const generationRecordSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     familyKey: keySchema,
     buildToolId: z.string().min(1),
     partitionFingerprint: z.string().min(1),
@@ -140,28 +143,40 @@ export function partitionObjectKey(identity: PartitionReference['identity']): st
 export function partitionObjectRoot(id: string): string {
   return `${PARTITION_OBJECT_DIRECTORY}/${cutoffPartitionIdSchema.parse(id)}`;
 }
-/** Stable relative arguments for each immutable object; Groovy roots come from its reference. */
+function literalGlobPath(name: string): string {
+  return name.replace(/[[?*]/gu, (c) => '[' + c + ']');
+}
+/** Stable relative arguments for each immutable object; Gradle roots come from its reference. */
 export function partitionObjectPaths(
   root: string,
   id: string,
   model: CacheModel,
   workspaceRoots?: readonly string[],
+  ordinaryPaths?: readonly string[],
 ): string[] {
   const partition = model.partitions.find((p) => p.id === id);
   if (!partition) throw new Error('Unknown partition archive.');
   const kind = partitionTransportKind(model, id);
-  if (kind === 'groovy' && !workspaceRoots?.length)
-    throw new Error('Missing native Groovy archive roots.');
+  if (kind === 'workspace' && (!workspaceRoots || !ordinaryPaths))
+    throw new Error('Missing native Gradle archive roots.');
   const payloads =
     kind === 'single-writer'
       ? [path.join(root, `.mammoth/partition-snapshots-v1/${id}/payload/*.bin`)]
       : [
-          ...(kind === 'groovy'
-            ? workspaceRoots!.map((p) => p + '/**')
+          ...(kind === 'workspace'
+            ? [
+                ...workspaceRoots!.map((p) => literalGlobPath(p) + '/**'),
+                ...ordinaryPaths!.map(literalGlobPath),
+              ]
             : partition.relativeIncludeGlobs
           ).map((p) => path.join(root, p)),
           ...partition.relativeExcludeGlobs.map((p) => '!' + path.join(root, p)),
-          ...(kind === 'groovy' ? [`!${root}/**/gc.properties`, `!${root}/**/*.lock`] : []),
+          ...(kind === 'workspace'
+            ? workspaceRoots!.flatMap((p) => [
+                `!${path.join(root, p)}/**/gc.properties`,
+                `!${path.join(root, p)}/**/*.lock`,
+              ])
+            : []),
           `!${root}/**/.[mM][aA][mM][mM][oO][tT][hH]/**`,
           `!${root}/**/.[mM][aA][mM][mM][oO][tT][hH][ .]*/**`,
         ];
@@ -194,27 +209,42 @@ export function validatePartitionReference(
     reference.key !== partitionObjectKey(reference.identity)
   )
     throw new Error('Partition object reference identity/key mismatch.');
-  if (partitionTransportKind(model, partitionId) === 'groovy') {
+  if (partitionTransportKind(model, partitionId) === 'workspace') {
     const roots = reference.workspaceRoots,
+      ordinary = reference.ordinaryPaths,
       owns = createManagedCachePathMatcher(model);
     if (
-      !roots?.length ||
+      !roots ||
+      !ordinary ||
+      (!roots.length && !ordinary.length) ||
       roots.some(
         (p, i) =>
-          !owns(partitionId, p + '/metadata.bin') || (i > 0 && roots[i - 1]!.localeCompare(p) >= 0),
+          workspaceRoot(p) !== p ||
+          !owns(partitionId, p + '/metadata.bin') ||
+          (i > 0 && roots[i - 1]!.localeCompare(p) >= 0),
+      ) ||
+      ordinary.some(
+        (p, i) =>
+          isWorkspaceCachePath(p) ||
+          !owns(partitionId, p) ||
+          (i > 0 && ordinary[i - 1]!.localeCompare(p) >= 0),
       )
     )
-      throw new Error('Invalid Groovy partition archive roots.');
-  } else if (reference.workspaceRoots !== undefined)
-    throw new Error('Unexpected Groovy archive roots.');
+      throw new Error('Invalid workspace partition archive membership.');
+  } else if (reference.workspaceRoots !== undefined || reference.ordinaryPaths !== undefined)
+    throw new Error('Unexpected workspace archive membership.');
+  assertStorageBudget(
+    reference,
+    1 + (reference.workspaceRoots?.length ?? 0) + (reference.ordinaryPaths?.length ?? 0),
+  );
 }
 export function partitionTransportKind(model: CacheModel, id: string): PartitionDescriptor['kind'] {
   const partition = model.partitions.find((p) => p.id === id);
   if (!partition) throw new Error('Unknown partition.');
   return partition.publication === 'single-writer'
     ? 'single-writer'
-    : model.buildToolId === 'gradle' && isGroovyPartition(partition)
-      ? 'groovy'
+    : model.buildToolId === 'gradle' && isWorkspacePartition(partition)
+      ? 'workspace'
       : 'aggregate';
 }
 export function validatePartitionDescriptor(
@@ -258,13 +288,22 @@ export function validatePartitionDescriptor(
       throw new Error('Invalid partition payload ownership/order.');
   }
   if (
-    descriptor.kind === 'groovy' &&
+    descriptor.kind === 'workspace' &&
     JSON.stringify(descriptor.workspaces.map((w) => w.root)) !==
       JSON.stringify(reference.workspaceRoots)
   )
-    throw new Error('Groovy archive roots/descriptor mismatch.');
-  if (descriptor.kind === 'groovy')
-    assertGroovyContributions(
+    throw new Error('Gradle archive roots/descriptor mismatch.');
+  if (
+    descriptor.kind === 'workspace' &&
+    JSON.stringify(
+      descriptor.files
+        .filter((e) => !isWorkspaceCachePath(e.relativePath))
+        .map((e) => e.relativePath),
+    ) !== JSON.stringify(reference.ordinaryPaths)
+  )
+    throw new Error('Ordinary archive members/descriptor mismatch.');
+  if (descriptor.kind === 'workspace')
+    assertWorkspaceContributions(
       model,
       [
         {
@@ -312,7 +351,19 @@ export function validateGenerationRecord(
     grouped.some((id) => !model.partitions.some((p) => p.id === id))
   )
     throw new Error('Invalid partition recovery groups.');
-  assertStorageBudget(record, record.partitions.length + grouped.length);
+  assertStorageBudget(
+    record,
+    record.partitions.length +
+      grouped.length +
+      record.partitions.reduce(
+        (n, p) =>
+          n +
+          (p.kind === 'object'
+            ? (p.reference.workspaceRoots?.length ?? 0) + (p.reference.ordinaryPaths?.length ?? 0)
+            : 0),
+        0,
+      ),
+  );
   return record;
 }
 export function assertStorageBudget(value: unknown, records: number): void {

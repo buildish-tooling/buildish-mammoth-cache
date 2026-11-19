@@ -71,7 +71,7 @@ export function changedPartitionIds(state: CutoffJournal): string[] {
         state.workers.upserts.some((name) => members.some((e) => e.relativePath === name))
       )
         return true;
-      if (partitionTransportKind(state.model, partition.id) === 'groovy') {
+      if (partitionTransportKind(state.model, partition.id) === 'workspace') {
         const removed = new Set(state.selection!.gc.map((e) => e.relativePath));
         const workspaces = (state.selection!.workspaces ?? [])
           .filter(
@@ -117,7 +117,7 @@ export async function freezePartitionPublication(
   const descriptors: PartitionDescriptor[] = [],
     changedIds: string[] = [];
   const record: NonNullable<CutoffJournal['publicationPlan']>['record'] = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     familyKey: state.model.cacheFamilyKey,
     buildToolId: state.model.buildToolId,
     partitionFingerprint: state.model.partitionFingerprint,
@@ -164,7 +164,7 @@ export async function freezePartitionPublication(
     const kind = partitionTransportKind(state.model, partition.id);
     const removed = new Set(state.selection.gc.map((e) => e.relativePath));
     const descriptor: PartitionDescriptor = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       identity: {
         familyKey: state.model.cacheFamilyKey,
         lineagePrefix: generation.lineagePrefix,
@@ -176,7 +176,7 @@ export async function freezePartitionPublication(
       partitionFingerprint: state.model.partitionFingerprint,
       kind,
       workspaces:
-        kind === 'groovy'
+        kind === 'workspace'
           ? (state.selection.workspaces ?? [])
               .filter(
                 (u) =>
@@ -226,6 +226,7 @@ export async function publishPartitionGeneration(
       entry.partitionId,
       state.model,
       entry.reference.workspaceRoots,
+      entry.reference.ordinaryPaths,
     );
     const changed = plan.changedIds.includes(entry.partitionId);
     if (!changed || state.partitionReceipts.includes(entry.partitionId)) {
@@ -316,6 +317,7 @@ async function confirmObject(
         reference.identity.partitionId,
         state.model,
         reference.workspaceRoots,
+        reference.ordinaryPaths,
       ),
       reference.key,
       [],

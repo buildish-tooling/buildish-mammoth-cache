@@ -261,10 +261,12 @@ workflows, skipped writers, fallback, and configuration compatibility.
 
 ### Partition conflict handling
 
-Each `cache-partitions` entry accepts `conflict-handling`: `default` (also the
-omitted value) or `choose-worker-directory`. The built-in Gradle `groovy-dsl` partition defaults to
-`choose-worker-directory`; other built-ins default to `default`. An explicit
-`default` clears an inherited directory-selection policy.
+Each `cache-partitions` entry accepts `conflict-handling`: `default`,
+`choose-worker-directory`, or `choose-worker-entry`. Omission inherits the preset
+policy. The built-in Gradle `groovy-dsl` and `kotlin-dsl` partitions default to
+`choose-worker-directory`; `build-cache` defaults to `choose-worker-entry`.
+Other built-ins and custom partitions default to strict handling. Explicit
+`default` clears an inherited selection policy.
 
 ```yaml
 cache-partitions:
@@ -273,18 +275,35 @@ cache-partitions:
 ```
 
 `choose-worker-directory` supports aggregate Maven partitions whose include
-globs all start with `repository/`, and dedicated aggregate Gradle partitions
-whose includes all select `caches/<version>/groovy-dsl/` paths. Configure the same
+globs all start with `repository/`, and aggregate Gradle partitions whose includes select DSL workspaces or the
+ordinary legacy-script/generated-API-JAR paths in the built-in Kotlin partition.
+Selection applies only to recognized workspace roots; ordinary files remain strict. Configure the same
 policy in every producer and aggregator. The effective policy changes the partition
 fingerprint and cache family.
 
-For Gradle Groovy DSL, the unit is the complete hashed workspace, including both
-metadata files and empty output directories. Conflicting producers are selected
+For Gradle DSL caches, the unit is the complete hashed workspace, including its
+metadata, output files and empty output directories. Groovy requires both metadata
+files; Kotlin uses its layout-specific required outputs. Conflicting producers are selected
 by the job-name ordering below. Losing views are discarded. The selected complete
 workspace replaces existing managed contents; excluded or unmanaged target
 obstacles fail before replacement. Partial-workspace overrides and single-writer
 publication are unsupported. `default` keeps whole-workspace transport but rejects
 conflicting views. See [cache partitions](../cache-partitions/) for capture and GC.
+
+`choose-worker-entry` supports aggregate Gradle build-cache partitions with
+includes rooted at `caches/build-cache-*/` or a literal numeric format directory.
+It selects one unchanged archive per direct 32-lowercase-hex key under
+`caches/build-cache-<number>/`. Other filenames retain ordinary strict handling.
+Different keys can come from different producers. Both Gradle selection policies
+use the smallest producer job name in JavaScript UTF-16 ordinal order, independent
+of package arrival and modification times, and take precedence over
+`allow-duplicate-dependent-delta-paths`. Explicit strict overrides also take
+precedence for recognized workspace/archive collisions.
+
+These policies also select a winner if actual outputs differ under the same key.
+They assume correctly declared, reproducible Gradle work; Mammoth does not compare
+archive contents semantically or rewrite origin metadata. Use `default` to reject
+such conflicts. Portable file permissions still apply to the selected view.
 
 For Maven, the following directory rules apply.
 

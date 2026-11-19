@@ -66,6 +66,23 @@ another archive layer or base-upload payload staging copy.
 Set `enabled: false` on `groovy-dsl` to disable it, or set `conflict-handling: default`
 to reject conflicting complete workspace views. Single-writer publication is unsupported.
 
+The `kotlin-dsl` partition uses the same whole-workspace transport for recognized
+`caches/<version>/kotlin-dsl/scripts/<32-hex-key>/` and
+`accessors/<32-hex-key>/` or `accessors/<32-hex-key>-PS/` roots. Supported scripts
+contain `metadata.bin`, `classes/` and `instrumented/classes/`; accessor workspaces
+contain metadata plus either `classes.jar`/`sources.jar`, or `classes/`/`sources/`
+for directory-based accessors, including `-PS`. Empty output directories are preserved. Unknown or incomplete modern
+layouts are skipped with warnings, and partial configured ownership fails.
+Legacy `caches/<version>/scripts/` files and generated Gradle API JARs remain
+ordinary strict files in this partition. Set `conflict-handling: default` to
+reject conflicting complete workspace views while retaining whole-unit capture.
+
+The `build-cache` partition defaults to `choose-worker-entry`: one unchanged
+archive is selected per direct 32-hex key under `caches/build-cache-<number>/`,
+using the smallest producer job name. Disjoint keys are retained. Explicit
+`default` rejects differing duplicate archives. These policies select a winner
+even if actual outputs differ under one key; they do not prove reproducibility.
+
 ### Maven
 
 The Maven action resolves the local repository (`~/.m2` by default) into these partitions:

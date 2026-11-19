@@ -85,11 +85,14 @@ aggregator replay can conservatively classify identical upserts as changed. Only
 partitions are uploaded; unrelated base objects remain referenced. Read-only finalize skips
 publication observations and envelope upload.
 
-## Complete Groovy workspace transport
+## Complete Gradle workspace transport
 
-A Groovy partition may declare `workspaces`: sorted complete file membership and
-empty-directory paths for each hashed root. Every Groovy upsert must belong to
-exactly one structurally complete descriptor with both nonempty metadata files.
+A DSL partition may declare typed `workspaces`: sorted complete file membership
+and empty-directory paths for each hashed root. Every recognized workspace upsert
+must belong to exactly one structurally complete descriptor. Groovy requires both
+nonempty metadata files; Kotlin scripts and accessor variants have layout-specific
+required outputs. Ordinary legacy scripts and generated API JARs remain separate
+strict members within Kotlin partitions.
 File-only or partial contributions fail validation. Changed members select all
 members; usage protects the whole workspace. Source directory identities join the
 frozen native fingerprint, so directory-only changes also invalidate retry.
@@ -109,17 +112,21 @@ on the next prepare by discarding only recorded partial contents as a cache miss
 unknown descendants block recovery. This is recoverable per-unit replacement,
 not a transaction across an entire batch of workspaces.
 
-Base storage uses a descriptor under `.mammoth/partition-objects-v1/<partition>/`
-and native payload paths. Groovy references carry accepted complete workspace roots
-so native archive path versions match on restore; descriptors bind membership and
+Base storage uses a descriptor under `.mammoth/partition-objects-v2/<partition>/`
+and native payload paths. Workspace references carry accepted complete roots and
+exact ordinary-file paths so native archive path versions match on restore; descriptors bind membership and
 empty directories. Base publication hashes/uploads changed native files without a
 new staging copy. Worker envelopes retain their existing complete-unit transport.
 
 ## Snapshot base transport and recovery
 
-The `partitioned-v2` storage family discriminator, CI lifecycle 6 and journal schema 4
-isolate the new base format. Worker manifest/package formats remain 5/6. A small
-`.mammoth/generations-v1/record.json` selects exact independent partition objects.
+Cache schema 7, CI lifecycle 7 and journal schema 5 isolate the typed workspace
+format. Worker manifest/package versions are 6/7; partition descriptors and
+generation records use version 2. A small `.mammoth/generations-v2/record.json`
+selects exact independent partition objects. Previous cache families are not used
+as fallbacks, so this causes a one-time cold start for both Gradle and Maven.
+Old local invocation state and mixed-format worker packages are rejected rather
+than interpreted as complete workspace captures.
 Verified snapshot object transport is renamed into the existing local
 `.mammoth/partition-snapshots-v1/<partition>/` transport before replacement. Preexisting
 managed snapshot files are cleared before restore; unavailable snapshots start empty,

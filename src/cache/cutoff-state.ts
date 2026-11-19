@@ -23,10 +23,10 @@ import {
 } from './partition-format';
 import { randomUUID, createHash } from 'node:crypto';
 import {
-  groovyObservationSchema,
-  assertGroovyOwnership,
-  assertGroovyContributions,
-} from './groovy-workspaces';
+  workspaceObservationSchema,
+  assertWorkspaceOwnership,
+  assertWorkspaceContributions,
+} from './immutable-workspaces';
 import { opendir, lstat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -69,7 +69,7 @@ const partitionSchema = z
     description: z.string(),
     publication: z.enum(['aggregate', 'single-writer']).optional(),
     writer: text.optional(),
-    conflictHandling: z.literal('choose-worker-directory').optional(),
+    conflictHandling: z.enum(['choose-worker-directory', 'choose-worker-entry']).optional(),
     relativeIncludeGlobs: z.array(glob),
     relativeExcludeGlobs: z.array(glob),
     absoluteIncludeGlobs: z.array(text),
@@ -168,7 +168,7 @@ const observationsSchema = z
 const selectionSchema = z
   .object({
     members: z.array(cutoffTargetSchema).optional(),
-    workspaces: z.array(groovyObservationSchema).max(200_000).optional(),
+    workspaces: z.array(workspaceObservationSchema).max(200_000).optional(),
     snapshotFileCount: z.number().int().nonnegative().optional(),
     snapshotByteCount: z.number().nonnegative().optional(),
     upserts: z.array(cutoffTargetSchema),
@@ -196,7 +196,7 @@ const partitionSnapshotRecordSchema = z
   .strict();
 export const cutoffJournalSchema = z
   .object({
-    schemaVersion: z.literal(4),
+    schemaVersion: z.literal(5),
     invocation: z.string().uuid(),
     phase: z.enum([
       'prepare-pending',
@@ -362,13 +362,13 @@ export const cutoffJournalSchema = z
       if (state.seal) {
         const manifest = state.seal.manifest;
         try {
-          assertGroovyContributions(
+          assertWorkspaceContributions(
             state.model,
             manifest.partitions,
             createManagedCachePathMatcher(state.model),
           );
         } catch {
-          ctx.addIssue({ code: 'custom', message: 'Invalid sealed Groovy contribution.' });
+          ctx.addIssue({ code: 'custom', message: 'Invalid sealed Gradle contribution.' });
         }
         for (const partition of manifest.partitions) {
           const expected = (state.selection.workspaces ?? [])
@@ -450,7 +450,7 @@ export const cutoffJournalSchema = z
       : [];
     for (const unit of state.selection?.workspaces ?? []) {
       try {
-        assertGroovyOwnership(unit.workspace, unit.partitionId, owns);
+        assertWorkspaceOwnership(unit.workspace, unit.partitionId, owns);
       } catch {
         ctx.addIssue({ code: 'custom', message: 'Invalid frozen workspace ownership.' });
       }
@@ -459,7 +459,7 @@ export const cutoffJournalSchema = z
           unit.workspace.files.some((p) => paths.has(p)) &&
           !unit.workspace.files.every((p) => paths.has(p))
         )
-          ctx.addIssue({ code: 'custom', message: 'Partial frozen Groovy workspace.' });
+          ctx.addIssue({ code: 'custom', message: 'Partial frozen Gradle workspace.' });
       }
     }
     if (state.selection) {
@@ -487,7 +487,7 @@ export function newCutoffJournal(
   execution: CutoffJournal['execution'],
 ): CutoffJournal {
   return cutoffJournalSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     invocation: randomUUID(),
     phase: 'prepare-pending',
     model,
@@ -553,7 +553,7 @@ export function validateCutoffBudget(
     needsSeal && s
       ? {
           manifest: {
-            schemaVersion: 5,
+            schemaVersion: 6,
             buildToolId: state.model.buildToolId,
             partitions: state.model.partitions.map((p, index) => ({
               partitionId: p.id,

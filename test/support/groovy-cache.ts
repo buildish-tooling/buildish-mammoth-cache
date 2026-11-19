@@ -37,7 +37,10 @@ export async function groovyFixtureModel(root: string, overrides: object[] = [])
     readGradleActionInputs(
       createTestRuntimeHost({
         inputs: {
-          'cache-partitions': JSON.stringify([...disabled, ...overrides]),
+          'cache-partitions': JSON.stringify([
+            ...disabled.filter((p) => !overrides.some((o) => (o as { id: string }).id === p.id)),
+            ...overrides,
+          ]),
         },
       }),
     ),

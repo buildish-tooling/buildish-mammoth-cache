@@ -86,7 +86,8 @@ export type CacheGcMode = (typeof CACHE_GC_MODES)[number];
  * New IDs create custom partitions appended after the built-ins in declaration order.
  */
 export type PartitionPublication = 'aggregate' | 'single-writer';
-export type PartitionConflictHandling = 'default' | 'choose-worker-directory';
+export type PartitionConflictHandling =
+  'default' | 'choose-worker-directory' | 'choose-worker-entry';
 
 export interface ConfiguredCachePartitionInput {
   /** Omission inherits the preset; default keeps existing conflict behavior. */

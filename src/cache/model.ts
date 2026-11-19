@@ -18,7 +18,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { CiJobContext } from '../ci';
-import { isGroovyPartition } from './groovy-workspaces';
+import { isWorkspacePartition } from './immutable-workspaces';
 import type { BuildToolAdapter, BuiltInCachePartitionPreset } from '../build-tool/types';
 import type {
   ConfiguredCachePartitionInput,
@@ -411,7 +411,7 @@ function createPartition(
     id,
     publication,
     ...(writer ? { writer } : {}),
-    ...(conflictHandling === 'choose-worker-directory' ? { conflictHandling } : {}),
+    ...(conflictHandling && conflictHandling !== 'default' ? { conflictHandling } : {}),
     displayName,
     description,
     relativeIncludeGlobs: deduplicatedIncludeGlobs,
@@ -477,23 +477,33 @@ export function validatePartitionConflictHandling(
   partitions: readonly CachePartitionDefinition[],
 ): void {
   for (const partition of partitions) {
-    const groovy = buildToolId === 'gradle' && isGroovyPartition(partition);
-    if (groovy && ((partition.publication ?? 'aggregate') !== 'aggregate' || partition.writer))
+    const workspace = buildToolId === 'gradle' && isWorkspacePartition(partition);
+    if (workspace && ((partition.publication ?? 'aggregate') !== 'aggregate' || partition.writer))
       throw new Error(
-        `Partition '${partition.id}' Groovy workspaces require aggregate publication without a writer.`,
+        `Partition '${partition.id}' Gradle workspaces require aggregate publication without a writer.`,
       );
     if (!partition.conflictHandling) continue;
     const maven =
       buildToolId === 'maven' &&
       partition.relativeIncludeGlobs.length > 0 &&
       partition.relativeIncludeGlobs.every((glob) => glob.startsWith('repository/'));
+    const archive =
+      buildToolId === 'gradle' &&
+      partition.relativeIncludeGlobs.length > 0 &&
+      partition.relativeIncludeGlobs.every((glob) =>
+        /^caches\/build-cache-(?:[0-9]+|\*)\//u.test(glob),
+      );
     if (
-      partition.conflictHandling !== 'choose-worker-directory' ||
       (partition.publication ?? 'aggregate') !== 'aggregate' ||
-      (!maven && !groovy)
+      partition.writer ||
+      (partition.conflictHandling === 'choose-worker-directory'
+        ? !maven && !workspace
+        : partition.conflictHandling === 'choose-worker-entry'
+          ? !archive
+          : true)
     )
       throw new Error(
-        `Partition '${partition.id}' choose-worker-directory requires an aggregate Maven partition rooted under repository/ or a Gradle Groovy workspace partition.`,
+        `Partition '${partition.id}' conflict policy requires aggregate Maven directories, Gradle workspaces, or choose-worker-entry on Gradle build-cache paths.`,
       );
   }
 }

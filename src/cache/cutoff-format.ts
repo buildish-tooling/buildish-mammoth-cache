@@ -15,15 +15,15 @@
  */
 
 import { z } from 'zod';
-import { groovyWorkspaceSchema } from './groovy-workspaces';
+import { workspaceSchema } from './immutable-workspaces';
 import { validateNormalizedRelativePosixPath } from '../util/paths';
 import { isCacheMetadataPath } from './metadata-paths';
 import { canonicalTimestampMs } from '../util/timestamps';
 
-export const CUTOFF_CACHE_SCHEMA_VERSION = 6;
-export const CUTOFF_MANIFEST_SCHEMA_VERSION = 5;
-export const CUTOFF_PACKAGE_SCHEMA_VERSION = 6;
-export const CUTOFF_LIFECYCLE_SCHEMA_VERSION = 6;
+export const CUTOFF_CACHE_SCHEMA_VERSION = 7;
+export const CUTOFF_MANIFEST_SCHEMA_VERSION = 6;
+export const CUTOFF_PACKAGE_SCHEMA_VERSION = 7;
+export const CUTOFF_LIFECYCLE_SCHEMA_VERSION = 7;
 export const cutoffPathSchema = z.string().refine((value) => {
   try {
     validateNormalizedRelativePosixPath(value, 'Cutoff path', 'cache root');
@@ -54,7 +54,7 @@ function sortedUnique(values: readonly string[], ctx: z.RefinementCtx) {
 export const cutoffPartitionSchema = z
   .object({
     partitionId: cutoffPartitionIdSchema,
-    workspaces: z.array(groovyWorkspaceSchema).max(200_000).optional(),
+    workspaces: z.array(workspaceSchema).max(200_000).optional(),
     /** True means upserts are the complete configured partition, including intentional empty. */
     snapshot: z.literal(true).optional(),
     upserts: z.array(cutoffUpsertSchema).superRefine((v, ctx) =>

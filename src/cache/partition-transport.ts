@@ -25,7 +25,7 @@ import {
 } from './guarded-files';
 import { metadataPath, readMetadata, writeMetadata } from './metadata-io';
 import { portableCacheFileMode } from './file-permissions';
-import { applyGroovyWorkspaces } from './groovy-apply';
+import { applyWorkspaces } from './workspace-apply';
 import { PARTITION_SNAPSHOT_DIRECTORY, readPartitionSnapshot } from './partition-snapshots';
 import type { CacheModel } from './model';
 import type { SnapshotSource } from './partition-snapshots';
@@ -61,12 +61,18 @@ export async function stagePartitionObject(
       mtimeMs: entry.mtimeMs,
     })),
   };
+  const workspaceFiles = new Set(descriptor.workspaces.flatMap((w) => w.files));
   const reference: PartitionReference = {
     identity: descriptor.identity,
     key: partitionObjectKey(descriptor.identity),
     descriptorDigest: storageDigest(projected),
-    ...(descriptor.kind === 'groovy'
-      ? { workspaceRoots: descriptor.workspaces.map((w) => w.root) }
+    ...(descriptor.kind === 'workspace'
+      ? {
+          workspaceRoots: descriptor.workspaces.map((w) => w.root),
+          ordinaryPaths: projected.files
+            .filter((e) => !workspaceFiles.has(e.relativePath))
+            .map((e) => e.relativePath),
+        }
       : {}),
   };
   validatePartitionDescriptor(model, projected, reference);
@@ -157,9 +163,9 @@ export async function installPartitionObject(
     await rename(path.join(root, relative), target);
     return;
   }
-  if (descriptor.kind === 'groovy') {
+  if (descriptor.kind === 'workspace') {
     const byPath = new Map(descriptor.files.map((e) => [e.relativePath, e]));
-    await applyGroovyWorkspaces(
+    await applyWorkspaces(
       descriptor.workspaces.map((workspace) => ({
         partitionId: descriptor.identity.partitionId,
         workspace,
@@ -169,9 +175,9 @@ export async function installPartitionObject(
       model,
       true,
     );
-    return;
   }
-  for (const entry of descriptor.files) {
+  const workspaceFiles = new Set(descriptor.workspaces.flatMap((w) => w.files));
+  for (const entry of descriptor.files.filter((e) => !workspaceFiles.has(e.relativePath))) {
     const parent = path.posix.dirname(entry.relativePath);
     await verifyParents(model.cacheRoot, parent, true);
     const target = guardedPath(model.cacheRoot, entry.relativePath);

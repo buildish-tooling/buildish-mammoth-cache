@@ -16,7 +16,7 @@
 
 import { resetPartitionRestoreStaging } from '../../cache/partition-restore';
 import { recoverInterruptedMoves } from '../../cache/guarded-files';
-import { recoverGroovyApplication } from '../../cache/groovy-apply';
+import { recoverWorkspaceApplication } from '../../cache/workspace-apply';
 import { resetGroovyBaseTransport } from '../../cache/groovy-base';
 import { mkdir, rm } from 'node:fs/promises';
 import {
@@ -107,7 +107,7 @@ export async function executeCutoffPrepareAction(
       await mkdir(model.cacheRoot, { recursive: true });
       await recoverInterruptedMoves(model.cacheRoot);
       await resetPartitionRestoreStaging(model);
-      await recoverGroovyApplication(model);
+      await recoverWorkspaceApplication(model);
       await resetGroovyBaseTransport(model);
       journal = newCutoffJournal(
         model,
@@ -135,7 +135,7 @@ export async function executeCutoffPrepareAction(
     dependent: CutoffDependentResult | null = null;
   if (!bootstrap.cacheModel) {
     persistCutoffLifecycle(
-      { schemaVersion: 6, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
+      { schemaVersion: 7, cacheEnabled: false, execution: cutoffExecution(bootstrap.ciContext) },
       dependencies.runtimeHost.saveState,
     );
   } else {
@@ -275,7 +275,7 @@ export async function executeCutoffPrepareAction(
           if (plan.directoryConflicts) {
             const { count, details } = plan.directoryConflicts;
             dependent.warnings.push(
-              `${model.buildToolId === 'gradle' ? 'Groovy workspace' : 'Maven directory'} selection resolved ${count} conflicting directory view(s).`,
+              `${model.buildToolId === 'gradle' ? 'Gradle cache unit' : 'Maven directory'} selection resolved ${count} conflicting cache unit view(s).`,
               ...details,
             );
             if (count > details.length)
@@ -318,7 +318,7 @@ export async function executeCutoffPrepareAction(
       dependencies.runtimeHost.warning(warning);
     persistCutoffLifecycle(
       {
-        schemaVersion: 6,
+        schemaVersion: 7,
         cacheEnabled: true,
         model: state.model,
         policy: state.policy,
