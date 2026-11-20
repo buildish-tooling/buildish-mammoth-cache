@@ -24,13 +24,13 @@ cache generation. After a material change, a standalone job publishes a new comp
 distributed workers instead exchange precise deltas through an aggregator. No manual cache-key
 juggling, and unchanged standalone runs publish no duplicate generation.
 
-> **Mammoth Cache 0.1.2 is released.** Use the `v0.1.2` tag for executable GitHub Actions.
+> **Mammoth Cache 0.2.1 is released.** Use the `v0.2.1` tag for executable GitHub Actions.
 > Ordinary source branches omit the generated action bundles.
 
 ---
 
 {{< buildish-button appearance="primary" >}}
-[Read the 0.1.2 getting-started guide](releases/0.1.2/user/getting-started/)
+[Read the 0.2.1 getting-started guide](releases/0.2.1/user/getting-started/)
 {{< /buildish-button >}}
 
 {{< buildish-component-link kind="docs" label="Release documentation" appearance="primary" >}}
