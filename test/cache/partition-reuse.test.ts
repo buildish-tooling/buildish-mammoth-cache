@@ -18,6 +18,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, lstat } from 'node:fs/promises
 import path from 'node:path';
 import { Hash } from 'node:crypto';
 import * as fileIO from '../../src/util/fs';
+import * as manifest from '../../src/cache/manifest';
 import type * as fs from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CutoffArtifacts } from '../support/cutoff-artifacts';
@@ -25,6 +26,8 @@ import { writeKotlinWorkspace } from '../support/kotlin-cache';
 import { writeTransformWorkspace } from '../support/transform-cache';
 import * as installInventory from '../../src/cache/install-inventory';
 import * as metadataIO from '../../src/cache/metadata-io';
+import * as transport from '../../src/cache/partition-transport';
+import { cutoffJournalSchema } from '../../src/cache/cutoff-state';
 import { writeGroovyWorkspace } from '../support/groovy-cache';
 import { cutoffJob } from '../support/cutoff-job';
 import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
@@ -589,7 +592,24 @@ it('fresh prepare reclaims only owned abandoned restore extraction trees', async
   expect(await readFile(path.join(base, 'unrelated/keep'), 'utf8')).toBe('keep');
 });
 
-it('reads changed ordinary payload bytes only for descriptor creation and pre-upload verification', async () => {
+it('passes the created descriptor directly into the frozen publication plan', async () => {
+  const f = await fixture(),
+    job = await f.job('descriptor-handoff');
+  await job.prepare();
+  await put(job, 'a/file', 'payload');
+  const reads = vi.spyOn(metadataIO, 'readMetadata');
+  const stage = vi.spyOn(transport, 'stagePartitionObject');
+  expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('saved');
+  const { descriptor } = await stage.mock.results[0]!.value;
+  expect(Object.isFrozen(descriptor)).toBe(true);
+  expect(Object.isFrozen(descriptor.files[0])).toBe(true);
+  // The two reads guard the persisted descriptor around upload, not immediately after staging.
+  expect(
+    reads.mock.calls.filter(([root, name]) => root === job.home && name.endsWith('/a/object.json')),
+  ).toHaveLength(2);
+});
+
+it('hashes changed ordinary payload bytes once and reuses identity-bound evidence around upload', async () => {
   const f = await fixture(),
     job = await f.job('hash-passes');
   await job.prepare();
@@ -598,7 +618,7 @@ it('reads changed ordinary payload bytes only for descriptor creation and pre-up
   expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('saved');
   expect(
     hash.mock.calls.filter(([root, relative]) => root === job.home && relative === 'a/file'),
-  ).toHaveLength(2);
+  ).toHaveLength(1);
 });
 
 it('base prepare trusts same-size bytes and performs zero payload hashes', async () => {
@@ -968,3 +988,308 @@ it.each([false, true])(
     }
   },
 );
+
+it('does not revalidate the immutable journal across several partition receipts', async () => {
+  const f = await fixture(),
+    job = await f.job('checkpoint-counts');
+  await job.prepare();
+  for (const id of ['a', 'b', 'c'])
+    for (let i = 0; i < 4; i++) await put(job, `${id}/shared/file-${i}`, 'payload');
+  const parse = vi.spyOn(cutoffJournalSchema, 'parse');
+  const counts: number[] = [];
+  const save = f.backend.saveCache.bind(f.backend);
+  vi.spyOn(f.backend, 'saveCache').mockImplementation(async (...args) => {
+    counts.push(parse.mock.calls.length);
+    return save(...args);
+  });
+  expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('saved');
+  expect(counts).toHaveLength(4); // three objects and their record
+  expect(new Set(counts).size).toBe(1);
+  expect(parse.mock.calls.length).toBe(counts[0]); // completion also reuses the plan
+});
+
+it('keeps full inventories bounded as more partitions are published', async () => {
+  const counts: number[] = [];
+  for (const n of [3, 6]) {
+    const ids = Array.from({ length: n }, (_, i) => `p${i}`);
+    const f = await fixture([
+      { id: 'data', includes: [] },
+      ...ids.map((id) => ({ id, includes: [`${id}/**`] })),
+    ]);
+    const job = await f.job('inventory-counts');
+    await job.prepare();
+    for (const id of ids)
+      for (let i = 0; i < 3; i++) await put(job, `${id}/shared/file-${i}`, 'payload');
+    const inventory = vi.spyOn(manifest, 'captureCacheMetadataSnapshot');
+    const hashes = vi.spyOn(fileIO, 'hashStableFileSha256');
+    const stats = vi.spyOn(await import('node:fs/promises'), 'lstat');
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('saved');
+    counts.push(inventory.mock.calls.length);
+    expect(
+      hashes.mock.calls.filter(([name]) => String(name).startsWith(job.home + '/p')),
+    ).toHaveLength(3 * n);
+    // Every payload has the same bounded number of actual inventory/use-time lstats.
+    const perFile = ids.flatMap((id) =>
+      Array.from(
+        { length: 3 },
+        (_, i) =>
+          stats.mock.calls.filter(
+            ([name]) => name === path.join(job.home, `${id}/shared/file-${i}`),
+          ).length,
+      ),
+    );
+    expect(new Set(perFile).size).toBe(1);
+    expect(perFile[0]).toBeGreaterThan(0);
+    inventory.mockRestore();
+    hashes.mockRestore();
+    stats.mockRestore();
+  }
+  expect(counts).toEqual([4, 4]); // capture, pre-GC, post-capture, final barrier
+});
+
+it('reuses snapshot capture hashes without hashing unrelated snapshots at each ordinary save', async () => {
+  const f = await fixture([
+    { id: 'data', includes: [] },
+    { id: 'metadata', includes: ['metadata/**'], publication: 'single-writer' },
+    ...['a', 'b', 'c'].map((id) => ({ id, includes: [`${id}/**`] })),
+  ]);
+  const job = await f.job('snapshot-evidence');
+  await job.prepare();
+  for (const id of ['metadata', 'a', 'b', 'c']) await put(job, `${id}/file`, 'payload');
+  const hash = vi.spyOn(fileIO, 'hashStableFileSha256');
+  const copy = vi.spyOn(guarded, 'copyGuardedFile');
+  expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('saved');
+  expect(
+    copy.mock.calls.filter(([root, name]) => root === job.home && name === 'metadata/file'),
+  ).toHaveLength(1);
+  expect(
+    hash.mock.calls.filter(([name]) => String(name).includes('/partition-snapshots-v1/')),
+  ).toHaveLength(0);
+});
+
+it.each(['current', 'prior', 'future', 'addition', 'removal', 'replacement'])(
+  'blocks the generation after %s partition mutation during upload',
+  async (kind) => {
+    const f = await fixture(),
+      job = await f.job(`mutate-${kind}`);
+    await job.prepare();
+    for (const id of ['a', 'b', 'c']) await put(job, `${id}/file`, 'payload');
+    const save = f.backend.saveCache.bind(f.backend);
+    vi.spyOn(f.backend, 'saveCache').mockImplementation(async (...args) => {
+      const result = await save(...args);
+      if (args[1].includes('-partition-b-')) {
+        const target = path.join(
+          job.home,
+          kind === 'prior' ? 'a/file' : kind === 'future' ? 'c/file' : 'b/file',
+        );
+        if (kind === 'addition') await writeFile(path.join(job.home, 'a/added'), 'new');
+        else if (kind === 'removal') await rm(path.join(job.home, 'a/file'));
+        else if (kind === 'replacement') {
+          await rm(target);
+          await writeFile(target, 'payload');
+        } else await writeFile(target, 'changed');
+      }
+      return result;
+    });
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+      'failed',
+    );
+    expect(
+      f.backend.entries.some((e) => e.files.some((file) => file.name === GENERATION_RECORD_PATH)),
+    ).toBe(false);
+  },
+);
+
+it('does not enumerate shared Maven include roots around each exclusion-partition save', async () => {
+  for (const n of [2, 4]) {
+    const suffixes = Array.from({ length: n }, (_, i) => `p${i}`);
+    const definitions = [
+      { id: 'data', includes: [] },
+      ...suffixes.map((id) => ({
+        id,
+        includes: ['repository/**'],
+        excludes: [
+          '**/_remote.repositories',
+          ...suffixes.filter((other) => other !== id).map((other) => `**/*.${other}`),
+        ],
+      })),
+      { id: 'origins', includes: ['repository/**'], excludes: suffixes.map((id) => `**/*.${id}`) },
+    ];
+    const f = await fixture(definitions, 'maven'),
+      job = await f.job('shared-includes');
+    await job.prepare();
+    for (let unit = 0; unit < 3; unit++) {
+      const directory = `repository/group/artifact/${unit}`;
+      for (const id of suffixes) await put(job, `${directory}/file.${id}`, 'payload');
+      await put(job, `${directory}/_remote.repositories`, 'origin');
+    }
+    const fs = await import('node:fs/promises');
+    const readdir = vi.spyOn(fs, 'readdir');
+    const save = f.backend.saveCache.bind(f.backend);
+    const root = path.join(job.home, 'repository');
+    const rootReads: number[] = [];
+    vi.spyOn(f.backend, 'saveCache').mockImplementation(async (...args) => {
+      rootReads.push(readdir.mock.calls.filter(([name]) => name === root).length);
+      return save(...args);
+    });
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('saved');
+    // Initial capture, pre-GC and post-capture barriers precede all object saves.
+    expect(rootReads.slice(0, n + 1)).toEqual(Array(n + 1).fill(3));
+    expect(rootReads[n + 1]).toBe(4); // the final complete replay precedes the record
+    expect(readdir.mock.calls.filter(([name]) => name === root)).toHaveLength(4);
+    // Count actual returned directory entries, including shared coordinate siblings.
+    const visits = readdir.mock.calls.flatMap(([name], i) =>
+      String(name).startsWith(root + path.sep) || name === root
+        ? [readdir.mock.results[i]!.value]
+        : [],
+    );
+    const entries = (await Promise.all(visits)).reduce((total, result) => total + result.length, 0);
+    expect(entries).toBeLessThanOrEqual(8 * (3 * (n + 1) + 5));
+    readdir.mockRestore();
+  }
+});
+
+it.each(['extra', 'empty/extra'])(
+  'rejects transient glob-selected %s membership and does not revive its receipt on retry',
+  async (extra) => {
+    const f = await fixture(),
+      job = await f.job('transient-membership');
+    await job.prepare();
+    await put(job, 'a/file', 'A');
+    await put(job, 'b/file', 'B');
+    await mkdir(path.join(job.home, 'b/empty'));
+    const save = f.backend.saveCache.bind(f.backend),
+      addition = path.join(job.home, 'b', extra);
+    vi.spyOn(f.backend, 'saveCache').mockImplementation(async (...args) => {
+      const result = await save(...args);
+      if (args[1].includes('-partition-a-')) await writeFile(addition, 'unexpected');
+      if (args[1].includes('-partition-b-')) await rm(addition);
+      return result;
+    });
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+      'failed',
+    );
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+      'failed',
+    );
+    expect(
+      f.backend.entries.some((e) => e.files.some((file) => file.name === GENERATION_RECORD_PATH)),
+    ).toBe(false);
+  },
+);
+
+it.each(['wildcard', 'missing-literal'])(
+  'rejects a transient newly selected include root (%s)',
+  async (kind) => {
+    const f = await fixture([
+        { id: 'data', includes: [] },
+        { id: 'a', includes: ['a/**'] },
+        {
+          id: 'b',
+          includes:
+            kind === 'wildcard' ? ['b/*/payload/**'] : ['b/v1/payload/**', 'b/v2/payload/**'],
+        },
+      ]),
+      job = await f.job('new-include-root');
+    await job.prepare();
+    await put(job, 'a/file', 'A');
+    await put(job, 'b/v1/payload/file', 'B');
+    const save = f.backend.saveCache.bind(f.backend);
+    vi.spyOn(f.backend, 'saveCache').mockImplementation(async (...args) => {
+      const result = await save(...args);
+      if (args[1].includes('-partition-a-')) {
+        await mkdir(path.join(job.home, 'b/v2/payload'), { recursive: true });
+        await writeFile(path.join(job.home, 'b/v2/payload/extra'), 'unexpected');
+      }
+      if (args[1].includes('-partition-b-'))
+        await rm(path.join(job.home, 'b/v2'), { recursive: true });
+      return result;
+    });
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+      'failed',
+    );
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+      'failed',
+    );
+    expect(
+      f.backend.entries.some((e) => e.files.some((file) => file.name === GENERATION_RECORD_PATH)),
+    ).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  'verifies non-writer snapshots once and rejects later tampering (%s)',
+  async (tamper) => {
+    const f = await fixture([
+      { id: 'data', includes: [] },
+      {
+        id: 'metadata',
+        includes: ['metadata/**'],
+        publication: 'single-writer',
+        writer: 'metadata-worker',
+      },
+      ...['a', 'b', 'c'].map((id) => ({ id, includes: [`${id}/**`] })),
+    ]);
+    const seed = await f.job('snapshot-baseline');
+    await seed.prepare();
+    await put(seed, 'metadata/file', 'payload');
+    await executeFinalizeAction(seed.deps);
+    const job = await f.job('non-writer', { 'job-mode': 'distributed-aggregator' });
+    await job.prepare();
+    for (const id of ['a', 'b', 'c']) await put(job, `${id}/file`, 'payload');
+    const hash = vi.spyOn(fileIO, 'hashStableFileSha256');
+    const save = f.backend.saveCache.bind(f.backend),
+      previous = f.backend.entries.length;
+    if (tamper)
+      vi.spyOn(f.backend, 'saveCache').mockImplementation(async (...args) => {
+        const result = await save(...args);
+        if (args[1].includes('-partition-b-'))
+          await writeFile(
+            path.join(job.home, '.mammoth/partition-snapshots-v1/metadata/payload/000001.bin'),
+            'changed',
+          );
+        return result;
+      });
+    if (tamper) {
+      await expect(executeFinalizeAction(job.deps)).rejects.toThrow();
+      expect(
+        f.backend.entries
+          .slice(previous)
+          .some((e) => e.files.some((file) => file.name === GENERATION_RECORD_PATH)),
+      ).toBe(false);
+    } else
+      expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe(
+        'saved',
+      );
+    expect(
+      hash.mock.calls.filter(([name]) =>
+        String(name).startsWith(job.home + '/.mammoth/partition-snapshots-v1/'),
+      ),
+    ).toHaveLength(1);
+  },
+);
+
+it('bounds store workspace directory visits with multiple units in one partition', async () => {
+  for (const count of [2, 4]) {
+    const f = await fixture(
+      [
+        { id: 'data', includes: [] },
+        { id: 'groovy-dsl', includes: ['caches/*/groovy-dsl/**'] },
+      ],
+      'gradle',
+    );
+    const job = await f.job('workspace-store-counts');
+    await job.prepare();
+    const names = Array.from(
+      { length: count },
+      (_, i) => `caches/9.8.1/groovy-dsl/${String(i + 1).padStart(32, '0')}`,
+    );
+    for (let i = 0; i < count; i++)
+      await writeGroovyWorkspace(job.home, String(i + 1).padStart(32, '0'), 'value');
+    const reads = vi.spyOn(await import('node:fs/promises'), 'readdir');
+    expect((await executeFinalizeAction(job.deps)).bootstrap.baseCacheResult?.status).toBe('saved');
+    for (const name of names)
+      expect(reads.mock.calls.filter(([p]) => p === path.join(job.home, name))).toHaveLength(10);
+    reads.mockRestore();
+  }
+});

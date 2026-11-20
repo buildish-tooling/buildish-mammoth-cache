@@ -67,6 +67,7 @@ export interface CachePartitionMetadata {
 }
 
 export interface CacheMetadataSnapshot {
+  readonly directories?: ReadonlyMap<string, FileIdentity>;
   readonly workspaces?: readonly WorkspaceObservation[];
   readonly workspaceWarnings?: readonly string[];
   readonly buildToolId: string;
@@ -95,6 +96,8 @@ export interface CacheManifestCaptureOptions {
    * {@link DEFAULT_CACHE_MANIFEST_SCAN_CONCURRENCY}.
    */
   readonly maxConcurrency?: number;
+  /** Publication-only, operation-local evidence for glob-selected archive topology. */
+  readonly includeDirectoryIdentities?: boolean;
 }
 
 interface IncludedTreeWorkItem {
@@ -142,10 +145,19 @@ export async function captureCacheMetadataSnapshot(
   cacheModel: CacheModel,
   options: CacheManifestCaptureOptions = {},
 ): Promise<CacheMetadataSnapshot> {
+  const directories = options.includeDirectoryIdentities
+    ? new Map<string, FileIdentity>()
+    : undefined;
   const partitions = await scanCachePartitions(
     cacheModel,
     captureFileMetadataEntry,
     resolveManifestScanConcurrency(options.maxConcurrency),
+    directories
+      ? (name, identity) => {
+          const relative = toPosixRelativePath(cacheModel.cacheRoot, name);
+          if (!isCacheMetadataPath(relative)) directories.set(relative, identity);
+        }
+      : undefined,
   );
   const warnings: string[] = [];
   const workspaces = await captureImmutableWorkspaces(
@@ -156,6 +168,7 @@ export async function captureCacheMetadataSnapshot(
     createCacheGlobMatcher(cacheModel.hardCacheExcludeGlobs),
   );
   return {
+    ...(directories ? { directories } : {}),
     buildToolId: cacheModel.buildToolId,
     cacheRoot: cacheModel.cacheRoot,
     partitions,
@@ -195,6 +208,7 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
     relativePath: string,
   ) => Promise<T | null>,
   maxConcurrency: number,
+  onDirectory?: (name: string, identity: FileIdentity) => void,
 ): Promise<{ partitionId: string; entries: T[] }[]> {
   const cacheRoot = cacheModel.cacheRoot;
   const compiledPartitions = cacheModel.partitions.map((partition) => ({
@@ -202,55 +216,65 @@ async function scanCachePartitions<T extends { readonly relativePath: string }>(
     includePatterns: partition.relativeIncludeGlobs.map(compileGlobPattern),
     excludePatterns: partition.relativeExcludeGlobs.map(compileGlobPattern),
     entries: [] as T[],
-    seenRelativePaths: new Set<string>(),
+    roots: [] as string[],
   }));
-  const claimedPaths = new Map<string, string>();
   const excludedMavenDirectories = new Set<string>();
-
-  for (const compiledPartition of compiledPartitions) {
-    for (const includePattern of compiledPartition.includePatterns) {
-      const includeRoots = await expandIncludePatternRoots(cacheRoot, includePattern);
-
-      for (const includeRoot of includeRoots) {
-        await walkIncludedTree(
-          includeRoot,
-          async (absolutePath) => {
-            const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
-            if (
-              isCacheMetadataPath(relativePath) ||
-              compiledPartition.seenRelativePaths.has(relativePath)
-            )
-              return;
-            if (matchesAnyCompiledGlob(relativePath, compiledPartition.excludePatterns)) {
-              if (
-                cacheModel.buildToolId === 'maven' &&
-                relativePath.startsWith('repository/') &&
-                !isMavenTransientFile(path.posix.basename(relativePath))
-              )
-                excludedMavenDirectories.add(path.posix.dirname(relativePath));
-              return;
-            }
-
-            const existingPartitionId = claimedPaths.get(relativePath);
-            if (existingPartitionId && existingPartitionId !== compiledPartition.partition.id) {
-              throw new Error(
-                `Cache manifest path '${relativePath}' matches multiple cache partitions: ${existingPartitionId}, ${compiledPartition.partition.id}.`,
-              );
-            }
-
-            const entry = await captureEntry(cacheRoot, absolutePath, relativePath);
-            if (!entry) {
-              return;
-            }
-
-            compiledPartition.seenRelativePaths.add(relativePath);
-            claimedPaths.set(relativePath, compiledPartition.partition.id);
-            compiledPartition.entries.push(entry);
-          },
-          maxConcurrency,
-        );
+  const claimedPaths = new Map<string, string>();
+  const expanded = new Map<string, readonly string[]>();
+  const roots = new Set<string>();
+  for (const compiled of compiledPartitions) {
+    for (const pattern of compiled.includePatterns) {
+      let matches = expanded.get(pattern.source);
+      if (!matches) {
+        matches = await expandIncludePatternRoots(cacheRoot, pattern, onDirectory);
+        expanded.set(pattern.source, matches);
+      }
+      for (const root of matches) {
+        compiled.roots.push(root);
+        roots.add(root);
       }
     }
+  }
+  const within = (name: string, root: string) =>
+    name === root || name.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+  // Discover shared/overlapping include trees once. Matching each discovered path
+  // against the partition definitions is metadata work, not another filesystem walk.
+  const scanRoots: string[] = [];
+  for (const root of [...roots].sort((a, b) => a.length - b.length))
+    if (!scanRoots.some((parent) => within(root, parent))) scanRoots.push(root);
+  for (const root of scanRoots) {
+    await walkIncludedTree(
+      root,
+      async (absolutePath) => {
+        const relativePath = toPosixRelativePath(cacheRoot, absolutePath);
+        if (isCacheMetadataPath(relativePath)) return;
+        let owner: (typeof compiledPartitions)[number] | undefined;
+        for (const compiled of compiledPartitions) {
+          if (!compiled.roots.some((include) => within(absolutePath, include))) continue;
+          if (matchesAnyCompiledGlob(relativePath, compiled.excludePatterns)) {
+            if (
+              cacheModel.buildToolId === 'maven' &&
+              relativePath.startsWith('repository/') &&
+              !isMavenTransientFile(path.posix.basename(relativePath))
+            )
+              excludedMavenDirectories.add(path.posix.dirname(relativePath));
+            continue;
+          }
+          if (owner)
+            throw new Error(
+              `Cache manifest path '${relativePath}' matches multiple cache partitions: ${owner.partition.id}, ${compiled.partition.id}.`,
+            );
+          owner = compiled;
+        }
+        if (!owner) return;
+        const entry = await captureEntry(cacheRoot, absolutePath, relativePath);
+        if (!entry) return;
+        claimedPaths.set(relativePath, owner.partition.id);
+        owner.entries.push(entry);
+      },
+      maxConcurrency,
+      onDirectory,
+    );
   }
 
   if (cacheModel.buildToolId === 'maven') {
@@ -398,6 +422,7 @@ async function walkIncludedTree(
   pathToScan: string,
   onFile: (absolutePath: string) => Promise<void>,
   maxConcurrency: number,
+  onDirectory?: (name: string, identity: FileIdentity) => void,
 ): Promise<void> {
   await processAsyncWorkQueue<IncludedTreeWorkItem>(
     [{ absolutePath: pathToScan, kind: 'inspect' }],
@@ -429,6 +454,7 @@ async function walkIncludedTree(
         return;
       }
 
+      onDirectory?.(item.absolutePath, fileIdentity(entryStat));
       const entries = await readSortedDirectoryEntries(item.absolutePath);
       if (entries) {
         enqueueDirectoryEntries(item.absolutePath, entries, enqueue);
@@ -472,20 +498,30 @@ function resolveManifestScanConcurrency(value: number | undefined): number {
 async function expandIncludePatternRoots(
   baseDirectory: string,
   pattern: CompiledGlobPattern,
+  onDirectory?: (name: string, identity: FileIdentity) => void,
 ): Promise<readonly string[]> {
   const terminalSegment = pattern.segments.at(-1);
   if (!terminalSegment || terminalSegment.kind !== 'globstar') {
     throw new Error(`Unsupported cache include glob '${pattern.source}': expected trailing '**'.`);
   }
 
-  return await expandPatternPrefix(baseDirectory, pattern.segments.slice(0, -1), 0);
+  return await expandPatternPrefix(baseDirectory, pattern.segments.slice(0, -1), 0, onDirectory);
 }
 
 async function expandPatternPrefix(
   currentPath: string,
   segments: readonly CompiledGlobSegment[],
   segmentIndex: number,
+  onDirectory?: (name: string, identity: FileIdentity) => void,
 ): Promise<readonly string[]> {
+  if (onDirectory) {
+    const current = await lstat(currentPath).catch((error: unknown) => {
+      if (isMissingPathError(error)) return null;
+      throw error;
+    });
+    if (current?.isDirectory() && !current.isSymbolicLink())
+      onDirectory(currentPath, fileIdentity(current));
+  }
   if (segmentIndex >= segments.length) {
     return [currentPath];
   }
@@ -518,7 +554,7 @@ async function expandPatternPrefix(
       return [];
     }
 
-    return await expandPatternPrefix(nextPath, segments, segmentIndex + 1);
+    return await expandPatternPrefix(nextPath, segments, segmentIndex + 1, onDirectory);
   }
 
   const entries = await readSortedDirectoryEntries(currentPath);
@@ -541,6 +577,7 @@ async function expandPatternPrefix(
         path.join(currentPath, entry.name),
         segments,
         segmentIndex + 1,
+        onDirectory,
       )),
     );
   }

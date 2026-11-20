@@ -33,7 +33,8 @@ import {
   cutoffJournalSchema,
   type CutoffJournal,
 } from '../../src/cache/cutoff-state';
-import type { CacheModel } from '../../src/cache/model';
+import { createCacheGeneration, type CacheModel } from '../../src/cache/model';
+import { freezePartitionPublication } from '../../src/cache/partition-publication';
 import type { NormalizedActionConfig } from '../../src/config/types';
 const roots: string[] = [];
 afterEach(async () => {
@@ -266,4 +267,61 @@ it('allows completed read-only state without frozen decisions while preserving w
   state.observedAt = null;
   state.phase = 'observations-frozen';
   await expect(persistCutoffJournal(state)).rejects.toThrow(/Read-only lifecycle/);
+});
+
+it('owns publication metadata and validates receipts without reparsing the immutable plan', async () => {
+  const { state, model } = await fixture();
+  await freeze(state);
+  await freezePartitionPublication(state, createCacheGeneration(model, 'a'.repeat(64)));
+  const parse = vi.spyOn(cutoffJournalSchema, 'parse');
+  expect(Object.isFrozen(state.selection!.members)).toBe(true);
+  expect(Object.isFrozen(state.publicationPlan!.record.partitions)).toBe(true);
+  const receipt = state.publicationPlan!.changedIds[0]!;
+  await persistCutoffJournal({ ...state, partitionReceipts: [receipt] });
+  await persistCutoffJournal({
+    ...state,
+    partitionReceipts: [receipt],
+    saved: true,
+    phase: 'completed',
+  });
+  expect(parse).not.toHaveBeenCalled();
+  await expect(
+    persistCutoffJournal({ ...state, partitionReceipts: [receipt, receipt] }),
+  ).rejects.toThrow(/progress/);
+  await expect(persistCutoffJournal({ ...state, partitionReceipts: ['unknown'] })).rejects.toThrow(
+    /progress/,
+  );
+  await expect(persistCutoffJournal({ ...state, saved: true })).rejects.toThrow(/saved/);
+  await expect(persistCutoffJournal({ ...state, phase: 'build-ready' })).rejects.toThrow();
+  const loaded = await loadCutoffJournal(model, cutoffJournalPath(state.invocation));
+  expect(parse).toHaveBeenCalledTimes(1);
+  // A fresh process-equivalent object must establish its own validation context.
+  await persistCutoffJournal(loaded);
+  expect(parse).toHaveBeenCalledTimes(2);
+  const changed = structuredClone(state);
+  changed.publicationPlan!.record.key += '-changed';
+  await expect(persistCutoffJournal(changed)).rejects.toThrow();
+});
+
+it('retains durable receipt ordering when a fast checkpoint fails', async () => {
+  const { state, model } = await fixture();
+  await freeze(state);
+  await freezePartitionPublication(state, createCacheGeneration(model, 'b'.repeat(64)));
+  const write = vi
+    .spyOn(metadata, 'writeMetadata')
+    .mockRejectedValueOnce(new Error('checkpoint failed'));
+  await expect(
+    persistCutoffJournal({ ...state, partitionReceipts: [...state.publicationPlan!.changedIds] }),
+  ).rejects.toThrow('checkpoint failed');
+  write.mockRestore();
+  expect(
+    (await loadCutoffJournal(model, cutoffJournalPath(state.invocation))).partitionReceipts,
+  ).toEqual([]);
+  const substituted = {
+    ...state,
+    selection: { ...state.selection!, retainedFingerprint: '0'.repeat(64) },
+  };
+  const parse = vi.spyOn(cutoffJournalSchema, 'parse');
+  await persistCutoffJournal(substituted);
+  expect(parse).toHaveBeenCalledTimes(1);
 });

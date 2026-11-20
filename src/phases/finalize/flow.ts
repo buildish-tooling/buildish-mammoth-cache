@@ -76,6 +76,7 @@ export async function executeFinalizeAction(
   );
   let bootstrap = await bootstrapPhase('finalize', d);
   const { record, journal: state } = pre;
+  const evidence = pre.publicationEvidence;
   if (
     record.cacheEnabled !== !!bootstrap.cacheModel ||
     JSON.stringify(cutoffExecution(bootstrap.ciContext)) !== JSON.stringify(record.execution)
@@ -114,7 +115,7 @@ export async function executeFinalizeAction(
     };
     if (state.phase !== 'completed') {
       state.phase = 'completed';
-      await persistCutoffJournal(state);
+      await persistCutoffJournal(state, evidence);
       await cleanPublishedPartitionStaging(state).catch((e: unknown) =>
         d.runtimeHost.warning(`Could not remove publication staging: ${String(e)}`),
       );
@@ -122,9 +123,9 @@ export async function executeFinalizeAction(
     bootstrap = { ...bootstrap, baseCacheResult: save };
   } else if (state) {
     // Reports may read managed files but must not change the retained metadata projection.
-    await verifyCutoffReplay(state);
+    await verifyCutoffReplay(state, evidence);
     cacheGcResult = await collectCutoffGarbage(state);
-    await captureLocalPartitionSnapshots(state);
+    await captureLocalPartitionSnapshots(state, evidence);
     const selection = state.selection!;
     if (state.policy.jobMode === 'distributed-worker' && !state.policy.readOnly) {
       if (!d.artifactBackend) throw new Error('Artifact backend dependency is required.');
@@ -138,7 +139,7 @@ export async function executeFinalizeAction(
             bootstrap.config.workerArtifactRetentionDays,
           ));
         state.workerReceipt = { name: uploaded.name, id: uploaded.id, size: uploaded.size };
-        await persistCutoffJournal(state);
+        await persistCutoffJournal(state, evidence);
         deltaArtifactResult = {
           status: 'uploaded',
           artifactName: uploaded.name,
@@ -174,7 +175,7 @@ export async function executeFinalizeAction(
         message: 'No worker envelope publication for this mode.',
       };
     }
-    await verifyCutoffReplay(state);
+    await verifyCutoffReplay(state, evidence);
     const required = !!state.publicationKey || changedPartitionIds(state).length > 0;
     const eligible = !state.policy.readOnly && state.policy.jobMode !== 'distributed-worker';
     const generation =
@@ -182,7 +183,7 @@ export async function executeFinalizeAction(
     if (generation) {
       if (state.publicationKey && state.publicationKey !== generation.key)
         throw new Error('Frozen publication identity changed.');
-      if (!state.saved) await freezePartitionPublication(state, generation);
+      if (!state.saved) await freezePartitionPublication(state, generation, evidence);
     }
     let save: BaseCacheSaveResult;
     if (state.saved) {
@@ -199,10 +200,13 @@ export async function executeFinalizeAction(
         await verifySnapshotTransport(
           state.model,
           new Map(state.partitionSnapshots.map((s) => [s.partitionId, s.digest])),
+          'verified',
+          [],
+          evidence,
         );
       save = await saveBaseCache(bootstrap.config, state.model, () => generation, {
         ...d,
-        publishGeneration: () => publishPartitionGeneration(state, d.cacheBackend),
+        publishGeneration: () => publishPartitionGeneration(state, d.cacheBackend, evidence),
       });
     }
     if (eligible && required && save.status !== 'saved') {
@@ -215,13 +219,14 @@ export async function executeFinalizeAction(
     } else {
       state.saved = save.status === 'saved';
       state.phase = 'completed';
-      await persistCutoffJournal(state);
+      await persistCutoffJournal(state, evidence);
       await cleanPublishedPartitionStaging(state).catch((e: unknown) =>
         d.runtimeHost.warning(`Could not remove publication staging: ${String(e)}`),
       );
     }
     bootstrap = { ...bootstrap, baseCacheResult: save };
   }
+  for (const line of evidence?.lines() ?? []) d.runtimeHost.info(line);
   const status: FinalizeActionStatus = {
     bootstrap,
     baseCacheRestoreResult: record.cacheEnabled ? record.restoreResult : null,

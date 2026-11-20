@@ -29,6 +29,7 @@ import { fileIdentity, sameFileIdentity } from './file-identity';
 import { metadataPath, readMetadata, writeMetadata } from './metadata-io';
 import { portableCacheFileMode, repairCacheFileMetadata } from './file-permissions';
 import { assertBaseInstallPlan, type BasePartitionInstallPlan } from './base-install-plan';
+import type { StoreEvidence } from './store-evidence';
 import { applyBaseWorkspaces, applyWorkspaces } from './workspace-apply';
 import {
   PARTITION_SNAPSHOT_DIRECTORY,
@@ -54,7 +55,8 @@ export async function stagePartitionObject(
   descriptor: PartitionDescriptor,
   sourceRoot: string,
   sources: readonly SnapshotSource[],
-): Promise<PartitionReference> {
+  evidence?: StoreEvidence,
+): Promise<{ reference: PartitionReference; descriptor: PartitionDescriptor }> {
   const projected = {
     ...descriptor,
     files: sources.map((entry) => ({
@@ -84,22 +86,26 @@ export async function stagePartitionObject(
       : {}),
   };
   validatePartitionDescriptor(model, projected, reference);
+  const directories = new DirectoryValidationBatch(sourceRoot);
   for (const [i, source] of sources.entries())
-    projected.files[i]!.contentSha256 = await hashGuardedFile(
+    projected.files[i]!.contentSha256 = await (
+      evidence ? evidence.hash.bind(evidence) : hashGuardedFile
+    )(
       sourceRoot,
       source.sourcePath,
       { size: source.size, contentSha256: source.contentSha256 },
       source.identity,
+      directories,
     );
   reference.descriptorDigest = storageDigest(projected);
-  validatePartitionDescriptor(model, projected, reference);
+  const validated = validatePartitionDescriptor(model, projected, reference);
   await writeMetadata(
     root,
     `${partitionObjectRoot(descriptor.identity.partitionId)}/object.json`,
-    projected,
+    validated,
     PARTITION_STORAGE_LIMITS.bytes,
   );
-  return reference;
+  return { reference, descriptor: validated };
 }
 /** Validate persisted descriptor metadata without reopening payload bytes. */
 export async function readPartitionDescriptor(

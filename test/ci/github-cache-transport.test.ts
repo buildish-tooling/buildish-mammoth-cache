@@ -287,7 +287,7 @@ it('native partition SDK globs archive exactly scanner ownership across overlapp
     files: [],
     workspaces: [],
   };
-  const reference = await stagePartitionObject(
+  const { reference } = await stagePartitionObject(
     model,
     source,
     descriptor,
@@ -371,7 +371,7 @@ it('native Groovy SDK selection omits unrecognized and incomplete workspace root
     files: [],
     workspaces: snapshot.workspaces!.map((w) => w.workspace),
   };
-  const reference = await stagePartitionObject(
+  const { reference } = await stagePartitionObject(
     model,
     source,
     descriptor,

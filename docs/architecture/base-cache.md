@@ -115,7 +115,8 @@ Each partition object contains a reserved `object.json` descriptor plus its nati
 Single-writer objects use their existing frozen snapshot payload paths directly.
 The descriptor binds object identity, ownership, portable membership, sizes, modes, mtimes and
 payload hashes, plus typed complete Groovy/Kotlin workspace metadata where applicable. Changed partitions
-are hashed and archived directly in full; unchanged partitions are not staged or uploaded.
+are archived directly in full; newly captured ordinary content is hashed once for publication,
+while unchanged partitions are not staged or uploaded.
 Snapshot owners still capture their complete local snapshot to determine material changes.
 Ordinary aggregate partitions do not inherit the worker-envelope expanded-byte ceiling.
 
@@ -124,7 +125,8 @@ objects. It validates isolated staged transports before installation. Missing/ev
 are cold partitions with no reusable reference or inherited membership. Available objects remain
 usable: outcomes distinguish complete hit, partial hit and all-partitions miss. Explicit empty
 entries count as successful restores; a valid zero-partition record is a complete hit. Malformed
-records or corrupt payloads fail validation rather than masquerading as eviction.
+records or structurally invalid payloads fail validation rather than masquerading as eviction.
+Base payload bytes follow the trusted-producer/service contract described below.
 
 Maven coordinate siblings can span aggregate partitions. Connected owners form bounded recovery
 groups recorded with the generation: if any member is unavailable, the entire group starts cold.
@@ -139,6 +141,30 @@ full readback and validation. The record is saved last, so one successful object
 complete publication. Required aggregator publication failures retain worker envelopes and fail
 aggregation; standalone failures warn and retain retry intent. Eviction after publication can
 still occur, and restore handles it per partition. Orphan backend objects expire normally.
+
+Publication keeps the pre-GC replay gate and a complete replay after snapshot capture. Around
+an object save it checks that object's frozen payload paths and descriptor, inventories only its
+selected complete workspace roots, and rechecks source identities with fresh directory evidence.
+A final complete replay guards the generation record. Ordinary archive selection still uses the
+existing include/exclude globs: operation-local directory identities cover the include trees and
+ancestors used to expand wildcard or absent roots. They are frozen before uploads and compared at
+the final barrier, detecting temporary extra members even if removed after archiving. Action-owned
+metadata trees are excluded. Creating/removing an excluded sibling can conservatively invalidate
+its parent's directory evidence; finalize requires a stable source tree during publication.
+Shared and overlapping include roots are discovered once per observation. Per-path partition
+matching still depends on the configured definitions, but each object save avoids a new traversal
+of unrelated partitions or a shared repository tree.
+
+Store hash evidence binds a digest to its exact source path and native identity for one finalize
+invocation. Snapshot capture reuses the digest calculated while copying into frozen payloads;
+selected inherited snapshots receive content verification once, then identity checks. Restored
+baseline digests remain trusted metadata under the base-restore contract. Without evidence
+connecting installation identity through cutoff, members of changed ordinary partitions are
+hashed locally once. No pre-build inventory is added for digest reuse. Changed identities invalidate
+reuse; a retry rebuilds its proofs. Previously receipted objects receive full exact readback on
+retry, because an earlier final directory barrier may have rejected the attempt after saving a
+receipt. Unchanged published references retain version-aware availability lookup. An invalidated
+attempt can leave unreachable objects, but cannot publish a successful generation.
 
 The action-owned `partitioned-v3` family discriminator prevents old monolithic archives from
 matching, even when a consumer pins its schema input. Cache schema **8**, package **8**, worker
@@ -164,6 +190,14 @@ prepare identity and per-partition snapshot summaries, with no per-file finalize
 Worker canonical manifest/package identity is sealed before upload; regeneration must match it.
 Base retries reuse their frozen keys and record; ambiguous remote success is confirmed by exact
 readback. Locally recorded complete success can be reused. Retained worker envelopes permit fresh aggregate recovery.
+
+Publication checkpoints own deeply frozen, validated immutable journal data. Receipt and completion
+updates validate only their progress and references while that exact owned data remains unchanged.
+New or substituted data and process reloads require full validation. Maximum receipt growth is
+budgeted before reuse; each write retains its serialized byte bound, atomic journal/pointer ordering
+and durable receipt checkpoint. Full journal serialization and writes remain proportional to journal
+size for each checkpoint. Finalize logs operation counts, payload hash/capture bytes and timings for
+publication work; these describe the actual phases, not an established elapsed-time speedup.
 
 GC records deletion intent before the sweep and checkpoints progress once after it finishes,
 keeping complete-journal writes constant per sweep. An interruption can leave uncheckpointed

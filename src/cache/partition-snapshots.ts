@@ -21,6 +21,7 @@ import {
 import type { PartitionDescriptor } from './partition-format';
 import { assertBaseInstallPlan, type BasePartitionInstallPlan } from './base-install-plan';
 import { stageGuardedFiles } from './staged-files';
+import type { StoreEvidence } from './store-evidence';
 import { portableCacheFileMode } from './file-permissions';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, opendir, lstat, rm, rename } from 'node:fs/promises';
@@ -193,6 +194,7 @@ export async function readPartitionSnapshot(
   model: CacheModel,
   id: string,
   integrity: PayloadIntegrity = 'verified',
+  evidence?: StoreEvidence,
 ): Promise<ValidatedPartitionSnapshot | null> {
   cutoffPartitionIdSchema.parse(id);
   const relative = PARTITION_SNAPSHOT_DIRECTORY + '/' + id;
@@ -215,7 +217,9 @@ export async function readPartitionSnapshot(
   if (manifest.partitionId !== id) throw new Error('Snapshot partition identity mismatch.');
   assertMembership(model, manifest);
   const root = path.dirname(await metadataPath(model.cacheRoot, relative + '/snapshot.json'));
-  const inventory = await inventoryInstallTree(root);
+  const inventory = await (evidence
+    ? evidence.measure('snapshot-inventory', () => inventoryInstallTree(root))
+    : inventoryInstallTree(root));
   const expected = new Set(['snapshot.json', ...manifest.files.map((e) => e.payloadPath)]);
   if (
     inventory.files.size !== expected.size ||
@@ -223,6 +227,7 @@ export async function readPartitionSnapshot(
     [...inventory.directories.keys()].some((name) => name !== '' && name !== 'payload')
   )
     throw new Error('Unexpected snapshot transport membership.');
+  evidence?.checkSnapshotDirectories(root, inventory.directories);
   const sources = new DirectoryValidationBatch(root);
   for (const entry of manifest.files) {
     const native = inventory.files.get(entry.payloadPath);
@@ -232,8 +237,10 @@ export async function readPartitionSnapshot(
           ? 'Snapshot payload size/SHA-256 mismatch.'
           : 'Snapshot payload size mismatch.',
       );
-    if (integrity === 'verified')
-      await hashGuardedFile(root, entry.payloadPath, entry, native, sources);
+    if (integrity === 'verified') {
+      if (evidence) await evidence.hash(root, entry.payloadPath, entry, native, sources);
+      else await hashGuardedFile(root, entry.payloadPath, entry, native, sources);
+    }
   }
   const snapshot = {
     manifest: freezeInstallMetadata(manifest),
@@ -263,6 +270,7 @@ export async function stagePartitionSnapshot(
   id: string,
   sourceRoot: string,
   sources: readonly SnapshotSource[],
+  evidence?: StoreEvidence,
 ): Promise<ValidatedPartitionSnapshot> {
   cutoffPartitionIdSchema.parse(id);
   if (
@@ -294,15 +302,27 @@ export async function stagePartitionSnapshot(
     assertMembership(model, projected);
     if (Buffer.byteLength(JSON.stringify(projected)) > MAX_MANIFEST_BYTES)
       throw new Error('Snapshot manifest exceeds byte limit.');
+    const sourceDirectories = new DirectoryValidationBatch(sourceRoot);
+    const captured = new Map<string, FileIdentity>();
     for (const [i, source] of sorted.entries()) {
       const entry = projected.files[i]!;
-      const digest = await copyGuardedFile(
-        sourceRoot,
-        source.sourcePath,
-        path.join(scratch, entry.payloadPath),
-        { size: source.size, contentSha256: source.contentSha256 },
-        source.identity,
-      );
+      const copy = () =>
+        copyGuardedFile(
+          sourceRoot,
+          source.sourcePath,
+          path.join(scratch, entry.payloadPath),
+          { size: source.size, contentSha256: source.contentSha256 },
+          source.identity,
+          sourceDirectories,
+        );
+      const digest = await (evidence
+        ? evidence.measure('snapshot-capture', copy, source.size)
+        : copy());
+      if (evidence)
+        captured.set(
+          entry.payloadPath,
+          fileIdentity((await regularStat(path.join(scratch, entry.payloadPath)))!),
+        );
       manifest.files.push({ ...entry, contentSha256: digest });
     }
     const parsed = storedPartitionSnapshotSchema.parse(manifest);
@@ -321,6 +341,11 @@ export async function stagePartitionSnapshot(
     await assertRegularTree(target);
     await rm(target, { recursive: true });
     await rename(scratch, target);
+    for (const entry of manifest.files) {
+      const native = captured.get(entry.payloadPath);
+      if (evidence && native)
+        evidence.remember(target, entry.payloadPath, entry.contentSha256, native);
+    }
     return {
       manifest: parsed,
       rootDirectory: target,
@@ -433,6 +458,7 @@ export async function verifySnapshotTransport(
   expected?: ReadonlyMap<string, string>,
   integrity: PayloadIntegrity = 'verified',
   restoredDescriptors: readonly PartitionDescriptor[] = [],
+  evidence?: StoreEvidence,
 ): Promise<ValidatedPartitionSnapshot[]> {
   const snapshots: ValidatedPartitionSnapshot[] = [];
   for (const p of snapshotPartitions(model)) {
@@ -441,13 +467,13 @@ export async function verifySnapshotTransport(
         ? restoredDescriptors.find((entry) => entry.identity.partitionId === p.id)
         : undefined;
     const restored = descriptor ? restoredBaseSnapshots.get(descriptor) : undefined;
-    const evidence = restored && snapshotPlans.get(restored);
+    const restoredEvidence = restored && snapshotPlans.get(restored);
     const snapshot =
       restored &&
-      evidence?.cacheRoot === model.cacheRoot &&
-      evidence.model === snapshotModelBinding(model)
+      restoredEvidence?.cacheRoot === model.cacheRoot &&
+      restoredEvidence.model === snapshotModelBinding(model)
         ? restored
-        : await readPartitionSnapshot(model, p.id, integrity);
+        : await readPartitionSnapshot(model, p.id, integrity, evidence);
     if (descriptor) restoredBaseSnapshots.delete(descriptor);
     if (!snapshot || (expected && expected.get(p.id) !== snapshot.digest))
       throw new Error('Selected partition snapshot is missing or changed.');

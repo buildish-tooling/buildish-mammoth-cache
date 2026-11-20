@@ -23,6 +23,7 @@ import {
   type ValidatedPartitionSnapshot,
 } from './partition-snapshots';
 import { persistCutoffJournal, type CutoffJournal } from './cutoff-state';
+import type { StoreEvidence } from './store-evidence';
 
 export function snapshotRecord(
   snapshot: ValidatedPartitionSnapshot,
@@ -81,14 +82,17 @@ export async function initializePartitionSnapshots(
   }
 }
 /** All source identities were durably frozen before any content reads. */
-export async function captureLocalPartitionSnapshots(state: CutoffJournal): Promise<void> {
+export async function captureLocalPartitionSnapshots(
+  state: CutoffJournal,
+  evidence?: StoreEvidence,
+): Promise<void> {
   if (!state.selection) throw new Error('Snapshot capture requires frozen observations.');
   if (state.policy.readOnly || state.policy.jobMode === 'distributed-worker') return;
   for (const partition of snapshotPartitions(state.model)) {
     if (!ownsSnapshot(partition, state.policy.jobMode, state.execution.jobName)) continue;
     const previous = state.partitionSnapshots.find((s) => s.partitionId === partition.id)!;
     if (previous.source === 'local') {
-      const selected = await readPartitionSnapshot(state.model, partition.id);
+      const selected = await readPartitionSnapshot(state.model, partition.id, 'verified', evidence);
       if (!selected || selected.digest !== previous.digest)
         throw new Error('Frozen local snapshot changed.');
       continue;
@@ -108,6 +112,7 @@ export async function captureLocalPartitionSnapshots(state: CutoffJournal): Prom
           mtimeMs: Math.trunc(e.identity.mtimeMs),
           identity: e.identity,
         })),
+      evidence,
     );
     const candidate = {
       ...state,
@@ -117,7 +122,7 @@ export async function captureLocalPartitionSnapshots(state: CutoffJournal): Prom
           : s,
       ),
     };
-    await persistCutoffJournal(candidate);
+    await persistCutoffJournal(candidate, evidence);
     Object.assign(state, candidate);
   }
 }

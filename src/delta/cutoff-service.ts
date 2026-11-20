@@ -34,7 +34,13 @@ import {
   cutoffExecutionSchema,
 } from '../cache/cutoff-state';
 import { createManagedCachePathMatcher } from '../cache/manifest';
-import { copyGuardedFile, verifyParents, regularStat, guardedPath } from '../cache/guarded-files';
+import {
+  copyGuardedFile,
+  verifyParents,
+  regularStat,
+  guardedPath,
+  DirectoryValidationBatch,
+} from '../cache/guarded-files';
 import type { CacheModel } from '../cache/model';
 import { CUTOFF_STATE_DIRECTORY } from '../cache/metadata-paths';
 import { metadataPath } from '../cache/metadata-io';
@@ -233,6 +239,8 @@ export async function stageCutoffPackage(
       DELTA_ARTIFACT_RESOURCE_LIMITS.expandedPackageSizeBytes
     )
       throw new Error('Expanded package metadata+payload budget exceeded.');
+    const sourceDirectories = new DirectoryValidationBatch(state.model.cacheRoot);
+    const byPartition = new Map(manifest.partitions.map((p) => [p.partitionId, p]));
     for (const target of state.selection.upserts) {
       const payloadPath = `payload/${String(++index).padStart(6, '0')}.bin`;
       const entry = {
@@ -248,10 +256,9 @@ export async function stageCutoffPackage(
         path.join(directory, payloadPath),
         entry,
         target.identity,
+        sourceDirectories,
       );
-      manifest.partitions
-        .find((p) => p.partitionId === target.partitionId)!
-        .upserts.push({ ...entry, contentSha256: digest });
+      byPartition.get(target.partitionId)!.upserts.push({ ...entry, contentSha256: digest });
     }
     manifest = cutoffManifestSchema.parse(manifest);
     checkManifestBounds(manifest);

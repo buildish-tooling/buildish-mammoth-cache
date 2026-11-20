@@ -263,7 +263,12 @@ consistency within the existing trusted-producer model. Base restore validates m
 digests, ownership, membership, regular-file types and sizes, but does not hash payload
 bytes, including snapshot initialization. Same-size base payload corruption is not
 detected; authorized producers and the cache service are trusted for these bytes.
-Worker imports and store/publication validation retain payload SHA-256 checks. They do
+Worker imports and store/publication validation retain payload SHA-256 checks. Within
+one finalize invocation, store may reuse a capture/verification digest bound to the
+same path and native identity; persisted journals cannot revive that local proof.
+Publication retains full boundary replay, source checks around saves and a final
+include-directory identity check to detect temporary archive-membership changes.
+Retries fully validate previously receipted objects by exact readback. These checks do
 not prove semantic equivalence or confidentiality of same-key outputs. This expands
 transported derived content under the existing trust boundaries; it does not make
 untrusted build execution safe. _(documented)_

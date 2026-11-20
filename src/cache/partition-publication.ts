@@ -23,11 +23,16 @@ import { metadataPath, readMetadata, writeMetadata } from './metadata-io';
 import { CUTOFF_STATE_DIRECTORY } from './metadata-paths';
 import { persistCutoffJournal, verifyCutoffReplay, type CutoffJournal } from './cutoff-state';
 import { readPartitionSnapshot, type SnapshotSource } from './partition-snapshots';
+import { stagePartitionObject, readPartitionObject } from './partition-transport';
+import { DirectoryValidationBatch } from './guarded-files';
+import { StoreEvidence } from './store-evidence';
+import type { CutoffTarget } from './cutoff-selection';
 import {
-  stagePartitionObject,
-  readPartitionObject,
-  readPartitionDescriptor,
-} from './partition-transport';
+  inspectWorkspaceTree,
+  type WorkspaceObservation,
+  type ImmutableWorkspace,
+} from './immutable-workspaces';
+import { sameFileIdentity } from './file-identity';
 import {
   storageDigest,
   partitionTransportKind,
@@ -42,48 +47,56 @@ import {
   type PartitionReference,
 } from './partition-format';
 
-function retainedMembers(state: CutoffJournal, id: string) {
-  const removed = new Set(state.selection!.gc.map((e) => e.relativePath));
-  return (state.selection!.members ?? state.selection!.upserts).filter(
-    (e) => e.partitionId === id && !removed.has(e.relativePath),
-  );
-}
-export function changedPartitionIds(state: CutoffJournal): string[] {
+function publicationInputs(state: CutoffJournal) {
   if (!state.selection) throw new Error('Partition decisions require frozen observations.');
-  return state.model.partitions
+  const removed = new Set(state.selection.gc.map((e) => e.relativePath));
+  const members = new Map<string, CutoffTarget[]>();
+  for (const entry of state.selection.members ?? state.selection.upserts) {
+    if (removed.has(entry.relativePath)) continue;
+    const list = members.get(entry.partitionId) ?? [];
+    list.push(entry);
+    members.set(entry.partitionId, list);
+  }
+  const workspaces = new Map<string, ImmutableWorkspace[]>();
+  for (const unit of state.selection.workspaces ?? []) {
+    if (unit.workspace.files.every((f) => removed.has(f))) continue;
+    const list = workspaces.get(unit.partitionId) ?? [];
+    list.push(unit.workspace);
+    workspaces.set(unit.partitionId, list);
+  }
+  const baselines = new Map(state.basePartitions.map((p) => [p.partitionId, p]));
+  const snapshots = new Map(state.partitionSnapshots.map((s) => [s.partitionId, s]));
+  const touched = new Set(
+    [...state.selection.upserts, ...state.selection.gc].map((e) => e.partitionId),
+  );
+  const workerPaths = new Set(state.workers.upserts);
+  const changedIds = state.model.partitions
     .filter((partition) => {
-      const baseline = state.basePartitions.find((p) => p.partitionId === partition.id);
+      const baseline = baselines.get(partition.id),
+        selected = members.get(partition.id) ?? [];
       if (partition.publication === 'single-writer') {
-        const snapshot = state.partitionSnapshots.find((s) => s.partitionId === partition.id)!;
+        const snapshot = snapshots.get(partition.id)!;
         return snapshot.changed || (!baseline?.reference && snapshot.fileCount > 0);
       }
-      if (state.selection!.gc.some((e) => e.partitionId === partition.id)) return true;
-      const members = retainedMembers(state, partition.id);
-      if (!baseline || baseline.status === 'missing') return members.length > 0;
+      if (touched.has(partition.id)) return true;
+      if (!baseline || baseline.status === 'missing') return selected.length > 0;
       if (
-        JSON.stringify(members.map((e) => e.relativePath)) !==
+        JSON.stringify(selected.map((e) => e.relativePath)) !==
         JSON.stringify(baseline.descriptor?.files.map((e) => e.relativePath) ?? [])
       )
         return true;
-      if (
-        state.selection!.upserts.some((e) => e.partitionId === partition.id) ||
-        state.selection!.gc.some((e) => e.partitionId === partition.id) ||
-        state.workers.upserts.some((name) => members.some((e) => e.relativePath === name))
-      )
-        return true;
-      if (partitionTransportKind(state.model, partition.id) === 'workspace') {
-        const removed = new Set(state.selection!.gc.map((e) => e.relativePath));
-        const workspaces = (state.selection!.workspaces ?? [])
-          .filter(
-            (u) =>
-              u.partitionId === partition.id && !u.workspace.files.every((f) => removed.has(f)),
-          )
-          .map((u) => u.workspace);
-        return JSON.stringify(workspaces) !== JSON.stringify(baseline.descriptor?.workspaces ?? []);
-      }
-      return false;
+      if (selected.some((e) => workerPaths.has(e.relativePath))) return true;
+      return (
+        partitionTransportKind(state.model, partition.id) === 'workspace' &&
+        JSON.stringify(workspaces.get(partition.id) ?? []) !==
+          JSON.stringify(baseline.descriptor?.workspaces ?? [])
+      );
     })
     .map((p) => p.id);
+  return { members, workspaces, baselines, snapshots, changedIds };
+}
+export function changedPartitionIds(state: CutoffJournal): string[] {
+  return publicationInputs(state).changedIds;
 }
 function publicationRoot(state: CutoffJournal): string {
   return path.join(
@@ -96,6 +109,7 @@ function publicationRoot(state: CutoffJournal): string {
 export async function freezePartitionPublication(
   state: CutoffJournal,
   generation: CacheGeneration,
+  evidence?: StoreEvidence,
 ): Promise<void> {
   if (state.publicationPlan) {
     if (state.publicationPlan.record.key !== generation.key)
@@ -104,7 +118,8 @@ export async function freezePartitionPublication(
   }
   if (!state.selection || state.policy.readOnly || state.policy.jobMode === 'distributed-worker')
     throw new Error('Ineligible partition publication.');
-  const changed = new Set(changedPartitionIds(state));
+  const inputs = publicationInputs(state);
+  const changed = new Set(inputs.changedIds);
   const root = publicationRoot(state);
   await metadataPath(
     state.model.cacheRoot,
@@ -129,7 +144,7 @@ export async function freezePartitionPublication(
     recoveryGroups: [],
   };
   for (const partition of state.model.partitions) {
-    const baseline = state.basePartitions.find((p) => p.partitionId === partition.id);
+    const baseline = inputs.baselines.get(partition.id);
     if (!changed.has(partition.id) && baseline?.reference && baseline.descriptor) {
       record.partitions.push({
         partitionId: partition.id,
@@ -142,14 +157,14 @@ export async function freezePartitionPublication(
     let sourceRoot = state.model.cacheRoot;
     let sources: SnapshotSource[];
     if (partition.publication === 'single-writer') {
-      const snapshot = await readPartitionSnapshot(state.model, partition.id);
-      const selected = state.partitionSnapshots.find((p) => p.partitionId === partition.id);
+      const snapshot = await readPartitionSnapshot(state.model, partition.id, 'verified', evidence);
+      const selected = inputs.snapshots.get(partition.id);
       if (!snapshot || snapshot.digest !== selected?.digest)
         throw new Error('Selected snapshot changed before publication.');
       sourceRoot = snapshot.rootDirectory;
       sources = snapshot.manifest.files.map((e) => ({ ...e, sourcePath: e.payloadPath }));
     } else
-      sources = retainedMembers(state, partition.id).map((e) => ({
+      sources = (inputs.members.get(partition.id) ?? []).map((e) => ({
         relativePath: e.relativePath,
         sourcePath: e.relativePath,
         size: e.identity.size,
@@ -162,7 +177,6 @@ export async function freezePartitionPublication(
       continue;
     }
     const kind = partitionTransportKind(state.model, partition.id);
-    const removed = new Set(state.selection.gc.map((e) => e.relativePath));
     const descriptor: PartitionDescriptor = {
       schemaVersion: 3,
       identity: {
@@ -175,25 +189,17 @@ export async function freezePartitionPublication(
       buildToolId: state.model.buildToolId,
       partitionFingerprint: state.model.partitionFingerprint,
       kind,
-      workspaces:
-        kind === 'workspace'
-          ? (state.selection.workspaces ?? [])
-              .filter(
-                (u) =>
-                  u.partitionId === partition.id && !u.workspace.files.every((f) => removed.has(f)),
-              )
-              .map((u) => u.workspace)
-          : [],
+      workspaces: kind === 'workspace' ? (inputs.workspaces.get(partition.id) ?? []) : [],
       files: [],
     };
-    const reference = await stagePartitionObject(
+    const { reference, descriptor: staged } = await stagePartitionObject(
       state.model,
       state.model.cacheRoot,
       descriptor,
       sourceRoot,
       sources,
+      evidence,
     );
-    const staged = await readPartitionDescriptor(state.model, state.model.cacheRoot, reference);
     record.partitions.push({ partitionId: partition.id, kind: 'object', reference });
     descriptors.push(staged);
     changedIds.push(partition.id);
@@ -207,17 +213,26 @@ export async function freezePartitionPublication(
     phase: 'publication-intent' as const,
     publicationPlan: { record, descriptors, changedIds },
   };
-  await persistCutoffJournal(candidate);
+  await persistCutoffJournal(candidate, evidence);
   Object.assign(state, candidate);
 }
 /** Returns null for a verified concurrent publication, otherwise the real record cache ID. */
 export async function publishPartitionGeneration(
   state: CutoffJournal,
   backend: BaseCacheBackend,
+  publicationEvidence?: StoreEvidence,
 ): Promise<number | null> {
   const plan = state.publicationPlan;
   if (!plan) throw new Error('Missing frozen partition publication plan.');
   const root = publicationRoot(state);
+  // A resumed/direct publication establishes fresh proofs before trusting any receipt.
+  const evidence = publicationEvidence ?? new StoreEvidence();
+  if (!publicationEvidence) await verifyCutoffReplay(state, evidence);
+  evidence.sealTransportDirectories();
+  const workspaces = new Map((state.selection?.workspaces ?? []).map((u) => [u.workspace.root, u]));
+  const changedIds = new Set(plan.changedIds),
+    receipts = new Set(state.partitionReceipts);
+  const descriptors = new Map(plan.descriptors.map((d) => [d.identity.partitionId, d]));
   for (const entry of plan.record.partitions) {
     if (entry.kind === 'empty') continue;
     const objectRoot = state.model.cacheRoot;
@@ -228,9 +243,12 @@ export async function publishPartitionGeneration(
       entry.reference.workspaceRoots,
       entry.reference.ordinaryPaths,
     );
-    const changed = plan.changedIds.includes(entry.partitionId);
-    if (!changed || state.partitionReceipts.includes(entry.partitionId)) {
-      if (backend.lookupCache) {
+    const changed = changedIds.has(entry.partitionId);
+    if (!changed || receipts.has(entry.partitionId)) {
+      // A prior invocation may have saved a receipt before its global directory
+      // barrier failed. Fresh readback prevents that archive reviving a bad plan.
+      if (receipts.has(entry.partitionId)) await confirmObject(state, backend, entry.reference);
+      else if (backend.lookupCache) {
         if (
           (await backend.lookupCache(paths, entry.reference.key, { archiveRoot: objectRoot })) !==
           entry.reference.key
@@ -241,18 +259,21 @@ export async function publishPartitionGeneration(
       } else await confirmObject(state, backend, entry.reference);
       continue;
     }
-    const descriptor = plan.descriptors.find((d) => d.identity.partitionId === entry.partitionId)!;
+    const descriptor = descriptors.get(entry.partitionId)!;
     await writeMetadata(
       objectRoot,
       `${partitionObjectRoot(entry.partitionId)}/object.json`,
       descriptor,
       PARTITION_STORAGE_LIMITS.bytes,
     );
-    await readPartitionObject(state.model, objectRoot, entry.reference, true);
-    await verifyCutoffReplay(state);
+    await evidence.measure('partition-source-check', () =>
+      verifyPublicationSources(state, descriptor, entry.reference, evidence, workspaces),
+    );
     let cacheId: number;
     try {
-      cacheId = await backend.saveCache(paths, entry.reference.key, { archiveRoot: objectRoot });
+      cacheId = await evidence.measure('backend-save', () =>
+        backend.saveCache(paths, entry.reference.key, { archiveRoot: objectRoot }),
+      );
     } catch (error) {
       try {
         await confirmObject(state, backend, entry.reference);
@@ -262,22 +283,26 @@ export async function publishPartitionGeneration(
       cacheId = 1;
     }
     if (cacheId <= 0) await confirmObject(state, backend, entry.reference);
-    await verifyCutoffReplay(state);
+    await evidence.measure('partition-source-check', () =>
+      verifyPublicationSources(state, descriptor, entry.reference, evidence, workspaces),
+    );
     const candidate = {
       ...state,
       partitionReceipts: [...state.partitionReceipts, entry.partitionId],
     };
-    await persistCutoffJournal(candidate);
+    await persistCutoffJournal(candidate, evidence);
     Object.assign(state, candidate);
   }
-  await verifyCutoffReplay(state);
+  await verifyCutoffReplay(state, evidence);
   // The immutable record must equal the frozen plan even after a process retry.
   await writeMetadata(root, GENERATION_RECORD_PATH, plan.record, PARTITION_STORAGE_LIMITS.bytes);
   let cacheId: number;
   try {
-    cacheId = await backend.saveCache(generationRecordPaths(root), plan.record.key, {
-      archiveRoot: root,
-    });
+    cacheId = await evidence.measure('backend-save', () =>
+      backend.saveCache(generationRecordPaths(root), plan.record.key, {
+        archiveRoot: root,
+      }),
+    );
   } catch {
     cacheId = -1;
   }
@@ -303,6 +328,43 @@ export async function publishPartitionGeneration(
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
+}
+/** Small persisted metadata boundary plus operation-local content/identity bindings. */
+async function verifyPublicationSources(
+  state: CutoffJournal,
+  descriptor: PartitionDescriptor,
+  reference: PartitionReference,
+  evidence: StoreEvidence,
+  workspaces: ReadonlyMap<string, WorkspaceObservation>,
+): Promise<void> {
+  const root = state.model.cacheRoot;
+  const raw = await readMetadata(
+    root,
+    `${partitionObjectRoot(reference.identity.partitionId)}/object.json`,
+    PARTITION_STORAGE_LIMITS.bytes,
+  );
+  if (!raw || storageDigest(JSON.parse(raw)) !== reference.descriptorDigest)
+    throw new Error('Planned partition descriptor changed.');
+  for (const unit of descriptor.workspaces) {
+    const expected = workspaces.get(unit.root);
+    const tree = await inspectWorkspaceTree(root, unit.root, unit.kind !== 'artifact-transform');
+    if (
+      !expected ||
+      !tree ||
+      JSON.stringify(tree.files.map((f) => f.relativePath)) !== JSON.stringify(unit.files) ||
+      JSON.stringify(tree.emptyDirectories) !== JSON.stringify(unit.emptyDirectories) ||
+      tree.directories.length !== expected.directories.length ||
+      tree.directories.some(
+        (entry, i) =>
+          entry.relativePath !== expected.directories[i]!.relativePath ||
+          !sameFileIdentity(entry.identity, expected.directories[i]!.identity, true),
+      )
+    )
+      throw new Error('Frozen publication workspace changed.');
+  }
+  const directories = new DirectoryValidationBatch(root);
+  for (const entry of descriptor.files)
+    await evidence.hash(root, entry.payloadPath, entry, undefined, directories);
 }
 async function confirmObject(
   state: CutoffJournal,

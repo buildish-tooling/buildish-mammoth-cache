@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { StoreEvidence } from '../cache/store-evidence';
 import { z } from 'zod';
 import {
   cutoffModelSchema,
@@ -125,6 +126,7 @@ export function readCutoffLifecycle(getState: (key: string) => string): CutoffLi
 export interface CutoffPreflight {
   record: CutoffLifecycle;
   journal: CutoffJournal | null;
+  publicationEvidence?: StoreEvidence;
 }
 const issuedPreflights = new WeakMap<CutoffPreflight, string>();
 function issuePreflight(result: CutoffPreflight): CutoffPreflight {
@@ -171,7 +173,9 @@ export async function preflightCutoffLifecycle(
   if (journal.phase === 'prepare-pending' || journal.cutoff === null)
     throw new Error('Prepare did not establish a valid cutoff.');
   if (journal.policy.readOnly) return issuePreflight({ record, journal });
-  if (journal.selection) await verifyCutoffReplay(journal);
+  const publicationEvidence =
+    journal.policy.jobMode !== 'distributed-worker' ? new StoreEvidence() : undefined;
+  if (journal.selection) await verifyCutoffReplay(journal, publicationEvidence);
   else {
     const snapshot = await captureCacheMetadataSnapshot(record.model);
     journal.snapshotWarnings.push(...(snapshot.workspaceWarnings ?? []));
@@ -189,5 +193,5 @@ export async function preflightCutoffLifecycle(
     );
     await freezeCutoffSelection(journal, selection, now);
   }
-  return issuePreflight({ record, journal });
+  return issuePreflight({ record, journal, publicationEvidence });
 }

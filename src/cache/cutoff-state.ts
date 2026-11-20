@@ -45,6 +45,8 @@ import {
   type WorkerObservations,
 } from './cutoff-selection';
 import { sameFileIdentity } from './file-identity';
+import { freezeInstallMetadata } from './install-inventory';
+import type { StoreEvidence } from './store-evidence';
 import { captureCacheMetadataSnapshot, createManagedCachePathMatcher } from './manifest';
 import { validateNormalizedRelativePosixPath } from '../util/paths';
 import { validatePartitionConflictHandling, type CacheModel } from './model';
@@ -645,9 +647,79 @@ async function retire(root: string, keep: ReadonlySet<string>): Promise<void> {
     if (st.isFile() && !st.isSymbolicLink()) await rm(target);
   }
 }
-export async function persistCutoffJournal(state: CutoffJournal): Promise<void> {
-  cutoffJournalSchema.parse(state);
-  validateCutoffBudget(state);
+// Only publication progress has a stable immutable plan. Other lifecycle transitions
+// continue through full validation; a process reload never restores this authority.
+const publicationCheckpoints = new WeakMap<
+  object,
+  {
+    immutable: Record<string, unknown>;
+    keys: Set<string>;
+    changed: Set<string>;
+  }
+>();
+const publicationProgressSchema = z
+  .object({
+    phase: z.enum(['publication-intent', 'completed']),
+    saved: z.boolean(),
+    partitionReceipts: z.array(cutoffPartitionIdSchema),
+  })
+  .strict()
+  .refine((p) => !p.saved || p.phase === 'completed', 'Invalid saved result.');
+function validateCheckpoint(state: CutoffJournal): void {
+  const context = state.publicationPlan && publicationCheckpoints.get(state.publicationPlan);
+  if (
+    context &&
+    Object.keys(state).length === context.keys.size &&
+    Object.entries(state).every(
+      ([key, value]) =>
+        context.keys.has(key) && (!(key in context.immutable) || context.immutable[key] === value),
+    )
+  ) {
+    const progress = publicationProgressSchema.parse({
+      phase: state.phase,
+      saved: state.saved,
+      partitionReceipts: state.partitionReceipts,
+    });
+    if (
+      new Set(progress.partitionReceipts).size !== progress.partitionReceipts.length ||
+      progress.partitionReceipts.some((id) => !context.changed.has(id))
+    )
+      throw new Error('Invalid publication progress.');
+    state.partitionReceipts = Object.freeze(progress.partitionReceipts) as string[];
+    // The maximum receipt list/longest phase was budgeted when this plan was owned.
+    // writeMetadata still enforces the actual serialized byte limit on every write.
+    return;
+  }
+  const parsed = cutoffJournalSchema.parse(state);
+  validateCutoffBudget(parsed);
+  if (!parsed.publicationPlan || !['publication-intent', 'completed'].includes(parsed.phase))
+    return;
+  validateCutoffBudget({
+    ...parsed,
+    phase: 'publication-intent',
+    saved: false,
+    partitionReceipts: parsed.publicationPlan.changedIds,
+  });
+  const immutable: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (['phase', 'saved', 'partitionReceipts'].includes(key)) continue;
+    immutable[key] = freezeInstallMetadata(value);
+  }
+  // The schema owns its parsed values; do not freeze caller-owned mutable input.
+  Object.assign(state, immutable);
+  state.partitionReceipts = Object.freeze([...parsed.partitionReceipts]) as string[];
+  publicationCheckpoints.set(state.publicationPlan!, {
+    immutable,
+    keys: new Set(Object.keys(parsed)),
+    changed: new Set(parsed.publicationPlan.changedIds),
+  });
+}
+export async function persistCutoffJournal(
+  state: CutoffJournal,
+  evidence?: StoreEvidence,
+): Promise<void> {
+  if (evidence) evidence.measureSync('journal-validation', () => validateCheckpoint(state));
+  else validateCheckpoint(state);
   const root = state.model.cacheRoot,
     name = path.posix.basename(cutoffJournalPath(state.invocation));
   const raw = await readMetadata(root, `${CUTOFF_STATE_DIRECTORY}/current.json`, 4096);
@@ -660,12 +732,10 @@ export async function persistCutoffJournal(state: CutoffJournal): Promise<void> 
     }
   if (previous !== undefined && previous !== name)
     await retire(root, new Set(previous ? [previous, name] : [name]));
-  await writeMetadata(
-    root,
-    cutoffJournalPath(state.invocation),
-    state,
-    CUTOFF_JOURNAL_LIMITS.bytes,
-  );
+  const write = () =>
+    writeMetadata(root, cutoffJournalPath(state.invocation), state, CUTOFF_JOURNAL_LIMITS.bytes);
+  if (evidence) await evidence.measure('journal-serialization-write', write);
+  else await write();
   await writeMetadata(
     root,
     `${CUTOFF_STATE_DIRECTORY}/current.json`,
@@ -726,7 +796,10 @@ export async function freezeCutoffSelection(
   await persistCutoffJournal(candidate);
   Object.assign(state, candidate);
 }
-export async function verifyCutoffReplay(state: CutoffJournal): Promise<void> {
+export async function verifyCutoffReplay(
+  state: CutoffJournal,
+  evidence?: StoreEvidence,
+): Promise<void> {
   if (!state.selection) throw new Error('No frozen cutoff observations.');
   for (const selected of state.partitionSnapshots) {
     const partition = state.model.partitions.find((p) => p.id === selected.partitionId)!;
@@ -737,12 +810,22 @@ export async function verifyCutoffReplay(state: CutoffJournal): Promise<void> {
       ownsSnapshot(partition, state.policy.jobMode, state.execution.jobName)
     )
       continue;
-    const snapshot = await readPartitionSnapshot(state.model, selected.partitionId);
+    const snapshot = await readPartitionSnapshot(
+      state.model,
+      selected.partitionId,
+      'verified',
+      evidence,
+    );
     if (!snapshot || snapshot.digest !== selected.digest)
       throw new Error('Selected partition snapshot changed.');
   }
-  const snapshot = await captureCacheMetadataSnapshot(state.model),
+  const snapshot = await (evidence
+      ? evidence.measure('full-inventory', () =>
+          captureCacheMetadataSnapshot(state.model, { includeDirectoryIdentities: true }),
+        )
+      : captureCacheMetadataSnapshot(state.model)),
     gc = new Set(state.selection.gc.map((e) => e.relativePath));
+  if (evidence && snapshot.directories) evidence.observeDirectories(snapshot.directories);
   if (fingerprintMetadata(snapshot, gc) !== state.selection.retainedFingerprint)
     throw new Error('Frozen cutoff retained content changed; run prepare again.');
   const actual = new Map(
