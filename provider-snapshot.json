@@ -6,7 +6,7 @@
       "type": "git-tags",
       "displayName": "Mammoth Cache Git tags",
       "baseUrl": "https://github.com/buildish-tooling/buildish-mammoth-cache",
-      "fetchedAt": "2026-11-19T15:22:21.275556+00:00"
+      "fetchedAt": "2026-11-20T06:27:51.546249+00:00"
     }
   ],
   "records": [
@@ -104,13 +104,32 @@
         "root": "docs",
         "ref": "764097ac7b840113b968f23b0966bb8386ce1e8f"
       }
+    },
+    {
+      "provider": "mammoth-cache-tags",
+      "kind": "released",
+      "componentSlug": "mammoth-cache",
+      "artifactKey": "mammoth-cache",
+      "version": "0.2.2",
+      "tag": "v0.2.2",
+      "commitSha": "00147da2c35e460d53e6b9d10be6bba35f4cf98f",
+      "externalId": "git:buildish-mammoth-cache:v0.2.2",
+      "externalUrl": "https://github.com/buildish-tooling/buildish-mammoth-cache/releases/tag/v0.2.2",
+      "releaseLine": "0.2",
+      "publicationState": "published",
+      "publishedAt": "2026-11-20T06:17:33Z",
+      "docsSource": {
+        "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
+        "root": "docs",
+        "ref": "00147da2c35e460d53e6b9d10be6bba35f4cf98f"
+      }
     }
   ],
   "artifacts": [
     {
       "componentSlug": "mammoth-cache",
       "artifactKey": "mammoth-cache",
-      "latestStable": "0.2.1",
+      "latestStable": "0.2.2",
       "releaseLines": [
         {
           "key": "0.1",
@@ -118,7 +137,7 @@
         },
         {
           "key": "0.2",
-          "latest": "0.2.1"
+          "latest": "0.2.2"
         }
       ]
     }
