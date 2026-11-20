@@ -256,6 +256,15 @@ jobs:
           test -x "$gradle_executable"
           echo "BUILDISH_TEST_GRADLE_EXECUTABLE=$gradle_executable" >> "$GITHUB_ENV"
 
+      # Restore after make build: npm ci removes node_modules, including Vite's cache.
+      - name: Restore Vitest integration timing history
+        id: vitest-timings
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules/.vite/vitest/**/results.json
+          key: vitest-integration-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: vitest-integration-v1-
+
       - name: Require installed tools and run local integration tests
         run: |
           test -x "$BUILDISH_TEST_GRADLE_EXECUTABLE"
@@ -265,6 +274,14 @@ jobs:
           java -version
           mvn --version
           make integration-test
+
+      # A fresh key lets successful main runs update timings as tests evolve.
+      - name: Save Vitest integration timing history
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules/.vite/vitest/**/results.json
+          key: ${{ steps.vitest-timings.outputs.cache-primary-key }}
 
   integration-trusted-gradle:
     name: Trusted GitHub integration scenarios (Gradle)
