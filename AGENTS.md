@@ -37,6 +37,23 @@ rules that should apply across code, tests, docs, and release work.
 - Prefer existing helper functions, build scripts, and project conventions over
   introducing parallel mechanisms.
 
+## Performance And Validation
+
+- Assess total work across the complete operation, including filesystem calls,
+  payload reads/writes, parsing, hashing, serialization and checkpoints.
+- Inventory and index collections once per stable phase. Avoid scanning an entire
+  partition or inventory inside a per-file or per-workspace loop.
+- Pass validated metadata and reusable evidence through helper layers. Define
+  invalidation boundaries for mutable filesystem evidence instead of independently
+  repeating validation at every layer.
+- Justify checks against the documented trust model and required invariants.
+  Additional validation must address a concrete failure mode; preserve guarantees
+  without automatically repeating the original work.
+- For changes to batch processing, add focused operation-count regressions using
+  multiple units within one partition and shared directories. Check aggregate work
+  as inputs grow; successful small-fixture tests and elapsed-time assertions alone
+  are insufficient.
+
 ## Testing And Validation
 
 - All changes should pass `make check` before they are treated as complete.
