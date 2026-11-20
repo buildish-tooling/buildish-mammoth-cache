@@ -27,3 +27,7 @@ The core model is shared between Gradle and Maven: the same two-phase lifecycle,
 key generation, delta exchange protocol, and CI abstraction layer underpin both. Build-tool-specific
 behaviour is isolated behind a `BuildToolAdapter` interface so the shared phase logic never imports
 tool-specific code.
+
+The [streaming cache protocol draft](../dev/cache-protocol/) defines the proposed
+next incompatible wire format and lifecycle contract. It is unimplemented and does
+not replace the descriptions of released behavior in these architecture pages.
