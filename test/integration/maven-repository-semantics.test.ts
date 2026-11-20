@@ -257,31 +257,8 @@ it('merges disjoint real worker directories and resolves their artifacts offline
     resolve('aggregator', release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
   ).rejects.toThrow(/offline mode/u);
 });
-it('rejects shared marker/disjoint classifier views and conflicting origins before managed mutation', async () => {
-  await publish('remote-a', 'example', '1.0', 'SOURCES', '-sources');
-  await resolve('classifier-worker', 'test:example:jar:sources:1.0');
-  await resolve('origin-worker', release, { id: 'origin-b', remote: 'remote-b' });
-  const a = await mavenFixtureState(path.join(root, 'worker-a'), 'worker-a');
-  const sources = await mavenFixtureState(path.join(root, 'classifier-worker'), 'sources');
-  const other = await mavenFixtureState(path.join(root, 'origin-worker'), 'other');
-  const pkg = await stageCutoffPackage(a.state, a.ci);
-  const target = await mavenFixtureModel(path.join(root, 'rejected'));
-  for (const state of [sources, other]) {
-    const candidate = await stageCutoffPackage(state.state, state.ci);
-    for (const override of [false, true])
-      expect(() => mergeCutoffPackages([pkg, candidate], target, a.ci, override)).toThrow(
-        /Conflicting Maven repository directory/u,
-      );
-  }
-  await expect(readFile(path.join(target.cacheRoot, artifact))).rejects.toThrow();
-  // Applying a classifier-only worker over an aggregator with a JAR must also fail.
-  const model = await mavenFixtureModel(path.join(root, 'seed'));
-  const sourcePackage = await stageCutoffPackage(sources.state, sources.ci);
-  await expect(
-    applyCutoffPlan(mergeCutoffPackages([sourcePackage], model, a.ci), model),
-  ).rejects.toThrow(/Incomplete Maven repository directory/u);
-  expect(await readFile(path.join(model.cacheRoot, artifact), 'utf8')).toBe('A');
-});
+// Strict classifier/origin conflict combinations are filesystem regressions in
+// test/cache/maven-repository.test.ts; native excluded-source controls remain below.
 
 it('GC preserves origin checks with old marker timestamps and evicts the whole inactive directory', async () => {
   await cloneSeed('gc');
@@ -340,15 +317,26 @@ const excludeSources = {
 const sourcesArtifact = 'repository/test/example/1.0/example-1.0-sources.jar';
 const sourcesCoordinates = 'test:example:jar:sources:1.0';
 
+// Immutable native prerequisites; clone before each independent mutation experiment.
+const sourcesSeeds = new Map<string, string>();
+async function cloneSourcesSeed(local: string, origin: 'a' | 'b') {
+  let seed = sourcesSeeds.get(origin);
+  if (!seed) {
+    seed = 'sources-seed-' + origin;
+    const options = { id: 'origin-' + origin, remote: 'remote-' + origin };
+    await publish(options.remote, 'example', '1.0', origin.toUpperCase() + '-SOURCES', '-sources');
+    expect(await resolve(seed, release, options)).toBe(origin.toUpperCase());
+    expect(await resolve(seed, sourcesCoordinates, options)).toBe(
+      origin.toUpperCase() + '-SOURCES',
+    );
+    sourcesSeeds.set(origin, seed);
+  }
+  await cp(path.join(root, seed), path.join(root, local), { recursive: true });
+}
+
 it('rejects a B marker over excluded A sources before aggregation changes any bytes', async () => {
-  await publish('remote-a', 'example', '1.0', 'A-SOURCES', '-sources');
-  await publish('remote-b', 'example', '1.0', 'B-SOURCES', '-sources');
-  await resolve('excluded-target');
-  expect(await resolve('excluded-target', sourcesCoordinates)).toBe('A-SOURCES');
-  await resolve('excluded-worker', release, { id: 'origin-b', remote: 'remote-b' });
-  expect(
-    await resolve('excluded-worker', sourcesCoordinates, { id: 'origin-b', remote: 'remote-b' }),
-  ).toBe('B-SOURCES');
+  await cloneSourcesSeed('excluded-target', 'a');
+  await cloneSourcesSeed('excluded-worker', 'b');
   // A missing artifact can still have an entry in Resolver's marker. The destination may
   // retain an excluded copy, so source-side validation alone cannot protect aggregation.
   await rm(path.join(root, 'excluded-worker', sourcesArtifact));
@@ -379,9 +367,7 @@ it('rejects a B marker over excluded A sources before aggregation changes any by
 });
 
 it('refuses GC of a marker when real excluded sources would survive', async () => {
-  await publish('remote-a', 'example', '1.0', 'A-SOURCES', '-sources');
-  await resolve('excluded-gc');
-  expect(await resolve('excluded-gc', sourcesCoordinates)).toBe('A-SOURCES');
+  await cloneSourcesSeed('excluded-gc', 'a');
   const home = path.join(root, 'excluded-gc');
   const { state } = await mavenFixtureState(home);
   state.model = cutoffModelSchema.parse(await mavenFixtureModel(home, excludeSources));

@@ -30,6 +30,7 @@ import { CutoffArtifacts } from '../support/cutoff-artifacts';
 import { cutoffJob } from '../support/cutoff-job';
 import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
 import { writeKotlinWorkspace } from '../support/kotlin-cache';
+import { captureWorkspaceEvidence } from '../support/gradle-workspace-evidence';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -251,4 +252,37 @@ it.each([
   }
   const agg = await f.job('aggregator', 'distributed-aggregator', 'worker-a,worker-b');
   await expect(agg.prepare()).rejects.toThrow(/Conflicting/);
+});
+
+it('publishes complete standalone Kotlin units through native archives and reuses them unchanged', async () => {
+  const f = await fixture(),
+    seed = await f.job('standalone-seed');
+  const prepared = await seed.prepare();
+  expect(prepared.bootstrap.baseCacheResult?.status).toBe('miss');
+  const kinds = [
+    'kotlin-script',
+    'kotlin-accessor-jars',
+    'kotlin-accessor-directories',
+    'kotlin-plugin-spec-accessors',
+  ] as const;
+  for (const [i, kind] of kinds.entries())
+    await writeKotlinWorkspace(seed.home, kind, String(i).repeat(32), 'standalone');
+  await put(seed, shared, 'standalone-task-archive');
+  const expected = await captureWorkspaceEvidence(prepared.bootstrap.cacheModel!);
+  expect([...expected.units.values()].map((u) => u.workspace.kind).sort()).toEqual(
+    [...kinds].sort(),
+  );
+  await executeFinalizeAction(seed.deps);
+  const saves = f.backend.savedKeys.length;
+  const reader = await f.job('standalone-reader');
+  const restored = await reader.prepare();
+  expect(restored.bootstrap.baseCacheResult?.status).toBe('current-lineage-hit');
+  const actual = await captureWorkspaceEvidence(restored.bootstrap.cacheModel!);
+  expect(actual.units).toEqual(expected.units);
+  expect(actual.archives).toEqual(expected.archives);
+  for (const unit of expected.units.values())
+    for (const directory of unit.workspace.emptyDirectories)
+      expect((await lstat(path.join(reader.home, directory))).isDirectory()).toBe(true);
+  await executeFinalizeAction(reader.deps);
+  expect(f.backend.savedKeys).toHaveLength(saves);
 });

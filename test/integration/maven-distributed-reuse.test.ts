@@ -141,17 +141,14 @@ async function main(): Promise<void> {
     assert.equal(aggregatorOutputs['dependent-delta-artifact-count'], '2');
     printOutputs('maven_aggregator', aggregatorOutputs);
 
-    // Both profiles must resolve offline — proves the delta merge populated the local repo.
-    await runMaven(
+    // Resolve both contributions in one process, observing each profile's artifact.
+    const aggregatorLog = await runMaven(
       jobs.maven_aggregator,
-      ['-P', 'worker-a', 'dependency:resolve', '--offline'],
-      'aggregator-mvn-worker-a-offline',
+      ['-P', 'worker-a,worker-b', 'dependency:resolve', '--offline'],
+      'aggregator-mvn-both-workers-offline',
     );
-    await runMaven(
-      jobs.maven_aggregator,
-      ['-P', 'worker-b', 'dependency:resolve', '--offline'],
-      'aggregator-mvn-worker-b-offline',
-    );
+    assert.match(aggregatorLog, /com\.google\.guava:guava:jar:33\.6\.0-jre/u);
+    assert.match(aggregatorLog, /commons-io:commons-io:jar:2\.22\.0/u);
 
     const aggregatorFinalizeStatus = await executeFinalizePhase(
       jobs.maven_aggregator,
@@ -402,7 +399,7 @@ async function runMaven(
   job: LocalMavenJobRuntime,
   args: readonly string[],
   label: string,
-): Promise<void> {
+): Promise<string> {
   console.log(`\n--- ${label} ---`);
   // Inject the isolated local repository path so Maven does not fall back to $HOME/.m2.
   const fullArgs = [
@@ -424,6 +421,7 @@ async function runMaven(
       `Maven command '${label}' for job '${job.jobName}' failed with exit code ${result.exitCode}.`,
     );
   }
+  return result.output;
 }
 
 async function runProcess(

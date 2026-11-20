@@ -30,7 +30,7 @@ abstract class ExpandJar implements TransformAction<ExpandParameters> {
     abstract Provider<FileSystemLocation> getInputArtifact()
 
     void transform(TransformOutputs outputs) {
-        println('TRANSFORM_EXECUTED ' + inputArtifact.get().asFile.name)
+        println('TRANSFORM_EXECUTED ' + parameters.outputKind.get() + ' ' + getClass().simpleName + ' ' + inputArtifact.get().asFile.name)
         if (parameters.outputKind.get() == 'none') return
         def destination = outputs.dir('expanded')
         if (parameters.outputKind.get() == 'empty') return
@@ -53,7 +53,11 @@ abstract class CacheableExpandJar extends ExpandJar {}
 abstract class NonCacheableExpandJar extends ExpandJar {}
 
 def artifactType = ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE
-def outputKind = providers.gradleProperty('outputKind').getOrElse('files')
+def outputKind = providers.gradleProperty('outputKind').getOrElse(project.findProperty('fixtureOutputKind') ?: 'files')
+def cacheable = providers.gradleProperty('cacheable').getOrElse(
+    project.hasProperty('fixtureCacheable') ? project.property('fixtureCacheable').toString() : 'true'
+).toBoolean()
+def extraArtifact = project.findProperty('fixtureExtraArtifact')
 configurations {
     expanded {
         canBeConsumed = false
@@ -62,12 +66,12 @@ configurations {
     }
 }
 dependencies {
-    registerTransform(providers.gradleProperty('cacheable').getOrElse('true').toBoolean() ? CacheableExpandJar : NonCacheableExpandJar) {
+    registerTransform(cacheable ? CacheableExpandJar : NonCacheableExpandJar) {
         from.attribute(artifactType, 'jar')
         to.attribute(artifactType, 'expanded')
         parameters.outputKind.set(outputKind)
     }
-    expanded files(providers.gradleProperty('artifact').getOrElse('input.jar'))
+    expanded files([providers.gradleProperty('artifact').getOrElse('input.jar')] + (extraArtifact ? [extraArtifact] : []))
 }
 @CacheableTask
 abstract class CacheControl extends DefaultTask {

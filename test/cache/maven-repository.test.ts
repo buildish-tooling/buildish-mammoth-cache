@@ -317,3 +317,33 @@ it('permits Resolver check state and locks without treating them as excluded art
     jar,
   ]);
 });
+
+it('rejects shared-marker classifier views and origin conflicts before mutation even with overrides', async () => {
+  const aRoot = await fixture(),
+    sourcesRoot = await fixture(),
+    otherRoot = await fixture();
+  const sources = directory + '/example-1.0-sources.jar';
+  await rm(path.join(sourcesRoot, jar));
+  await writeFile(path.join(sourcesRoot, sources), 'SOURCES');
+  await writeFile(path.join(sourcesRoot, marker), 'example-1.0-sources.jar>origin-a=\n');
+  await writeFile(path.join(otherRoot, jar), 'B');
+  await writeFile(path.join(otherRoot, marker), 'example-1.0.jar>origin-b=\n');
+  const a = await mavenFixtureState(aRoot, 'worker-a');
+  const source = await mavenFixtureState(sourcesRoot, 'sources');
+  const other = await mavenFixtureState(otherRoot, 'other');
+  const pkg = await stageCutoffPackage(a.state, a.ci);
+  const target = await mavenFixtureModel(await fixture());
+  for (const state of [source, other]) {
+    const candidate = await stageCutoffPackage(state.state, state.ci);
+    for (const override of [false, true])
+      expect(() => mergeCutoffPackages([pkg, candidate], target, a.ci, override)).toThrow(
+        /Conflicting Maven repository directory/u,
+      );
+  }
+  const sourcePackage = await stageCutoffPackage(source.state, source.ci);
+  await expect(
+    applyCutoffPlan(mergeCutoffPackages([sourcePackage], a.model, a.ci), a.model),
+  ).rejects.toThrow(/Incomplete Maven repository directory/u);
+  expect(await readFile(path.join(aRoot, jar), 'utf8')).toBe('A');
+  expect(await readFile(path.join(aRoot, marker), 'utf8')).toBe('example-1.0.jar>origin-a=\n');
+});

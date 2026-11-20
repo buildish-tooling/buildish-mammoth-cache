@@ -20,6 +20,7 @@ import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/prom
 import path from 'node:path';
 
 import { test } from 'vitest';
+import { gradleExecutable } from '../support/gradle-executable';
 
 import { createGitHubPlatform, createGitHubReportSink } from '../../src/ci/github';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
@@ -83,8 +84,7 @@ async function main(): Promise<void> {
     const runtime = await stageProject(stagedRoot, fixtureSourceDirectory);
     const summary = createSummaryCapture();
     const gradleInvocations: readonly GradleInvocation[] = [
-      { args: ['help'], label: 'Baseline help build' },
-      { args: ['publishFakeBuildScan'], label: 'Publish fake Build Scan' },
+      { args: ['help', 'publishFakeBuildScan'], label: 'Help and publish fake Build Scan' },
       { args: ['publishFakeBuildScanFailure'], label: 'Fail fake Build Scan publication' },
     ];
 
@@ -187,7 +187,11 @@ async function main(): Promise<void> {
         (build) => build.requestedTasks === 'failingVerification',
       ),
     );
-    assert.ok(finalizeStatus.buildReport.builds.some((build) => build.requestedTasks === 'help'));
+    assert.ok(
+      finalizeStatus.buildReport.builds.some(
+        (build) => build.requestedTasks === 'help publishFakeBuildScan',
+      ),
+    );
 
     const summaryText = await readFile(summaryPath, 'utf8');
     assert.match(summaryText, /## Buildish Mammoth Cache for Gradle/u);
@@ -201,7 +205,7 @@ async function main(): Promise<void> {
     assert.match(summaryText, /### Performed Gradle builds/u);
     // escapeSummaryText escapes hyphens as \- in Markdown, so project names appear with
     // literal backslashes in the summary file (GitHub's renderer strips them on display).
-    assert.match(summaryText, /mammoth\\-cache\\-gradle\\-it — help/u);
+    assert.match(summaryText, /mammoth\\-cache\\-gradle\\-it — help publishFakeBuildScan/u);
     // The build-scan link text is "published" (not an emoji icon).
     assert.match(
       summaryText,
@@ -489,7 +493,9 @@ async function runGradle(
   expectedExitCode = 0,
 ): Promise<string> {
   console.log(`\n--- ${label} ---`);
-  const result = await runProcess('./gradlew', args, {
+  const executable = gradleExecutable();
+  console.log(`Gradle executable: ${executable}`);
+  const result = await runProcess(executable, args, {
     cwd: runtime.projectDirectory,
     env: runtime.env,
   });

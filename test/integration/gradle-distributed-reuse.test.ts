@@ -21,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { test } from 'vitest';
+import { gradleExecutable } from '../support/gradle-executable';
 
 import type { WorkflowArtifactDescriptor } from '../../src/delta/service';
 import { createGitHubPlatform, createGitHubReportSink } from '../../src/ci/github';
@@ -380,7 +381,9 @@ async function runGradle(
   label: string,
 ): Promise<string> {
   console.log(`\n--- ${label} ---`);
-  const result = await runProcess('./gradlew', args, {
+  const executable = gradleExecutable();
+  console.log(`Gradle executable: ${executable}`);
+  const result = await runProcess(executable, args, {
     cwd: job.projectDirectory,
     env: job.env,
   });
