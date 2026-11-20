@@ -140,3 +140,27 @@ it('groups connected Maven directory owners while leaving unrelated partitions s
     ]),
   ).toEqual([['jar', 'marker'], ['other']]);
 });
+
+it('reuses only deeply frozen validated descriptors with unchanged model/reference bindings', () => {
+  const { descriptor, reference } = fixture();
+  const validated = validatePartitionDescriptor(model, descriptor, reference);
+  expect(validatePartitionDescriptor(model, validated, reference)).toBe(validated);
+  expect(Object.isFrozen(validated.files[0])).toBe(true);
+  expect(() => {
+    validated.files[0]!.size = 42;
+  }).toThrow();
+  expect(() =>
+    validatePartitionDescriptor(model, validated, {
+      ...reference,
+      descriptorDigest: '0'.repeat(64),
+    }),
+  ).toThrow();
+  const changed = {
+    ...model,
+    partitions: model.partitions.map((p) => ({ ...p, relativeExcludeGlobs: ['data/**'] })),
+  };
+  expect(() => validatePartitionDescriptor(changed, validated, reference)).toThrow(/ownership/);
+  const reread = JSON.parse(JSON.stringify(validated));
+  reread.files[0].size++;
+  expect(() => validatePartitionDescriptor(model, reread, reference)).toThrow(/digest/);
+});

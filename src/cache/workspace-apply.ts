@@ -13,15 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { freezeInstallMetadata } from './install-inventory';
+import { assertBaseInstallPlan, type BasePartitionInstallPlan } from './base-install-plan';
 import { randomUUID } from 'node:crypto';
-import { chmod, lstat, rename, rm, rmdir, utimes } from 'node:fs/promises';
+import { lstat, readdir, rename, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { CacheModel } from './model';
 import type { CutoffUpsert } from './cutoff-format';
 import {
   workspaceRoot,
-  workspaceSchema,
   inspectWorkspaceTree,
   assertWorkspaceOwnership,
   type ImmutableWorkspace,
@@ -31,12 +32,13 @@ import {
   guardedPath,
   verifyParents,
   regularStat,
-  copyGuardedFile,
-  moveGuardedFile,
+  type PayloadIntegrity,
+  DirectoryValidationBatch,
 } from './guarded-files';
-import { fileIdentity, sameFileIdentity } from './file-identity';
+import { fileIdentity, sameFileIdentity, type FileIdentity } from './file-identity';
 import { readMetadata, writeMetadata, metadataPath } from './metadata-io';
-import { portableCacheFileMode } from './file-permissions';
+import { stageGuardedFiles, moveGuardedFiles } from './staged-files';
+import { portableCacheFileMode, repairCacheFileMetadata } from './file-permissions';
 import { isMissingPathError } from '../util/fs';
 
 const INTENT = '.mammoth/workspace-apply-v3/intent.json';
@@ -65,7 +67,11 @@ async function clearIntent(model: CacheModel) {
 }
 async function removeScratch(model: CacheModel, relative: string) {
   const tree = await inspectWorkspaceTree(model.cacheRoot, relative, false);
-  if (tree) await rm(guardedPath(model.cacheRoot, relative), { recursive: true });
+  if (tree) {
+    if (!tree.directories.some((directory) => directory.relativePath === relative))
+      throw new Error('Unsafe workspace scratch directory.');
+    await rm(guardedPath(model.cacheRoot, relative), { recursive: true });
+  }
 }
 function allowedStage(root: string, stage: string): boolean {
   const parent = path.posix.dirname(root);
@@ -74,10 +80,20 @@ function allowedStage(root: string, stage: string): boolean {
     /^[a-f0-9-]{36}$/u.test(stage.slice((parent + '/.mammoth/stage-').length))
   );
 }
-async function targetTree(model: CacheModel, partitionId: string, root: string) {
+async function targetTree(
+  model: CacheModel,
+  partitionId: string,
+  root: string,
+  owns = createManagedCachePathMatcher(model),
+) {
   if (workspaceRoot(root) !== root) throw new Error('Invalid Gradle replacement root.');
+  await verifyParents(model.cacheRoot, path.posix.dirname(root));
+  const existing = await lstat(guardedPath(model.cacheRoot, root)).catch((error: unknown) => {
+    if (isMissingPathError(error)) return null;
+    throw error;
+  });
+  if (!existing) return null;
   const tree = await inspectWorkspaceTree(model.cacheRoot, root, false);
-  const owns = createManagedCachePathMatcher(model);
   if (tree && !tree.directories.some((d) => d.relativePath === root))
     throw new Error('Gradle workspace target is not a directory.');
   if (
@@ -95,8 +111,14 @@ async function deleteTree(
   root: string,
   tree: NonNullable<Awaited<ReturnType<typeof inspectWorkspaceTree>>>,
 ) {
+  const directories = new DirectoryValidationBatch(model.cacheRoot);
   for (const entry of tree.files) {
-    await verifyParents(model.cacheRoot, path.posix.dirname(entry.relativePath));
+    await verifyParents(
+      model.cacheRoot,
+      path.posix.dirname(entry.relativePath),
+      false,
+      directories,
+    );
     const current = await regularStat(guardedPath(model.cacheRoot, entry.relativePath));
     if (!current || !sameFileIdentity(entry.identity, fileIdentity(current), true))
       throw new Error('Gradle replacement target changed.');
@@ -105,7 +127,12 @@ async function deleteTree(
   for (const entry of [...tree.directories].sort(
     (a, b) => b.relativePath.length - a.relativePath.length,
   )) {
-    await verifyParents(model.cacheRoot, path.posix.dirname(entry.relativePath));
+    await verifyParents(
+      model.cacheRoot,
+      path.posix.dirname(entry.relativePath),
+      false,
+      directories,
+    );
     const current = await lstat(guardedPath(model.cacheRoot, entry.relativePath));
     if (
       !current.isDirectory() ||
@@ -114,6 +141,7 @@ async function deleteTree(
       current.dev !== entry.identity.dev
     )
       throw new Error('Gradle replacement directory changed.');
+    directories.invalidate(entry.relativePath);
     await rmdir(guardedPath(model.cacheRoot, entry.relativePath));
   }
   if (tree.directories.every((d) => d.relativePath !== root))
@@ -179,10 +207,13 @@ function treeIdentity(tree: Awaited<ReturnType<typeof inspectWorkspaceTree>>): s
 }
 
 /** Preflight every destination before changing any unit; publish only complete staged trees. */
-export async function applyWorkspaces(
+async function applyWorkspaceUnits(
   units: readonly IncomingWorkspace[],
   model: CacheModel,
   consumeSources = false,
+  integrity: PayloadIntegrity = 'verified',
+  basePlan?: BasePartitionInstallPlan,
+  metadataValidated = false,
 ): Promise<void> {
   if (units.length && model.buildToolId !== 'gradle')
     throw new Error('Gradle replacement requires a Gradle cache.');
@@ -190,50 +221,87 @@ export async function applyWorkspaces(
   const roots = new Set<string>();
   const before = new Map<string, string>();
   for (const unit of units) {
-    workspaceSchema.parse(unit.workspace);
-    assertWorkspaceOwnership(unit.workspace, unit.partitionId, owns);
+    if (!basePlan && !metadataValidated)
+      assertWorkspaceOwnership(unit.workspace, unit.partitionId, owns);
     if (roots.has(unit.workspace.root)) throw new Error('Duplicate Gradle replacement root.');
     roots.add(unit.workspace.root);
     if (
+      !basePlan &&
+      !metadataValidated &&
       JSON.stringify(unit.entries.map((e) => e.relativePath).sort((a, b) => a.localeCompare(b))) !==
-      JSON.stringify(unit.workspace.files)
+        JSON.stringify(unit.workspace.files)
     )
       throw new Error('Incomplete Gradle replacement payload.');
     before.set(
       unit.workspace.root,
-      treeIdentity(await targetTree(model, unit.partitionId, unit.workspace.root)),
+      treeIdentity(await targetTree(model, unit.partitionId, unit.workspace.root, owns)),
     );
   }
   for (const unit of units) {
     const root = unit.workspace.root,
       parent = path.posix.dirname(root);
     const stage = parent + '/.mammoth/stage-' + randomUUID();
-    await verifyParents(model.cacheRoot, stage, true);
-    let intentWritten = false;
-    try {
-      for (const directory of unit.workspace.emptyDirectories)
-        await verifyParents(model.cacheRoot, stage + directory.slice(root.length), true);
-      for (const entry of unit.entries) {
-        const destination = stage + entry.relativePath.slice(root.length);
-        await verifyParents(model.cacheRoot, path.posix.dirname(destination), true);
-        const target = guardedPath(model.cacheRoot, destination);
-        const expected = { size: entry.size, contentSha256: entry.contentSha256 };
-        if (consumeSources)
-          await moveGuardedFile(
-            unit.rootDirectory,
-            entry.payloadPath,
-            target,
-            expected,
-            model.cacheRoot,
-          );
-        else await copyGuardedFile(unit.rootDirectory, entry.payloadPath, target, expected);
-        await chmod(target, portableCacheFileMode(entry.mode, 'gradle', entry.relativePath));
-        await utimes(target, new Date(entry.mtimeMs), new Date(entry.mtimeMs));
-      }
-      const old = await targetTree(model, unit.partitionId, root);
+    let nativeStaged = false;
+    const nativeDirectories = basePlan?.workspaceDirectories.get(root);
+    if (basePlan) {
+      await prepareNativeWorkspace(basePlan, unit, model, nativeDirectories!);
+      const old = await targetTree(model, unit.partitionId, root, owns);
       if (treeIdentity(old) !== before.get(root))
         throw new Error('Gradle replacement target changed during staging.');
-      const staged = await inspectWorkspaceTree(model.cacheRoot, stage, false);
+      await verifyParents(model.cacheRoot, parent, true);
+      await nativeStageTree(
+        basePlan,
+        unit,
+        { ...model, cacheRoot: unit.rootDirectory },
+        root,
+        nativeDirectories!,
+        false,
+      );
+      try {
+        if (!old) {
+          if (await pathExists(guardedPath(model.cacheRoot, root)))
+            throw new Error('Gradle replacement root was recreated.');
+          await rename(guardedPath(unit.rootDirectory, root), guardedPath(model.cacheRoot, root));
+          continue;
+        }
+        await verifyParents(model.cacheRoot, path.posix.dirname(stage), true);
+        await rename(guardedPath(unit.rootDirectory, root), guardedPath(model.cacheRoot, stage));
+        nativeStaged = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+      }
+    }
+
+    const staging = new DirectoryValidationBatch(model.cacheRoot);
+    if (!nativeStaged) await verifyParents(model.cacheRoot, stage, true, staging);
+    let intentWritten = false;
+    try {
+      if (!nativeStaged) {
+        for (const directory of unit.workspace.emptyDirectories)
+          await verifyParents(model.cacheRoot, stage + directory.slice(root.length), true, staging);
+        const stageFiles = consumeSources ? moveGuardedFiles : stageGuardedFiles;
+        await stageFiles(
+          model.cacheRoot,
+          unit.entries.map((entry) => ({
+            sourceRoot: unit.rootDirectory,
+            sourcePath: entry.payloadPath,
+            destination: stage + entry.relativePath.slice(root.length),
+            native: basePlan?.inventory.files.get(entry.payloadPath),
+            expected: {
+              ...entry,
+              mode: portableCacheFileMode(entry.mode, 'gradle', entry.relativePath),
+            },
+          })),
+          integrity,
+        );
+      }
+      const old = await targetTree(model, unit.partitionId, root, owns);
+      if (treeIdentity(old) !== before.get(root))
+        throw new Error('Gradle replacement target changed during staging.');
+      const staged =
+        nativeStaged && basePlan
+          ? await nativeStageTree(basePlan, unit, model, stage, nativeDirectories!)
+          : await inspectWorkspaceTree(model.cacheRoot, stage, false);
       if (!staged) throw new Error('Gradle replacement staging disappeared.');
       if (
         JSON.stringify(staged.files.map((f) => root + f.relativePath.slice(stage.length))) !==
@@ -242,6 +310,13 @@ export async function applyWorkspaces(
           JSON.stringify(unit.workspace.emptyDirectories)
       )
         throw new Error('Gradle staging membership changed.');
+      if (!old) {
+        await verifyParents(model.cacheRoot, parent, true);
+        if (await pathExists(guardedPath(model.cacheRoot, root)))
+          throw new Error('Gradle replacement root was recreated.');
+        await rename(guardedPath(model.cacheRoot, stage), guardedPath(model.cacheRoot, root));
+        continue;
+      }
       await writeMetadata(
         model.cacheRoot,
         INTENT,
@@ -277,6 +352,207 @@ export async function applyWorkspaces(
       intentWritten = false;
     } finally {
       if (!intentWritten) await removeScratch(model, stage);
+    }
+  }
+}
+
+export interface WorkspaceApplicationPlan {
+  readonly units: readonly IncomingWorkspace[];
+}
+const workspacePlans = new WeakMap<WorkspaceApplicationPlan, string>();
+function workspaceModelBinding(model: CacheModel): string {
+  return JSON.stringify([
+    model.buildToolId,
+    model.cacheFamilyKey,
+    model.partitionFingerprint,
+    model.partitions.map((p) => [p.id, p.relativeIncludeGlobs, p.relativeExcludeGlobs]),
+  ]);
+}
+export function prepareWorkspaceApplication(
+  units: readonly IncomingWorkspace[],
+  model: CacheModel,
+): WorkspaceApplicationPlan {
+  const copy = structuredClone(units);
+  const owns = createManagedCachePathMatcher(model),
+    roots = new Set<string>();
+  for (const unit of copy) {
+    assertWorkspaceOwnership(unit.workspace, unit.partitionId, owns);
+    if (roots.has(unit.workspace.root)) throw new Error('Duplicate Gradle replacement root.');
+    roots.add(unit.workspace.root);
+    if (
+      JSON.stringify(
+        unit.entries.map((entry) => entry.relativePath).sort((a, b) => a.localeCompare(b)),
+      ) !== JSON.stringify(unit.workspace.files)
+    )
+      throw new Error('Incomplete Gradle replacement payload.');
+  }
+  const plan = freezeInstallMetadata({ units: copy });
+  workspacePlans.set(plan, workspaceModelBinding(model));
+  return plan;
+}
+export async function applyWorkspaceApplication(
+  plan: WorkspaceApplicationPlan,
+  model: CacheModel,
+  consumeSources = false,
+  integrity: PayloadIntegrity = 'verified',
+): Promise<void> {
+  if (workspacePlans.get(plan) !== workspaceModelBinding(model))
+    throw new Error('Invalid workspace installation plan/model.');
+  await applyWorkspaceUnits(plan.units, model, consumeSources, integrity, undefined, true);
+}
+export async function applyWorkspaces(
+  units: readonly IncomingWorkspace[],
+  model: CacheModel,
+  consumeSources = false,
+  integrity: PayloadIntegrity = 'verified',
+): Promise<void> {
+  await applyWorkspaceApplication(
+    prepareWorkspaceApplication(units, model),
+    model,
+    consumeSources,
+    integrity,
+  );
+}
+export async function applyBaseWorkspaces(
+  plan: BasePartitionInstallPlan,
+  model: CacheModel,
+): Promise<void> {
+  assertBaseInstallPlan(plan, model);
+  const byPath = new Map(plan.descriptor.files.map((entry) => [entry.relativePath, entry]));
+  await applyWorkspaceUnits(
+    plan.descriptor.workspaces.map((workspace) => ({
+      partitionId: plan.descriptor.identity.partitionId,
+      workspace,
+      entries: workspace.files.map((name) => byPath.get(name)!),
+      rootDirectory: plan.rootDirectory,
+    })),
+    model,
+    true,
+    'trusted-base',
+    plan,
+  );
+}
+async function pathExists(name: string): Promise<boolean> {
+  return lstat(name).then(
+    () => true,
+    (error: unknown) => {
+      if (isMissingPathError(error)) return false;
+      throw error;
+    },
+  );
+}
+async function prepareNativeWorkspace(
+  plan: BasePartitionInstallPlan,
+  unit: IncomingWorkspace,
+  model: CacheModel,
+  directories: ReadonlyMap<string, FileIdentity>,
+): Promise<void> {
+  const root = unit.workspace.root;
+  await verifyParents(unit.rootDirectory, path.posix.dirname(root));
+  for (const [name, identity] of directories) {
+    const stat = await lstat(guardedPath(unit.rootDirectory, name));
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      !sameFileIdentity(identity, fileIdentity(stat), true)
+    )
+      throw new Error('Native workspace directory changed.');
+  }
+  for (const entry of unit.entries) {
+    const source = guardedPath(unit.rootDirectory, entry.payloadPath);
+    const current = await regularStat(source);
+    if (
+      !current ||
+      !sameFileIdentity(plan.inventory.files.get(entry.payloadPath)!, fileIdentity(current), true)
+    )
+      throw new Error('Native workspace source changed.');
+    const repaired = await repairCacheFileMetadata(source, fileIdentity(current), {
+      mode: portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath),
+      mtimeMs: entry.mtimeMs,
+    });
+    if (repaired) plan.inventory.files.set(entry.payloadPath, fileIdentity(await lstat(source)));
+  }
+}
+async function nativeStageTree(
+  plan: BasePartitionInstallPlan,
+  unit: IncomingWorkspace,
+  model: CacheModel,
+  stage: string,
+  sourceDirectories: ReadonlyMap<string, FileIdentity>,
+  renamed = true,
+) {
+  const root = unit.workspace.root;
+  const files = [],
+    directories = [];
+  await verifyParents(model.cacheRoot, path.posix.dirname(stage));
+  for (const entry of unit.entries) {
+    const relativePath = stage + entry.relativePath.slice(root.length);
+    const stat = await regularStat(guardedPath(model.cacheRoot, relativePath));
+    if (
+      !stat ||
+      !sameFileIdentity(plan.inventory.files.get(entry.payloadPath)!, fileIdentity(stat), true)
+    )
+      throw new Error('Native workspace staging changed.');
+    files.push({ relativePath, identity: fileIdentity(stat) });
+  }
+  for (const [name, identity] of sourceDirectories) {
+    const relativePath = stage + name.slice(root.length);
+    const stat = await lstat(guardedPath(model.cacheRoot, relativePath));
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      (name === root && renamed
+        ? stat.dev !== identity.dev ||
+          stat.ino !== identity.ino ||
+          stat.mode !== identity.mode ||
+          stat.size !== identity.size ||
+          stat.mtimeMs !== identity.mtimeMs
+        : !sameFileIdentity(identity, fileIdentity(stat), true))
+    )
+      throw new Error('Native workspace staging directory changed.');
+    directories.push({ relativePath, identity: fileIdentity(stat) });
+  }
+  return {
+    files: files.sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
+    directories: directories.sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
+    emptyDirectories: unit.workspace.emptyDirectories.map(
+      (name) => stage + name.slice(root.length),
+    ),
+  };
+}
+
+/** Inspect only reserved stage namespaces in supported, managed Gradle layout parents. */
+export async function recoverWorkspaceScratch(model: CacheModel): Promise<void> {
+  if (model.buildToolId !== 'gradle') return;
+  const owns = createManagedCachePathMatcher(model);
+  await verifyParents(model.cacheRoot, 'caches');
+  const versions = await readdir(guardedPath(model.cacheRoot, 'caches'), {
+    withFileTypes: true,
+  }).catch((error: unknown) => {
+    if (isMissingPathError(error)) return [];
+    throw error;
+  });
+  if (versions.length > 200_000) throw new Error('Workspace scratch discovery exceeds bounds.');
+  const parents = new Set(['caches/transforms-4']);
+  for (const entry of versions) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const version = entry.name;
+    for (const suffix of ['groovy-dsl', 'transforms', 'kotlin-dsl/scripts', 'kotlin-dsl/accessors'])
+      parents.add('caches/' + version + '/' + suffix);
+  }
+  for (const parent of parents) {
+    const probe = parent + '/' + 'a'.repeat(32) + '/metadata.bin';
+    if (!model.partitions.some((partition) => owns(partition.id, probe))) continue;
+    const reserved = parent + '/.mammoth';
+    await verifyParents(model.cacheRoot, reserved);
+    const names = await readdir(guardedPath(model.cacheRoot, reserved)).catch((error: unknown) => {
+      if (isMissingPathError(error)) return [];
+      throw error;
+    });
+    if (names.length > 200_000) throw new Error('Workspace scratch discovery exceeds bounds.');
+    for (const name of names) {
+      if (!/^stage-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(name)) continue;
+      await removeScratch(model, reserved + '/' + name);
     }
   }
 }

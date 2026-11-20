@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { chmod, opendir, rename, rm, utimes } from 'node:fs/promises';
+import { opendir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import {
   hashGuardedFile,
@@ -22,11 +22,19 @@ import {
   guardedPath,
   regularStat,
   verifyParents,
+  type PayloadIntegrity,
+  DirectoryValidationBatch,
 } from './guarded-files';
+import { fileIdentity, sameFileIdentity } from './file-identity';
 import { metadataPath, readMetadata, writeMetadata } from './metadata-io';
-import { portableCacheFileMode } from './file-permissions';
-import { applyWorkspaces } from './workspace-apply';
-import { PARTITION_SNAPSHOT_DIRECTORY, readPartitionSnapshot } from './partition-snapshots';
+import { portableCacheFileMode, repairCacheFileMetadata } from './file-permissions';
+import { assertBaseInstallPlan, type BasePartitionInstallPlan } from './base-install-plan';
+import { applyBaseWorkspaces, applyWorkspaces } from './workspace-apply';
+import {
+  PARTITION_SNAPSHOT_DIRECTORY,
+  readPartitionSnapshot,
+  installBaseSnapshot,
+} from './partition-snapshots';
 import type { CacheModel } from './model';
 import type { SnapshotSource } from './partition-snapshots';
 import {
@@ -109,6 +117,7 @@ export async function readPartitionObject(
   root: string,
   reference: PartitionReference,
   live = false,
+  integrity: PayloadIntegrity = 'verified',
 ): Promise<PartitionDescriptor> {
   const relative = `${partitionObjectRoot(reference.identity.partitionId)}/object.json`;
   const descriptor = await readPartitionDescriptor(model, root, reference);
@@ -128,13 +137,21 @@ export async function readPartitionObject(
     if (actual.size !== expected.size || [...actual].some((p) => !expected.has(p)))
       throw new Error('Partition payload membership mismatch.');
   }
-  for (const entry of descriptor.files) await hashGuardedFile(root, entry.payloadPath, entry);
+  for (const entry of descriptor.files) {
+    if (integrity === 'verified') await hashGuardedFile(root, entry.payloadPath, entry);
+    else {
+      await verifyParents(root, path.posix.dirname(entry.payloadPath));
+      const stat = await regularStat(guardedPath(root, entry.payloadPath));
+      if (!stat || stat.size !== entry.size) throw new Error('Base payload size mismatch.');
+    }
+  }
   return descriptor;
 }
 export async function installPartitionObject(
   model: CacheModel,
   root: string,
   descriptor: PartitionDescriptor,
+  integrity: PayloadIntegrity = 'verified',
 ): Promise<void> {
   if (descriptor.kind === 'single-writer') {
     const relative = `${PARTITION_SNAPSHOT_DIRECTORY}/${descriptor.identity.partitionId}`;
@@ -152,9 +169,10 @@ export async function installPartitionObject(
     const staged = await readPartitionSnapshot(
       { ...model, cacheRoot: root },
       descriptor.identity.partitionId,
+      integrity,
     );
     if (!staged) throw new Error('Restored snapshot transport disappeared.');
-    await readPartitionSnapshot(model, descriptor.identity.partitionId);
+    await readPartitionSnapshot(model, descriptor.identity.partitionId, integrity);
     const target = path.dirname(
       await metadataPath(model.cacheRoot, relative + '/snapshot.json', true),
     );
@@ -174,16 +192,66 @@ export async function installPartitionObject(
       })),
       model,
       true,
+      integrity,
     );
   }
   const workspaceFiles = new Set(descriptor.workspaces.flatMap((w) => w.files));
+  const destinations = new DirectoryValidationBatch(model.cacheRoot);
+  const sources = new DirectoryValidationBatch(root);
   for (const entry of descriptor.files.filter((e) => !workspaceFiles.has(e.relativePath))) {
     const parent = path.posix.dirname(entry.relativePath);
-    await verifyParents(model.cacheRoot, parent, true);
+    await verifyParents(model.cacheRoot, parent, true, destinations);
     const target = guardedPath(model.cacheRoot, entry.relativePath);
     await regularStat(target);
-    await moveGuardedFile(root, entry.payloadPath, target, entry, model.cacheRoot);
-    await chmod(target, portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath));
-    await utimes(target, new Date(entry.mtimeMs), new Date(entry.mtimeMs));
+    const moved = await moveGuardedFile(
+      root,
+      entry.payloadPath,
+      target,
+      entry,
+      model.cacheRoot,
+      integrity,
+      sources,
+    );
+    await repairCacheFileMetadata(target, moved.identity, {
+      mode: portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath),
+      mtimeMs: entry.mtimeMs,
+    });
+  }
+}
+
+/** Only the freshly validated extraction plan can select the trusted-base native path. */
+export async function installBasePartitionPlan(
+  model: CacheModel,
+  plan: BasePartitionInstallPlan,
+): Promise<void> {
+  assertBaseInstallPlan(plan, model);
+  if (plan.descriptor.kind === 'single-writer') {
+    await installBaseSnapshot(plan, model);
+    return;
+  }
+  await applyBaseWorkspaces(plan, model);
+  const destinations = new DirectoryValidationBatch(model.cacheRoot);
+  const sources = new DirectoryValidationBatch(plan.rootDirectory);
+  for (const entry of plan.ordinaryFiles) {
+    await destinations.verify(path.posix.dirname(entry.relativePath), true);
+    const target = guardedPath(model.cacheRoot, entry.relativePath);
+    await regularStat(target);
+    const source = await regularStat(guardedPath(plan.rootDirectory, entry.payloadPath));
+    const identity = plan.inventory.files.get(entry.payloadPath)!;
+    if (!source || !sameFileIdentity(identity, fileIdentity(source), true))
+      throw new Error('Base source changed after inventory.');
+    const moved = await moveGuardedFile(
+      plan.rootDirectory,
+      entry.payloadPath,
+      target,
+      entry,
+      model.cacheRoot,
+      'trusted-base',
+      sources,
+    );
+    await repairCacheFileMetadata(target, moved.identity, {
+      mode: portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath),
+      mtimeMs: entry.mtimeMs,
+    });
   }
 }

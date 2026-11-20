@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import * as filesystem from 'node:fs/promises';
+import { cutoffUpsertSchema, cutoffManifestSchema } from '../../src/cache/cutoff-format';
 import { afterEach, it, expect, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile, readFile, utimes, chmod, lstat } from 'node:fs/promises';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -36,6 +38,7 @@ import {
   STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
   type WorkflowArtifactBackend,
 } from '../../src/delta/backend';
+vi.mock('node:fs/promises', async (original) => ({ ...(await original<typeof filesystem>()) }));
 const require = createRequire(import.meta.url),
   roots: string[] = [];
 afterEach(async () => {
@@ -314,4 +317,112 @@ it.each([
   };
   await applyCutoffPlan(mergeCutoffPackages([pkg], targetModel, ci), targetModel);
   expect((await lstat(path.join(root, launcher))).mode & 0o777).toBe(0o755);
+});
+
+it.each([false, true])(
+  'explicit disposable application consumes payloads, EXDEV=%s',
+  async (crossDevice) => {
+    const { state, ci } = await fixture(),
+      pkg = await stageCutoffPackage(state, ci);
+    const verified = await verifyCutoffPackage(pkg.rootDirectory);
+    const target = await mkdtemp(path.join(os.tmpdir(), 'cutoff-consuming-'));
+    roots.push(target);
+    const model = cutoffFixtureModel(target),
+      plan = mergeCutoffPackages([verified], model, ci);
+    const source = path.join(pkg.rootDirectory, plan.upserts[0]!.entry.payloadPath);
+    const rename = filesystem.rename;
+    vi.spyOn(filesystem, 'rename').mockImplementation(async (from, to) => {
+      if (crossDevice && String(from) === source)
+        throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
+      return rename(from, to);
+    });
+    let payloadBytesWritten = 0;
+    const originalOpen = filesystem.open;
+    vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (
+        String(args[0]).startsWith(target) &&
+        /(?:write-|restore-move-)[a-f0-9-]{36}(?:\.tmp)?$/u.test(String(args[0]))
+      ) {
+        const write = handle.writeFile.bind(handle);
+        vi.spyOn(handle, 'writeFile').mockImplementation(async (...writeArgs) => {
+          const data = writeArgs[0];
+          payloadBytesWritten +=
+            typeof data === 'string'
+              ? Buffer.byteLength(data)
+              : data instanceof Uint8Array
+                ? data.byteLength
+                : 0;
+          return write(...writeArgs);
+        });
+      }
+      return handle;
+    });
+    const copy = vi.spyOn(guarded, 'copyGuardedFile');
+    await applyCutoffPlan(plan, model, { consumeSources: true });
+    expect(payloadBytesWritten).toBe(crossDevice ? 8 : 0);
+    expect(await readFile(path.join(target, 'data/a'), 'utf8')).toBe('original');
+    await expect(lstat(source)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(copy).not.toHaveBeenCalled();
+    await expect(lstat(path.join(target, '.mammoth/restore-move-v1.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  },
+);
+it('keeps non-consuming application reusable and rejects consuming source aliases before mutation', async () => {
+  const { state, ci } = await fixture(),
+    pkg = await stageCutoffPackage(state, ci);
+  const target = await mkdtemp(path.join(os.tmpdir(), 'cutoff-preserve-'));
+  roots.push(target);
+  const model = cutoffFixtureModel(target),
+    plan = mergeCutoffPackages([pkg], model, ci);
+  await applyCutoffPlan(plan, model);
+  await applyCutoffPlan(plan, model);
+  expect(
+    await readFile(path.join(pkg.rootDirectory, plan.upserts[0]!.entry.payloadPath), 'utf8'),
+  ).toBe('original');
+  const alias = {
+    ...plan,
+    upserts: [
+      ...plan.upserts,
+      { ...plan.upserts[0]!, entry: { ...plan.upserts[0]!.entry, relativePath: 'data/alias' } },
+    ],
+  };
+  await expect(applyCutoffPlan(alias, model, { consumeSources: true })).rejects.toThrow(/shared/);
+  await expect(lstat(path.join(target, 'data/alias'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+it('verifies worker bytes again at consuming application time', async () => {
+  const { state, ci } = await fixture(),
+    pkg = await stageCutoffPackage(state, ci);
+  const verified = await verifyCutoffPackage(pkg.rootDirectory);
+  const target = await mkdtemp(path.join(os.tmpdir(), 'cutoff-tamper-'));
+  roots.push(target);
+  const model = cutoffFixtureModel(target),
+    plan = mergeCutoffPackages([verified], model, ci);
+  await writeFile(path.join(pkg.rootDirectory, plan.upserts[0]!.entry.payloadPath), 'tampered');
+  await expect(applyCutoffPlan(plan, model, { consumeSources: true })).rejects.toThrow(/SHA-256/);
+  await expect(lstat(path.join(target, 'data/a'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+it('does not reparse unchanged immutable worker entries in downstream application', async () => {
+  const { state, ci } = await fixture(),
+    pkg = await stageCutoffPackage(state, ci);
+  const target = await mkdtemp(path.join(os.tmpdir(), 'cutoff-plan-'));
+  roots.push(target);
+  const verified = await verifyCutoffPackage(pkg.rootDirectory);
+  const manifests = vi.spyOn(cutoffManifestSchema, 'parse');
+  const model = cutoffFixtureModel(target),
+    plan = mergeCutoffPackages([verified], model, ci);
+  expect(manifests).not.toHaveBeenCalled();
+  const parse = vi.spyOn(cutoffUpsertSchema, 'parse');
+  await applyCutoffPlan(plan, model);
+  expect(parse).not.toHaveBeenCalled();
+  await expect(
+    applyCutoffPlan(
+      {
+        ...plan,
+        upserts: [{ ...plan.upserts[0]!, entry: { ...plan.upserts[0]!.entry, size: -1 } }],
+      },
+      model,
+    ),
+  ).rejects.toThrow();
 });

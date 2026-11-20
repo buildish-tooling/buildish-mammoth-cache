@@ -18,7 +18,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { moveGuardedFile, recoverInterruptedMoves } from '../../src/cache/guarded-files';
-import { createHash } from 'node:crypto';
+import { createHash, Hash } from 'node:crypto';
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof fs>()),
 }));
@@ -94,4 +94,57 @@ it('recovers an interrupted cross-device copy before observations without touchi
   await expect(lstat(path.join(root, '.mammoth/restore-move-v1.json'))).rejects.toMatchObject({
     code: 'ENOENT',
   });
+});
+
+it.each([false, true])('trusted base moves skip hashes with EXDEV=%s', async (crossDevice) => {
+  await mkdir('build', { recursive: true });
+  const root = await mkdtemp(path.resolve('build/guarded-base-'));
+  roots.push(root);
+  await writeFile(path.join(root, 'source'), 'base');
+  const original = fs.rename;
+  vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (crossDevice && String(from) === path.join(root, 'source'))
+      throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
+    await original(from, to);
+  });
+  const hashes = vi.spyOn(Hash.prototype, 'update');
+  await moveGuardedFile(
+    root,
+    'source',
+    path.join(root, 'target'),
+    { size: 4, contentSha256: '0'.repeat(64) },
+    root,
+    'trusted-base',
+  );
+  expect(hashes.mock.calls.filter(([data]) => typeof data !== 'string')).toHaveLength(0);
+  expect(await readFile(path.join(root, 'target'), 'utf8')).toBe('base');
+  await expect(lstat(path.join(root, 'source'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(lstat(path.join(root, '.mammoth/restore-move-v1.json'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+});
+
+it('rejects trusted-base source replacement during parent validation', async () => {
+  await mkdir('build', { recursive: true });
+  const root = await mkdtemp(path.resolve('build/guarded-base-'));
+  roots.push(root);
+  await mkdir(path.join(root, 'payload'));
+  const source = path.join(root, 'payload/source'),
+    target = path.join(root, 'target');
+  await writeFile(source, 'base');
+  await writeFile(target, 'keep');
+  const original = fs.lstat;
+  let replaced = false;
+  vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+    if (!replaced && String(args[0]) === path.join(root, 'payload')) {
+      replaced = true;
+      await rm(source);
+      await writeFile(source, 'replacement');
+    }
+    return original(...args);
+  });
+  await expect(
+    moveGuardedFile(root, 'payload/source', target, { size: 4 }, root, 'trusted-base'),
+  ).rejects.toThrow(/identity changed/);
+  expect(await readFile(target, 'utf8')).toBe('keep');
 });

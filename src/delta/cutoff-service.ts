@@ -16,11 +16,12 @@
 import { assertCompleteMavenRepositoryDirectories } from '../cache/maven-repository';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile, rm, opendir, lstat, open } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import {
   cutoffManifestSchema,
+  validateCutoffManifest,
   cutoffDigestSchema,
   CUTOFF_PACKAGE_SCHEMA_VERSION,
   type CutoffManifest,
@@ -324,7 +325,7 @@ export async function verifyCutoffPackage(
   expectedName?: string,
 ): Promise<CutoffPackage> {
   await verifyParents(root, '');
-  const files = new Set<string>();
+  const files = new Map<string, Stats>();
   let bytes = 0;
   for (const directory of ['', 'payload']) {
     const absolute = directory ? path.join(root, directory) : root;
@@ -340,7 +341,7 @@ export async function verifyCutoffPackage(
       const relative = directory ? `${directory}/${item.name}` : item.name;
       const st = await regularStat(guardedPath(root, relative));
       if (!st) throw new Error('Package entry disappeared.');
-      files.add(relative);
+      files.set(relative, st);
       bytes += st.size;
       if (
         files.size > DELTA_ARTIFACT_RESOURCE_LIMITS.manifestEntries + 2 ||
@@ -353,7 +354,7 @@ export async function verifyCutoffPackage(
   const serialized = await readBounded(root, MANIFEST);
   if (cutoffHash(serialized) !== metadata.manifestSha256)
     throw new Error('Package manifest digest mismatch.');
-  const manifest = cutoffManifestSchema.parse(JSON.parse(serialized));
+  const manifest = validateCutoffManifest(JSON.parse(serialized));
   checkManifestBounds(manifest);
   const name = artifactName(
     metadata.producer.jobName,
@@ -374,11 +375,11 @@ export async function verifyCutoffPackage(
     for (const e of p.upserts) {
       expectedFiles.add(e.payloadPath);
       const file = guardedPath(root, e.payloadPath),
-        st = await regularStat(file);
+        st = files.get(e.payloadPath);
       if (!st || st.size !== e.size || (await hashStableFileSha256(file, st)) !== e.contentSha256)
         throw new Error('Package payload size/SHA-256 mismatch.');
     }
-  if (files.size !== expectedFiles.size || [...files].some((p) => !expectedFiles.has(p)))
+  if (files.size !== expectedFiles.size || [...files.keys()].some((p) => !expectedFiles.has(p)))
     throw new Error('Unexpected package entries.');
   return { rootDirectory: root, metadata, manifest };
 }

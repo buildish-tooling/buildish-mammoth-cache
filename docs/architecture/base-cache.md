@@ -190,19 +190,43 @@ That optional traversal is cleanup, not a baseline inventory. Single-writer part
 clear preexisting managed members before restore and validate/restore their staged authoritative
 snapshots, including when ordinary cleanup is disabled.
 
-Prepare verifies downloaded payload hashes in isolated extraction roots under the cache root's
-reserved metadata, then renames ordinary files into place. Workspace application consumes disposable
-extracted inputs by moves into its existing guarded workspace staging. Snapshot transport trees
-are renamed into the existing local snapshot representation; its original replacement/capture
-copying remains. No new payload copy or hardlink staging is required for base uploads: ordinary
+Prepare validates descriptors, membership, regular-file types and sizes in isolated extraction
+roots under the cache root's reserved metadata, then renames ordinary files into place. Base
+restore does not hash payload contents, including during snapshot initialization: same-size
+corruption is not detected. It trusts authorized producers and the cache service for those bytes.
+Worker imports and store/publication validation continue verifying payload hashes.
+One extraction inventory supplies membership, sizes and native identities to an operation-local
+installation plan. Native Groovy, Kotlin and transform workspaces are repaired in private staging
+and renamed as complete directories on the same filesystem. Fresh destinations need no old-tree
+inventory, deletion or replacement intent; existing targets retain guarded destructive replacement
+and recovery. Flat worker payloads use complete destination-local workspace staging.
+Snapshot transport trees are renamed into the local snapshot representation, preserving the
+transport while copying into live paths during initialization. These snapshot copies remain
+necessary; their base-restore payload hashes are removed.
+No new payload copy or hardlink staging is required for base uploads: ordinary
 and workspace files are archived natively, and selected snapshot payloads are archived where they
 already reside. Source identity is rechecked after uploads, including ambiguous-save readback,
 before the generation record may be published. Hardlinks would share mutations and alter ctime.
 
-A nested destination mount can require verified copying on EXDEV. Reserved destination-local
+A nested destination mount can require guarded copying on EXDEV, with size and native-identity
+checks but no base payload hashing. Reserved destination-local
 scratch and a durable root-local cleanup intent preserve the old target until copy completion;
 prepare recovers interrupted fallback scratch before observations. New prepares also discard only
-owned abandoned extraction roots. Normal same-filesystem restores use moves with no byte copies.
+owned abandoned extraction roots and abandoned workspace `stage-UUID` directories under known
+managed Gradle workspace parents. Recovery validates reserved namespaces and rejects links/special
+files; it does not scan arbitrary cache contents for stages. A fresh direct workspace rename leaves
+an absent or complete unit on interruption. If the journal was not completed, the next prepare
+re-downloads inputs and safely handles already-installed complete units.
+
+Directory evidence is scoped to an installation phase or bounded batch and invalidated on directory
+replacement/removal. Copy staging opens at most 64 exclusive output handles before payload I/O,
+writes bytes and metadata through those handles, then validates paths and native identities before
+installation. Thus repeated files share ancestor checks without trusting paths across source I/O.
+Moves and native workspace installation reuse existing metadata to skip matching mode/mtime writes;
+new scratch copies still receive required metadata. Cross-platform launcher normalization remains.
+Normal same-filesystem ordinary/native restores use moves without another payload-write pass;
+snapshot initialization and EXDEV retain the copies described above. No elapsed-time speedup has
+been established by these operation reductions.
 Read-only finalize still does no publication scan, hashing, plan construction or save.
 
 Partition calls remain sequential because the GitHub adapter serializes cwd/workspace changes;

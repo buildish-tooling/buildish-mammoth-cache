@@ -162,3 +162,30 @@ describe('complete partition snapshot transport', () => {
     ]).toEqual(patterns);
   });
 });
+
+it('binds cached snapshot ownership to the current model policy', async () => {
+  const { root, model } = await fixture();
+  await writeFile(path.join(root, 'data/index.bin'), 'selected');
+  await capture(model);
+  const snapshot = (await readPartitionSnapshot(model, 'data'))!;
+  await writeFile(path.join(root, 'data/index.bin'), 'keep excluded');
+  const changed = {
+    ...model,
+    partitions: model.partitions.map((p) => ({
+      ...p,
+      relativeExcludeGlobs: [...p.relativeExcludeGlobs, 'data/index.bin'],
+    })),
+  };
+  await expect(restorePartitionSnapshot(changed, snapshot)).rejects.toThrow(/outside/);
+  expect(await readFile(path.join(root, 'data/index.bin'), 'utf8')).toBe('keep excluded');
+});
+it('rechecks snapshot directory evidence without rediscovering transport members', async () => {
+  const { root, model } = await fixture();
+  await writeFile(path.join(root, 'data/index.bin'), 'selected');
+  await capture(model);
+  const snapshot = (await readPartitionSnapshot(model, 'data'))!;
+  await writeFile(path.join(root, 'data/index.bin'), 'keep live');
+  await writeFile(path.join(snapshot.rootDirectory, 'payload/extra.bin'), 'undeclared');
+  await expect(restorePartitionSnapshot(model, snapshot)).rejects.toThrow(/directory changed/);
+  expect(await readFile(path.join(root, 'data/index.bin'), 'utf8')).toBe('keep live');
+});

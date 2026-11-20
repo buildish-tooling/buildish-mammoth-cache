@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { freezeInstallMetadata } from './install-inventory';
 import { z } from 'zod';
 import { workspaceSchema } from './immutable-workspaces';
 import { validateNormalizedRelativePosixPath } from '../util/paths';
@@ -102,3 +103,13 @@ export const cutoffManifestSchema = z
     }
   });
 export type CutoffManifest = z.infer<typeof cutoffManifestSchema>;
+
+const validatedManifests = new WeakSet<object>();
+/** Reuse immutable parsed envelopes; newly read or caller-modified data takes the schema boundary. */
+export function validateCutoffManifest(value: unknown): CutoffManifest {
+  if (value && typeof value === 'object' && validatedManifests.has(value))
+    return value as CutoffManifest;
+  const manifest = freezeInstallMetadata(cutoffManifestSchema.parse(value));
+  validatedManifests.add(manifest);
+  return manifest;
+}

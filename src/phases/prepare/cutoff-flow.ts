@@ -16,7 +16,7 @@
 
 import { resetPartitionRestoreStaging } from '../../cache/partition-restore';
 import { recoverInterruptedMoves } from '../../cache/guarded-files';
-import { recoverWorkspaceApplication } from '../../cache/workspace-apply';
+import { recoverWorkspaceApplication, recoverWorkspaceScratch } from '../../cache/workspace-apply';
 import { resetGroovyBaseTransport } from '../../cache/groovy-base';
 import { mkdir, rm } from 'node:fs/promises';
 import {
@@ -108,6 +108,7 @@ export async function executeCutoffPrepareAction(
       await recoverInterruptedMoves(model.cacheRoot);
       await resetPartitionRestoreStaging(model);
       await recoverWorkspaceApplication(model);
+      await recoverWorkspaceScratch(model);
       await resetGroovyBaseTransport(model);
       journal = newCutoffJournal(
         model,
@@ -246,7 +247,7 @@ export async function executeCutoffPrepareAction(
             },
             names = downloaded.map((p) => p.artifact.name);
           assertPrepareWorkerBudget(state, workers, names);
-          const applied = await applyCutoffPlan(plan, model);
+          const applied = await applyCutoffPlan(plan, model, { consumeSources: true });
           for (const incoming of plan.snapshots ?? []) {
             const previous = state.partitionSnapshots.find(
               (s) => s.partitionId === incoming.partitionId,

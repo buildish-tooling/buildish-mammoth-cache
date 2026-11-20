@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { freezeInstallMetadata } from './install-inventory';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
@@ -49,7 +50,7 @@ export const objectIdentitySchema = z
     decisionDigest: cutoffDigestSchema,
   })
   .strict();
-export const partitionDescriptorSchema = z
+const rawPartitionDescriptorSchema = z
   .object({
     schemaVersion: z.literal(3),
     identity: objectIdentitySchema,
@@ -62,6 +63,42 @@ export const partitionDescriptorSchema = z
     workspaces: z.array(workspaceSchema).max(PARTITION_STORAGE_LIMITS.records),
   })
   .strict();
+const validatedDescriptors = new WeakMap<object, { model: string; reference: string }>();
+// Only validator-produced, deeply frozen objects can skip another schema traversal.
+export const partitionDescriptorSchema = z.union([
+  z.custom<z.infer<typeof rawPartitionDescriptorSchema>>(
+    (value) => !!value && typeof value === 'object' && validatedDescriptors.has(value),
+  ),
+  rawPartitionDescriptorSchema,
+]);
+function descriptorBinding(model: CacheModel, reference: PartitionReference) {
+  return {
+    model: JSON.stringify([
+      model.cacheFamilyKey,
+      model.buildToolId,
+      model.partitionFingerprint,
+      model.currentRefLineagePrefix,
+      model.fallbackRefLineagePrefixes,
+      model.partitions.map((p) => [
+        p.id,
+        p.publication,
+        p.relativeIncludeGlobs,
+        p.relativeExcludeGlobs,
+      ]),
+    ]),
+    reference: JSON.stringify([
+      reference.identity.familyKey,
+      reference.identity.lineagePrefix,
+      reference.identity.partitionId,
+      reference.identity.writerId,
+      reference.identity.decisionDigest,
+      reference.key,
+      reference.descriptorDigest,
+      reference.workspaceRoots,
+      reference.ordinaryPaths,
+    ]),
+  };
+}
 export const partitionReferenceSchema = z
   .object({
     identity: objectIdentitySchema,
@@ -255,7 +292,11 @@ export function validatePartitionDescriptor(
   value: unknown,
   reference: PartitionReference,
 ): PartitionDescriptor {
-  const descriptor = partitionDescriptorSchema.parse(value);
+  const binding = descriptorBinding(model, reference);
+  const known = value && typeof value === 'object' ? validatedDescriptors.get(value) : undefined;
+  if (known && known.model === binding.model && known.reference === binding.reference)
+    return value as PartitionDescriptor;
+  const descriptor = rawPartitionDescriptorSchema.parse(value);
   assertFamily(
     model,
     descriptor.identity.familyKey,
@@ -326,6 +367,8 @@ export function validatePartitionDescriptor(
     descriptor.files.length +
       descriptor.workspaces.reduce((n, w) => n + 1 + w.files.length + w.emptyDirectories.length, 0),
   );
+  freezeInstallMetadata(descriptor);
+  validatedDescriptors.set(descriptor, binding);
   return descriptor;
 }
 export function validateGenerationRecord(

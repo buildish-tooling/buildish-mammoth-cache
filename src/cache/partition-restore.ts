@@ -20,7 +20,8 @@ import type { BaseCacheBackend } from './backend';
 import type { CacheModel } from './model';
 import { metadataPath, readMetadata } from './metadata-io';
 import { stagePartitionSnapshot, snapshotPartitions } from './partition-snapshots';
-import { installPartitionObject, readPartitionObject } from './partition-transport';
+import { installBasePartitionPlan } from './partition-transport';
+import { readBasePartitionPlan, type BasePartitionInstallPlan } from './base-install-plan';
 import {
   assertStorageBudget,
   GENERATION_RECORD_PATH,
@@ -52,6 +53,7 @@ export async function restorePartitionedGeneration(
     reference: null,
     descriptor: null,
   }));
+  const plans = new Map<string, BasePartitionInstallPlan>();
   try {
     const recordRoot = path.join(scratch, 'record');
     await mkdir(recordRoot);
@@ -101,11 +103,13 @@ export async function restorePartitionedGeneration(
         { archiveRoot: root },
       );
       if (matched !== entry.reference.key) continue;
+      const plan = await readBasePartitionPlan(model, root, entry.reference);
+      plans.set(entry.partitionId, plan);
       partitions[i] = {
         partitionId: entry.partitionId,
         status: 'restored',
         reference: entry.reference,
-        descriptor: await readPartitionObject(model, root, entry.reference),
+        descriptor: plan.descriptor,
       };
       assertStorageBudget(
         partitions,
@@ -136,12 +140,7 @@ export async function restorePartitionedGeneration(
       throw new Error('Pinned cache partition was unavailable during cleanup.');
     // Group availability and every transport are validated before the first live installation.
     for (const entry of partitions)
-      if (entry.descriptor)
-        await installPartitionObject(
-          model,
-          path.join(scratch, entry.partitionId),
-          entry.descriptor,
-        );
+      if (entry.descriptor) await installBasePartitionPlan(model, plans.get(entry.partitionId)!);
     for (const partition of snapshotPartitions(model))
       if (!partitions.find((p) => p.partitionId === partition.id)?.descriptor)
         await stagePartitionSnapshot(model, partition.id, model.cacheRoot, []);

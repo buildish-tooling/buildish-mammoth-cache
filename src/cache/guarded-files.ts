@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import { constants, type Stats } from 'node:fs';
-import { open, lstat, mkdir, rename, rm, rmdir } from 'node:fs/promises';
+import { open, lstat, mkdir, rename, rm, rmdir, type FileHandle } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
@@ -28,21 +28,53 @@ export function guardedPath(root: string, relative: string): string {
   validateNormalizedRelativePosixPath(relative, 'Managed path', 'root');
   return path.join(root, ...relative.split('/'));
 }
-export async function verifyParents(root: string, relative: string, create = false): Promise<void> {
-  const parts = relative === '.' || relative === '' ? [] : relative.split('/');
-  let directory = path.resolve(root);
-  for (const part of [null, ...parts]) {
-    if (part !== null) directory = path.join(directory, part);
-    const st = await lstat(directory).catch((e: unknown) => {
-      if (isMissingPathError(e)) return null;
-      throw e;
-    });
-    if (!st) {
-      if (create) await mkdir(directory, { recursive: part === null });
-      else return;
-    } else if (!st.isDirectory() || st.isSymbolicLink())
-      throw new Error(`Unsafe directory: ${directory}`);
+/** Positive directory evidence belongs to one stable phase, never to a retry. */
+export class DirectoryValidationBatch {
+  private readonly validated = new Set<string>();
+  readonly root: string;
+  constructor(root: string) {
+    this.root = path.resolve(root);
   }
+  invalidate(relative = ''): void {
+    const name = relative === '.' ? '' : relative;
+    if (name) guardedPath(this.root, name);
+    for (const entry of this.validated)
+      if (!name || entry === name || entry.startsWith(name + '/')) this.validated.delete(entry);
+  }
+  async verify(relative: string, create = false): Promise<void> {
+    if (relative !== '.' && relative !== '') guardedPath(this.root, relative);
+    const parts = relative === '.' || relative === '' ? [] : relative.split('/');
+    let name = '';
+    for (const part of [null, ...parts]) {
+      if (part !== null) name = name ? name + '/' + part : part;
+      if (this.validated.has(name)) continue;
+      const directory = name ? guardedPath(this.root, name) : this.root;
+      let stat = await lstat(directory).catch((error: unknown) => {
+        if (isMissingPathError(error)) return null;
+        throw error;
+      });
+      if (!stat) {
+        if (!create) return;
+        await mkdir(directory, { recursive: part === null }).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        });
+        stat = await lstat(directory);
+      }
+      if (!stat.isDirectory() || stat.isSymbolicLink())
+        throw new Error(`Unsafe directory: ${directory}`);
+      this.validated.add(name);
+    }
+  }
+}
+export async function verifyParents(
+  root: string,
+  relative: string,
+  create = false,
+  batch?: DirectoryValidationBatch,
+): Promise<void> {
+  if (batch && batch.root !== path.resolve(root))
+    throw new Error('Directory validation root mismatch.');
+  await (batch ?? new DirectoryValidationBatch(root)).verify(relative, create);
 }
 export async function regularStat(file: string): Promise<Stats | null> {
   const st = await lstat(file).catch((e: unknown) => {
@@ -54,14 +86,17 @@ export async function regularStat(file: string): Promise<Stats | null> {
   return st;
 }
 /** Read a selected source once, hashing the same bytes written to the exclusive staging file. */
-export async function copyGuardedFile(
+async function copyFileContents(
   root: string,
   relative: string,
   destination: string,
   expected: { size: number; mode?: number; mtimeMs?: number; contentSha256?: string },
-  native?: FileIdentity,
-): Promise<string> {
-  await verifyParents(root, path.posix.dirname(relative));
+  native: FileIdentity | undefined,
+  integrity: PayloadIntegrity,
+  directories?: DirectoryValidationBatch,
+  destinationHandle?: FileHandle,
+): Promise<string | undefined> {
+  await verifyParents(root, path.posix.dirname(relative), false, directories);
   const source = guardedPath(root, relative),
     before = await regularStat(source);
   if (!before) throw new Error(`Payload source missing: ${relative}`);
@@ -78,19 +113,19 @@ export async function copyGuardedFile(
   try {
     if (!sameFileIdentity(fileIdentity(before), fileIdentity(await input.stat()), true))
       throw new Error('Payload source replaced during open.');
-    const output = await open(destination, 'wx', 0o600);
-    const hash = createHash('sha256');
+    const output = destinationHandle ?? (await open(destination, 'wx', 0o600));
+    const hash = integrity === 'verified' ? createHash('sha256') : undefined;
     let count = 0;
     try {
       for await (const data of input.createReadStream({ autoClose: false })) {
         const chunk = Buffer.from(data);
         count += chunk.length;
         if (count > expected.size) throw new Error('Payload grew during copy.');
-        hash.update(chunk);
+        hash?.update(chunk);
         await output.writeFile(chunk);
       }
     } finally {
-      await output.close();
+      if (!destinationHandle) await output.close();
     }
     if (
       count !== expected.size ||
@@ -100,13 +135,56 @@ export async function copyGuardedFile(
     const after = await regularStat(source);
     if (!after || !sameFileIdentity(fileIdentity(before), fileIdentity(after), true))
       throw new Error('Payload path changed during copy.');
-    const digest = hash.digest('hex');
-    if (expected.contentSha256 && digest !== expected.contentSha256)
+    const digest = hash?.digest('hex');
+    if (integrity === 'verified' && expected.contentSha256 && digest !== expected.contentSha256)
       throw new Error('Payload SHA-256 verification failed.');
     return digest;
   } finally {
     await input.close();
   }
+}
+
+/** Base restore trusts producer bytes; every other caller verifies content by default. */
+export type PayloadIntegrity = 'verified' | 'trusted-base';
+export async function copyGuardedFile(
+  root: string,
+  relative: string,
+  destination: string,
+  expected: { size: number; mode?: number; mtimeMs?: number; contentSha256?: string },
+  native?: FileIdentity,
+  directories?: DirectoryValidationBatch,
+  destinationHandle?: FileHandle,
+): Promise<string> {
+  return (await copyFileContents(
+    root,
+    relative,
+    destination,
+    expected,
+    native,
+    'verified',
+    directories,
+    destinationHandle,
+  ))!;
+}
+export async function copyTrustedBaseFile(
+  root: string,
+  relative: string,
+  destination: string,
+  expected: { size: number },
+  native?: FileIdentity,
+  directories?: DirectoryValidationBatch,
+  destinationHandle?: FileHandle,
+): Promise<void> {
+  await copyFileContents(
+    root,
+    relative,
+    destination,
+    expected,
+    native,
+    'trusted-base',
+    directories,
+    destinationHandle,
+  );
 }
 
 /** Hash without materializing another file, bound to the selected native source identity. */
@@ -115,8 +193,9 @@ export async function hashGuardedFile(
   relative: string,
   expected: { size: number; contentSha256?: string },
   native?: FileIdentity,
+  directories?: DirectoryValidationBatch,
 ): Promise<string> {
-  await verifyParents(root, path.posix.dirname(relative));
+  await verifyParents(root, path.posix.dirname(relative), false, directories);
   const source = guardedPath(root, relative),
     before = await regularStat(source);
   if (
@@ -136,6 +215,50 @@ export async function hashGuardedFile(
     throw new Error(`Payload size/SHA-256 or source identity changed: ${relative}`);
   return digest;
 }
+export interface PreparedGuardedMove {
+  readonly identity: FileIdentity;
+  readonly digest?: string;
+}
+const preparedMoves = new WeakMap<PreparedGuardedMove, string>();
+function moveBinding(
+  root: string,
+  relative: string,
+  expected: { size: number; contentSha256?: string },
+  integrity: PayloadIntegrity,
+): string {
+  return JSON.stringify([
+    path.resolve(root),
+    relative,
+    expected.size,
+    expected.contentSha256,
+    integrity,
+  ]);
+}
+/** Freeze application-time content verification before the destination mutation batch. */
+export async function prepareGuardedMove(
+  root: string,
+  relative: string,
+  expected: { size: number; contentSha256?: string },
+  integrity: PayloadIntegrity = 'verified',
+  directories?: DirectoryValidationBatch,
+): Promise<PreparedGuardedMove> {
+  const source = guardedPath(root, relative),
+    before = await regularStat(source);
+  await verifyParents(root, path.posix.dirname(relative), false, directories);
+  if (!before || before.size !== expected.size) throw new Error('Restore source size changed.');
+  if (integrity === 'trusted-base') {
+    const current = await regularStat(source);
+    if (!current || !sameFileIdentity(fileIdentity(before), fileIdentity(current), true))
+      throw new Error('Restore source identity changed.');
+  }
+  const digest =
+    integrity === 'verified'
+      ? await hashGuardedFile(root, relative, expected, fileIdentity(before), directories)
+      : undefined;
+  const prepared = Object.freeze({ identity: Object.freeze(fileIdentity(before)), digest });
+  preparedMoves.set(prepared, moveBinding(root, relative, expected, integrity));
+  return prepared;
+}
 /** Consume disposable verified restore inputs. Rename normally; copy only across filesystems. */
 export async function moveGuardedFile(
   root: string,
@@ -143,15 +266,26 @@ export async function moveGuardedFile(
   destination: string,
   expected: { size: number; contentSha256?: string },
   recoveryRoot = path.dirname(destination),
-): Promise<void> {
-  const source = guardedPath(root, relative),
-    before = await regularStat(source);
-  if (!before) throw new Error('Restore source disappeared.');
-  const digest = await hashGuardedFile(root, relative, expected, fileIdentity(before));
+  integrity: PayloadIntegrity = 'verified',
+  directories?: DirectoryValidationBatch,
+  prepared?: PreparedGuardedMove,
+): Promise<{ copied: boolean; identity: FileIdentity }> {
+  const selected =
+    prepared ?? (await prepareGuardedMove(root, relative, expected, integrity, directories));
+  if (preparedMoves.get(selected) !== moveBinding(root, relative, expected, integrity))
+    throw new Error('Invalid prepared source binding.');
+  await verifyParents(root, path.posix.dirname(relative), false, directories);
+  const source = guardedPath(root, relative);
+  const before = await regularStat(source);
+  if (!before || !sameFileIdentity(selected.identity, fileIdentity(before), true))
+    throw new Error('Move source changed after verification.');
+  const digest = selected.digest;
+  let copied = false;
   try {
     await rename(source, destination);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    copied = true;
     const relativeDestination = path.relative(recoveryRoot, destination).split(path.sep).join('/');
     validateNormalizedRelativePosixPath(relativeDestination, 'Restore destination', 'cache root');
     const parent = path.posix.dirname(relativeDestination);
@@ -175,19 +309,40 @@ export async function moveGuardedFile(
     );
     try {
       const temporary = await metadataPath(recoveryRoot, temporaryRelative, true);
-      await copyGuardedFile(
-        root,
-        relative,
-        temporary,
-        { size: expected.size, contentSha256: digest },
-        fileIdentity(before),
-      );
+      const output = await open(temporary, 'wx', 0o600);
+      let written: FileIdentity;
+      try {
+        await copyFileContents(
+          root,
+          relative,
+          temporary,
+          { size: expected.size, contentSha256: digest },
+          fileIdentity(before),
+          integrity,
+          undefined,
+          output,
+        );
+        written = fileIdentity(await output.stat());
+      } finally {
+        await output.close();
+      }
+      await verifyParents(recoveryRoot, metadataDirectory);
+      const current = await regularStat(temporary);
+      if (!current || !sameFileIdentity(written, fileIdentity(current), true))
+        throw new Error('Move fallback staging changed.', { cause: error });
+      await verifyParents(root, path.posix.dirname(relative));
+      const sourceNow = await regularStat(source);
+      if (!sourceNow || !sameFileIdentity(selected.identity, fileIdentity(sourceNow), true))
+        throw new Error('Move fallback source changed.', { cause: error });
       await rename(temporary, destination);
       await rm(source);
     } finally {
       await recoverInterruptedMoves(recoveryRoot);
     }
   }
+  const installed = await regularStat(destination);
+  if (!installed) throw new Error('Move destination disappeared.');
+  return { copied, identity: fileIdentity(installed) };
 }
 
 const MOVE_INTENT = '.mammoth/restore-move-v1.json';

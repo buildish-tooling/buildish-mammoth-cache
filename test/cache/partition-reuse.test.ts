@@ -16,9 +16,15 @@
 
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat } from 'node:fs/promises';
 import path from 'node:path';
+import { Hash } from 'node:crypto';
+import * as fileIO from '../../src/util/fs';
 import type * as fs from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CutoffArtifacts } from '../support/cutoff-artifacts';
+import { writeKotlinWorkspace } from '../support/kotlin-cache';
+import { writeTransformWorkspace } from '../support/transform-cache';
+import * as installInventory from '../../src/cache/install-inventory';
+import * as metadataIO from '../../src/cache/metadata-io';
 import { writeGroovyWorkspace } from '../support/groovy-cache';
 import { cutoffJob } from '../support/cutoff-job';
 import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
@@ -387,7 +393,7 @@ it('read-only partial restore does no save-oriented finalize work', async () => 
   expect(copy).not.toHaveBeenCalled();
   expect(save).not.toHaveBeenCalled();
 });
-it('rejects corruption before installing any downloaded partition', async () => {
+it('rejects size corruption before installing any downloaded partition', async () => {
   const f = await fixture(),
     seed = await f.job('seed');
   await seed.prepare();
@@ -402,7 +408,7 @@ it('rejects corruption before installing any downloaded partition', async () => 
     return key;
   });
   const reader = await f.job('reader');
-  await expect(reader.prepare()).rejects.toThrow(/SHA-256/);
+  await expect(reader.prepare()).rejects.toThrow(/size mismatch/);
   await expect(lstat(path.join(reader.home, 'a/file'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 it('does not accept a longer prefix match as an exact partition object', async () => {
@@ -594,3 +600,371 @@ it('reads changed ordinary payload bytes only for descriptor creation and pre-up
     hash.mock.calls.filter(([root, relative]) => root === job.home && relative === 'a/file'),
   ).toHaveLength(2);
 });
+
+it('base prepare trusts same-size bytes and performs zero payload hashes', async () => {
+  const f = await fixture(),
+    seed = await f.job('seed');
+  await seed.prepare();
+  await put(seed, 'a/file', 'A');
+  await executeFinalizeAction(seed.deps);
+  const object = f.backend.entries.find((e) => e.files.some((f) => f.name === 'a/file'))!;
+  object.files.find((f) => f.name === 'a/file')!.bytes = Buffer.from('B');
+  object.archive = undefined;
+  const hashes = vi.spyOn(Hash.prototype, 'update');
+  const fileHashes = vi.spyOn(fileIO, 'hashStableFileSha256');
+  const reader = await f.job('hash-free');
+  await reader.prepare();
+  expect(hashes.mock.calls.filter(([data]) => typeof data !== 'string')).toHaveLength(0);
+  expect(fileHashes).not.toHaveBeenCalled();
+  expect(await readFile(path.join(reader.home, 'a/file'), 'utf8')).toBe('B');
+});
+
+it.each([
+  [false, false],
+  [false, true],
+  [true, false],
+  [true, true],
+])(
+  'native workspaces use one inventory and whole-tree moves (EXDEV=%s, existing=%s)',
+  async (crossDevice, existing) => {
+    const f = await fixture(
+      [
+        { id: 'data', includes: [] },
+        { id: 'groovy-dsl', includes: ['caches/*/groovy-dsl/**'] },
+        { id: 'kotlin-dsl', includes: ['caches/*/kotlin-dsl/**'] },
+        { id: 'transforms-metadata', includes: ['caches/*/transforms/**'] },
+      ],
+      'gradle',
+    );
+    const seed = await f.job('native-seed');
+    await seed.prepare();
+    const names = [
+      await writeGroovyWorkspace(seed.home),
+      await writeKotlinWorkspace(seed.home),
+      await writeTransformWorkspace(seed.home),
+    ];
+    // Establish already-correct portable modes independently of the developer's umask.
+    const fixtureFS = await import('node:fs/promises');
+    for (const entry of await fixtureFS.readdir(path.join(seed.home, 'caches'), {
+      recursive: true,
+      withFileTypes: true,
+    }))
+      if (entry.isFile()) await fixtureFS.chmod(path.join(entry.parentPath, entry.name), 0o644);
+    await executeFinalizeAction(seed.deps);
+    const reader = await f.job('native-reader');
+    if (existing) {
+      await writeGroovyWorkspace(reader.home, undefined, 'old');
+      await writeKotlinWorkspace(reader.home, undefined, undefined, 'old');
+      await writeTransformWorkspace(reader.home, undefined, undefined, 'old');
+      for (const name of names) await writeFile(path.join(reader.home, name, 'obsolete'), 'stale');
+    }
+    const fs = await import('node:fs/promises'),
+      original = fs.rename;
+    const renames = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (crossDevice && String(from).includes('/restore-staging/'))
+        throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
+      return original(from, to);
+    });
+    const modes = vi.spyOn(fs, 'chmod'),
+      times = vi.spyOn(fs, 'utimes');
+    const inventories = vi.spyOn(installInventory, 'inventoryInstallTree');
+    const hashes = vi.spyOn(fileIO, 'hashStableFileSha256');
+    const copies = vi.spyOn(Hash.prototype, 'update');
+    const moves = vi.spyOn(guarded, 'moveGuardedFile');
+    const metadata = vi.spyOn(metadataIO, 'writeMetadata');
+    await reader.prepare();
+    expect(inventories).toHaveBeenCalledTimes(3);
+    expect(
+      copies.mock.calls.filter(([data]) => {
+        if (typeof data !== 'string' || !data.startsWith('{')) return false;
+        return JSON.parse(data).kind === 'workspace';
+      }),
+    ).toHaveLength(3);
+    expect(hashes).not.toHaveBeenCalled();
+    expect(copies.mock.calls.filter(([data]) => typeof data !== 'string')).toHaveLength(0);
+    if (!crossDevice) {
+      if (process.platform !== 'win32') expect(modes).not.toHaveBeenCalled();
+      expect(times).not.toHaveBeenCalled();
+      expect(moves).not.toHaveBeenCalled();
+      expect(
+        renames.mock.calls.filter(([from]) => String(from).includes('/restore-staging/')),
+      ).toHaveLength(3);
+    }
+    expect(
+      metadata.mock.calls.filter(([, name]) => name === '.mammoth/workspace-apply-v3/intent.json'),
+    ).toHaveLength(existing ? 3 : 0);
+    for (const name of names) {
+      expect(await readFile(path.join(reader.home, name, 'metadata.bin'), 'utf8')).toBe(
+        'origin-compiled',
+      );
+      await expect(lstat(path.join(reader.home, name, 'obsolete'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    }
+    expect((await lstat(path.join(reader.home, names[0]!, 'reports'))).isDirectory()).toBe(true);
+    expect((await lstat(path.join(reader.home, names[1]!, 'reports/empty'))).isDirectory()).toBe(
+      true,
+    );
+    expect(
+      (await lstat(path.join(reader.home, names[2]!, 'transformed/empty'))).isDirectory(),
+    ).toBe(true);
+  },
+);
+
+it.each(['before', 'after'])(
+  're-downloads a native workspace after interruption %s its fresh rename',
+  async (when) => {
+    const f = await fixture(
+      [
+        { id: 'data', includes: [] },
+        { id: 'groovy-dsl', includes: ['caches/*/groovy-dsl/**'] },
+      ],
+      'gradle',
+    );
+    const seed = await f.job('seed');
+    await seed.prepare();
+    const name = await writeGroovyWorkspace(seed.home);
+    await executeFinalizeAction(seed.deps);
+    const reader = await f.job('interrupted');
+    const fs = await import('node:fs/promises'),
+      original = fs.rename;
+    let fail = true;
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (
+        fail &&
+        String(from).includes('/restore-staging/') &&
+        String(to) === path.join(reader.home, name)
+      ) {
+        fail = false;
+        if (when === 'after') await original(from, to);
+        throw new Error('interrupted native rename');
+      }
+      return original(from, to);
+    });
+    await expect(reader.prepare()).rejects.toThrow(/interrupted native rename/);
+    if (when === 'after')
+      expect(await readFile(path.join(reader.home, name, 'metadata.bin'), 'utf8')).toBe(
+        'origin-compiled',
+      );
+    else
+      await expect(lstat(path.join(reader.home, name))).rejects.toMatchObject({ code: 'ENOENT' });
+    await reader.prepare();
+    expect(await readFile(path.join(reader.home, name, 'metadata.bin'), 'utf8')).toBe(
+      'origin-compiled',
+    );
+  },
+);
+
+it('rejects native workspace topology changes after the extraction inventory', async () => {
+  const f = await fixture(
+    [
+      { id: 'data', includes: [] },
+      { id: 'groovy-dsl', includes: ['caches/*/groovy-dsl/**'] },
+    ],
+    'gradle',
+  );
+  const seed = await f.job('seed');
+  await seed.prepare();
+  const name = await writeGroovyWorkspace(seed.home);
+  await executeFinalizeAction(seed.deps);
+  const original = installInventory.inventoryInstallTree;
+  vi.spyOn(installInventory, 'inventoryInstallTree').mockImplementation(async (...args) => {
+    const inventory = await original(...args);
+    if (args[0].includes('/restore-staging/'))
+      await writeFile(path.join(args[0], name, 'surprise'), 'unexpected');
+    return inventory;
+  });
+  const reader = await f.job('mutated-source');
+  await expect(reader.prepare()).rejects.toThrow(/directory changed/);
+  await expect(lstat(path.join(reader.home, name))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each([false, true])(
+  'production prepare consumes ordinary and all workspace kinds and retries partial consumption=%s',
+  async (interrupt) => {
+    const f = await fixture(
+      [
+        { id: 'data', includes: ['data/**'] },
+        { id: 'groovy-dsl', includes: ['caches/*/groovy-dsl/**'] },
+        { id: 'kotlin-dsl', includes: ['caches/*/kotlin-dsl/**'] },
+        { id: 'transforms-metadata', includes: ['caches/*/transforms/**'] },
+      ],
+      'gradle',
+    );
+    const worker = await f.job('worker', { 'job-mode': 'distributed-worker' });
+    await worker.prepare();
+    await put(worker, 'data/ordinary', 'ordinary');
+    const names = [
+      await writeGroovyWorkspace(worker.home),
+      await writeKotlinWorkspace(worker.home),
+      await writeTransformWorkspace(worker.home),
+    ];
+    await executeFinalizeAction(worker.deps);
+    const aggregator = await f.job('aggregator', {
+      'job-mode': 'distributed-aggregator',
+      'dependent-jobs': 'build',
+    });
+    const original = guarded.moveGuardedFile;
+    let consumed = 0,
+      failed = false;
+    vi.spyOn(guarded, 'moveGuardedFile').mockImplementation(async (...args) => {
+      const result = await original(...args);
+      await expect(lstat(path.join(args[0], args[1]))).rejects.toMatchObject({ code: 'ENOENT' });
+      consumed++;
+      if (interrupt && !failed) {
+        failed = true;
+        throw new Error('interrupted consumed worker');
+      }
+      return result;
+    });
+    const copy = vi.spyOn(guarded, 'copyGuardedFile');
+    if (interrupt) {
+      await expect(aggregator.prepare()).rejects.toThrow(/interrupted consumed worker/);
+      for (const name of names)
+        await expect(lstat(path.join(aggregator.home, name))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+    }
+    await aggregator.prepare();
+    expect(copy).not.toHaveBeenCalled();
+    expect(consumed).toBeGreaterThan(3);
+    expect(await readFile(path.join(aggregator.home, 'data/ordinary'), 'utf8')).toBe('ordinary');
+    for (const name of names)
+      expect(await readFile(path.join(aggregator.home, name, 'metadata.bin'), 'utf8')).toBe(
+        'origin-compiled',
+      );
+    expect(f.artifacts.downloads).toHaveLength(interrupt ? 2 : 1);
+    for (const download of f.artifacts.downloads)
+      await expect(lstat(download)).rejects.toMatchObject({ code: 'ENOENT' });
+  },
+);
+
+it('rejects extra native staged members after the whole-tree staging rename', async () => {
+  const f = await fixture(
+    [
+      { id: 'data', includes: [] },
+      { id: 'groovy-dsl', includes: ['caches/*/groovy-dsl/**'] },
+    ],
+    'gradle',
+  );
+  const seed = await f.job('seed');
+  await seed.prepare();
+  const name = await writeGroovyWorkspace(seed.home);
+  await executeFinalizeAction(seed.deps);
+  const reader = await f.job('staged-mutation');
+  await writeGroovyWorkspace(reader.home, undefined, 'keep old');
+  const fs = await import('node:fs/promises'),
+    original = fs.rename;
+  vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    await original(from, to);
+    if (String(from).includes('/restore-staging/') && String(to).includes('/.mammoth/stage-'))
+      await writeFile(path.join(String(to), 'surprise'), 'not in descriptor');
+  });
+  await expect(reader.prepare()).rejects.toThrow(/staging directory changed/);
+  expect(await readFile(path.join(reader.home, name, 'metadata.bin'), 'utf8')).toBe(
+    'origin-keep old',
+  );
+});
+
+it('carries the one base snapshot inventory through journal model cloning and live initialization', async () => {
+  const f = await fixture([
+    { id: 'data', includes: [] },
+    { id: 'metadata', includes: ['metadata/**'], publication: 'single-writer' },
+  ]);
+  const seed = await f.job('snapshot-seed');
+  await seed.prepare();
+  await put(seed, 'metadata/index', 'snapshot');
+  await executeFinalizeAction(seed.deps);
+  const inventories = vi.spyOn(installInventory, 'inventoryInstallTree');
+  const reader = await f.job('snapshot-reader');
+  await reader.prepare();
+  expect(inventories).toHaveBeenCalledTimes(1);
+  expect(await readFile(path.join(reader.home, 'metadata/index'), 'utf8')).toBe('snapshot');
+});
+
+it.each([false, true])(
+  'directory inventory visits scale with total workspace directories (existing=%s)',
+  async (existing) => {
+    const visits: number[] = [];
+    for (const count of [2, 8, 32]) {
+      const f = await fixture(
+        [
+          { id: 'data', includes: [] },
+          { id: 'groovy-dsl', includes: ['caches/*/groovy-dsl/**'] },
+        ],
+        'gradle',
+      );
+      const seed = await f.job('directory-seed');
+      await seed.prepare();
+      for (let i = 0; i < count; i++)
+        await writeGroovyWorkspace(seed.home, i.toString(16).padStart(32, '0'));
+      await executeFinalizeAction(seed.deps);
+      const reader = await f.job('directory-reader');
+      if (existing)
+        for (let i = 0; i < count; i++)
+          await writeGroovyWorkspace(reader.home, i.toString(16).padStart(32, '0'), 'old');
+      let directoryVisits = 0;
+      const observe = (value: unknown) => {
+        // Count actual directory identities yielded, including the workspace indexes.
+        if (
+          value &&
+          typeof value === 'object' &&
+          'mode' in value &&
+          typeof value.mode === 'number' &&
+          (value.mode & 0o170000) === 0o040000
+        )
+          directoryVisits++;
+      };
+      const originalIterator = Map.prototype[Symbol.iterator],
+        originalEntries = Map.prototype.entries,
+        originalKeys = Map.prototype.keys;
+      const iterator = vi.spyOn(Map.prototype, Symbol.iterator).mockImplementation(function* (
+        this: Map<unknown, unknown>,
+      ) {
+        for (const entry of originalIterator.call(this)) {
+          observe(entry[1]);
+          yield entry;
+        }
+        return undefined;
+      });
+      const entries = vi.spyOn(Map.prototype, 'entries').mockImplementation(function* (
+        this: Map<unknown, unknown>,
+      ) {
+        for (const entry of originalEntries.call(this)) {
+          observe(entry[1]);
+          yield entry;
+        }
+        return undefined;
+      });
+      const keys = vi.spyOn(Map.prototype, 'keys').mockImplementation(function* (
+        this: Map<unknown, unknown>,
+      ) {
+        for (const key of originalKeys.call(this)) {
+          observe(this.get(key));
+          yield key;
+        }
+        return undefined;
+      });
+      try {
+        await reader.prepare();
+      } finally {
+        iterator.mockRestore();
+        entries.mockRestore();
+        keys.mockRestore();
+      }
+      visits.push(directoryVisits);
+      expect(
+        await readFile(
+          path.join(reader.home, `caches/9.8.1/groovy-dsl/${'0'.repeat(32)}/metadata.bin`),
+          'utf8',
+        ),
+      ).toBe('origin-compiled');
+    }
+    expect(visits[0]).toBeGreaterThan(0);
+    // Four times the workspaces may visit four times their directories, plus fixed ancestors.
+    for (let i = 1; i < visits.length; i++) {
+      expect(visits[i]).toBeGreaterThan(visits[i - 1]!);
+      expect(visits[i]).toBeLessThanOrEqual(4 * visits[i - 1]!);
+    }
+  },
+);

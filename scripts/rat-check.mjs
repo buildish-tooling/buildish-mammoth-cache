@@ -20,6 +20,7 @@ import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const RAT_VERSION = '0.18';
 const RAT_ARCHIVE_SHA512 =
@@ -102,26 +103,21 @@ async function collectCandidateFiles(repoRoot, relativeDir = '') {
   return files;
 }
 
-async function collectGitIgnoredFiles(candidateFiles) {
+export async function collectGitIgnoredFiles(candidateFiles) {
   if (candidateFiles.length === 0) {
     return new Set();
   }
 
-  const { stdout, code } = await spawnProcess('git', ['check-ignore', '--stdin'], {
+  const { stdout, code } = await spawnProcess('git', ['check-ignore', '--stdin', '-z'], {
     allowFailure: true,
-    input: `${candidateFiles.join('\n')}\n`,
+    input: `${candidateFiles.join('\0')}\0`,
   });
 
   if (code !== 0 && code !== 1) {
     throw new Error(`git check-ignore failed with exit code ${code}.\n${stdout}`);
   }
 
-  return new Set(
-    stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0),
-  );
+  return new Set(stdout.split('\0').filter((line) => line.length > 0));
 }
 
 async function ensureRatArchive(archiveFile) {
@@ -267,4 +263,6 @@ async function spawnProcess(command, args, options = {}) {
   });
 }
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

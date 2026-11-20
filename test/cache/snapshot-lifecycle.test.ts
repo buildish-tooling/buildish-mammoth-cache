@@ -17,6 +17,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, writeFile, readFile, rm, stat, chmod, utimes } from 'node:fs/promises';
 import path from 'node:path';
+import { Hash } from 'node:crypto';
+import * as fileIO from '../../src/util/fs';
 import * as glob from '@actions/glob';
 import * as fs from 'node:fs/promises';
 import * as metadataIO from '../../src/cache/metadata-io';
@@ -394,13 +396,13 @@ describe('single-writer partition lifecycle', () => {
       reads.mockRestore();
     },
   );
-  it('still rejects corrupt restored transport for a read-only consumer', async () => {
+  it('still rejects size-changing restored transport for a read-only consumer', async () => {
     const f = await fixture();
     await f.seed();
     const payload = f.entries[0]!.files.find((file) => file.name.endsWith('payload/000001.bin'))!;
     payload.bytes = Buffer.from('corrupt');
     const reader = await f.job('reader', 'standalone', { 'read-only': 'true' });
-    await expect(reader.prepare()).rejects.toThrow(/size\/SHA-256/);
+    await expect(reader.prepare()).rejects.toThrow(/size mismatch/);
   });
   it('exempts retained snapshots from per-file GC while ordinary artifacts are evicted', async () => {
     const f = await fixture();
@@ -467,4 +469,18 @@ describe('single-writer partition lifecycle', () => {
     );
     await expect(executeFinalizeAction(agg.deps)).rejects.toThrow(/SHA-256/);
   });
+});
+
+it('base snapshot initialization trusts same-size bytes without any payload hash', async () => {
+  const f = await fixture();
+  await f.seed();
+  const payload = f.entries[0]!.files.find((file) => file.name.endsWith('payload/000001.bin'))!;
+  payload.bytes = Buffer.alloc(payload.bytes.length, 88);
+  const hashes = vi.spyOn(Hash.prototype, 'update');
+  const fileHashes = vi.spyOn(fileIO, 'hashStableFileSha256');
+  const reader = await f.job('hash-free', 'standalone', { 'read-only': 'true' });
+  await reader.prepare();
+  expect(hashes.mock.calls.filter(([data]) => typeof data !== 'string')).toHaveLength(0);
+  expect(fileHashes).not.toHaveBeenCalled();
+  expect(await get(reader, 'metadata/index.bin')).toBe(payload.bytes.toString());
 });

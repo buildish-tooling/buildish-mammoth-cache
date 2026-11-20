@@ -13,18 +13,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import {
+  inventoryInstallTree,
+  freezeInstallMetadata,
+  type InstallInventory,
+} from './install-inventory';
+import type { PartitionDescriptor } from './partition-format';
+import { assertBaseInstallPlan, type BasePartitionInstallPlan } from './base-install-plan';
+import { stageGuardedFiles } from './staged-files';
 import { portableCacheFileMode } from './file-permissions';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, opendir, lstat, rm, rename, chmod, utimes } from 'node:fs/promises';
+import { mkdir, opendir, lstat, rm, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { cutoffPartitionIdSchema, cutoffUpsertSchema } from './cutoff-format';
-import { guardedPath, verifyParents, regularStat, copyGuardedFile } from './guarded-files';
+import {
+  guardedPath,
+  verifyParents,
+  regularStat,
+  copyGuardedFile,
+  type PayloadIntegrity,
+  DirectoryValidationBatch,
+  hashGuardedFile,
+} from './guarded-files';
 import { captureCacheMetadataSnapshot, createManagedCachePathMatcher } from './manifest';
 import { fileIdentity, sameFileIdentity, type FileIdentity } from './file-identity';
 import { metadataPath, readMetadata, writeMetadata } from './metadata-io';
 import { CUTOFF_STATE_DIRECTORY } from './metadata-paths';
-import { hashStableFileSha256, isMissingPathError } from '../util/fs';
+import { isMissingPathError } from '../util/fs';
 import type { CacheModel, CachePartitionDefinition } from './model';
 import { DELTA_ARTIFACT_RESOURCE_LIMITS } from '../delta/discovery';
 
@@ -60,12 +76,18 @@ export const storedPartitionSnapshotSchema = z
       ctx.addIssue({ code: 'custom', message: 'Partition snapshot exceeds resource limits.' });
   });
 export type StoredPartitionSnapshot = z.infer<typeof storedPartitionSnapshotSchema>;
-export interface VerifiedPartitionSnapshot {
+export interface ValidatedPartitionSnapshot {
+  integrity: PayloadIntegrity;
   manifest: StoredPartitionSnapshot;
   rootDirectory: string;
   digest: string;
   contentDigest: string;
 }
+const snapshotPlans = new WeakMap<
+  ValidatedPartitionSnapshot,
+  { cacheRoot: string; model: string; inventory: InstallInventory }
+>();
+const restoredBaseSnapshots = new WeakMap<PartitionDescriptor, ValidatedPartitionSnapshot>();
 export function snapshotPartitions(model: CacheModel): readonly CachePartitionDefinition[] {
   return model.partitions.filter((p) => p.publication === 'single-writer');
 }
@@ -110,15 +132,27 @@ export async function clearSnapshotFiles(model: CacheModel, id?: string): Promis
       if (!owns(p.partitionId, entry.relativePath))
         throw new Error('Snapshot deletion has ambiguous partition ownership.');
   const entries = snapshot.partitions.flatMap((p) => p.entries);
+  let directories = new DirectoryValidationBatch(model.cacheRoot);
   for (const entry of entries) {
-    await verifyParents(model.cacheRoot, path.posix.dirname(entry.relativePath));
+    await verifyParents(
+      model.cacheRoot,
+      path.posix.dirname(entry.relativePath),
+      false,
+      directories,
+    );
     const file = guardedPath(model.cacheRoot, entry.relativePath),
       current = await regularStat(file);
     if (!current || !sameFileIdentity(entry.identity, fileIdentity(current), true))
       throw new Error('Snapshot replacement target changed.');
   }
+  directories = new DirectoryValidationBatch(model.cacheRoot);
   for (const entry of entries) {
-    await verifyParents(model.cacheRoot, path.posix.dirname(entry.relativePath));
+    await verifyParents(
+      model.cacheRoot,
+      path.posix.dirname(entry.relativePath),
+      false,
+      directories,
+    );
     const file = guardedPath(model.cacheRoot, entry.relativePath),
       current = await regularStat(file);
     if (!current || !sameFileIdentity(entry.identity, fileIdentity(current), true))
@@ -158,7 +192,8 @@ async function assertRegularTree(root: string): Promise<void> {
 export async function readPartitionSnapshot(
   model: CacheModel,
   id: string,
-): Promise<VerifiedPartitionSnapshot | null> {
+  integrity: PayloadIntegrity = 'verified',
+): Promise<ValidatedPartitionSnapshot | null> {
   cutoffPartitionIdSchema.parse(id);
   const relative = PARTITION_SNAPSHOT_DIRECTORY + '/' + id;
   const serialized = await readMetadata(
@@ -180,29 +215,38 @@ export async function readPartitionSnapshot(
   if (manifest.partitionId !== id) throw new Error('Snapshot partition identity mismatch.');
   assertMembership(model, manifest);
   const root = path.dirname(await metadataPath(model.cacheRoot, relative + '/snapshot.json'));
-  await assertRegularTree(root);
+  const inventory = await inventoryInstallTree(root);
   const expected = new Set(['snapshot.json', ...manifest.files.map((e) => e.payloadPath)]);
-  const actual = new Set<string>();
-  for await (const entry of await opendir(root)) {
-    if (entry.name === 'payload' && entry.isDirectory()) {
-      for await (const file of await opendir(path.join(root, 'payload')))
-        actual.add('payload/' + file.name);
-    } else actual.add(entry.name);
-  }
-  if (actual.size !== expected.size || [...actual].some((name) => !expected.has(name)))
+  if (
+    inventory.files.size !== expected.size ||
+    [...inventory.files.keys()].some((name) => !expected.has(name)) ||
+    [...inventory.directories.keys()].some((name) => name !== '' && name !== 'payload')
+  )
     throw new Error('Unexpected snapshot transport membership.');
+  const sources = new DirectoryValidationBatch(root);
   for (const entry of manifest.files) {
-    await verifyParents(root, 'payload');
-    const file = guardedPath(root, entry.payloadPath),
-      st = await regularStat(file);
-    if (
-      !st ||
-      st.size !== entry.size ||
-      (await hashStableFileSha256(file, st)) !== entry.contentSha256
-    )
-      throw new Error('Snapshot payload size/SHA-256 mismatch.');
+    const native = inventory.files.get(entry.payloadPath);
+    if (!native || native.size !== entry.size)
+      throw new Error(
+        integrity === 'verified'
+          ? 'Snapshot payload size/SHA-256 mismatch.'
+          : 'Snapshot payload size mismatch.',
+      );
+    if (integrity === 'verified')
+      await hashGuardedFile(root, entry.payloadPath, entry, native, sources);
   }
-  return { manifest, rootDirectory: root, ...snapshotDigests(manifest) };
+  const snapshot = {
+    manifest: freezeInstallMetadata(manifest),
+    rootDirectory: root,
+    integrity,
+    ...snapshotDigests(manifest),
+  };
+  snapshotPlans.set(snapshot, {
+    cacheRoot: model.cacheRoot,
+    model: snapshotModelBinding(model),
+    inventory,
+  });
+  return Object.freeze(snapshot);
 }
 export interface SnapshotSource {
   relativePath: string;
@@ -219,7 +263,7 @@ export async function stagePartitionSnapshot(
   id: string,
   sourceRoot: string,
   sources: readonly SnapshotSource[],
-): Promise<VerifiedPartitionSnapshot> {
+): Promise<ValidatedPartitionSnapshot> {
   cutoffPartitionIdSchema.parse(id);
   if (
     sources.length > DELTA_ARTIFACT_RESOURCE_LIMITS.manifestEntries ||
@@ -277,7 +321,12 @@ export async function stagePartitionSnapshot(
     await assertRegularTree(target);
     await rm(target, { recursive: true });
     await rename(scratch, target);
-    return { manifest: parsed, rootDirectory: target, ...snapshotDigests(parsed) };
+    return {
+      manifest: parsed,
+      rootDirectory: target,
+      integrity: 'verified',
+      ...snapshotDigests(parsed),
+    };
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -285,39 +334,96 @@ export async function stagePartitionSnapshot(
 /** Restore a verified snapshot as a replacement, preserving user-excluded files. */
 export async function restorePartitionSnapshot(
   model: CacheModel,
-  snapshot: VerifiedPartitionSnapshot,
+  snapshot: ValidatedPartitionSnapshot,
 ): Promise<void> {
-  const verified = await readPartitionSnapshot(model, snapshot.manifest.partitionId);
+  let evidence = snapshotPlans.get(snapshot);
+  const verified =
+    evidence?.cacheRoot === model.cacheRoot && evidence.model === snapshotModelBinding(model)
+      ? snapshot
+      : await readPartitionSnapshot(model, snapshot.manifest.partitionId, snapshot.integrity);
   if (!verified || verified.digest !== snapshot.digest)
     throw new Error('Snapshot changed before restore.');
-  // Validate incoming target paths before deleting old members.
+  evidence = snapshotPlans.get(verified)!;
+  await verifyParents(
+    model.cacheRoot,
+    PARTITION_SNAPSHOT_DIRECTORY + '/' + verified.manifest.partitionId,
+  );
+  for (const [name, identity] of evidence.inventory.directories) {
+    const current = await lstat(
+      name ? guardedPath(verified.rootDirectory, name) : verified.rootDirectory,
+    );
+    if (
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      !sameFileIdentity(identity, fileIdentity(current), true)
+    )
+      throw new Error('Snapshot transport directory changed.');
+  }
+  const manifestStat = await regularStat(guardedPath(verified.rootDirectory, 'snapshot.json'));
+  if (
+    !manifestStat ||
+    !sameFileIdentity(
+      evidence.inventory.files.get('snapshot.json')!,
+      fileIdentity(manifestStat),
+      true,
+    )
+  )
+    throw new Error('Snapshot changed before restore.');
+  // Preflight, staging and live commit each own a fresh directory batch.
+  const preflight = new DirectoryValidationBatch(model.cacheRoot);
   for (const entry of verified.manifest.files) {
-    await verifyParents(model.cacheRoot, path.posix.dirname(entry.relativePath));
+    await verifyParents(model.cacheRoot, path.posix.dirname(entry.relativePath), false, preflight);
     await regularStat(guardedPath(model.cacheRoot, entry.relativePath));
   }
   await clearSnapshotFiles(model, verified.manifest.partitionId);
-  for (const entry of verified.manifest.files) {
-    const parent = path.posix.dirname(entry.relativePath),
-      target = guardedPath(model.cacheRoot, entry.relativePath);
-    await verifyParents(model.cacheRoot, parent, true);
-    const temporaryRelative =
-      (parent === '.' ? '' : parent + '/') + '.mammoth/restore-' + randomUUID();
-    const temporary = await metadataPath(model.cacheRoot, temporaryRelative, true);
-    try {
-      await copyGuardedFile(verified.rootDirectory, entry.payloadPath, temporary, {
-        size: entry.size,
-        contentSha256: entry.contentSha256,
-      });
-      await chmod(
-        temporary,
-        portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath),
+  const staged = verified.manifest.files.map((entry) => {
+    const parent = path.posix.dirname(entry.relativePath);
+    const destination = (parent === '.' ? '' : parent + '/') + '.mammoth/restore-' + randomUUID();
+    return { entry, destination, temporary: guardedPath(model.cacheRoot, destination) };
+  });
+  try {
+    const identities = await stageGuardedFiles(
+      model.cacheRoot,
+      staged.map(({ entry, destination }) => ({
+        sourceRoot: verified.rootDirectory,
+        sourcePath: entry.payloadPath,
+        destination,
+        native: evidence!.inventory.files.get(entry.payloadPath),
+        expected: {
+          ...entry,
+          mode: portableCacheFileMode(entry.mode, model.buildToolId, entry.relativePath),
+        },
+      })),
+      snapshot.integrity,
+    );
+    const commit = new DirectoryValidationBatch(model.cacheRoot);
+    for (const { entry, temporary, destination } of staged) {
+      await verifyParents(
+        model.cacheRoot,
+        path.posix.dirname(path.relative(model.cacheRoot, temporary).split(path.sep).join('/')),
+        false,
+        commit,
       );
-      await utimes(temporary, new Date(entry.mtimeMs), new Date(entry.mtimeMs));
-      await verifyParents(model.cacheRoot, parent);
-      const current = await regularStat(target);
-      if (current) throw new Error('Snapshot restore target unexpectedly appeared.');
+      const stagedStat = await regularStat(temporary);
+      if (
+        !stagedStat ||
+        !sameFileIdentity(identities.get(destination)!, fileIdentity(stagedStat), true)
+      )
+        throw new Error('Snapshot staging changed before replacement.');
+      const target = guardedPath(model.cacheRoot, entry.relativePath);
+      if (await regularStat(target))
+        throw new Error('Snapshot restore target unexpectedly appeared.');
       await rename(temporary, target);
-    } finally {
+    }
+  } finally {
+    const cleanup = new DirectoryValidationBatch(model.cacheRoot);
+    for (const { temporary } of staged) {
+      await verifyParents(
+        model.cacheRoot,
+        path.posix.dirname(path.relative(model.cacheRoot, temporary).split(path.sep).join('/')),
+        false,
+        cleanup,
+      );
       await rm(temporary, { force: true });
     }
   }
@@ -325,10 +431,24 @@ export async function restorePartitionSnapshot(
 export async function verifySnapshotTransport(
   model: CacheModel,
   expected?: ReadonlyMap<string, string>,
-): Promise<VerifiedPartitionSnapshot[]> {
-  const snapshots: VerifiedPartitionSnapshot[] = [];
+  integrity: PayloadIntegrity = 'verified',
+  restoredDescriptors: readonly PartitionDescriptor[] = [],
+): Promise<ValidatedPartitionSnapshot[]> {
+  const snapshots: ValidatedPartitionSnapshot[] = [];
   for (const p of snapshotPartitions(model)) {
-    const snapshot = await readPartitionSnapshot(model, p.id);
+    const descriptor =
+      integrity === 'trusted-base'
+        ? restoredDescriptors.find((entry) => entry.identity.partitionId === p.id)
+        : undefined;
+    const restored = descriptor ? restoredBaseSnapshots.get(descriptor) : undefined;
+    const evidence = restored && snapshotPlans.get(restored);
+    const snapshot =
+      restored &&
+      evidence?.cacheRoot === model.cacheRoot &&
+      evidence.model === snapshotModelBinding(model)
+        ? restored
+        : await readPartitionSnapshot(model, p.id, integrity);
+    if (descriptor) restoredBaseSnapshots.delete(descriptor);
     if (!snapshot || (expected && expected.get(p.id) !== snapshot.digest))
       throw new Error('Selected partition snapshot is missing or changed.');
     snapshots.push(snapshot);
@@ -346,4 +466,88 @@ export async function verifySnapshotTransport(
         throw new Error('Unexpected snapshot partition transport.');
   }
   return snapshots;
+}
+
+/** Carry base snapshot metadata/inventory through its own transport rename, without rediscovery. */
+export async function installBaseSnapshot(
+  plan: BasePartitionInstallPlan,
+  model: CacheModel,
+): Promise<void> {
+  assertBaseInstallPlan(plan, model);
+  const id = plan.descriptor.identity.partitionId;
+  if (plan.descriptor.kind !== 'single-writer') throw new Error('Expected snapshot partition.');
+  const relative = PARTITION_SNAPSHOT_DIRECTORY + '/' + id;
+  const inventory: InstallInventory = { files: new Map(), directories: new Map() };
+  await verifyParents(plan.rootDirectory, path.posix.dirname(relative));
+  for (const [name, identity] of plan.inventory.directories) {
+    if (name !== relative && !name.startsWith(relative + '/')) continue;
+    const current = await lstat(guardedPath(plan.rootDirectory, name));
+    if (
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      !sameFileIdentity(identity, fileIdentity(current), true)
+    )
+      throw new Error('Base snapshot directory changed.');
+    inventory.directories.set(name === relative ? '' : name.slice(relative.length + 1), identity);
+  }
+  for (const entry of plan.descriptor.files) {
+    const current = await regularStat(guardedPath(plan.rootDirectory, entry.payloadPath));
+    const identity = plan.inventory.files.get(entry.payloadPath)!;
+    if (!current || !sameFileIdentity(identity, fileIdentity(current), true))
+      throw new Error('Base snapshot source changed.');
+    inventory.files.set(entry.payloadPath.slice(relative.length + 1), identity);
+  }
+  const manifest = freezeInstallMetadata({
+    schemaVersion: 1 as const,
+    partitionId: id,
+    files: plan.descriptor.files.map((entry) => ({
+      ...entry,
+      payloadPath: entry.payloadPath.slice(relative.length + 1),
+    })),
+  });
+  await writeMetadata(
+    plan.rootDirectory,
+    relative + '/snapshot.json',
+    manifest,
+    MAX_MANIFEST_BYTES,
+  );
+  inventory.files.set(
+    'snapshot.json',
+    fileIdentity(
+      (await regularStat(guardedPath(plan.rootDirectory, relative + '/snapshot.json')))!,
+    ),
+  );
+  const target = path.dirname(
+    await metadataPath(model.cacheRoot, relative + '/snapshot.json', true),
+  );
+  await assertRegularTree(target);
+  await rm(target, { recursive: true });
+  await rename(guardedPath(plan.rootDirectory, relative), target);
+  inventory.directories.set('', fileIdentity(await lstat(target)));
+  const snapshot: ValidatedPartitionSnapshot = {
+    manifest,
+    rootDirectory: target,
+    integrity: 'trusted-base',
+    ...snapshotDigests(manifest),
+  };
+  snapshotPlans.set(snapshot, {
+    cacheRoot: model.cacheRoot,
+    model: snapshotModelBinding(model),
+    inventory,
+  });
+  restoredBaseSnapshots.set(plan.descriptor, Object.freeze(snapshot));
+}
+
+function snapshotModelBinding(model: CacheModel): string {
+  return JSON.stringify([
+    model.cacheFamilyKey,
+    model.buildToolId,
+    model.partitionFingerprint,
+    model.partitions.map((p) => [
+      p.id,
+      p.publication,
+      p.relativeIncludeGlobs,
+      p.relativeExcludeGlobs,
+    ]),
+  ]);
 }

@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-import { chmod, glob } from 'node:fs/promises';
+import { chmod, utimes, glob } from 'node:fs/promises';
 import path from 'node:path';
 import { guardedPath, verifyParents, regularStat } from './guarded-files';
 import { createManagedCachePathMatcher } from './manifest';
+import type { FileIdentity } from './file-identity';
+import { canonicalTimestampMs } from '../util/timestamps';
 import type { CacheModel } from './model';
 
 /** Cache data needs ordinary read/write access; retain any executable bits supplied by producers. */
@@ -28,6 +30,24 @@ export function portableCacheFileMode(
 ): number {
   if (relativePath && isDistributionLauncher(buildToolId, relativePath)) return 0o755;
   return 0o644 | (mode & 0o111);
+}
+
+/** Reuse native metadata already required for correctness; never stat merely to avoid a write. */
+export async function repairCacheFileMetadata(
+  target: string,
+  current: FileIdentity,
+  desired: { mode: number; mtimeMs: number },
+): Promise<boolean> {
+  let changed = false;
+  if ((current.mode & 0o7777) !== desired.mode) {
+    await chmod(target, desired.mode);
+    changed = true;
+  }
+  if (canonicalTimestampMs(current.mtimeMs) !== canonicalTimestampMs(desired.mtimeMs)) {
+    await utimes(target, new Date(desired.mtimeMs), new Date(desired.mtimeMs));
+    changed = true;
+  }
+  return changed;
 }
 
 function isDistributionLauncher(buildToolId: string | undefined, relative: string): boolean {
@@ -56,6 +76,7 @@ export async function restoreDistributionLauncherPermissions(model: CacheModel):
       continue;
     await verifyParents(model.cacheRoot, path.posix.dirname(relative));
     const target = guardedPath(model.cacheRoot, relative);
-    if (await regularStat(target)) await chmod(target, 0o755);
+    const current = await regularStat(target);
+    if (current && (current.mode & 0o7777) !== 0o755) await chmod(target, 0o755);
   }
 }

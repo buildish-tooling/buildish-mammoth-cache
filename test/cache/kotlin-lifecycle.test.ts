@@ -132,12 +132,14 @@ it('selects complete independent units and unchanged archives through artifact a
   const forward = mergeCutoffPackages(packages, model, aggregator.ci),
     reverse = mergeCutoffPackages([...packages].reverse(), model, aggregator.ci);
   expect(reverse).toEqual(forward);
-  const workspacePartitions = packages.flatMap((pkg) =>
+  // Instrument a mutable copy; verified package manifests are deliberately immutable.
+  const indexedPackages = structuredClone(packages);
+  const workspacePartitions = indexedPackages.flatMap((pkg) =>
     pkg.manifest.partitions.filter((p) => (p.workspaces?.length ?? 0) > 1),
   );
   expect(workspacePartitions).toHaveLength(2);
   const indexBuilds = workspacePartitions.map((p) => vi.spyOn(p.upserts, 'map'));
-  const resolved = resolveWorkspaceConflicts(packages, model);
+  const resolved = resolveWorkspaceConflicts(indexedPackages, model);
   expect(resolved.chosen).toEqual(forward.workspaces);
   for (const build of indexBuilds) expect(build).toHaveBeenCalledTimes(1);
   expect(forward.directoryConflicts?.count).toBe(5);

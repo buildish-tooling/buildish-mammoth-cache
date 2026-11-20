@@ -20,12 +20,12 @@ import {
   stagePartitionSnapshot,
   verifySnapshotTransport,
   ownsSnapshot,
-  type VerifiedPartitionSnapshot,
+  type ValidatedPartitionSnapshot,
 } from './partition-snapshots';
 import { persistCutoffJournal, type CutoffJournal } from './cutoff-state';
 
 export function snapshotRecord(
-  snapshot: VerifiedPartitionSnapshot,
+  snapshot: ValidatedPartitionSnapshot,
   baselineDigest: string | null,
   source: 'seed' | 'writer' | 'local',
 ) {
@@ -50,7 +50,16 @@ export async function initializePartitionSnapshots(
   results?: readonly { partitionId: string; status: string }[],
 ): Promise<void> {
   const partitions = snapshotPartitions(state.model);
-  const restored = hit ? await verifySnapshotTransport(state.model) : [];
+  const restored = hit
+    ? await verifySnapshotTransport(
+        state.model,
+        undefined,
+        'trusted-base',
+        state.basePartitions.flatMap((partition) =>
+          partition.descriptor ? [partition.descriptor] : [],
+        ),
+      )
+    : [];
   for (const partition of partitions) {
     const snapshot =
       restored.find((s) => s.manifest.partitionId === partition.id) ??

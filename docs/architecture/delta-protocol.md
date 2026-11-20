@@ -69,9 +69,20 @@ are limited to 4 GiB and 200,000 observations. JSON, structure, provenance, unex
 ownership, payload checksums/size and aggregate local-state bounds are checked before mutation.
 ZIP need not preserve source mode/mtime: application restores these fields explicitly.
 
-All target ownership is validated before writes. A payload is copied to excluded scratch on the
-target filesystem, receives mode/mtime, then replaces its target after native recheck. Old targets
-are not hashed. Used paths do not recreate missing files or select content. Missing-at-apply usage
+All target ownership is validated before writes. Production prepare owns disposable downloaded
+packages and consumes selected ordinary and workspace payloads with guarded same-filesystem moves.
+Application verifies each bounded source batch's hashes and binds the selected bytes to native
+identities before the rename phase. Target identity checks, complete workspace replacement, mode
+and mtime repair remain; losing views are never installed. Selected source aliases are rejected
+before consumption. General application callers preserve sources by default.
+
+Cross-filesystem moves fall back to verified copies with exclusive scratch, native/size checks,
+recorded recovery and fresh destination validation. Non-consuming copies preopen at most 64 output
+handles before source I/O, write bytes and metadata through those handles, then revalidate paths
+and scratch identities. Already-correct moved metadata avoids writes. Snapshot imports retain their
+separate verified copy into durable snapshot storage. Prepare cleans all downloaded roots in
+`finally`; retry can re-download retained artifacts after partial consumption. Unavailable required
+artifacts fail through the existing retry contract. Old targets are not hashed. Used paths do not recreate missing files or select content. Missing-at-apply usage
 is forwarded until final presence filtering, including through worker chains.
 
 Same SHA-256, size and mode merge despite differing mtimes, choosing maximum mtime. Different
