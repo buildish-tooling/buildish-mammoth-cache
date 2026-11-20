@@ -73,6 +73,18 @@
       semanticCommitScope: 'toolchain',
       automerge: false,
     },
+    // Consumer checks must match the Actions' node24 runtime, independently of .nvmrc.
+    {
+      matchManagers: ['github-actions'],
+      matchDepTypes: ['uses-with'],
+      matchDepNames: ['node'],
+      matchFileNames: [
+        '.github/workflows/ci.yml',
+        '.github/workflows/release-candidate.yml',
+        '.github/workflows/release-promote.yml',
+      ],
+      allowedVersions: '24.x',
+    },
     // NPM dependencies
     {
       matchDatasources: ['npm'],
