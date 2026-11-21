@@ -50,8 +50,14 @@ it('preserves literal default fingerprints and persisted partition shapes', asyn
     { phase: 'prepare', ciContext: ci, env: { GRADLE_USER_HOME: '/cache' } },
   );
   const gradle = await createCacheModel(config, ci, new GradleBuildToolAdapter(config));
-  expect(gradle.partitionFingerprint).toBe('691842db2b4a565e');
-  for (const model of [original, explicit, gradle]) {
+  expect(gradle.partitionFingerprint).toBe('26b980584b0bb24e');
+  const noPurgeConfig = {
+      ...config,
+      cachePartitions: gradle.partitions.map(({ id }) => ({ id, purgeableGlobs: [] })),
+    },
+    noPurge = await createCacheModel(noPurgeConfig, ci, new GradleBuildToolAdapter(noPurgeConfig));
+  expect(noPurge.partitionFingerprint).toBe('691842db2b4a565e');
+  for (const model of [original, explicit, gradle, noPurge]) {
     expect(cutoffModelSchema.parse(model)).toEqual(model);
     for (const partition of model.partitions)
       if (

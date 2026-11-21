@@ -28,7 +28,18 @@ export async function observationFixture(
     ['dir-close', ''],
   ],
 ) {
-  const f = await installFixture(tool, options),
+  const f = await installFixture(tool, options);
+  return initializeObservationFixture(f, activity);
+}
+export async function initializeObservationFixture(
+  f: Awaited<ReturnType<typeof installFixture>>,
+  activity: readonly Value[] = [
+    ['dir-open', ''],
+    ['dir-close', ''],
+  ],
+  cutoff = Date.now() + 600000,
+) {
+  const tool = f.model.tuple[2],
     spec = { budget: f.budget, partition: null },
     b = f.bindings,
     policy = b[8] as Value[];
@@ -45,7 +56,7 @@ export async function observationFixture(
   b[12] = await f.store.writeStream('activity', spec, rows(activity));
   policy[5] = 'timestamp';
   policy[6] = 1000000;
-  policy[7] = Date.now() + 600000;
+  policy[7] = cutoff;
   await f.store.initialize(b);
   const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
   state[3]++;

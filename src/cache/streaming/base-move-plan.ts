@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { PartitionSummaries } from './partition-summaries';
 import { LiveBaseInputs, type LivePartitionSource } from './live-base-inputs';
 import { FrozenBaseTree } from './base-frozen-tree';
 import { InstallScratch } from './install-scratch';
@@ -43,6 +44,7 @@ type Group = readonly [string, string, string];
 export async function freezeMovePlans(
   input: LiveBaseInputs,
   trees: readonly FrozenBaseTree[],
+  summaries?: PartitionSummaries,
 ): Promise<ReadonlyMap<string, Reference>> {
   LiveBaseInputs.assert(input);
   const { store, options } = input.view,
@@ -52,6 +54,7 @@ export async function freezeMovePlans(
     spools = new Map<string, WorkerSpool>(),
     presences = new Map<string, WorkerSpool>(),
     result = new Map<string, Reference>();
+  summaries?.assert(model);
   for (const t of trees) {
     FrozenBaseTree.assert(t, store);
     const p = t.reference[1][2];
@@ -93,6 +96,7 @@ export async function freezeMovePlans(
           original.release();
         }
       } else span = ['span', source.evidence[4], node[9], node[10]];
+      summaries?.root(p, node[1] as 'file' | 'directory');
       await emit(p, [
         'move-candidate',
         source.nativeRoot ? 'owned' : 'live',
@@ -143,6 +147,15 @@ export async function freezeMovePlans(
             }
         const eligible = !!n[2] && n[6] === 0 && contributes;
         const scope = n[1] === 'directory' ? await workspace(n) : null;
+        if (summaries && n[1] === 'directory' && n[2] && !eligible) {
+          const reason = n[6]
+            ? 'excluded or unmanaged entries remain'
+            : pi < 0
+              ? 'mixed partition ownership'
+              : 'unselected contents';
+          for (const id of selected.keys())
+            if ((nodeMask(n) & partitionBit(model, id)) !== 0n) summaries.hint(id, reason, n[2]);
+        }
         if (eligible) {
           if (active) {
             if (active.p !== p) throw new Error('Split transfer workspace owner.');

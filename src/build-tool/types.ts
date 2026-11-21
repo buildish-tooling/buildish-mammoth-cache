@@ -25,6 +25,8 @@ import type { PartitionPublication, PartitionConflictHandling } from '../config/
  * include list is empty after applying an override.
  */
 export interface BuiltInCachePartitionPreset {
+  /** Disposable regular-file globs; [] disables preset purging. Relative to the cache root. */
+  readonly purgeableGlobs?: readonly string[];
   readonly conflictHandling?: PartitionConflictHandling;
   readonly publication?: PartitionPublication;
   readonly id: string;

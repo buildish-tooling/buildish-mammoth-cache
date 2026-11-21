@@ -394,3 +394,15 @@ correspondence. Prepared readers reject this variant. Context is identical to L0
 Expected local event digest: `c6de02c207d37d2f3377e99de6e4ec3cb974d4dfb7c127f4f570dea187695613`.
 Expected exact byte length including all three LFs: `558`.
 Expected raw SHA-256: `40ebaa5a4eafafe1049063f23ab115ed61f4395616f53b47169becb8fbdd585d`.
+
+## P0: frozen purge configuration
+
+Canonical model (no LF in the framed model digest):
+
+```text
+["model",1,"maven",[".mammoth/**"],[["data",["data/**"],[".mammoth/**"],"aggregate",null,"default",["data/*.tmp"]]]]
+```
+
+Model ID: `bd2038f6837e6be40ec90eab8a8b0f7ba8e509cbfb98b0aded28621d79716475`. The final nonempty purge list is part of the existing model
+identity; omission represents no purging. Preserve-only exclusions remain distinct,
+even when the upload exclusion union would be identical. No separate policy Q exists.

@@ -120,6 +120,25 @@ The resolved partition order, include/exclude sets, publication policies, and wr
 `partitionFingerprint`, which is part of the cache family. Changing the active partition layout
 produces a different family and therefore starts a cold lineage for the complete managed state.
 
+## Purgeable files (unreleased streaming lifecycle)
+
+The existing `cache-partitions` entries accept `purgeableGlobs`. Omit the field to
+inherit preset defaults, use `[]` to disable purging, or supply a list to replace
+defaults. Custom partitions can supply rules too; their default is no purging.
+For example, `{"id":"build-cache","purgeableGlobs":[]}` disables its default rules.
+A custom partition can use `{"id":"scratch","includes":["scratch/**"],
+"purgeableGlobs":["scratch/**/*.tmp"]}`. These are explicit disposable-file rules;
+ordinary `excludes` preserve files locally. Purgeable files are excluded from uploads.
+
+Deletion is available only to the unreleased streaming lifecycle's explicitly gated
+pre-capture primitive, after all consumers are excluded; it is not enabled in released
+Action prepare/post paths. Rules remain confined to the managed root, cannot delete
+another partition's nonconsenting payload, follow links or delete reserved metadata.
+Only files encountered by the existing traversal qualify. Hard-pruned directories,
+including Gradle configuration-cache and journal subtrees, remain opaque: rules aimed
+there are unsupported, and broad rules do not cause extra traversal. Effective rules
+are frozen for retry; changing current defaults cannot change an existing attempt.
+
 ## Include and exclude semantics
 
 - Includes define the files the action manages for a partition.

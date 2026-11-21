@@ -16,6 +16,7 @@
 
 import { LiveBaseInputs } from './live-base-inputs';
 import { FrozenBaseTree } from './base-frozen-tree';
+import type { PartitionSummaries } from './partition-summaries';
 import { freezeMovePlans, checkMovePlanMetadata } from './base-move-plan';
 import { ValidatedBaseObject, type BaseObjectOptions } from './base-object';
 import { baselineGeneration, freezeRecord, checkInheritedChoice } from './base-publication';
@@ -90,11 +91,13 @@ export class FrozenMovingPublication {
     input: LiveBaseInputs,
     ref: string,
     baseline: readonly ValidatedBaseObject[] = [],
+    summaries?: PartitionSummaries,
   ): Promise<FrozenMovingPublication> {
     LiveBaseInputs.assert(input);
     const { store, options } = input.view,
       model = store.codec.options.model,
       signal = options.signal ?? new AbortController().signal;
+    summaries?.assert(model);
     if (baseline.length > model.partitions.length)
       throw new Error('Baseline metadata frontier exceeded.');
     baseline = Object.freeze([...baseline]);
@@ -202,7 +205,7 @@ export class FrozenMovingPublication {
         hold(cells[cells.length - 1]);
         if (!(row instanceof FrozenBaseTree)) hold(row);
       }
-      const plans = await freezeMovePlans(input, changed);
+      const plans = await freezeMovePlans(input, changed, summaries);
       for (const draft of drafts)
         rows.push(
           store.codec.schemas.rows.publicationPartition.parse(
@@ -287,7 +290,9 @@ export class FrozenMovingPublication {
             source.partition,
             options,
           );
-      return await FrozenMovingPublication.resume(store, options);
+      const result = await FrozenMovingPublication.resume(store, options);
+      for (const choice of result.choices) summaries?.choice(choice[1], choice[0]);
+      return result;
     } finally {
       options.budget.release(retained);
     }

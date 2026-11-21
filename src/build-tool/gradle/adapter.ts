@@ -61,6 +61,11 @@ const GRADLE_HARD_CACHE_EXCLUDE_GLOBS: readonly string[] = [
 const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPreset[] = [
   {
     id: 'modules',
+    purgeableGlobs: [
+      'caches/modules-2/modules-2.lock',
+      'caches/jars-9/jars-9.lock',
+      'caches/jars-9/*/*.lock',
+    ],
     displayName: 'Dependency modules',
     description:
       'Downloaded dependency artifacts, plugin jars, and shared resource stores reused across builds.',
@@ -74,6 +79,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'dependency-metadata',
+    purgeableGlobs: ['caches/modules-2/modules-2.lock'],
     displayName: 'Dependency metadata',
     description: 'Complete dependency-resolution metadata snapshots from a single writer.',
     defaultEnabled: true,
@@ -83,6 +89,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'transforms-metadata',
+    purgeableGlobs: ['caches/*/transforms/*/*.lock'],
     conflictHandling: 'choose-worker-directory',
     displayName: 'Transforms and metadata',
     description: 'Complete artifact-transform workspaces selected from one worker per workspace.',
@@ -96,6 +103,11 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'kotlin-dsl',
+    purgeableGlobs: [
+      'caches/*/generated-gradle-jars/generated-gradle-jars.lock',
+      'caches/*/kotlin-dsl/scripts/*/*.lock',
+      'caches/*/kotlin-dsl/accessors/*/*.lock',
+    ],
     conflictHandling: 'choose-worker-directory',
     displayName: 'Kotlin DSL caches',
     description: 'Compiled Kotlin DSL scripts and generated Gradle API jars.',
@@ -109,6 +121,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'groovy-dsl',
+    purgeableGlobs: ['caches/*/groovy-dsl/*/*.lock'],
     displayName: 'Groovy DSL caches',
     description:
       'Complete compiled Groovy script workspaces selected from one worker per workspace.',
@@ -123,6 +136,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'build-cache',
+    purgeableGlobs: ['caches/build-cache-1/build-cache-1.lock'],
     conflictHandling: 'choose-worker-entry',
     displayName: 'Local build cache',
     description: 'Reusable local task output cache entries maintained by Gradle.',

@@ -17,11 +17,13 @@
 import type { BigIntStats } from 'node:fs';
 import { withAbort } from './abort';
 import { isCacheMetadataPath } from '../metadata-paths';
-import { lstat, opendir } from 'node:fs/promises';
+import { lstat, opendir, unlink } from 'node:fs/promises';
 import {
   nativeIdentity,
   nativeIds,
   sameNative,
+  sameObject,
+  missing,
   type NativeIdentity,
   type NativeRoot,
 } from './native';
@@ -39,8 +41,16 @@ export interface NativeChild {
 }
 const childType = (s: BigIntStats): NativeChild['type'] =>
   s.isFile() ? 'file' : s.isDirectory() ? 'directory' : s.isSymbolicLink() ? 'symlink' : 'other';
+/** Capture-only pre-freeze policy; the trusted caller already owns the exclusive window. */
+export interface NativePurge {
+  claim(path: string): readonly string[];
+  assertCurrent(): void;
+  outcome(partition: string, outcome: 'deleted' | 'missing' | 'unsupported', path: string): void;
+  checkpoint(phase: 'before-unlink' | 'unlinked' | 'refreshed'): Promise<void>;
+}
 export interface WalkOptions {
   readonly budget: WorkingBudget;
+  readonly purge?: NativePurge;
   readonly maxDirectoryEntries?: number;
   /** Logical root when traversing an owned staging tree. Defaults to the native path. */
   readonly logicalRoot?: string;
@@ -58,6 +68,7 @@ export type WalkEvent =
   | (NativeChild & { readonly tag: 'protected-child'; readonly nativePath: string })
   | {
       readonly tag: 'directory-open' | 'directory-close';
+      readonly activityTimes?: readonly [string, string];
       readonly path: string;
       readonly nativePath: string;
       readonly identity: NativeIdentity;
@@ -79,6 +90,8 @@ export const walkWork = (): WalkWork => ({ listings: 0, entries: 0, stats: 0, pe
 interface Child {
   name: string;
   directory: boolean;
+  regular: boolean;
+  removed?: boolean;
   pruned: boolean;
 }
 
@@ -152,7 +165,7 @@ export async function* walkNative(
     }
     if (pruned) return;
     pathSchema.parse(path);
-    const before = nativeIdentity(raw);
+    let before = nativeIdentity(raw);
     if (expectedKind && before[2] !== expectedKind)
       throw new Error('Native entry kind changed during traversal.');
     if (before[2] === 'directory' && depth > 100) throw new Error('Native tree depth exceeded.');
@@ -167,7 +180,8 @@ export async function* walkNative(
           throw new Error('Native file changed during traversal.');
         return;
       }
-      yield { tag: 'directory-open', path, nativePath, identity: before };
+      const activityTimes = options.purge ? ([before[8], before[9]] as const) : undefined;
+      if (!options.purge) yield { tag: 'directory-open', path, nativePath, identity: before };
       const children: (Child | undefined)[] = [];
       const names = new Set<string>();
       let charge = 0,
@@ -208,7 +222,7 @@ export async function* walkNative(
           work.peakNames = Math.max(work.peakNames, retained);
           const name = Buffer.from(entry.name).toString('utf8');
           names.add(name);
-          children.push({ name, directory: isDirectory, pruned });
+          children.push({ name, directory: isDirectory, regular: entry.isFile(), pruned });
         }
         if (!sameNative(before, await stat(nativePath), true))
           throw new Error('Native directory changed while listing.');
@@ -216,6 +230,65 @@ export async function* walkNative(
         children.sort(
           (a, b) => Number(a!.directory) - Number(b!.directory) || compareName(a!.name, b!.name),
         );
+        // Protocol: docs/dev/cache-lifecycle-protocol.md#pre-freeze-purge-configuration.
+        // No observer facts escape until these known mutations finish. Nonmatches
+        // reuse the listing and incur no additional filesystem/lifetime checks.
+        if (options.purge) {
+          const policy = options.purge;
+          for (const child of children) {
+            if (!child || child.directory || child.pruned) continue;
+            const file = joinPath(nativePath, child.name),
+              claims = policy.claim(joinPath(path, child.name));
+            if (!claims.length) continue;
+            const partition = claims[0];
+            if (!child.regular) {
+              policy.outcome(partition, 'unsupported', file);
+              continue;
+            }
+            let candidate: BigIntStats;
+            try {
+              candidate = await rawStat(file);
+            } catch (error) {
+              if (!missing(error)) throw error;
+              if (!sameNative(before, await stat(nativePath), true))
+                throw new Error('Missing purge candidate changed its parent.', { cause: error });
+              child.removed = true;
+              policy.outcome(partition, 'missing', file);
+              continue;
+            }
+            if (!candidate.isFile() || candidate.nlink !== 1n) {
+              policy.outcome(partition, 'unsupported', file);
+              continue;
+            }
+            const expected = nativeIdentity(candidate);
+            if (expected[3] !== root.binding[3]) throw new Error('Cross-device purge candidate.');
+            await policy.checkpoint('before-unlink');
+            policy.assertCurrent();
+            signal.throwIfAborted();
+            if (!sameNative(before, await stat(nativePath), true))
+              throw new Error('Purge parent changed.');
+            const fresh = await rawStat(file);
+            if (
+              !fresh.isFile() ||
+              fresh.nlink !== 1n ||
+              !sameNative(expected, nativeIdentity(fresh), true)
+            )
+              throw new Error('Purge candidate changed.');
+            policy.assertCurrent();
+            signal.throwIfAborted();
+            await unlink(root.resolve(file));
+            root.work.unlinks++;
+            child.removed = true;
+            policy.outcome(partition, 'deleted', file);
+            const after = await stat(nativePath);
+            if (!sameObject(before, after) || before[6] !== after[6])
+              throw new Error('Purge parent was replaced.');
+            before = after;
+            await policy.checkpoint('unlinked');
+            await policy.checkpoint('refreshed');
+          }
+          yield { tag: 'directory-open', path, nativePath, identity: before, activityTimes };
+        }
         for (let i = 0; i < children.length; i++) {
           signal.throwIfAborted();
           const child = children[i]!;
@@ -226,6 +299,7 @@ export async function* walkNative(
           options.budget.release(released);
           charge -= released;
           retained -= released;
+          if (child.removed) continue;
           yield* visit(
             joinPath(nativePath, child.name),
             joinPath(path, child.name),

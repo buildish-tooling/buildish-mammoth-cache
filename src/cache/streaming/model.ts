@@ -16,7 +16,7 @@
 
 import { z } from 'zod';
 import { createCacheGlobMatcher } from '../manifest';
-import { validatePartitionConflictHandling } from '../model';
+import { validatePartitionConflictHandling, type CacheModel } from '../model';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { canonical, encodeRecord, H, scalar, tuple as requireTuple, type Value } from './encoding';
 import {
@@ -45,15 +45,17 @@ const globs = z
     ),
   )
   .refine(unique);
+const partitionFields = [
+  partitionSchema,
+  globs.min(1),
+  globs,
+  z.enum(['aggregate', 'single-writer']),
+  nameSchema.nullable(),
+  z.enum(['default', 'choose-worker-entry', 'choose-worker-directory']),
+] as const;
+// Canonical optional configuration: omit an empty list; a present list is nonempty.
 export const partitionDefinitionSchema = z
-  .tuple([
-    partitionSchema,
-    globs.min(1),
-    globs,
-    z.enum(['aggregate', 'single-writer']),
-    nameSchema.nullable(),
-    z.enum(['default', 'choose-worker-entry', 'choose-worker-directory']),
-  ])
+  .union([z.tuple(partitionFields), z.tuple([...partitionFields, globs.min(1)])])
   .refine((p) => p[3] === 'single-writer' || p[4] === null)
   .refine((p) => {
     try {
@@ -90,6 +92,7 @@ export interface ResolvedModel {
   readonly familyProjection: readonly ['family', 1, string, number, string, ...string[]];
   readonly partitions: readonly Partition[];
   owner(path: string): Partition;
+  purge(path: string): readonly string[];
 }
 export function resolveModel(input: unknown, prefix: string, schemaVersion: number): ResolvedModel {
   const raw = requireTuple(input as Value, 'model', 5);
@@ -97,8 +100,7 @@ export function resolveModel(input: unknown, prefix: string, schemaVersion: numb
   if (partitions.length < 1 || partitions.length > 64)
     throw new Error('Model partition admission exceeded.');
   encodeRecord(['model-header', raw[2], raw[3]]);
-  for (const partition of partitions)
-    encodeRecord(['partition', ...requireTuple(partition, undefined, 6)]);
+  for (const partition of partitions) encodeRecord(['partition', ...requireTuple(partition)]);
   const tuple = modelSchema.parse(input);
   validatePartitionConflictHandling(
     tuple[2],
@@ -128,10 +130,21 @@ export function resolveModel(input: unknown, prefix: string, schemaVersion: numb
   ] as const;
   const family = streamingFamilyId(tuple[2], H('family', familyProjection));
   const hard = createCacheGlobMatcher(tuple[3]);
+  for (const p of tuple[4])
+    for (const rule of p[6] ?? []) {
+      let prefix = '';
+      for (const segment of rule.split('/')) {
+        if (segment.includes('*')) break;
+        prefix = prefix ? prefix + '/' + segment : segment;
+        if (isCacheMetadataPath(prefix) || hard(prefix + '/.workspace-directory-probe'))
+          throw new Error('Purge rule targets a reserved or opaque hard-pruned scope.');
+      }
+    }
   const parts = tuple[4].map((p) => ({
     p,
     includes: createCacheGlobMatcher(p[1]),
     excludes: createCacheGlobMatcher(p[2]),
+    purge: createCacheGlobMatcher(p[6] ?? []),
   }));
   return {
     tuple,
@@ -139,12 +152,23 @@ export function resolveModel(input: unknown, prefix: string, schemaVersion: numb
     family,
     familyProjection,
     partitions: tuple[4],
+    purge(path) {
+      if (isCacheMetadataPath(path)) return [];
+      const claims = parts.filter((item) => item.purge(path));
+      if (!claims.length) return [];
+      if (!hard(path)) {
+        const owners = parts.filter((item) => item.includes(path) && !item.excludes(path));
+        if (owners.length > 1 || owners.some((owner) => !claims.includes(owner)))
+          throw new Error('Purge conflicts with original partition ownership.');
+      }
+      return claims.map((item) => item.p[0]);
+    },
     owner(path) {
       if (isCacheMetadataPath(path) || hard(path))
         throw new Error('Reserved/excluded managed path.');
       let owner: Partition | undefined;
       for (const item of parts)
-        if (item.includes(path) && !item.excludes(path)) {
+        if (item.includes(path) && !item.excludes(path) && !item.purge(path)) {
           if (owner) throw new Error('Ambiguous partition ownership.');
           owner = item.p;
         }
@@ -180,4 +204,31 @@ export function decisionId(decision: unknown): string {
 }
 export function sameModel(a: ResolvedModel, b: ResolvedModel): boolean {
   return canonical([a.id, a.family]).equals(canonical([b.id, b.family]));
+}
+
+/** Resolve the existing normalized configuration once; freeze these exact rows in modelRef. */
+export function resolveCacheModel(
+  model: Pick<CacheModel, 'buildToolId' | 'hardCacheExcludeGlobs' | 'partitions'>,
+  prefix: string,
+  schemaVersion: number,
+): ResolvedModel {
+  return resolveModel(
+    [
+      'model',
+      1,
+      model.buildToolId,
+      model.hardCacheExcludeGlobs,
+      model.partitions.map((p) => [
+        p.id,
+        p.relativeIncludeGlobs,
+        p.ordinaryExcludeGlobs ?? p.relativeExcludeGlobs,
+        p.publication ?? 'aggregate',
+        p.writer ?? null,
+        p.conflictHandling ?? 'default',
+        ...(p.purgeableGlobs?.length ? [p.purgeableGlobs] : []),
+      ]),
+    ],
+    prefix,
+    schemaVersion,
+  );
 }

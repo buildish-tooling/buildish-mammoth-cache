@@ -90,6 +90,8 @@ export type PartitionConflictHandling =
   'default' | 'choose-worker-directory' | 'choose-worker-entry';
 
 export interface ConfiguredCachePartitionInput {
+  /** Disposable regular-file globs; [] disables preset purging. Relative to the cache root. */
+  readonly purgeableGlobs?: readonly string[];
   /** Omission inherits the preset; default keeps existing conflict behavior. */
   readonly conflictHandling?: PartitionConflictHandling;
   /** Stable machine-readable partition identifier. */

@@ -126,6 +126,10 @@ export interface CacheModel {
  * to pass to filesystem or cache APIs for the current {@link CacheModel.cacheRoot}.
  */
 export interface CachePartitionDefinition {
+  /** Resolved deletion rules, distinct from preserve-only exclusions. */
+  readonly purgeableGlobs?: readonly string[];
+  /** Ordinary/hard exclusions before automatic purge upload filtering, when purging is configured. */
+  readonly ordinaryExcludeGlobs?: readonly string[];
   /** Effective default is omitted to preserve existing compatibility identities. */
   readonly conflictHandling?: Exclude<PartitionConflictHandling, 'default'>;
   /** Defaults to aggregation when absent. Single-writer partitions travel as complete snapshots. */
@@ -357,6 +361,7 @@ export function createCachePartitions(
         override?.publication ?? preset.publication,
         override?.writer,
         override?.conflictHandling ?? preset.conflictHandling,
+        override?.purgeableGlobs ?? preset.purgeableGlobs,
       ),
     ];
   });
@@ -383,6 +388,7 @@ export function createCachePartitions(
         partition.publication,
         partition.writer,
         partition.conflictHandling,
+        partition.purgeableGlobs,
       ),
     ];
   });
@@ -401,14 +407,17 @@ function createPartition(
   publication: PartitionPublication = 'aggregate',
   writer?: string,
   conflictHandling?: PartitionConflictHandling,
+  purgeableGlobs: readonly string[] = [],
 ): CachePartitionDefinition {
   if (writer && publication !== 'single-writer')
     throw new Error(`Partition '${id}' writer requires single-writer publication.`);
   const deduplicatedIncludeGlobs = deduplicatePaths(relativeIncludeGlobs);
-  const relativeExcludeGlobs = deduplicatePaths([
-    ...hardCacheExcludeGlobs,
-    ...partitionRelativeExcludeGlobs,
-  ]);
+  const ordinaryExcludeGlobs = deduplicatePaths([
+      ...hardCacheExcludeGlobs,
+      ...partitionRelativeExcludeGlobs,
+    ]),
+    purge = deduplicatePaths(purgeableGlobs),
+    relativeExcludeGlobs = deduplicatePaths([...ordinaryExcludeGlobs, ...purge]);
 
   return {
     id,
@@ -417,6 +426,7 @@ function createPartition(
     ...(conflictHandling && conflictHandling !== 'default' ? { conflictHandling } : {}),
     displayName,
     description,
+    ...(purge.length ? { purgeableGlobs: purge, ordinaryExcludeGlobs } : {}),
     relativeIncludeGlobs: deduplicatedIncludeGlobs,
     relativeExcludeGlobs,
     absoluteIncludeGlobs: deduplicatedIncludeGlobs.map((glob) => path.join(cacheRoot, glob)),
@@ -436,6 +446,12 @@ function createPartitionFingerprint(
       id: partition.id,
       includes: partition.relativeIncludeGlobs,
       excludes: partition.relativeExcludeGlobs,
+      ...(partition.purgeableGlobs?.length
+        ? {
+            purgeableGlobs: partition.purgeableGlobs,
+            ordinaryExcludes: partition.ordinaryExcludeGlobs,
+          }
+        : {}),
       publication: partition.publication ?? 'aggregate',
       writer: partition.writer ?? null,
       ...(partition.conflictHandling ? { conflictHandling: partition.conflictHandling } : {}),

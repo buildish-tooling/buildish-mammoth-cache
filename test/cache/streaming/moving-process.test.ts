@@ -15,7 +15,7 @@
  */
 
 import { beforeAll, afterAll, afterEach, expect, it } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { build } from 'esbuild';
@@ -117,6 +117,65 @@ it.each([
     expect(
       await readFile(f.store.root.resolve('repository/org/a/1/_remote.repositories'), 'utf8'),
     ).toBe('marker');
+  },
+  30000,
+);
+
+it.each(['observation-purge-unlinked', 'observations-candidate', 'observations-pointer'] as const)(
+  'retries purge conservatively after actual process exit at %s',
+  async (point) => {
+    const unit = 'caches/transforms-4/' + 'a'.repeat(32),
+      purgeGlobs = [unit + '/*.lock', unit + '/a.lock'],
+      f = await installFixture('gradle', { purgeGlobs });
+    fixtures.push(f);
+    let status: unknown;
+    try {
+      execFileSync(process.execPath, [bundle, 'start', f.root, point, '1', 'purge'], {
+        stdio: 'pipe',
+      });
+    } catch (error) {
+      status = (error as { status: unknown }).status;
+    }
+    expect(status).toBe(73);
+    const before = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
+    if (point === 'observations-pointer')
+      await writeFile(f.store.root.resolve(unit + '/a.lock'), 'new-after-commit');
+    const result = JSON.parse(
+      execFileSync(process.execPath, [bundle, 'recover', f.root, 'unused', '1', 'purge'], {
+        encoding: 'utf8',
+      }).trim(),
+    ) as { deleted: number; frozen: boolean };
+    const after = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
+    expect(after[5]).toEqual(before[5]);
+    expect(after[6]).not.toBeNull();
+    if (point === 'observations-pointer') {
+      expect(after[6]).toEqual(before[6]);
+      expect(result).toEqual({ deleted: 0, frozen: true });
+      expect(await readFile(f.store.root.resolve(unit + '/a.lock'), 'utf8')).toBe(
+        'new-after-commit',
+      );
+    } else {
+      expect(result).toEqual({
+        deleted: point === 'observation-purge-unlinked' ? 1 : 0,
+        frozen: false,
+      });
+      const units: unknown[] = [];
+      await f.store.readStream(
+        after[6]!,
+        'observations',
+        { budget: f.budget, partition: null },
+        async (row) => {
+          if (Array.isArray(row) && row[0] === 'unit-open') units.push(row);
+        },
+      );
+      expect(units).toHaveLength(1);
+      expect((units[0] as unknown[]).slice(4, 6)).toEqual(['upsert', 'retain']);
+      expect(await f.store.root.stat(unit + '/a.lock')).toBeNull();
+      expect(await f.store.root.stat(unit + '/b.lock')).toBeNull();
+    }
+    expect(await readFile(f.store.root.resolve(unit + '/transformed/a'), 'utf8')).toBe('payload');
+    await f.store.assertNoIntents();
+    expect(f.budget.retained).toBe(0);
   },
   30000,
 );

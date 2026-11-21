@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore, Reference } from './owned-store';
 import { InstallScratch } from './install-scratch';
 import { decodeRecords, Digest, equal, tuple, type Value } from './encoding';
@@ -72,10 +73,27 @@ const markerNames = new Set([
 export interface ObservationCaptureOptions extends BaseObjectOptions {
   /** Genuine pinned metadata retained through prepare; never a caller-supplied hash table. */
   readonly baseline?: readonly ValidatedBaseObject[];
+  readonly summaries?: PartitionSummaries;
+  /** Verified by the trusted lifecycle caller, not by persisted quiescence. Synchronous lifetime assertions only. */
+  readonly purgeWindow?: {
+    readonly root: OwnedStore['root'];
+    readonly invocation: string;
+    assertCurrent(): undefined;
+  };
+  /** Operation-local progress, including completed deletions if capture subsequently fails. No logs per file. */
+  readonly onPurge?: (partition: string, outcome: 'deleted' | 'missing' | 'unsupported') => void;
+  readonly onOpaqueScope?: (path: string) => void;
 }
 export interface FrozenObservation {
   readonly reference: Reference;
   readonly work: Readonly<WalkWork>;
+  readonly purge: {
+    readonly status: 'not-configured' | 'skipped' | 'executed';
+    readonly deleted: number;
+    readonly missing: number;
+    readonly unsupported: number;
+    readonly opaqueScopes: number;
+  };
 }
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas.
@@ -90,6 +108,30 @@ export async function captureObservations(
     signal = options.signal ?? new AbortController().signal,
     codec = store.codec,
     model = codec.options.model;
+  options.summaries?.assert(model);
+  const configured = model.partitions.some((p) => p[6]?.length),
+    purge = {
+      status: !configured
+        ? ('not-configured' as const)
+        : options.purgeWindow
+          ? ('executed' as const)
+          : ('skipped' as const),
+      deleted: 0,
+      missing: 0,
+      unsupported: 0,
+      opaqueScopes: 0,
+    };
+  const assertWindow = (): undefined => {
+    signal.throwIfAborted();
+    const window = options.purgeWindow;
+    if (!window || window.root !== store.root || window.invocation !== codec.options.invocation)
+      throw new Error('Unbound purge window.');
+    if (window.assertCurrent.constructor.name === 'AsyncFunction')
+      throw new Error('Purge lifetime assertion must be synchronous.');
+    if (window.assertCurrent() !== undefined)
+      throw new Error('Purge lifetime assertion must be synchronous.');
+  };
+  if (configured && options.purgeWindow) assertWindow();
   signal.throwIfAborted();
   await store.assertNoIntents();
   const initial = codec.schemas.documents['local-state'].parse(await store.state()),
@@ -186,6 +228,7 @@ export async function captureObservations(
     entries: Entry[];
     charge: number;
     unitActivity: Activity;
+    activityTimes: readonly [string, string];
     unit?: { kind: string; markers: readonly [boolean, string][]; complete: number };
   };
   let root: number | undefined,
@@ -220,7 +263,14 @@ export async function captureObservations(
       id: c.fileId,
       offset: null,
     });
-    if (c.pruned || hard(c.path) || hard(c.path + '/.workspace-directory-probe')) return 'prune';
+    if (c.pruned || hard(c.path) || hard(c.path + '/.workspace-directory-probe')) {
+      if (configured && c.type === 'directory' && !isCacheMetadataPath(c.path)) {
+        purge.opaqueScopes++;
+        options.summaries?.opaqueScope(c.path);
+        options.onOpaqueScope?.(c.path);
+      }
+      return 'prune';
+    }
     if (c.type === 'directory') return;
     if (!owner(c.path) || (model.tuple[2] === 'maven' && isMavenTransientFile(c.name)))
       return 'prune';
@@ -239,6 +289,19 @@ export async function captureObservations(
     {
       ...options,
       metadata: 'exclude',
+      purge:
+        configured && options.purgeWindow
+          ? {
+              claim: (path) => model.purge(path),
+              assertCurrent: assertWindow,
+              outcome: (partition, outcome) => {
+                purge[outcome]++;
+                options.summaries?.purge(partition, outcome);
+                options.onPurge?.(partition, outcome);
+              },
+              checkpoint: (phase) => store.fail('observation-purge-' + phase),
+            }
+          : undefined,
       inspectChild: (c) => {
         pending = child(c);
         return pending;
@@ -248,6 +311,7 @@ export async function captureObservations(
   );
   try {
     await activity.start();
+    options.summaries?.capture(!!options.purgeWindow);
     for await (const e of walk) {
       signal.throwIfAborted();
       if (e.tag === 'protected-child') continue;
@@ -266,7 +330,14 @@ export async function captureObservations(
           if (workspace) throw new Error('Nested observation workspace.');
           workspace = { root: e.path, markers: [] };
         }
-        frames.push({ path: e.path, native: e.identity, entries: [], charge: 0, unitActivity });
+        frames.push({
+          path: e.path,
+          native: e.identity,
+          entries: [],
+          charge: 0,
+          unitActivity,
+          activityTimes: e.activityTimes ?? [e.identity[8], e.identity[9]],
+        });
       } else if (e.tag === 'file') {
         mark(e.path, false);
         const p = owner(e.path)!;
@@ -320,7 +391,8 @@ export async function captureObservations(
             directFiles = 0,
             mask = 0n,
             single = false;
-          if (BigInt(e.identity[8]) >= cutoff || BigInt(e.identity[9]) >= cutoff) act = 'upsert';
+          if (BigInt(frame.activityTimes[0]) >= cutoff || BigInt(frame.activityTimes[1]) >= cutoff)
+            act = 'upsert';
           for (const entry of frame.entries)
             if (entry.offset !== null) {
               const lease = await tree.record(entry.offset);
@@ -447,6 +519,7 @@ export async function captureObservations(
     equal(state, initial, 'observation capture state');
     await store.assertNoIntents();
     signal.throwIfAborted();
+    if (configured && options.purgeWindow) assertWindow();
     state[3]++;
     state[4] = 'observations-frozen';
     state[6] = codec.schemas.ref('observations').parse(reference);
@@ -457,6 +530,7 @@ export async function captureObservations(
     completed = Object.freeze({
       reference: Object.freeze(reference) as Reference,
       work: Object.freeze({ ...work }),
+      purge: Object.freeze({ ...purge }),
     });
   } catch (e) {
     failure = e;
@@ -475,6 +549,7 @@ export async function captureObservations(
     );
   }
   signal.throwIfAborted();
+  if (configured && options.purgeWindow) assertWindow();
   return completed!;
 }
 

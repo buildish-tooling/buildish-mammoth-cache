@@ -1348,3 +1348,46 @@ wrong immutable bytes invalidate the attempt. Final publication binds effective-
 validation and completed-GC-target absence, not an already-returned flag. A returned
 stage may retain metadata/structural empty directories; its contents are not a new
 source. Existing record-last and intent/marker ownership rules remain in force.
+
+## Pre-freeze purge configuration
+
+Resolved `purgeableGlobs` is part of the existing frozen model partition record.
+Presets provide defaults; the public `cache-partitions` field inherits on omission,
+disables on `[]`, and replaces on an explicit list. Custom partitions may specify
+rules (omission means none); disabled partitions have none. Ordinary excludes remain
+preserve-only, and purge rules also exclude uploaded content. Retain ordinary
+exclusion provenance for original-ownership checks. A matching active nonclaiming
+payload owner or ambiguous ownership rejects before unlink; shared claims delete
+once, credited in resolved partition order. No purge-policy Q/version/journal exists.
+
+Only an explicitly supplied current exclusive/no-consumer window may enable purge,
+in writable base capture before observation commitment and without unresolved intents.
+Persisted quiescence is not live permission. V5 establishes this window; per-candidate
+checks are synchronous cheap lifetime/root/invocation assertions, not process queries.
+The released lifecycle does not invoke this internal primitive yet.
+
+Purge uses the existing closed directory listing and only already traversed capture
+domain. Ordinary excluded file entries can qualify. Hard-pruned descendants (including
+configuration-cache/journal and reserved metadata) remain opaque: directed rules there
+are rejected/unsupported and broad rules disclose that domain limit. Derived upload
+exclusions never become hard discovery-prune rules. Nonmatching entries and untouched
+directories incur zero added native operations. Actual candidates alone get fresh
+file/nlink/device/parent checks and successful unlink plus required parent refresh.
+No payload reads, survivor rescan, relisting, ancestor rewalk or process inspection.
+
+Freeze native N and complete surviving child evidence only after authorized removals,
+while retaining original activity mtime/ctime separately for the same-process unit/GC
+decision. Do not change build cutoff or restore timestamps. On crash before commit,
+retry the same frozen configuration under a new window; missing files are no-ops and
+lost activity clocks imply conservative activity. Earlier successful purges are final.
+After observation commit, recover with original frozen facts and do not purge again.
+
+Diagnostic summaries are operation-local and have no authority or persisted schema.
+Capture supplies admitted/skipped status and actual removals (shared claims credited
+once); the planner supplies emitted physical root counts and coarse split hints from
+its existing ownership/protected state. Incomplete planning is not an upload result.
+Effective configuration is the same in-memory frozen model. Retained hint examples
+are limited to eight paths and 4 KiB of UTF-8 paths per partition, charged to the
+working budget, with explicit truncation; opaque-scope samples have the same single
+shared bound. No diagnostic reads files, relists directories or adds inventories.
+The orchestration caller owns and disposes the collector, including on failure.

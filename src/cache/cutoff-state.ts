@@ -72,6 +72,8 @@ const partitionSchema = z
     publication: z.enum(['aggregate', 'single-writer']).optional(),
     writer: text.optional(),
     conflictHandling: z.enum(['choose-worker-directory', 'choose-worker-entry']).optional(),
+    purgeableGlobs: z.array(glob).min(1).optional(),
+    ordinaryExcludeGlobs: z.array(glob).optional(),
     relativeIncludeGlobs: z.array(glob),
     relativeExcludeGlobs: z.array(glob),
     absoluteIncludeGlobs: z.array(text),
@@ -109,6 +111,20 @@ export const cutoffModelSchema = z
       )
     )
       ctx.addIssue({ code: 'custom', message: 'Missing hard cache exclusion.' });
+    for (const p of model.partitions) {
+      if (
+        p.ordinaryExcludeGlobs &&
+        model.hardCacheExcludeGlobs.some((g) => !p.ordinaryExcludeGlobs!.includes(g))
+      )
+        ctx.addIssue({ code: 'custom', message: 'Missing ordinary hard exclusion.' });
+      if (
+        !!p.purgeableGlobs !== !!p.ordinaryExcludeGlobs ||
+        (p.purgeableGlobs &&
+          JSON.stringify([...new Set([...p.ordinaryExcludeGlobs!, ...p.purgeableGlobs])]) !==
+            JSON.stringify(p.relativeExcludeGlobs))
+      )
+        ctx.addIssue({ code: 'custom', message: 'Purge exclusion provenance mismatch.' });
+    }
     const ids = model.partitions.map((p) => p.id);
     if (new Set(ids).size !== ids.length)
       ctx.addIssue({ code: 'custom', message: 'Duplicate partitions.' });

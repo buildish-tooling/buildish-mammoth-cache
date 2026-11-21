@@ -18,7 +18,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
-import { resolveModel, invocationId } from '../../../src/cache/streaming/model';
+import { resolveModel, invocationId, type ResolvedModel } from '../../../src/cache/streaming/model';
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
 import { walkNative } from '../../../src/cache/streaming/native-walk';
 import { VerifiedIncoming } from '../../../src/cache/streaming/install-evidence';
@@ -35,6 +35,8 @@ export async function installFixture(
     upperSibling?: boolean;
     excluded?: string[];
     repositorySplit?: 'aggregate' | 'single-writer';
+    purgeGlobs?: readonly string[];
+    model?: ResolvedModel;
     access?: 'writable' | 'read-only';
     root?: string;
     nonce?: string;
@@ -43,55 +45,58 @@ export async function installFixture(
 ) {
   const root = configuration.root ?? (await mkdtemp(path.resolve('build/native-install-'))),
     hard = ['.mammoth/**', '**/*.lock', ...(configuration.excluded ?? [])];
-  const model = resolveModel(
-    [
-      'model',
+  const model =
+    configuration.model ??
+    resolveModel(
+      [
+        'model',
+        1,
+        tool,
+        hard,
+        configuration.partitionCount
+          ? Array.from({ length: configuration.partitionCount }, (_, i) => {
+              const p = 'p' + String(i).padStart(3, '0');
+              return [p, ['shared/**/' + p], hard, 'aggregate', null, 'default'];
+            })
+          : [
+              [
+                'data',
+                configuration.upperSibling
+                  ? ['shared/lower/**']
+                  : configuration.shared
+                    ? ['shared/data/**']
+                    : ['data/**', 'caches/**', 'repository/**'],
+                configuration.foreignSibling
+                  ? [...hard, 'data/empty/foreign']
+                  : configuration.repositorySplit
+                    ? [...hard, 'repository/other/**']
+                    : hard,
+                'aggregate',
+                null,
+                'default',
+                ...(configuration.purgeGlobs?.length ? [configuration.purgeGlobs] : []),
+              ],
+              [
+                'state',
+                configuration.repositorySplit
+                  ? ['repository/other/**']
+                  : configuration.foreignSibling
+                    ? ['data/empty/foreign']
+                    : configuration.upperSibling
+                      ? ['shared/LOWER/**']
+                      : configuration.shared
+                        ? ['shared/state/**']
+                        : ['state/**'],
+                hard,
+                configuration.repositorySplit ?? 'single-writer',
+                configuration.repositorySplit === 'aggregate' ? null : 'A',
+                'default',
+              ],
+            ],
+      ],
+      'install-fixture-',
       1,
-      tool,
-      hard,
-      configuration.partitionCount
-        ? Array.from({ length: configuration.partitionCount }, (_, i) => {
-            const p = 'p' + String(i).padStart(3, '0');
-            return [p, ['shared/**/' + p], hard, 'aggregate', null, 'default'];
-          })
-        : [
-            [
-              'data',
-              configuration.upperSibling
-                ? ['shared/lower/**']
-                : configuration.shared
-                  ? ['shared/data/**']
-                  : ['data/**', 'caches/**', 'repository/**'],
-              configuration.foreignSibling
-                ? [...hard, 'data/empty/foreign']
-                : configuration.repositorySplit
-                  ? [...hard, 'repository/other/**']
-                  : hard,
-              'aggregate',
-              null,
-              'default',
-            ],
-            [
-              'state',
-              configuration.repositorySplit
-                ? ['repository/other/**']
-                : configuration.foreignSibling
-                  ? ['data/empty/foreign']
-                  : configuration.upperSibling
-                    ? ['shared/LOWER/**']
-                    : configuration.shared
-                      ? ['shared/state/**']
-                      : ['state/**'],
-              hard,
-              configuration.repositorySplit ?? 'single-writer',
-              configuration.repositorySplit === 'aggregate' ? null : 'A',
-              'default',
-            ],
-          ],
-    ],
-    'install-fixture-',
-    1,
-  );
+    );
   const context: Context = [...localOptions().context];
   context[7] = tool;
   const options = {

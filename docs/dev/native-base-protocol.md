@@ -51,7 +51,7 @@ The ordered resolved model tuple is:
 
 ```text
 ["model",1,buildTool,hardExcludes,partitions]
-partition = [id,includes,excludes,publication,writer,conflict]
+partition = [id,includes,ordinaryExcludes,publication,writer,conflict,purgeableGlobs?]
 ```
 
 `buildTool` is `gradle` or `maven`; glob lists are ordered unique nonempty strings,
@@ -59,7 +59,15 @@ except excludes may be empty. Include lists are nonempty. `publication` is
 `aggregate` or `single-writer`; writer is a job name or `null`, and is permitted
 only for single-writer. Conflict is `default`, `choose-worker-entry` or
 `choose-worker-directory`, restricted to supported build-tool unit kinds.
-Excludes include resolved hard excludes. `.mammoth` and descendants are always
+Ordinary excludes include resolved hard excludes. `purgeableGlobs` is an optional,
+nonempty ordered unique list of managed-root-relative file globs; omit the field
+canonically when the resolved list is empty. This optional configuration field is
+bound by the existing model hash and modelRef, not a separate policy document or
+version. Content ownership/upload filters derive the union of ordinary exclusions
+and purge rules. Deletion checks consult original selection before that union so a
+purge exclusion cannot hide another partition's selected content. Absence of the canonical field means the resolved list is empty. Public built-in
+omission inherits preset defaults; only an explicit empty override disables them.
+`.mammoth` and descendants are always
 reserved, regardless of custom globs. No absolute cache root, display label,
 runner-local path or observed member list participates. The model bounds are those
 of the parent specification; duplicate IDs and ambiguous ownership are invalid.

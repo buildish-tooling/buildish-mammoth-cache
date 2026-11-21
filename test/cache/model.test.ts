@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { resolveCacheModel } from '../../src/cache/streaming/model';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -390,4 +391,57 @@ describe('createCacheModel', () => {
     expect(cacheModel.plannedGenerationId).toBe('uuid-123e4567-e89b-12d3-a456-426614174000');
     expect(cacheModel.fallbackRefLineagePrefixes).toEqual([]);
   });
+});
+
+it('resolves actual Gradle purge defaults through the adapter and honors disable overrides', () => {
+  const resolve = (overrides: Parameters<typeof createCachePartitions>[1] = []) =>
+    resolveCacheModel(
+      {
+        buildToolId: 'gradle',
+        hardCacheExcludeGlobs: gradleAdapter.getHardCacheExcludeGlobs(),
+        partitions: createCachePartitions(
+          '/cache',
+          overrides,
+          gradleAdapter.getBuiltInPartitionPresets(),
+          gradleAdapter.getHardCacheExcludeGlobs(),
+        ),
+      },
+      'purge-',
+      1,
+    );
+  const model = resolve(),
+    hash = 'a'.repeat(32);
+  for (const [path, owners] of [
+    ['caches/modules-2/modules-2.lock', ['modules', 'dependency-metadata']],
+    ['caches/jars-9/jars-9.lock', ['modules']],
+    [`caches/jars-9/${hash}/source.jar.lock.lock`, ['modules']],
+    [`caches/jars-9/${hash}/source.jar.lock`, ['modules']],
+    [`caches/9.2.1/transforms/${hash}/${hash}.lock`, ['transforms-metadata']],
+    [`caches/9.2.1/kotlin-dsl/scripts/${hash}/${hash}.lock`, ['kotlin-dsl']],
+    [`caches/9.2.1/kotlin-dsl/accessors/${hash}/${hash}.lock`, ['kotlin-dsl']],
+    ['caches/9.2.1/generated-gradle-jars/generated-gradle-jars.lock', ['kotlin-dsl']],
+    [`caches/9.2.1/groovy-dsl/${hash}/${hash}.lock`, ['groovy-dsl']],
+    ['caches/build-cache-1/build-cache-1.lock', ['build-cache']],
+    ['caches/build-cache-2/build-cache-2.lock', []],
+    ['caches/modules-2/modules-unrelated.lock', []],
+    ['caches/modules-3/modules-3.lock', []],
+    ['caches/jars-9/jars-unrelated.lock', []],
+    ['caches/jars-8/jars-8.lock', []],
+    ['caches/build-cache-1/entry', []],
+    ['caches/build-cache-1/gc.properties', []],
+    ['wrapper/dists/gradle/hash/gradle.zip.lck', []],
+    [`caches/jars-9/${hash}/source.jar.receipt`, []],
+  ] as const)
+    expect(model.purge(path), path).toEqual(owners);
+  expect(
+    resolve([{ id: 'modules', purgeableGlobs: [] }]).purge('caches/modules-2/modules-2.lock'),
+  ).toEqual(['dependency-metadata']);
+  expect(
+    resolve([{ id: 'modules', includes: [] }]).purge('caches/modules-2/modules-2.lock'),
+  ).toEqual(['dependency-metadata']);
+  expect(
+    resolve([{ id: 'build-cache', purgeableGlobs: [] }]).purge(
+      'caches/build-cache-1/build-cache-1.lock',
+    ),
+  ).toEqual([]);
 });
