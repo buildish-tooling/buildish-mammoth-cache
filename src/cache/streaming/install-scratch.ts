@@ -68,7 +68,7 @@ export class InstallScratch {
       },
     };
   }
-  async append(value: Value, owner?: symbol): Promise<number> {
+  async append(value: Value, owner?: symbol, encoded?: (bytes: Buffer) => void): Promise<number> {
     if (this.closed || this.failed) throw new Error('Scratch is closed or failed.');
     if (this.writing || (this.owner !== null && this.owner !== owner))
       throw new Error('Scratch write is already claimed.');
@@ -91,6 +91,7 @@ export class InstallScratch {
         this.store.root.work.scratchWriteBytes,
         bytes.length,
       );
+      encoded?.(bytes);
       return start;
     } catch (error) {
       this.failed = true;
@@ -136,7 +137,11 @@ export class InstallScratch {
       };
     throw new Error('Missing scratch record.');
   }
-  async *rows(start: number, end: number): AsyncGenerator<Value> {
+  async *rows(
+    start: number,
+    end: number,
+    encoded?: (bytes: Buffer) => void,
+  ): AsyncGenerator<Value> {
     if (
       this.closed ||
       this.failed ||
@@ -150,6 +155,7 @@ export class InstallScratch {
     for await (const row of decodeRecords(this.bytes(start, end))) {
       const release = this.budget.holdRecord(row.raw.length);
       try {
+        encoded?.(row.raw);
         yield row.value;
       } finally {
         release();

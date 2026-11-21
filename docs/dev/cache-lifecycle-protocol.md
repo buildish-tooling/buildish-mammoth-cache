@@ -960,8 +960,27 @@ guards are not a cross-process lock. Native cache directories remain outside thi
 private garbage lifecycle.
 
 Unpublished planning spools and admission/mutation lookup directories are disposable
-process state. Close their handles and retire their exact owned containers without
-following links; they never become restart authority. Parent lookup ledgers can retire
+process state. Close unpublished container handles before guarded retirement;
+unpublished lookups never become restart authority.
+
+A `worker/<uuid>` container holds one unpublished worker merge
+candidate, with selected payload partition directories and no live-cache authority.
+It may retire under the same guarded, no-follow owned-container rules after all
+body/reader handles close. Before granting incoming install receipts, native-rename
+its complete selected partition roots to the exact invocation `install/<partition>`
+paths and seal their resulting native evidence; no reference may keep the old
+pathname as source authority. Retain each partition's sealed pre-publication root
+identity in bounded process state and require full native equality before its move;
+a fresh stat must not rebase unexplained ctime changes into a later rename exception.
+Only that verified own move permits the documented root rename adjustments.
+
+A failure after publishing these roots but before returning a common accepted merge
+can leave unclaimed, invocation-owned install/snapshot sources. Do not adopt or erase
+those roots by pathname on a new attempt. They can block another attempt at the fixed
+install path until their owner retires or supersedes the invocation; V4a recovery
+replays recorded install intent/progress, not arbitrary worker publication orphans.
+Published install sources and independent retained
+snapshots are excluded from candidate cleanup. Parent lookup ledgers can retire
 after plan sealing, while the separately staged parent objects remain available to
 pending install rows. Superseded progress Qs retire only after the replacement pointer
 is durable. Batch evidence retires only after its fixed intent is cleared. After clean
