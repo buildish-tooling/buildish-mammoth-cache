@@ -217,7 +217,7 @@ it('checks exact relocation marker paths, receipt/marker exclusion and install v
     1,
     'repository/a',
     f.prefix + 'source',
-    f.q('native-evidence'),
+    f.evidence(),
     null,
     'insert',
     null,
@@ -225,7 +225,7 @@ it('checks exact relocation marker paths, receipt/marker exclusion and install v
   expect(() => f.codec.schemas.rows.install.parse(insert)).not.toThrow();
   insert[6] = 'replace';
   expect(() => f.codec.schemas.rows.install.parse(insert)).toThrow();
-  insert[5] = f.q('native-evidence');
+  insert[5] = f.evidence();
   insert[7] = f.prefix + 'backup';
   expect(() => f.codec.schemas.rows.install.parse(insert)).not.toThrow();
   insert[7] = f.prefix + 'source/backup';
@@ -271,4 +271,17 @@ it('requires sealed adjustment ownership at sources-returned', () => {
   expect(() => f.codec.encode(r)).toThrow();
   r[13] = f.q('adjustments');
   expect(() => f.codec.encode(r)).not.toThrow();
+});
+
+it('binds install member spans to their exact shared evidence Q', () => {
+  const f = localFixtures(),
+    binding = f.evidence() as Value[];
+  expect(() => f.codec.schemas.memberEvidence.parse(binding)).not.toThrow();
+  expect(() => f.codec.schemas.memberEvidence.parse(f.q('native-evidence'))).toThrow();
+  const wrongSha = structuredClone(binding);
+  (wrongSha[2] as Value[])[1] = '0'.repeat(64);
+  expect(() => f.codec.schemas.memberEvidence.parse(wrongSha)).toThrow();
+  const outside = structuredClone(binding);
+  (outside[2] as Value[])[3] = 101;
+  expect(() => f.codec.schemas.memberEvidence.parse(outside)).toThrow();
 });

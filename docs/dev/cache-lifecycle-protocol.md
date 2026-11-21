@@ -22,14 +22,14 @@ limitations under the License.
 
 ## Status and reference rules
 
-**Draft version 1, pure document and stream codecs implemented in isolation.** This is the local persistence and recovery part
-of the [streaming cache protocol](../cache-protocol/), paired with the
-[native-base and generation schemas](../native-base-protocol/). These are local
-records, never worker payload members or cached generation data. Codecs validate
-serialization and supplied immutable bindings; they do not execute persistence,
-native operations, process shutdown or recovery, and do not recreate native proof. Later state,
-intent, guarded-operation and recovery code comments must cite this file and its
-relevant heading. No serialized flag restores a process-local verification proof.
+**Draft version 1; codecs and an isolated native persistence/install/recovery engine
+are implemented.** This is the local part of the [streaming cache protocol](../cache-protocol/),
+paired with the [native-base and generation schemas](../native-base-protocol/).
+These are local records, never worker payload members or cached generation data.
+The released Action lifecycle does not use this engine yet. Producer integration,
+Gradle shutdown, native save relocation, full scale/runner memory qualification and
+activation remain later work. Implementation comments cite this file and its relevant
+heading. No serialized flag restores a process-local verification proof.
 
 Use the parent's canonical `J`, framed `A(domain)`/`H(domain,tuple)`, scalar types,
 paths and portable metadata. Each JSON tuple/NDJSON record is bounded to 64 KiB;
@@ -68,7 +68,10 @@ rootBinding = [nativePath,N]
 
 `kind` is `file` or `directory`. Device/file ID/size are canonical unsigned decimal
 strings; times are canonical signed decimal nanosecond strings (no leading zeros
-or negative zero); birthNs may be `null` when unavailable. Mode is the full native
+or negative zero); birthNs may be `null` when unavailable or not reliably distinguishable from a
+platform fallback. The Node adapter uses Windows native creation time; it omits
+Unix birth identity because the stat interface can substitute ctime. Other N fields
+retain full native precision. Mode is the full native
 integer mode, not portable normalized mode. Preserve actual native precision;
 portable millisecond truncation is not valid for source-stability checks. A platform
 adapter must supply consistent stable identities or reject the mutating operation,
@@ -76,8 +79,11 @@ not fabricate a successful rename proof from zero/unknown IDs.
 
 Frozen identities include atime for activity decisions. Subsequent content reads
 attributable to Mammoth may ignore atime only; size/mode/mtime/ctime and file ID
-remain checked. A known rename can change the moved root's ctime; a live guarded
-operation bridges exactly that transition. It cannot excuse changed descendants.
+remain checked. A known rename can change the moved root's ctime; on Windows, native filename
+tunneling can also adjust that root's creation/birth timestamp. A live guarded
+operation bridges exactly the observed transition, retaining kind/device/file ID,
+size/mode/mtime. Ordinary identity comparisons and the root locator keep their
+birth checks. See [Microsoft file-time documentation](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfiletime). It cannot excuse changed descendants.
 For an ancestor whose children Mammoth deliberately changes, compare stable kind/
 device/file ID and the exact attributed child projection; do not accept its current
 timestamps as a new blanket baseline. Record the affected ancestor facts through
@@ -142,6 +148,17 @@ then sync the containing directory under the platform's supported durability
 contract. Publish a reference/pointer only after its evidence is durable. Do not
 promise power-loss survival beyond the platform's actual sync/rename guarantees;
 if required durable ownership cannot be established, do not begin destructive work.
+The POSIX implementation syncs both file bytes and the containing directory; any
+required sync failure is fatal. The Windows Node/libuv implementation syncs file
+bytes with FlushFileBuffers and completes the same-filesystem native replacement.
+It provides process-termination/restart recovery while Windows and the filesystem
+remain running. It makes no directory-namespace persistence promise across an OS
+crash, reboot or power loss; directory sync is not silently treated as successful.
+This explicit Windows profile leaves evidence/intent/mutation/progress/pointer/
+retirement ordering unchanged. Actual process-restart tests qualify those code
+paths, not power-loss survival. See the
+[libuv Windows implementation](https://github.com/libuv/libuv/blob/v1.x/src/win/fs.c).
+
 Keep at most current plus one candidate for a replaced checkpoint, not retry history.
 For every replaced **Q-referenced** record/stream, write to a new unique immutable
 owned pathname, sync it, atomically commit the root state's new Q pointer, and only
@@ -204,7 +221,11 @@ in prepare bindings. The shared snapshotSource tuple's source kind is `baseline`
 `worker-writer`; identity is `[kind,originId]`, where originId is its pinned object
 key, this invocation ID or the selected artifact ID respectively. Metadata ref
 binds the exact source's validated tree/activity and nativeRoot is an owned native
-staging path under the same managed root. Never store file lists in bindings.
+staging path under the same managed root. Retained snapshot nativeRoot rejects the
+first-component `install` subtree, including native case/trailing-dot/space aliases;
+`VerifiedIncoming` instead requires exactly `install/<partition>`. A consumable root
+cannot also be the retained authoritative snapshot. No-link/nlink guards complement
+this namespace separation. Never store file lists in bindings.
 
 ```text
 policy = ["policy",1,role,access,restoreCleanup,gcMode,gcCutoffMs,cutoffMs,
@@ -702,15 +723,72 @@ no-extra-hashing claim. Normal base transport restore still does not hash incomi
 trusted-base bytes. Recovery may hash old/desired native staging to re-establish an
 ambiguous transition. A missing preimage digest is not silently treated as proof.
 
-Initial input preflight completes for **all required inputs** before first live
-install. Purpose `install-plan` contains complete semantic units with records:
+Purpose `install-current` freezes the complete physical current-root projection
+needed by admission, shared across all selected units and snapshot partitions:
 
 ```text
+["dir-open",path,N]
+["file",path,N]
+["parent-child",parentPath,name,type,device,fileId]
+["dir-close",path,N]
+```
+
+Its stream partition is `null`. The empty root is balanced even for an empty cache.
+Regular files and opened directories supply their own immediate child kind/ID facts.
+A `parent-child` row supplies that fact instead for a protected/pruned child, with
+`type` and canonical decimal IDs as in GC evidence. It does not open or follow that
+child; metadata directory variants and unsupported objects can be protected facts.
+All immediate children share files/non-directories-first then directories ordering
+and the physical breadth limit. A protected child is counted exactly once. Protected
+subtrees can be pruned only when all requested evidence excludes their descendants;
+unknown ownership is not sufficient proof for pruning a directory. Directory close
+retains its open identity except attributable read effects. All active frames and
+reader records share the existing working budgets.
+
+The native installer rejects hardlinked selected files and cross-device source,
+backup or mutation parents. Unselected current aliases remain protected/preserved
+according to ownership. Final merged immediate-child names share the configured
+physical breadth cap. Native name comparison conservatively folds case on Windows
+and folds normalized Unicode names on macOS; layouts distinguishing those aliases
+may be rejected even on a case-sensitive volume. These checks fail before ordinary
+execution admission and never grant a copy fallback.
+
+This inventory carries no body hashes or GC/activity decisions, and does not assert
+that every enumerated child is managed or eligible for replacement. In particular,
+untouched aggregate bodies are not read. The later selected-source/current join
+proves ownership and derives required old preimage native-evidence/hashes, preserving
+protected children. Presence of an unsupported child is evidence to preserve it,
+never authority to consume it. Snapshot planning must use the complete current owned
+projection from this shared traversal, not a caller's partial destination list.
+Complete the Q hash/EOF gate before treating the inventory as frozen; abandon or
+failure cannot grant installation authority. The inventory is sequential operation
+metadata, not an in-memory searchable file catalogue.
+
+Initial input preflight completes for **all required inputs** before first live
+install. V2/V3 producers apply selected portable mode/mtime (including merged execute
+bits or the chosen header timestamp) before sealing incoming native-evidence and
+creating `VerifiedIncoming`. The evidence binds the resulting full native identities.
+V4a freezes and renames those objects; it performs no portable metadata repair on
+staging or live destinations. Repair after sealing invalidates the receipt and needs
+new evidence/verification. Purpose `install-plan` contains complete semantic units with records:
+
+```text
+["install-context",installCurrentQ]
 ["install-unit-open",kind,root,scope]
+["install-parent",index,logicalPath,ownedEmptySourcePath,N]
 ["install",index,logicalPath,sourcePath,sourceEvidenceRef,destinationEvidenceRef,
  operation,backupPath]
 ["install-unit-close",kind,root]
+evidence = ["evidence",nativeEvidenceQ,span]
 ```
+
+Exactly one `install-context` is required as the first data row, in both plan and
+batch evidence. It binds the complete frozen `install-current` projection, including
+existing-parent identities and protected child IDs needed even by ordinary inserts.
+Batch evidence must repeat the plan's exact context Q; tuple validity alone is not
+that cross-reference proof. Retain this Q while any dependent plan/intent can need
+it. The initial cursor is immediately after context (including for an empty plan),
+not after the header. Later cursors remain complete-unit boundaries.
 
 Install plans list aggregate semantic units in canonical hierarchical order first,
 then each authoritative snapshot partition once in model order. Operations within
@@ -718,11 +796,61 @@ each unit follow canonical files-first hierarchy and have no ancestor/descendant
 overlap. This preserves complete snapshot units when partition paths interleave;
 there is no single global logical-path sort across snapshot units. Since install
 rows omit member kind, ordering uses independently validated referenced native
-member kind. An ordinary file unit requires file kind. Cross-unit alias/overlap,
+member kind. Source/destination evidence slots bind `evidence` or `null`, not a
+bare Q. The span SHA equals Q.sha and its end is within Q.bytes. A file span contains
+exactly its one matching file record. A directory span starts at its matching
+directory record, contains every contiguous descendant record, and ends immediately
+before a checked outside-subtree record or local-end. Canonical LF boundaries and
+header/end exclusion must be checked; arbitrary tuple-valid offsets are insufficient.
+
+Validate/hash each distinct evidence Q once per stable phase and bind shared
+positional readers to that exact Q, purpose/partition and native metadata-file
+identity. Bounded span reads then permit different source/destination physical orders:
+old a=directory,b=file and desired a=file,b=directory cannot both be co-read in the
+same physical order. Do not rescan a complete Q or revalidate all ancestors for
+each member, or create one Q per file. Per-side member spans are nonduplicated and
+nonoverlapping; include bounded outside-record lookahead, seeks and range bytes in
+aggregate work. Derive offsets through checked LocalRows and bounded sequential or
+per-directory metadata spooling, never a global resident offset index. A complete
+partition-projection span still does not establish complete physical ownership.
+Serialized Q+span cannot recreate the reader or native execution capability after
+restart; recovery re-establishes the required native/content proof. An ordinary file unit requires file kind. Cross-unit alias/overlap,
 complete directory ownership and retained snapshot separation remain mandatory
 referenced-evidence preflight checks before live installation.
 
-Index starts at 1. Operation is `insert`, `replace` or `delete`:
+Structural `install-parent` rows and content `install` rows share one contiguous
+index starting at 1 in a full plan. A batch evidence stream may start at the
+positive global index of its validated plan range, then remains contiguous; admission
+binds its exact rows/first index to that intent range. A parent row creates only an absent ancestor needed by a later
+content operation in the same complete unit. Before intent publication, create an
+empty native directory in the owned staging namespace, capture its directory N,
+and freeze its source path/N in the plan. This is metadata preparation, not a live
+mkdir. Execute parent rows before dependent content by guarded same-filesystem
+rename. Inline N is bounded native evidence; it avoids a per-directory reference or
+misrepresenting an unowned structural ancestor as meaningful managed content.
+
+Admission proves the source empty, its identity unchanged, the destination absent,
+and the existing ancestor chain guarded. Each parent is created once; later units
+reuse its frozen binding through ordered plan/evidence traversal. Parent rows count
+in batch work, but structural ancestry is exempt from the content-operation overlap
+ban. They cannot alone satisfy a nonempty ordinary unit. Recovery after the rename
+must prove the parent identity and exactly the descendants attributable to this
+batch or the committed plan prefix. It must not demand that the now populated
+parent stay empty, adopt an unrelated same-name directory, or hide unexpected
+children. There is no unrecorded live mkdir exception.
+
+Local install-only `empty-directory`/scope `subtree` is a presence unit for a
+standalone meaningful empty aggregate directory outside recognized Gradle units.
+Empty Maven repository directories may use this presence-only unit without implying
+a complete direct-file coordinate upsert; they do not replace coordinate contents. Its
+verified desired source must be empty. It permits at most one content operation,
+at exactly the root with directory kind: insert when absent, or replacement of an
+exact owned file preimage. An existing directory is an overlay-preserving no-op
+(zero content rows allowed), retaining all its children. It never authorizes deleting
+a nonempty directory to force emptiness, widening a workspace, or using V4b's
+whole-directory move group. Snapshot directory outcomes stay in snapshot units.
+
+Content operation is `insert`, `replace` or `delete`:
 
 - Insert requires desired sourcePath/sourceEvidenceRef, an expected absent destination,
   and null destinationEvidenceRef/backupPath.
@@ -731,6 +859,13 @@ Index starts at 1. Operation is `insert`, `replace` or `delete`:
 - Delete requires null sourcePath/sourceEvidenceRef, exact old destinationEvidenceRef
   and a fixed owned backupPath. It means authoritative planned absence, not an
   unspecified optional source.
+
+For snapshot file operations, logicalPath must be owned by that partition. A
+nonempty structural directory root need not itself match a file-only include glob:
+directory operations instead require admission to prove the full physical source
+and/or preimage subtree contains only that partition's meaningful members and no
+protected/mixed/unknown descendants. Directory kind alone is insufficient. Retain
+ordinary empty-leaf ownership rules and forbid managed-root operations.
 
 Snapshot installation uses one complete `["install-unit-open","snapshot",partitionId,
 "partition"]` through corresponding close. This local-only unit kind/scope is distinct
@@ -764,7 +899,7 @@ unit occur in the same batch before any successful prepare/build is advertised.
 ["install-intent",1,invocationId,planRef,startCursor,endCursor,evidenceRef]
 ```
 
-Purpose `install-evidence` repeats the active range's install-unit/install rows, bound
+Purpose `install-evidence` repeats the active range's install-unit/install-parent/install rows, bound
 to their complete source/destination refs. Publish immutable evidence then fixed
 `install-intent.json` before the first rename. For replacement, rename expected old
 target into its exact backup first; then rename desired staged source into target.
@@ -783,7 +918,17 @@ cursor is missing preimage evidence and blocks; both present conflicts. After th
 cursor commits, an absent target and absent backup may mean finished cleanup; a
 recreated target still blocks. Never reinterpret a delete as a missing insert.
 After a native ambiguity/reload, hash desired data as needed to re-establish its
-binding; trusted-base policy does not allow adopting an unrelated native object.
+binding; trusted-base policy does not allow adopting an unrelated native object. The
+current restart engine rehashes installed roots in the committed plan prefix as well
+as active ambiguous roots: exact observed post-rename root identities are process-local,
+so prefix recovery re-establishes those bindings. Include these restart-only bytes
+in I/O accounting. Normal uninterrupted prepare still reuses verified incoming hashes.
+Even when an intent was already retired, a noninitial install progress cursor retains
+its frozen prefix projection until prepare clears that progress; validate created and
+existing parents and reject unknown children before discarding it. For active moves
+observed complete on reload, sync their source and destination containing directories
+before advancing the cursor: endpoint completion alone does not prove that the lost
+process completed its namespace barrier.
 
 Group consecutive complete ordinary units into batches by the same candidate
 16,384 operation/8 MiB evidence thresholds as GC, not one durable cycle per one-file
@@ -806,6 +951,81 @@ batch first or block. It need not complete all future old-plan batches, but cann
 claim the abandoned invocation was build-ready. Already installed complete units
 are ordinary live cache state for the new prepare's own guarded restore/preflight;
 there is no promise to restore a byte-identical pre-prepare cache after abandonment.
+
+## Owned metadata retirement
+
+One lifecycle owner exclusively controls the dedicated managed root. Old consumers
+and retained readers must be closed before completion or metadata retirement; these
+guards are not a cross-process lock. Native cache directories remain outside this
+private garbage lifecycle.
+
+Unpublished planning spools and admission/mutation lookup directories are disposable
+process state. Close their handles and retire their exact owned containers without
+following links; they never become restart authority. Parent lookup ledgers can retire
+after plan sealing, while the separately staged parent objects remain available to
+pending install rows. Superseded progress Qs retire only after the replacement pointer
+is durable. Batch evidence retires only after its fixed intent is cleared. After clean
+finish/abandon and reader closure, retire the consumed plan/current/preimage Qs.
+Borrowed upstream source evidence is not consumed by this metadata cleanup.
+
+Unused consumable sources, retained authoritative snapshots, unreferenced failed-attempt
+Qs and crash-orphan lookups remain owned by their invocation. They can be required
+through post/publication retry. Their final retirement occurs when a completed invocation
+is superseded, rather than through a transitive reference collector or a global file map.
+All live local Q/P references and retained native source roots are restricted to their
+own invocation. The reserved `retired/` subtree is forbidden to those references.
+
+The fixed record `.mammoth/v1/<current>/retirements/<old>.json` is:
+
+```text
+["retirement",1,currentInvocationId,oldInvocationId,oldNamespaceN,oldStateSha,managedRootN]
+```
+
+IDs must differ; both N values describe same-device directories. Paths are derived:
+source `.mammoth/v1/<old>`, target `.mammoth/v1/<current>/retired/<old>`.
+`oldStateSha` hashes the exact canonical completed old state bytes including LF.
+This record authorizes retirement of a wholly detached private namespace; it grants
+no install, source-return or live-cache mutation permission.
+
+`OwnedStore.initialize` validates the old completed state and root binding, checks
+that no destructive intent remains, and drains old retirement records. It writes
+new bindings/state and the retirement record durably **before** publishing the new
+locator. Only the matching current locator may replay the record. On interrupted
+initialization, its owner calls `resumeRetirements` before continuing; installation
+admission also drains those records. Completion drains pending retirements, preventing
+`retired/A/retired/B/...` nesting across repeated interruptions.
+
+Replay uses these cases:
+
+| Source  | Target  | Required action                                                                                                                                                         |
+| ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Present | Absent  | Require exact old namespace N (apart from own read atime), unchanged completed state digest, stable managed-root binding and no intents; rename into target.            |
+| Absent  | Present | Require the bound directory identity/mode; permit attributed rename/deletion size/time changes and the documented Windows rename birth-time exception; resume disposal. |
+| Present | Present | Block; do not choose or merge containers.                                                                                                                               |
+| Absent  | Absent  | Re-establish containing-directory barriers and retire the record idempotently.                                                                                          |
+
+Sync both rename parents before deleting target contents, including on restart after
+an observed completed rename. The exact reserved target is action-owned disposable
+storage: its whole contents can retire without retaining old state/bindings or
+opening a per-file catalogue. Stream one directory entry at a time under the shared
+working budget. Guard root/container identities, stay on the same device, reject
+links/unsupported objects and preserve ambiguous paths. Keep the record through partial
+deletion and the final target-parent barrier; remove it last. A replaced container or
+unrecorded target blocks. Directory/state deletion followed by an abrupt exit remains
+recoverable because the independent current-owner record survives.
+
+For example, after `A` completes and `B` commits its locator, a crash before the rename
+leaves B's record plus source A; B verifies and detaches A on retry. A crash halfway
+through deleting `B/retired/A` instead leaves that target and the same record, so B
+continues disposing it without requiring A's already deleted state file. B cannot
+complete until this retirement finishes.
+
+A crash **before locator publication** can leave an unpublished initialization
+namespace/record. It cannot have new live mutations and matching-current replay
+intentionally ignores it. This isolated engine does not claim to collect all such
+bootstrap orphans; broader abandoned-bootstrap housekeeping remains an integration
+responsibility. Published invocation retirement and ordinary attempt cleanup above
+are implemented; native I/O or ownership failures remain explicit, never copy fallback.
 
 ## Recovery location matrix and worked examples
 

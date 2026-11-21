@@ -153,7 +153,16 @@ export function localSchemas(options: LocalOptions) {
   assert(options.context[7] === options.model.tuple[2], 'Local context build tool mismatch.');
   const invocation = z.literal(options.invocation),
     prefix = '.mammoth/v1/' + options.invocation + '/';
-  const owned = relativePathSchema.refine((p) => p.startsWith(prefix) && p.length > prefix.length);
+  const owned = relativePathSchema.refine(
+    (p) =>
+      p.startsWith(prefix) &&
+      p.length > prefix.length &&
+      p
+        .slice(prefix.length)
+        .split('/')[0]
+        .replace(/[ .]+$/u, '')
+        .toUpperCase() !== 'RETIRED',
+  ); // Detached garbage cannot be a live reference/source.
   const partition = partitionSchema.refine((p) => options.model.partitions.some((d) => d[0] === p));
   const ref = <T extends string>(purpose: T) =>
     z.tuple([z.literal('ref'), z.literal(purpose), owned, positiveSchema, shaSchema]);
@@ -174,13 +183,21 @@ export function localSchemas(options: LocalOptions) {
     uintSchema,
     ref('cursor-stack').nullable(),
   ]);
+  const retainedOwned = owned.refine(
+    (p) =>
+      p
+        .slice(prefix.length)
+        .split('/')[0]
+        .replace(/[ .]+$/u, '')
+        .toUpperCase() !== 'INSTALL',
+  );
   const source = z
     .tuple([
       partition,
       z.enum(['baseline', 'local-writer', 'worker-writer']),
       z.tuple([z.enum(['baseline', 'local-writer', 'worker-writer']), nameSchema]),
       ref('native-evidence'),
-      owned,
+      retainedOwned,
     ])
     .refine((s) => s[1] === s[2][0] && (s[1] !== 'local-writer' || s[2][1] === options.invocation))
     .refine((s) => options.model.partitions.find((p) => p[0] === s[0])?.[3] === 'single-writer');
@@ -501,14 +518,17 @@ export function localSchemas(options: LocalOptions) {
         (p[6] === null || p[6] === prefix + 'relocation/' + p[1] + '.json')
       );
     });
+  const memberEvidence = z
+    .tuple([z.literal('evidence'), ref('native-evidence'), spanSchema])
+    .refine((r) => r[2][1] === r[1][4] && r[2][3] <= r[1][3]);
   const install = z
     .tuple([
       z.literal('install'),
       positiveSchema,
       filePathSchema,
       owned.nullable(),
-      ref('native-evidence').nullable(),
-      ref('native-evidence').nullable(),
+      memberEvidence.nullable(),
+      memberEvidence.nullable(),
       z.enum(['insert', 'replace', 'delete']),
       owned.nullable(),
     ])
@@ -574,6 +594,15 @@ export function localSchemas(options: LocalOptions) {
     registration,
     partitionState,
     install,
+    installParent: z
+      .tuple([
+        z.literal('install-parent'),
+        positiveSchema,
+        filePathSchema,
+        owned,
+        nativeIdentitySchema,
+      ])
+      .refine((r) => r[4][2] === 'directory'),
     move,
     publicationPartition,
     observationFile: z
@@ -650,11 +679,29 @@ export function localSchemas(options: LocalOptions) {
     ref,
     appendPrefix,
     cursor,
+    memberEvidence,
     source,
     rows,
     documents: {
       current,
       bindings,
+      retirement: z
+        .tuple([
+          z.literal('retirement'),
+          z.literal(1),
+          invocation,
+          shaSchema,
+          nativeIdentitySchema,
+          shaSchema,
+          nativeIdentitySchema,
+        ])
+        .refine(
+          (r) =>
+            r[3] !== options.invocation &&
+            r[4][2] === 'directory' &&
+            r[6][2] === 'directory' &&
+            r[4][3] === r[6][3],
+        ),
       'local-state': state,
       quiescence,
       'gradle-installation': registration,

@@ -21,6 +21,7 @@ import { decodeRecords, encodeRecord, equal, Digest, add, type Value } from './e
 import type { LocalCodec, LocalSchemas } from './local-schema';
 import { shaSchema, uintSchema, unitSchema } from './schema';
 import { parentPath, type WorkingBudget, validateUnit } from './tree-state';
+import { LocalCurrentState } from './local-current-state';
 import { LocalTreeState } from './local-tree-state';
 import { LocalEvidenceState, type InstallKind } from './local-evidence-state';
 
@@ -46,6 +47,7 @@ export const localPurposes = [
   'move-plan',
   'install-plan',
   'install-evidence',
+  'install-current',
 ] as const;
 export type LocalPurpose = (typeof localPurposes)[number];
 export interface LocalStreamOptions {
@@ -62,9 +64,10 @@ export interface LocalStreamSeal {
   sha: string;
   eventSha: string;
 }
-class Grammar {
+export class LocalStreamGrammar {
   private readonly schemas: LocalSchemas;
   private tree?: LocalTreeState;
+  private current?: LocalCurrentState;
   private evidence?: LocalEvidenceState;
   private count = 0;
   private index = -1;
@@ -87,7 +90,13 @@ class Grammar {
     if (purpose !== 'cursor-stack' && partitioned !== (options.partition !== null))
       throw new Error('Wrong local stream partition scope.');
     if (options.partition !== null) this.schemas.partition.parse(options.partition);
-    if (purpose === 'activity' || purpose === 'observations')
+    if (purpose === 'install-current')
+      this.current = new LocalCurrentState(
+        this.schemas,
+        options.budget,
+        options.maxDirectoryEntries,
+      );
+    else if (purpose === 'activity' || purpose === 'observations')
       this.tree = new LocalTreeState(
         purpose,
         this.schemas,
@@ -123,6 +132,11 @@ class Grammar {
     this.index = index;
   }
   accept(value: Value): void {
+    if (this.current) {
+      this.current.accept(value);
+      this.count = add(this.count);
+      return;
+    }
     if (this.tree) {
       this.tree.accept(value);
       this.count = add(this.count);
@@ -221,6 +235,7 @@ class Grammar {
   }
   finish(): void {
     this.tree?.finish();
+    this.current?.finish();
     this.evidence?.finish();
     const m = this.schemas.options.model;
     if (this.purpose === 'model' && this.count !== m.partitions.length + 1)
@@ -233,10 +248,46 @@ class Grammar {
   }
   dispose(): void {
     this.tree?.dispose();
+    this.current?.dispose();
     this.evidence?.dispose();
   }
 }
 const endSchema = z.tuple([z.literal('local-end'), uintSchema, shaSchema]);
+export interface LocalRow {
+  readonly value: Value;
+  readonly start: number;
+  readonly end: number;
+  /** Zero-based physical record number, including the header. */
+  readonly record: number;
+}
+/** Provisional rows for bounded joins. Acceptance requires verified EOF, never early return. */
+export async function* readLocalRows(
+  source: AsyncIterable<Uint8Array>,
+  purpose: LocalPurpose,
+  options: LocalStreamOptions,
+  reference: Value,
+  signal = new AbortController().signal,
+  beforeAccept?: (value: Value) => Promise<void>,
+): AsyncGenerator<LocalRow, LocalStreamSeal> {
+  const ref = options.codec.schemas.ref(purpose).parse(reference);
+  const result = yield* read(
+    source,
+    purpose,
+    options,
+    { bytes: ref[3], sha: ref[4] },
+    false,
+    undefined,
+    signal,
+    beforeAccept,
+  );
+  return result.seal;
+}
+async function drain<T>(rows: AsyncGenerator<LocalRow, T>): Promise<T> {
+  while (true) {
+    const row = await rows.next();
+    if (row.done) return row.value;
+  }
+}
 /** References bind exact bytes; callbacks remain provisional until this resolves. */
 export async function readLocalStream(
   source: AsyncIterable<Uint8Array>,
@@ -248,7 +299,9 @@ export async function readLocalStream(
 ): Promise<LocalStreamSeal> {
   const ref = options.codec.schemas.ref(purpose).parse(reference);
   return (
-    await read(source, purpose, options, { bytes: ref[3], sha: ref[4] }, false, event, signal)
+    await drain(
+      read(source, purpose, options, { bytes: ref[3], sha: ref[4] }, false, event, signal),
+    )
   ).seal;
 }
 /** Caller clips source to committed P.bytes; uncommitted tail is never accepted. No total-byte quota. */
@@ -259,23 +312,25 @@ export async function readLocalPrefix(
   reference: Value,
   event?: (value: Value) => Promise<void>,
   signal = new AbortController().signal,
-): Promise<{ seal: LocalStreamSeal; rawHash: Hash; eventDigest: Digest }> {
+): Promise<{
+  seal: LocalStreamSeal;
+  rawHash: Hash;
+  eventDigest: Digest;
+  grammar: LocalStreamGrammar;
+}> {
   if (!['outbound-evidence', 'return-evidence', 'adjustments'].includes(purpose))
     throw new Error('Prefix not allowed for purpose.');
   const ref = options.codec.schemas.appendPrefix(purpose).parse(reference);
-  const result = await read(
-    source,
-    purpose,
-    options,
-    { bytes: ref[3], sha: ref[5] },
-    true,
-    event,
-    signal,
+  const result = await drain(
+    read(source, purpose, options, { bytes: ref[3], sha: ref[5] }, true, event, signal),
   );
-  if (result.seal.records !== ref[4]) throw new Error('Prefix record count mismatch.');
+  if (result.seal.records !== ref[4]) {
+    result.grammar.dispose();
+    throw new Error('Prefix record count mismatch.');
+  }
   return result;
 }
-async function read(
+async function* read(
   source: AsyncIterable<Uint8Array>,
   purpose: LocalPurpose,
   options: LocalStreamOptions,
@@ -283,14 +338,17 @@ async function read(
   prefix: boolean,
   event: ((value: Value) => Promise<void>) | undefined,
   signal: AbortSignal,
+  beforeAccept?: (value: Value) => Promise<void>,
 ) {
-  const grammar = new Grammar(purpose, options),
+  const grammar = new LocalStreamGrammar(purpose, options),
     digest = new Digest('local-' + purpose),
     raw = createHash('sha256');
   let bytes = 0,
     records = 0,
+    physicalRecord = 0,
     started = false,
-    ended = false;
+    ended = false,
+    handedOff = false;
   try {
     for await (const frame of decodeRecords(abortableValues(source, signal))) {
       const release = options.budget.holdRecord(frame.raw.length);
@@ -310,11 +368,18 @@ async function read(
           equal(end, ['local-end', records, digest.digest()], 'local stream seal');
           ended = true;
         } else {
+          if (beforeAccept) await withAbort(beforeAccept(frame.value), signal);
           grammar.accept(frame.value);
           records = add(records);
           digest.update(frame.value);
         }
         if (event) await withAbort(event(frame.value), signal);
+        yield {
+          value: frame.value,
+          start: bytes - frame.raw.length,
+          end: bytes,
+          record: physicalRecord++,
+        };
       } finally {
         release();
       }
@@ -323,13 +388,15 @@ async function read(
     if (prefix) grammar.finish();
     const sha = raw.copy().digest('hex');
     equal([bytes, sha], [expected.bytes, expected.sha], 'local reference');
+    handedOff = prefix;
     return {
       seal: { bytes, records, sha, eventSha: digest.digest() },
       rawHash: raw,
       eventDigest: digest,
+      grammar,
     };
   } finally {
-    grammar.dispose();
+    if (!handedOff) grammar.dispose();
   }
 }
 export async function* writeLocalStream(
@@ -339,7 +406,7 @@ export async function* writeLocalStream(
   sealed: (seal: LocalStreamSeal) => void,
   signal = new AbortController().signal,
 ): AsyncGenerator<Buffer> {
-  const grammar = new Grammar(purpose, options),
+  const grammar = new LocalStreamGrammar(purpose, options),
     digest = new Digest('local-' + purpose),
     raw = createHash('sha256');
   let bytes = 0,
