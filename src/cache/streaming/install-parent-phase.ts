@@ -18,6 +18,7 @@ import { lstat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { nativeIdentity, sameNative, missing, type NativeIdentity } from './native';
 import { sameDirectoryObject } from './install-member';
+import { shaSchema } from './schema';
 import { nativeIdentitySchema } from './local-schema';
 import { encodeRecord, decodeRecord, add } from './encoding';
 import type { OwnedStore } from './owned-store';
@@ -30,6 +31,7 @@ export class InstallParentPhase {
     path: string;
     native: NativeIdentity;
     dirty: boolean;
+    projection: string | null;
     release: () => void;
   }[] = [];
   constructor(
@@ -38,6 +40,7 @@ export class InstallParentPhase {
     readonly ledger: string,
     readonly budget: WorkingBudget,
     readonly expected: (physical: string) => Promise<NativeIdentity | null>,
+    readonly signal?: AbortSignal,
   ) {}
   private key(path: string) {
     return this.ledger + createHash('sha256').update(path).digest('hex');
@@ -56,7 +59,9 @@ export class InstallParentPhase {
     if (!actual || !sameNative(frame.native, actual, true))
       throw new Error('Active install parent changed.');
   }
-  private async saved(path: string): Promise<NativeIdentity | null> {
+  private async savedFull(
+    path: string,
+  ): Promise<{ native: NativeIdentity; projection: string | null } | null> {
     try {
       const file = this.key(path),
         stat = await this.store.root.stat(file);
@@ -67,32 +72,56 @@ export class InstallParentPhase {
       const value = decodeRecord(Buffer.concat(chunks));
       if (!Array.isArray(value) || value[0] !== path)
         throw new Error('Parent phase ledger collision.');
-      return nativeIdentitySchema.parse(value[1]);
+      return {
+        native: nativeIdentitySchema.parse(value[1]),
+        projection: value[2] ? shaSchema.parse(value[2]) : null,
+      };
     } catch (error) {
       if (missing(error)) return null;
       throw error;
     }
   }
-  async created(path: string, native: NativeIdentity) {
-    const bytes = encodeRecord([path, native]);
+  private async saved(path: string) {
+    return (await this.savedFull(path))?.native ?? null;
+  }
+  async projection(path: string): Promise<string | null> {
+    return (
+      this.frames.find((f) => f.path === path)?.projection ??
+      (await this.savedFull(path))?.projection ??
+      null
+    );
+  }
+  async known(path: string): Promise<NativeIdentity | null> {
+    return this.frames.find((f) => f.path === path)?.native ?? (await this.saved(path));
+  }
+  async effective(path: string): Promise<NativeIdentity | null> {
+    const frame = this.frames.find((f) => f.path === path);
+    return frame ? frame.native : ((await this.saved(path)) ?? this.expected(path));
+  }
+  async created(path: string, native: NativeIdentity, projection: string | null = null) {
+    const bytes = encodeRecord([path, native, projection]);
     await writeFile(this.store.root.resolve(this.key(path)), bytes, {
       mode: 0o600,
     });
     this.store.root.work.writeBytes = add(this.store.root.work.writeBytes, bytes.length);
   }
   private async pop() {
+    this.signal?.throwIfAborted();
     const f = this.frames.pop()!;
     try {
       await this.check(f);
+      this.signal?.throwIfAborted();
       if (f.dirty) {
         await this.store.root.syncDirectory(f.path);
-        await this.created(f.path, f.native);
+        this.signal?.throwIfAborted();
+        await this.created(f.path, f.native, f.projection);
       }
     } finally {
       f.release();
     }
   }
   async parents(leaf: string) {
+    this.signal?.throwIfAborted();
     const parent = parentPath(leaf);
     if (parent !== this.anchor && !parent.startsWith(this.anchor ? this.anchor + '/' : ''))
       throw new Error('Mutation escapes parent phase.');
@@ -112,13 +141,15 @@ export class InstallParentPhase {
     if (!this.frames.length)
       await this.store.root.parents(this.anchor ? this.anchor + '/pending' : 'pending');
     for (const path of paths.slice(this.frames.length)) {
-      const native = (await this.saved(path)) ?? (await this.expected(path));
+      const saved = await this.savedFull(path),
+        native = saved?.native ?? (await this.expected(path));
       if (!native || native[2] !== 'directory' || native[3] !== this.store.root.binding[3])
         throw new Error('Missing/unsafe expected mutation parent.');
       const frame = {
         path,
         native,
         dirty: false,
+        projection: saved?.projection ?? null,
         release: this.budget.holdRecord(512 + Buffer.byteLength(path)),
       };
       this.frames.push(frame);
@@ -134,6 +165,11 @@ export class InstallParentPhase {
       throw new Error('Mutation parent was replaced.');
     frame.native = after;
     frame.dirty = true;
+  }
+  /** Immediate parent within this phase's checked, mutation-aware ancestor stack. */
+  async checkedParent(leaf: string): Promise<NativeIdentity> {
+    await this.parents(leaf);
+    return this.frames[this.frames.length - 1].native;
   }
   async barrier() {
     while (this.frames.length) await this.pop();

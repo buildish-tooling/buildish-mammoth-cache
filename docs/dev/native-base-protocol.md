@@ -242,6 +242,14 @@ Windows exposes writable/read-only attributes rather than Unix executable bits; 
 its supported native permissions without claiming Unix mode equivalence. Portable
 launcher normalization remains part of the tree contract.
 
+A save stage evacuated from live aggregate sources preserves their original raw
+native permissions. Compare their normalized portable modes with the tree and retain
+full native source/transition evidence; do not chmod live files while they are away
+from their original paths. For example, raw 0600 may archive with portable 0644 and
+return as the original 0600 object. This save-only validation does not authorize
+repairing or rebasing source evidence. Downloaded objects still use the guarded
+restore normalization above. This is distinct from the prepared source below.
+
 An already sealed prepared snapshot/source is not a restore repair target. Its producer
 must establish canonical supported permissions before source-set commit; later native
 changes invalidate that proof. Capture retains the original full native identities

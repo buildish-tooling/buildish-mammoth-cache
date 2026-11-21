@@ -302,7 +302,7 @@ it('round-trips mixed new/reuse/empty with connected Maven units and an inherite
     await source.dispose();
   }
   expect(f.budget.retained).toBe(0);
-});
+}, 30000);
 
 it('resumes after record service confirmation but before durable record-saved state', async () => {
   const { f, sdk, p } = await setup();

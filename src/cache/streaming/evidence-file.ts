@@ -23,6 +23,8 @@ import { nativeIdentity, sameNative, type NativeIdentity } from './native';
 import type { OwnedStore, Reference } from './owned-store';
 import type { WorkingBudget } from './tree-state';
 
+const readers = new WeakSet<object>();
+
 export interface EvidenceFileWork {
   validationBytes: number;
   rangeBytes: number;
@@ -99,11 +101,21 @@ export class EvidenceFile {
       }
       await reader.stable();
       signal.throwIfAborted();
+      readers.add(reader);
       return reader;
     } catch (error) {
       await reader.close();
       throw error;
     }
+  }
+  static assert(reader: EvidenceFile, store: OwnedStore, partition: string) {
+    if (
+      !readers.has(reader) ||
+      reader.closed ||
+      reader.store !== store ||
+      reader.partition !== partition
+    )
+      throw new Error('Unbound native evidence reader.');
   }
   private async stable(): Promise<void> {
     if (this.closed) throw new Error('Evidence reader is closed.');

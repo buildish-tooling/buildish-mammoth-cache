@@ -1,0 +1,700 @@
+/*
+ * Copyright 2026 The Buildish Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { OwnedStore, Reference } from './owned-store';
+import { InstallScratch } from './install-scratch';
+import { decodeRecords, Digest, equal, tuple, type Value } from './encoding';
+import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-walk';
+import { sameObject, sameNative, type NativeIdentity } from './native';
+import { createCacheGlobMatcher } from '../manifest';
+import { isCacheMetadataPath } from '../metadata-paths';
+import { isMavenTransientFile } from '../maven-repository';
+import { workspaceKind } from '../immutable-workspaces';
+import { UnitMarkers } from './unit-markers';
+import { baseName, parentPath, compareMembership, isWorkspaceRoot } from './tree-state';
+import { ValidatedBaseObject, settleBaseCleanup, type BaseObjectOptions } from './base-object';
+import { baseFileBytes } from './base-layout';
+import { decodeGeneration } from './native-records';
+import type { Unit } from './schema';
+
+type Activity = 'none' | 'used' | 'upsert';
+type Decision = 'retain' | 'delete';
+// Temporary hierarchical metadata, no body bytes or durable authority.
+type Node = [
+  'directory' | 'file',
+  string,
+  NativeIdentity,
+  string | null,
+  Value,
+  Activity,
+  Decision,
+  number,
+  number,
+  string | null,
+  number,
+  number,
+  Activity,
+  Decision,
+  number,
+];
+type Edge = ['edge', string, NativeChild['type'], string, string, number | null];
+const rank = (a: Activity) => (a === 'upsert' ? 2 : a === 'used' ? 1 : 0);
+const maxActivity = (a: Activity, b: Activity): Activity => (rank(a) >= rank(b) ? a : b);
+const compare = (a: string, b: string, ak = 'file', bk = 'file') =>
+  compareMembership(['member', ak, a], ['member', bk, b]);
+const markerNames = new Set([
+  'metadata.bin',
+  'results.bin',
+  'classes.jar',
+  'sources.jar',
+  'metadata/metadata.bin',
+  'transformed',
+  'classes',
+  'instrumented',
+  'metadata',
+  'instrumented/classes',
+  'sources',
+]);
+
+export interface ObservationCaptureOptions extends BaseObjectOptions {
+  /** Genuine pinned metadata retained through prepare; never a caller-supplied hash table. */
+  readonly baseline?: readonly ValidatedBaseObject[];
+}
+export interface FrozenObservation {
+  readonly reference: Reference;
+  readonly work: Readonly<WalkWork>;
+}
+
+// Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas.
+// The caller owns a current exclusive cache window. This does not stop Gradle/V5.
+export async function captureObservations(
+  store: OwnedStore,
+  input: ObservationCaptureOptions,
+): Promise<FrozenObservation> {
+  if (input.baseline && input.baseline.length > 64)
+    throw new Error('Observation baseline frontier exceeded.');
+  const options = Object.freeze({ ...input, baseline: Object.freeze([...(input.baseline ?? [])]) }),
+    signal = options.signal ?? new AbortController().signal,
+    codec = store.codec,
+    model = codec.options.model;
+  signal.throwIfAborted();
+  await store.assertNoIntents();
+  const initial = codec.schemas.documents['local-state'].parse(await store.state()),
+    bindings = codec.schemas.documents.bindings.parse(
+      await store.readDocument(initial[5], 'bindings'),
+    );
+  codec.checkStateBindings(initial, bindings);
+  if (
+    bindings[5][0] !== store.root.path ||
+    !sameObject(bindings[5][1], store.root.binding) ||
+    bindings[5][1][6] !== store.root.binding[6]
+  )
+    throw new Error('Observation root binding changed.');
+  if (
+    codec.options.access !== 'writable' ||
+    codec.options.role === 'distributed-worker' ||
+    initial[4] !== 'quiescent' ||
+    initial[6] !== null
+  )
+    throw new Error('Observation capture requires writable quiescent base state.');
+  if ((options.maxDirectoryEntries ?? 100000) !== bindings[8][9])
+    throw new Error('Observation allowance differs from frozen policy.');
+  await store.readStream(bindings[6], 'model', { ...options, partition: null }, undefined, signal);
+  await store.readStream(
+    bindings[10],
+    'producers',
+    { ...options, partition: null },
+    undefined,
+    signal,
+  );
+  await store.readStream(
+    bindings[11],
+    'prepare-sources',
+    { ...options, partition: null },
+    undefined,
+    signal,
+  );
+  await store.readStream(
+    bindings[12]!,
+    'activity',
+    { ...options, partition: null },
+    undefined,
+    signal,
+  );
+  if (initial[13]) {
+    const q = codec.schemas.documents.quiescence.parse(
+      await store.readDocument(initial[13], 'quiescence'),
+    );
+    await store.readStream(
+      q[3],
+      'installations',
+      { ...options, partition: null },
+      undefined,
+      signal,
+    );
+  }
+  const baseline = bindings[9]
+    ? decodeGeneration(await baseFileBytes(store, bindings[9][2]), model, bindings[9][1])
+    : null;
+  const seen = new Set<string>();
+  for (const object of options.baseline) {
+    ValidatedBaseObject.assertReceipt(object, store);
+    const p = object.reference[1][2],
+      old = baseline?.[8].find((e) => e[1] === p);
+    if (seen.has(p) || old?.[0] !== 'object')
+      throw new Error('Unbound/duplicate observation baseline.');
+    equal(object.reference, old[2], 'observation pinned baseline');
+    seen.add(p);
+  }
+  const activity = new ActivityCursor(activityFacts(store, bindings[12]!, options)),
+    tree = await InstallScratch.create(store, options.budget),
+    frames: Frame[] = [],
+    work = walkWork(),
+    hard = createCacheGlobMatcher(model.tuple[3]),
+    cutoff = BigInt(bindings[8][7]!) * 1000000n,
+    gcCutoff = bindings[8][6] === null ? null : BigInt(bindings[8][6]) * 1000000n;
+  let bases: BaselineCursor;
+  try {
+    bases = await BaselineCursor.open(store, options.baseline, options);
+  } catch (error) {
+    await settleBaseCleanup([() => tree.close()], error);
+    throw error;
+  }
+  type Entry = {
+    name: string;
+    type: NativeChild['type'];
+    device: string;
+    id: string;
+    offset: number | null;
+  };
+  type Frame = {
+    path: string;
+    native: NativeIdentity;
+    entries: Entry[];
+    charge: number;
+    unitActivity: Activity;
+    unit?: { kind: string; markers: readonly [boolean, string][]; complete: number };
+  };
+  let root: number | undefined,
+    pending: Promise<'prune' | void> | undefined,
+    failure: unknown,
+    completed: FrozenObservation | undefined;
+  const owner = (path: string) => {
+    try {
+      return model.owner(path);
+    } catch (e) {
+      if (e instanceof Error && /Unowned|Reserved\/excluded/.test(e.message)) return null;
+      throw e;
+    }
+  };
+  let workspace: { root: string; markers: [boolean, string][] } | null = null;
+  const mark = (path: string, directory: boolean) => {
+    if (!workspace) return;
+    const relative = path.slice(workspace.root.length + 1);
+    if (markerNames.has(relative)) workspace.markers.push([directory, path]);
+  };
+  const child = async (c: NativeChild): Promise<'prune' | void> => {
+    const frame = frames[frames.length - 1];
+    if (!frame || frame.path !== c.parent)
+      throw new Error('Observation child has no active parent.');
+    const charge = 160 + 4 * (Buffer.byteLength(c.name) + c.device.length + c.fileId.length);
+    options.budget.retain(charge);
+    frame.charge += charge;
+    frame.entries.push({
+      name: c.name,
+      type: c.type,
+      device: c.device,
+      id: c.fileId,
+      offset: null,
+    });
+    if (c.pruned || hard(c.path) || hard(c.path + '/.workspace-directory-probe')) return 'prune';
+    if (c.type === 'directory') return;
+    if (!owner(c.path) || (model.tuple[2] === 'maven' && isMavenTransientFile(c.name)))
+      return 'prune';
+    if (c.type !== 'file') throw new Error('Unsupported managed observation child.');
+  };
+  const attach = (offset: number) => {
+    const parent = frames[frames.length - 1];
+    if (!parent) {
+      if (root !== undefined) throw new Error('Multiple observation roots.');
+      root = offset;
+    } else parent.entries[parent.entries.length - 1].offset = offset;
+  };
+  const walk = walkNative(
+    store.root,
+    '',
+    {
+      ...options,
+      metadata: 'exclude',
+      inspectChild: (c) => {
+        pending = child(c);
+        return pending;
+      },
+    },
+    work,
+  );
+  try {
+    await activity.start();
+    for await (const e of walk) {
+      signal.throwIfAborted();
+      if (e.tag === 'protected-child') continue;
+      if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1'))
+        throw new Error('Aliased/cross-device observation source.');
+      if (e.tag === 'directory-open') {
+        mark(e.path, true);
+        let unitActivity: Activity = 'none';
+        if (
+          isWorkspaceRoot(model, e.path) ||
+          (model.tuple[2] === 'maven' &&
+            (e.path === 'repository' || e.path.startsWith('repository/')))
+        )
+          unitActivity = await activity.take('unit', e.path);
+        if (isWorkspaceRoot(model, e.path)) {
+          if (workspace) throw new Error('Nested observation workspace.');
+          workspace = { root: e.path, markers: [] };
+        }
+        frames.push({ path: e.path, native: e.identity, entries: [], charge: 0, unitActivity });
+      } else if (e.tag === 'file') {
+        mark(e.path, false);
+        const p = owner(e.path)!;
+        const imported = await activity.take('file', e.path),
+          localSnapshot =
+            p[3] === 'single-writer' && (p[4] === null || p[4] === codec.options.context[4]);
+        const act: Activity =
+          localSnapshot ||
+          imported === 'upsert' ||
+          BigInt(e.identity[8]) >= cutoff ||
+          BigInt(e.identity[9]) >= cutoff
+            ? 'upsert'
+            : imported === 'used' || BigInt(e.identity[7]) >= cutoff
+              ? 'used'
+              : 'none';
+        const decision: Decision =
+          p[3] === 'aggregate' &&
+          act === 'none' &&
+          gcCutoff !== null &&
+          BigInt(e.identity[8]) < gcCutoff
+            ? 'delete'
+            : 'retain';
+        const previous = await bases.take(e.path);
+        attach(
+          await tree.append([
+            'file',
+            e.path,
+            e.identity,
+            p[0],
+            previous,
+            act,
+            decision,
+            0,
+            0,
+            null,
+            1,
+            1,
+            act,
+            decision,
+            1,
+          ]),
+        );
+      } else {
+        const frame = frames.pop()!;
+        try {
+          let act = frame.unitActivity,
+            direct = frame.unitActivity,
+            allDelete = true,
+            directDelete = true,
+            files = 0,
+            directFiles = 0,
+            mask = 0n,
+            single = false;
+          if (BigInt(e.identity[8]) >= cutoff || BigInt(e.identity[9]) >= cutoff) act = 'upsert';
+          for (const entry of frame.entries)
+            if (entry.offset !== null) {
+              const lease = await tree.record(entry.offset);
+              try {
+                const n = lease.value as Node;
+                act = maxActivity(act, n[5]);
+                files += n[10];
+                allDelete &&= n[6] === 'delete';
+                if (n[0] === 'file') {
+                  direct = maxActivity(direct, n[5]);
+                  directFiles++;
+                  directDelete &&= n[6] === 'delete';
+                  const pi = model.partitions.findIndex((p) => p[0] === n[3]);
+                  mask |= 1n << BigInt(pi);
+                  single ||= model.partitions[pi][3] === 'single-writer';
+                }
+              } finally {
+                lease.release();
+              }
+            }
+          if (
+            single &&
+            (mask & (mask - 1n)) !== 0n &&
+            model.tuple[2] === 'maven' &&
+            e.path.startsWith('repository/')
+          )
+            throw new Error('Maven direct unit splits a snapshot owner.');
+          let kind: string | null = null,
+            complete = 1;
+          if (workspace?.root === e.path) {
+            kind = workspaceKind(
+              e.path,
+              workspace.markers.filter(([dir]) => !dir).map(([, p]) => p),
+            );
+            const markers = new UnitMarkers([kind, e.path, 'subtree'] as Unit);
+            for (const [dir, p] of workspace.markers)
+              if (dir) markers.directory(p);
+              else markers.file(p);
+            try {
+              markers.finish();
+            } catch {
+              complete = 0;
+            }
+            workspace = null;
+          } else if (
+            model.tuple[2] === 'maven' &&
+            (e.path === 'repository' || e.path.startsWith('repository/')) &&
+            (directFiles || frame.unitActivity !== 'none')
+          )
+            kind = 'maven-directory';
+          if (
+            kind === 'maven-directory' &&
+            frame.entries.some(
+              (x) =>
+                x.offset === null &&
+                x.type !== 'directory' &&
+                !isCacheMetadataPath(e.path + '/' + x.name) &&
+                !isMavenTransientFile(x.name),
+            )
+          )
+            directDelete = false;
+          const start = tree.position;
+          for (const entry of frame.entries)
+            await tree.append([
+              'edge',
+              entry.name,
+              entry.type,
+              entry.device,
+              entry.id,
+              entry.offset,
+            ]);
+          const end = tree.position,
+            meaningful =
+              e.path === '' ||
+              files > 0 ||
+              frame.entries.some((x) => x.offset !== null) ||
+              !!owner(e.path + '/.workspace-directory-probe');
+          const offset = meaningful
+            ? await tree.append([
+                'directory',
+                e.path,
+                e.identity,
+                null,
+                null,
+                act,
+                files > 0 && allDelete ? 'delete' : 'retain',
+                start,
+                end,
+                kind,
+                files,
+                complete,
+                direct,
+                directFiles > 0 && directDelete ? 'delete' : 'retain',
+                directFiles,
+              ])
+            : null;
+          if (offset !== null) attach(offset);
+        } finally {
+          options.budget.release(frame.charge);
+        }
+      }
+    }
+    await activity.finish();
+    await bases.finish();
+    if (root === undefined) throw new Error('Missing observation root.');
+    const reference = await store.writeStream(
+      'observations',
+      { ...options, partition: null },
+      renderObservations(tree, root, signal),
+      signal,
+    );
+    await store.fail('observations-candidate');
+    const progress = await store.writeDocument([
+      'gc-progress',
+      1,
+      codec.options.invocation,
+      reference,
+      ['cursor', reference[4], 0, 0, 0, null],
+      null,
+    ]);
+    await store.fail('observations-progress-candidate');
+    await assertCaptureStable(store, tree, root, signal);
+    const state = codec.schemas.documents['local-state'].parse(await store.state());
+    equal(state, initial, 'observation capture state');
+    await store.assertNoIntents();
+    signal.throwIfAborted();
+    state[3]++;
+    state[4] = 'observations-frozen';
+    state[6] = codec.schemas.ref('observations').parse(reference);
+    state[10] = codec.schemas.ref('gc-progress').parse(progress);
+    await store.updateState(state);
+    await store.fail('observations-pointer');
+    signal.throwIfAborted();
+    completed = Object.freeze({
+      reference: Object.freeze(reference) as Reference,
+      work: Object.freeze({ ...work }),
+    });
+  } catch (e) {
+    failure = e;
+    throw e;
+  } finally {
+    await pending?.catch(() => {});
+    for (const frame of frames) options.budget.release(frame.charge);
+    await settleBaseCleanup(
+      [
+        () => walk.return(undefined),
+        () => activity.close(),
+        () => bases.close(),
+        () => tree.close(),
+      ],
+      failure,
+    );
+  }
+  signal.throwIfAborted();
+  return completed!;
+}
+
+async function* renderObservations(
+  tree: InstallScratch,
+  root: number,
+  signal: AbortSignal,
+): AsyncGenerator<Value> {
+  async function* edges(n: Node): AsyncGenerator<Edge> {
+    for await (const r of tree.rows(n[7], n[8])) {
+      signal.throwIfAborted();
+      yield r as Edge;
+    }
+  }
+  async function* facts(offset: number, direct: boolean): AsyncGenerator<Value> {
+    const lease = await tree.record(offset),
+      n = lease.value as Node;
+    try {
+      if (n[0] === 'file') {
+        yield ['file', n[1], n[3], n[2], n[4]];
+        return;
+      }
+      yield ['directory', n[1], n[2]];
+      for await (const e of edges(n)) yield ['child', n[1], e[1], e[2], e[3], e[4]];
+      for await (const e of edges(n))
+        if (e[5] !== null && (e[2] === 'file' || !direct)) yield* facts(e[5], false);
+    } finally {
+      lease.release();
+    }
+  }
+  async function* visit(
+    offset: number,
+    override?: readonly [Activity, Decision],
+  ): AsyncGenerator<Value> {
+    signal.throwIfAborted();
+    const lease = await tree.record(offset),
+      n = lease.value as Node;
+    try {
+      if (n[0] === 'file') {
+        yield [
+          'file',
+          baseName(n[1]),
+          n[3],
+          n[2],
+          n[4],
+          override?.[0] ?? n[5],
+          override?.[1] ?? n[6],
+        ];
+        return;
+      }
+      yield ['dir-open', n[1], n[2]];
+      for await (const e of edges(n)) yield ['child', e[1], e[2], e[3], e[4]];
+      const unit = n[9] !== null && !override,
+        direct = n[9] === 'maven-directory';
+      let selected = override,
+        sha: string | undefined;
+      if (unit) {
+        const digest = new Digest('observation-unit');
+        for await (const f of facts(offset, direct)) digest.update(f);
+        sha = digest.digest();
+        const act = direct ? n[12] : n[5],
+          deletion =
+            (direct ? n[13] : n[6]) === 'delete' && act === 'none' && n[11] === 1
+              ? 'delete'
+              : 'retain';
+        selected = [act, deletion];
+        yield ['unit-open', n[9], n[1], direct ? 'direct' : 'subtree', act, deletion, sha];
+      }
+      for await (const e of edges(n))
+        if (e[5] !== null && (e[2] === 'file' || !direct)) yield* visit(e[5], selected);
+      if (unit) yield ['unit-close', n[9], n[1], sha!];
+      if (direct)
+        for await (const e of edges(n))
+          if (e[5] !== null && e[2] === 'directory') yield* visit(e[5], override);
+      yield ['dir-close', n[1]];
+    } finally {
+      lease.release();
+    }
+  }
+  yield* visit(root);
+}
+
+async function* activityFacts(
+  store: OwnedStore,
+  ref: Reference,
+  options: BaseObjectOptions,
+): AsyncGenerator<readonly [string, 'file' | 'unit', Activity]> {
+  let path = '';
+  for await (const record of decodeRecords(store.read(ref, 'activity'))) {
+    options.signal?.throwIfAborted();
+    const release = options.budget.holdRecord(record.raw.length);
+    try {
+      const r = tuple(record.value);
+      if (r[0] === 'dir-open') path = String(r[1]);
+      else if (r[0] === 'dir-close') path = parentPath(path);
+      else if (r[0] === 'unit-open') yield [String(r[2]), 'unit', r[4] as Activity];
+      else if (r[0] === 'upsert' || r[0] === 'used')
+        yield [path ? path + '/' + r[1] : String(r[1]), 'file', r[0]];
+    } finally {
+      release();
+    }
+  }
+}
+class ActivityCursor {
+  private readonly iterator: AsyncIterator<readonly [string, 'file' | 'unit', Activity]>;
+  private head?: IteratorResult<readonly [string, 'file' | 'unit', Activity]>;
+  constructor(source: AsyncIterable<readonly [string, 'file' | 'unit', Activity]>) {
+    this.iterator = source[Symbol.asyncIterator]();
+  }
+  async start() {
+    this.head = await this.iterator.next();
+  }
+  async take(kind: 'file' | 'unit', path: string): Promise<Activity> {
+    while (this.head && !this.head.done) {
+      const h = this.head.value,
+        c = compare(h[0], path, h[1], kind);
+      if (c > 0) return 'none';
+      this.head = await this.iterator.next();
+      if (c === 0) return h[2];
+    }
+    return 'none';
+  }
+  async finish() {
+    while (this.head && !this.head.done) this.head = await this.iterator.next();
+  }
+  async close() {
+    await this.iterator.return?.();
+  }
+}
+class BaselineCursor {
+  private constructor(
+    private readonly cursors: {
+      iterator: AsyncIterator<readonly [string, Value]>;
+      head: IteratorResult<readonly [string, Value]>;
+    }[],
+  ) {}
+  static async open(
+    store: OwnedStore,
+    objects: readonly ValidatedBaseObject[],
+    options: BaseObjectOptions,
+  ): Promise<BaselineCursor> {
+    const cursors: BaselineCursor['cursors'] = [];
+    async function* files(object: ValidatedBaseObject): AsyncGenerator<readonly [string, Value]> {
+      let path = '';
+      for await (const row of decodeRecords(store.read(object.tree, 'native-tree'))) {
+        options.signal?.throwIfAborted();
+        const release = options.budget.holdRecord(row.raw.length);
+        try {
+          const r = tuple(row.value);
+          if (r[0] === 'dir-open') path = String(r[1]);
+          else if (r[0] === 'dir-close') path = parentPath(path);
+          else if (r[0] === 'file')
+            yield [path ? path + '/' + r[1] : String(r[1]), ['portable', ...r.slice(2, 6)]];
+        } finally {
+          release();
+        }
+      }
+    }
+    try {
+      for (const object of objects) {
+        const iterator = files(object)[Symbol.asyncIterator]();
+        cursors.push({ iterator, head: await iterator.next() });
+      }
+      return new BaselineCursor(cursors);
+    } catch (e) {
+      await settleBaseCleanup(
+        cursors.map((c) => () => c.iterator.return?.()),
+        e,
+      );
+      throw e;
+    }
+  }
+  async take(path: string): Promise<Value> {
+    let found: Value = null;
+    for (const c of this.cursors) {
+      while (!c.head.done && compare(c.head.value[0], path) < 0) c.head = await c.iterator.next();
+      if (!c.head.done && c.head.value[0] === path) {
+        if (found !== null) throw new Error('Overlapping baseline projections.');
+        found = c.head.value[1];
+        c.head = await c.iterator.next();
+      }
+    }
+    return found;
+  }
+  async finish() {
+    for (const c of this.cursors) while (!c.head.done) c.head = await c.iterator.next();
+  }
+  async close() {
+    await settleBaseCleanup(this.cursors.map((c) => () => c.iterator.return?.()));
+  }
+}
+
+async function assertCaptureStable(
+  store: OwnedStore,
+  tree: InstallScratch,
+  root: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const visit = async (offset: number): Promise<void> => {
+    signal.throwIfAborted();
+    const r = await tree.record(offset),
+      n = r.value as Node;
+    try {
+      const before = await store.root.stat(n[1]);
+      if (!before || !sameNative(n[2], before, true))
+        throw new Error('Observation source changed before pointer commit.');
+      if (n[0] === 'directory') {
+        for await (const value of tree.rows(n[7], n[8])) {
+          signal.throwIfAborted();
+          const edge = value as Edge;
+          if (edge[5] !== null) await visit(edge[5]);
+        }
+        const after = await store.root.stat(n[1]);
+        if (!after || !sameNative(n[2], after, true))
+          throw new Error('Observation directory changed before pointer commit.');
+      }
+    } finally {
+      r.release();
+    }
+  };
+  await visit(root);
+  signal.throwIfAborted();
+}

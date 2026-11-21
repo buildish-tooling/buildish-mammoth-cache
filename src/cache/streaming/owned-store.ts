@@ -591,6 +591,22 @@ export class OwnedStore {
     if (await this.readFixed(relative)) throw new Error('Outstanding destructive intent.');
     await this.fixed(relative, valid);
   }
+  /** Exact current relocation replacement; caller binds cursor/epoch semantics to its plan. */
+  async replaceRelocation(expected: Value, next: Value): Promise<void> {
+    const before = this.codec.schemas.documents.relocation.parse(expected),
+      after = this.codec.schemas.documents.relocation.parse(next),
+      name = this.prefix + 'relocation/' + before[3] + '.json';
+    if (
+      before[3] !== after[3] ||
+      before[4] !== after[4] ||
+      !encodeRecord(before[5]).equals(encodeRecord(after[5]))
+    )
+      throw new Error('Relocation replacement changes owner/epoch/plan.');
+    const actual = await this.readFixed(name);
+    if (actual === null || !encodeRecord(actual).equals(encodeRecord(before)))
+      throw new Error('Relocation changed before replacement.');
+    await this.fixed(name, after);
+  }
   async clearIntent(expected: Value): Promise<void> {
     const valid = this.codec.validate(expected),
       row = valid as Value[],
@@ -608,7 +624,19 @@ export class OwnedStore {
     await this.root.syncDirectory(path.posix.dirname(relative));
     await this.fail('intent-retired');
   }
-  async assertNoIntents(): Promise<void> {
+  async assertNoIntents(ownedIntent?: Value): Promise<void> {
+    // Only the exact discoverable current-invocation owner may be excluded.
+    let ownedName: string | undefined;
+    if (ownedIntent !== undefined) {
+      const value = this.codec.validate(ownedIntent) as readonly Value[];
+      if (value[0] === 'gc-intent') ownedName = this.prefix + 'gc-intent.json';
+      else if (value[0] === 'relocation')
+        ownedName = this.prefix + 'relocation/' + value[3] + '.json';
+      else throw new Error('Unsupported recovery intent.');
+      const actual = await this.readFixed(ownedName);
+      if (actual === null || !encodeRecord(actual).equals(encodeRecord(ownedIntent)))
+        throw new Error('Recovery intent changed.');
+    }
     // Known old destructive formats never become executable new-format inputs.
     for (const name of [
       'restore-move-v1.json',
@@ -655,13 +683,17 @@ export class OwnedStore {
       if (!/^[a-f0-9]{64}$/.test(entry.name)) continue;
       if (!entry.isDirectory() || entry.isSymbolicLink())
         throw new Error('Unsafe invocation discovery directory.');
-      for (const file of fixedIntents)
-        if (await this.root.stat(base + '/' + entry.name + '/' + file))
+      for (const file of fixedIntents) {
+        const relative = base + '/' + entry.name + '/' + file;
+        if (relative === ownedName) continue;
+        if (await this.root.stat(relative))
           throw new Error('Pending root-local destructive intent.');
+      }
       const relocation = base + '/' + entry.name + '/relocation';
       if (await this.root.stat(relocation))
         for await (const marker of await opendir(this.root.resolve(relocation)))
-          if (marker.name.endsWith('.json')) throw new Error('Pending root-local relocation.');
+          if (marker.name.endsWith('.json') && relocation + '/' + marker.name !== ownedName)
+            throw new Error('Pending root-local relocation.');
     }
   }
   /** These Q purposes are referenced only by root-state cells, never arbitrary streams. */
@@ -699,6 +731,32 @@ export class OwnedStore {
       throw new Error('Install metadata still has an intent owner.');
     if (ref[1] !== 'install-evidence' && state[11] !== null)
       throw new Error('Install metadata still has a progress owner.');
+    if (!(await this.root.stat(ref[2]))) return;
+    for await (const bytes of this.read(ref, ref[1])) void bytes;
+    await unlink(this.root.resolve(ref[2]));
+    this.root.work.unlinks++;
+    await this.root.syncDirectory(path.posix.dirname(ref[2]));
+  }
+  /** GC-only detached evidence/stack, after progress replacement and intent retirement. */
+  async retireGcMetadata(reference: Reference): Promise<void> {
+    if (!['gc-evidence', 'cursor-stack'].includes(reference[1]))
+      throw new Error('Not GC-owned metadata.');
+    const ref = this.codec.schemas.ref(reference[1]).parse(reference);
+    if (await this.readFixed(this.prefix + 'gc-intent.json'))
+      throw new Error('GC metadata still has an intent owner.');
+    const state = this.codec.schemas.documents['local-state'].parse(await this.state());
+    if (ref[1] === 'cursor-stack') {
+      for (const [cell, purpose] of [
+        [state[10], 'gc-progress'],
+        [state[11], 'install-progress'],
+      ] as const) {
+        if (!cell) continue;
+        const progress = this.codec.schemas.documents[purpose].parse(
+          await this.readDocument(cell, purpose),
+        );
+        if (progress[4][5]?.[2] === ref[2]) throw new Error('GC stack is still referenced.');
+      }
+    }
     if (!(await this.root.stat(ref[2]))) return;
     for await (const bytes of this.read(ref, ref[1])) void bytes;
     await unlink(this.root.resolve(ref[2]));

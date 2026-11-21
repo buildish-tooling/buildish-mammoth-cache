@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdir, mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rm, symlink, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { NativeRoot, nativeIds } from '../../../src/cache/streaming/native';
@@ -35,6 +35,24 @@ async function collect(events: AsyncIterable<WalkEvent>) {
   for await (const event of events) result.push(event.tag + ':' + event.path);
   return result;
 }
+it.each(['before', 'after'] as const)('rechecks a scoped parent %s traversal', async (when) => {
+  const f = await fixture();
+  await mkdir(path.join(f.directory, 'parent/child'), { recursive: true });
+  await writeFile(path.join(f.directory, 'parent/child/file'), 'body');
+  const parentNative = (await f.root.stat('parent'))!;
+  if (when === 'before') await utimes(path.join(f.directory, 'parent'), 0, 0);
+  await expect(
+    (async () => {
+      for await (const event of walkNative(f.root, 'parent/child', {
+        budget: f.budget,
+        parentNative,
+      }))
+        if (when === 'after' && event.tag === 'directory-close')
+          await utimes(path.join(f.directory, 'parent'), 0, 0);
+    })(),
+  ).rejects.toThrow('Scoped traversal parent changed');
+  expect(f.budget.retained).toBe(0);
+});
 it('lists files first and closes each directory around its complete sorted subtree', async () => {
   const f = await fixture();
   for (const dir of ['z-dir', 'a-dir', 'empty', '.mammoth'])

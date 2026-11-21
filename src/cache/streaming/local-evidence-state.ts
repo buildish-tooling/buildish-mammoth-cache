@@ -16,9 +16,10 @@
 
 import { z } from 'zod';
 import { Digest, equal, type Value } from './encoding';
-import { filePathSchema, shaSchema, positiveSchema, unitKindSchema } from './schema';
+import { filePathSchema, pathSchema, shaSchema, positiveSchema, unitKindSchema } from './schema';
 import { GcTreeState } from './local-gc-state';
-import { semanticUnitSchema, type LocalSchemas } from './local-schema';
+import { SharedGcTreeState } from './shared-gc-state';
+import { semanticUnitSchema, spanSchema, type LocalSchemas } from './local-schema';
 import {
   TreeState,
   compareMembership,
@@ -103,7 +104,9 @@ export class LocalEvidenceState {
   private epoch: number | null = null;
   private snapshotIndex = -1;
   private preparedSeen = false;
-  private gc?: GcTreeState;
+  private moveSourceSeen = false;
+  private gc?: GcTreeState | SharedGcTreeState;
+  private gcObservation: string | null = null;
   constructor(
     private readonly purpose: string,
     private readonly schemas: LocalSchemas,
@@ -112,6 +115,7 @@ export class LocalEvidenceState {
     private readonly maxEntries = 100000,
     private readonly installKind?: InstallKind,
     private readonly moveMode: 'transfer' | 'prepared' = 'transfer',
+    private readonly gcMode: 'inline' | 'shared' = 'inline',
   ) {
     if (purpose === 'native-evidence' || purpose === 'stage-evidence')
       this.flat = new FlatTree(budget, maxEntries, (path) => {
@@ -207,7 +211,7 @@ export class LocalEvidenceState {
     this.roots = 0;
     this.unitDigest = this.purpose === 'gc-evidence' ? new Digest('gc-unit').update(value) : null;
     if (this.purpose === 'gc-evidence')
-      this.gc = new GcTreeState(
+      this.gc = new (this.gcMode === 'shared' ? SharedGcTreeState : GcTreeState)(
         String(descriptor[1]),
         String(descriptor[2]),
         this.budget,
@@ -222,6 +226,16 @@ export class LocalEvidenceState {
     if (!Array.isArray(value) || typeof value[0] !== 'string')
       throw new Error('Invalid evidence row.');
     const tag = value[0];
+    if (this.purpose === 'gc-evidence' && this.gcMode === 'shared') {
+      if (this.gcObservation === null) {
+        const context = z
+          .tuple([z.literal('gc-context'), this.schemas.ref('observations')])
+          .parse(value);
+        this.gcObservation = context[1][4];
+        return;
+      }
+      if (tag === 'gc-context') throw new Error('Duplicate GC context.');
+    }
     if (this.purpose === 'move-plan') {
       if (this.moveMode === 'prepared') {
         if (this.preparedSeen || tag !== 'prepared-source')
@@ -232,6 +246,13 @@ export class LocalEvidenceState {
       }
       if (tag === 'prepared-source')
         throw new Error('Prepared-source plan is not a relocation plan.');
+      if (!this.moveSourceSeen) {
+        if (tag !== 'move-source') throw new Error('Transfer plan must start with move-source.');
+        z.tuple([z.literal('move-source'), this.schemas.ref('native-evidence')]).parse(value);
+        this.moveSourceSeen = true;
+        return;
+      }
+      if (tag === 'move-source') throw new Error('Duplicate/late move-source.');
     }
 
     if (this.purpose.startsWith('install')) {
@@ -355,13 +376,28 @@ export class LocalEvidenceState {
         throw new Error('Empty-directory presence cannot delete.');
       return;
     }
-    if (tag === 'directory') {
+    if (this.gcMode === 'shared') {
+      if (tag === 'gc-parent') {
+        const row = z.tuple([z.literal('gc-parent'), pathSchema, spanSchema]).parse(value);
+        if (row[2][1] !== this.gcObservation) throw new Error('Foreign shared GC observation.');
+        (this.gc as SharedGcTreeState).parent(row[1]);
+        this.unitDigest!.update(row);
+      } else if (tag === 'target') {
+        const row = this.schemas.rows.gcTarget.parse(value);
+        this.within(row[1]);
+        if (this.schemas.options.model.owner(row[1])[0] !== row[2])
+          throw new Error('Wrong GC target owner.');
+        this.gc!.target(row[1], row[3]);
+        this.unitDigest!.update(row);
+        this.roots++;
+      } else throw new Error('Inline/unknown row in shared GC evidence.');
+    } else if (tag === 'directory') {
       const row = this.schemas.rows.evidenceDirectory.parse(value);
-      this.gc!.directory(row[1], row[2]);
+      (this.gc as GcTreeState).directory(row[1], row[2]);
       this.unitDigest!.update(row);
     } else if (tag === 'parent-child') {
       const row = this.schemas.rows.parentChild.parse(value);
-      this.gc!.child(row[1], row[2], row[3], row[4], row[5]);
+      (this.gc as GcTreeState).child(row[1], row[2], row[3], row[4], row[5]);
       this.unitDigest!.update(row);
     } else if (tag === 'target') {
       const row = this.schemas.rows.gcTarget.parse(value);
@@ -374,8 +410,12 @@ export class LocalEvidenceState {
     } else throw new Error('Unknown GC evidence row.');
   }
   finish(): void {
+    if (this.purpose === 'gc-evidence' && this.gcMode === 'shared' && this.gcObservation === null)
+      throw new Error('Missing GC context.');
     if (this.purpose === 'move-plan' && this.moveMode === 'prepared' && !this.preparedSeen)
       throw new Error('Missing prepared-source binding.');
+    if (this.purpose === 'move-plan' && this.moveMode === 'transfer' && !this.moveSourceSeen)
+      throw new Error('Missing transfer move-source.');
     if (this.purpose.startsWith('install') && !this.installContext)
       throw new Error('Missing install context.');
     this.flat?.finish();

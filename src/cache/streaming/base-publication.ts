@@ -634,7 +634,7 @@ async function publicationState(store: OwnedStore): Promise<State> {
   await store.assertNoIntents();
   return state;
 }
-async function baselineGeneration(
+export async function baselineGeneration(
   store: OwnedStore,
   b: ReturnType<OwnedStore['codec']['schemas']['documents']['bindings']['parse']>,
 ): Promise<Generation | null> {
@@ -742,7 +742,7 @@ async function zeroTransferGate(
   return sources;
 }
 
-async function freezeRecord(
+export async function freezeRecord(
   store: OwnedStore,
   root: string,
   generation: Generation,
@@ -766,7 +766,7 @@ function freezeValue<T extends Value>(value: T): T {
   return value;
 }
 
-async function checkInheritedChoice(
+export async function checkInheritedChoice(
   store: OwnedStore,
   row: ChoiceRow,
   source: ReturnType<OwnedStore['codec']['schemas']['source']['parse']>,

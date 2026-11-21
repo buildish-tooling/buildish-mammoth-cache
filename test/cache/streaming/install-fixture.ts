@@ -30,6 +30,8 @@ export async function installFixture(
   tool: 'gradle' | 'maven' = 'gradle',
   configuration: {
     shared?: boolean;
+    partitionCount?: number;
+    foreignSibling?: boolean;
     upperSibling?: boolean;
     excluded?: string[];
     access?: 'writable' | 'read-only';
@@ -46,32 +48,39 @@ export async function installFixture(
       1,
       tool,
       hard,
-      [
-        [
-          'data',
-          configuration.upperSibling
-            ? ['shared/lower/**']
-            : configuration.shared
-              ? ['shared/data/**']
-              : ['data/**', 'caches/**', 'repository/**'],
-          hard,
-          'aggregate',
-          null,
-          'default',
-        ],
-        [
-          'state',
-          configuration.upperSibling
-            ? ['shared/LOWER/**']
-            : configuration.shared
-              ? ['shared/state/**']
-              : ['state/**'],
-          hard,
-          'single-writer',
-          'A',
-          'default',
-        ],
-      ],
+      configuration.partitionCount
+        ? Array.from({ length: configuration.partitionCount }, (_, i) => {
+            const p = 'p' + String(i).padStart(3, '0');
+            return [p, ['shared/**/' + p], hard, 'aggregate', null, 'default'];
+          })
+        : [
+            [
+              'data',
+              configuration.upperSibling
+                ? ['shared/lower/**']
+                : configuration.shared
+                  ? ['shared/data/**']
+                  : ['data/**', 'caches/**', 'repository/**'],
+              configuration.foreignSibling ? [...hard, 'data/empty/foreign'] : hard,
+              'aggregate',
+              null,
+              'default',
+            ],
+            [
+              'state',
+              configuration.foreignSibling
+                ? ['data/empty/foreign']
+                : configuration.upperSibling
+                  ? ['shared/LOWER/**']
+                  : configuration.shared
+                    ? ['shared/state/**']
+                    : ['state/**'],
+              hard,
+              'single-writer',
+              'A',
+              'default',
+            ],
+          ],
     ],
     'install-fixture-',
     1,

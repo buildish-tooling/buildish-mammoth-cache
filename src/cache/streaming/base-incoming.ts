@@ -19,6 +19,7 @@ import { decodeRecords, tuple, add, type Value } from './encoding';
 import type { OwnedStore, Reference } from './owned-store';
 import { ProvisionalBaseSet } from './base-generation';
 import { ValidatedBaseObject, settleBaseCleanup, type BaseObjectOptions } from './base-object';
+import { FrozenBaseTree } from './base-frozen-tree';
 import { RecoveryGroups } from './native-records';
 import { compareMembership, parentPath } from './tree-state';
 import { sameNative, sameRename, type NativeIdentity } from './native';
@@ -38,7 +39,7 @@ import { retireOwnedDirectory } from './owned-retirement';
 // One direct-unit root frontier per input, never a coordinate/file catalogue.
 export async function deriveBaseGroups(
   store: OwnedStore,
-  objects: readonly ValidatedBaseObject[],
+  objects: readonly (ValidatedBaseObject | FrozenBaseTree)[],
   options: BaseObjectOptions,
 ): Promise<RecoveryGroups> {
   options = Object.freeze({ ...options });
@@ -46,7 +47,8 @@ export async function deriveBaseGroups(
   objects = Object.freeze([...objects]);
   const owners = new Set<string>();
   for (const object of objects) {
-    ValidatedBaseObject.assertReceipt(object, store);
+    if (object instanceof FrozenBaseTree) FrozenBaseTree.assert(object, store);
+    else ValidatedBaseObject.assertReceipt(object, store);
     if (owners.has(object.reference[1][2])) throw new Error('Duplicate base group projection.');
     owners.add(object.reference[1][2]);
   }
@@ -57,7 +59,7 @@ export async function deriveBaseGroups(
     iterator: AsyncIterator<string>;
     head: IteratorResult<string>;
   }[] = [];
-  async function* roots(object: ValidatedBaseObject): AsyncGenerator<string> {
+  async function* roots(object: ValidatedBaseObject | FrozenBaseTree): AsyncGenerator<string> {
     for await (const row of decodeRecords(store.read(object.tree, 'native-tree'))) {
       signal.throwIfAborted();
       const release = options.budget.holdRecord(row.raw.length);
@@ -72,7 +74,8 @@ export async function deriveBaseGroups(
   let failure: unknown;
   try {
     for (const object of objects) {
-      ValidatedBaseObject.assertReceipt(object, store);
+      if (object instanceof FrozenBaseTree) FrozenBaseTree.assert(object, store);
+      else ValidatedBaseObject.assertReceipt(object, store);
       const iterator = roots(object)[Symbol.asyncIterator]();
       const cursor = { partition: object.reference[1][2], iterator, head: await iterator.next() };
       cursors.push(cursor);

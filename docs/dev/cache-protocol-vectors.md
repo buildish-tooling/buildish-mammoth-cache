@@ -344,3 +344,53 @@ Context/model/family use the shared vectors; invocation nonce is 32 copies of `a
 Expected local event digest: `8447ba695a15b7d7918ae46651ed56984763c42a95e86a4dc22d280fafe77a2e`.
 Expected exact byte length including all three LFs: `563`.
 Expected raw SHA-256: `d868bc6cb688afdccf9a0c1b302fb0199b26a407a9036ab25c676ff3fdd9fa31`.
+
+## L1: shared GC projection binding
+
+The immutable observation bytes are:
+
+```text
+["local-stream",1,"observations","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef",null]
+["dir-open","",["native",1,"directory","1","4","0",16877,"-1","0","1",null]]
+["child","metadata","directory","1","3"]
+["dir-open","metadata",["native",1,"directory","1","3","0",16877,"-1","0","1",null]]
+["child","a","file","1","2"]
+["file","a","metadata",["native",1,"file","1","2","0",33188,"-1","0","1",null],null,"none","delete"]
+["dir-close","metadata"]
+["dir-close",""]
+["local-end",7,"37a19bf8c3e39c450f7a800f5450b60c99d8063ab66ef7be94df8decc5950745"]
+```
+
+Observation raw SHA-256: `a9c9d126abb41c1eb7901509f212b2a7bad7575425930fe8dd87c1096e3ea1ff`; 715 bytes. The metadata parent
+projection is the exact span `[375,489)`. Shared GC bytes:
+
+```text
+["local-stream",1,"gc-evidence","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef",null]
+["gc-context",["ref","observations",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/observations",715,"a9c9d126abb41c1eb7901509f212b2a7bad7575425930fe8dd87c1096e3ea1ff"]]
+["gc-unit-open","file","metadata/a","file"]
+["gc-parent","metadata",["span","a9c9d126abb41c1eb7901509f212b2a7bad7575425930fe8dd87c1096e3ea1ff",375,489]]
+["target","metadata/a","metadata",["native",1,"file","1","2","0",33188,"-1","0","1",null]]
+["gc-unit-close","file","metadata/a","cd5512d94076e6f3d541641ee833842b35888a7a3b08ce22e4f07a2b45565ab7"]
+["local-end",5,"26c13f82428360e4a53aa9c607960b07d428b5bdc6009afb2b4c80473a3b03e9"]
+```
+
+GC raw SHA-256: `9a665294d9bdb378591dad0c8a34e34e43c7d66721811dfe1c1d1b43747fddec`; 895 bytes.
+The unit digest binds the shared reference and target, not a duplicated child table.
+These values were computed with an independent Python length-framed SHA-256 encoder.
+
+## L2: frozen post-GC transfer source
+
+This exact default transfer stream has one source-context data record and zero move
+units/roots. The referenced Q is a syntactic fixture, not native source qualification;
+a consumer must resolve its complete matching header/EOF and original native/hash
+correspondence. Prepared readers reject this variant. Context is identical to L0.
+
+```text
+["local-stream",1,"move-plan","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef","metadata"]
+["move-source",["ref","native-evidence",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/post-gc-evidence",100,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]]
+["local-end",1,"c6de02c207d37d2f3377e99de6e4ec3cb974d4dfb7c127f4f570dea187695613"]
+```
+
+Expected local event digest: `c6de02c207d37d2f3377e99de6e4ec3cb974d4dfb7c127f4f570dea187695613`.
+Expected exact byte length including all three LFs: `558`.
+Expected raw SHA-256: `40ebaa5a4eafafe1049063f23ab115ed61f4395616f53b47169becb8fbdd585d`.

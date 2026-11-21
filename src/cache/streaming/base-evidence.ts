@@ -66,7 +66,7 @@ export async function* baseEvidence(
       const r = tuple(row.value);
       if (r[0] === 'local-stream' || r[0] === 'local-end') continue;
       const logical = String(r[1]),
-        path = root + (logical ? '/' + logical : ''),
+        path = root ? root + (logical ? '/' + logical : '') : logical,
         native = r[2] as NativeIdentity,
         parent = r[0] === 'directory' && logical === '' ? null : parentPath(path);
       while (stack.length && stack[stack.length - 1].path !== parent) await leave();

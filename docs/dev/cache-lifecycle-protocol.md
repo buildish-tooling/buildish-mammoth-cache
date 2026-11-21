@@ -525,6 +525,48 @@ A fresh prepare recovers active batch ownership first; it need not finish all fu
 GC batches of an abandoned attempt. Final publication still validates absence of
 completed deletion targets: do not prune their paths from replay and miss recreation.
 
+### Shared GC parent projections
+
+New GC execution uses the explicit **shared** profile of purpose `gc-evidence`.
+The first data row is exactly `["gc-context",observationsRef]`; this is the exact
+complete Q bound by the active GC progress/intent. Every unit retains its existing
+open/close and target tuples, but replaces inline directory/parent-child facts with:
+
+```text
+["gc-parent",parentPath,projectionSpan]
+```
+
+The span's streamSha equals context observationsRef.sha. It starts at that parent's
+`dir-open` record and ends immediately after its last consecutive `child` record
+(or after dir-open if there are none), before any unit/file/subdirectory body.
+It therefore includes the full original immediate projection, including protected
+children. Exact offsets, whole records, parent N/path, observation context and EOF
+are validated by the execution consumer against the complete original Q; matching
+hash strings or syntactic span bounds alone do not authorize deletion. A shared
+context with no units is valid empty evidence. No duplicate/late context or mixed
+inline rows are permitted. Legacy/default inline readers reject the new profile;
+only a reader explicitly selecting shared mode admits it. This is an unreleased
+local-v1 amendment, with no reinterpretation of released state or worker/base wire.
+
+The unit projection digest uses the existing gc-unit framing over its open,
+gc-parent and target rows; close is excluded. A file unit references its parent;
+a direct Maven unit references its root; a subtree references its root and each
+traversed directory in files-first hierarchy. Files require their preceding parent;
+directory cleanup targets follow their own complete descendant evidence. Referenced
+spans may be reused by multiple units: original child rows occur once in observations,
+not copied/parsed again for every target/batch. Active directory state is bounded.
+
+The consumer validates/indexes original observations once per operation or reload
+and binds each parent span/target to that index. It verifies current membership
+against the original projection minus only completed GC targets and the discoverable
+active range's possible deletions; future planned absences are not yet authorized.
+Unknown/replaced survivors and recreated completed targets reject. Own directory
+changes are attributed by those exact deletions and scoped native-parent guards,
+never a fresh post-delete baseline. Normal batches retain this evidence and do not
+re-list the whole parent or rehash/rebuild the complete index at each checkpoint.
+On reload one linear reconstruction/co-read is allowed. Final absence/source checks
+retain completed target paths. Shared syntax alone grants no execution capability.
+
 ## Frozen publication and native transfer plans
 
 The publication document is:
@@ -548,13 +590,27 @@ sinks, not one full-cache walk per partition. Producer/snapshot set digests and
 observation hash and finalized postSourcesRef are fixed before deriving keys.
 The publication source ref must equal root state's committed postSourcesRef.
 
-Purpose `move-plan` contains:
+Purpose `move-plan` starts with exactly one source binding, then contains zero or more complete move units:
 
 ```text
+["move-source",nativeEvidenceRef]
 ["move-unit-open",kind,root,scope]
 ["move",index,sourceSpace,sourcePath,logicalPath,kind,treeSpan,sourceEvidenceSpan]
 ["move-unit-close",kind,root,rootCount]
 ```
+
+The `move-source` Q is the complete frozen **post-GC original native/hash projection**
+for this partition, captured before decision/key derivation. Validate its exact Q,
+invocation/model/family/partition header, EOF and complete portable-tree correspondence
+once before native use. Live aggregate roots derive from the bound managed root;
+owned source roots derive from committed postSources, and their Q must equal that
+snapshot source's metadataRef. Keep the live per-move observation spans below: the
+source Q augments their original-decision provenance rather than replacing it.
+Effective adjustments/transitions may change only their attributable roots/ancestors
+from this frozen baseline. A new stat or GC omission must never rebase post-freeze
+source directory clocks into authority. Even a zero-move presence-only plan contains
+this first source row, without a fabricated move unit. This extends the unreleased
+local-v1 draft; prior source-less transfer plans are rejected, not migrated.
 
 A **prepared zero-transfer** variant instead contains exactly one data row:
 
@@ -625,8 +681,19 @@ Fixed `relocation/<partition>.json` remains durable throughout the entire operat
 active = null | [direction,startCursor,endCursor]
 ```
 
-Epoch is positive and increases for each new evacuation attempt under the same
-immutable plan/key. Phase is `outbound`, `staged`, `saving`, `returning` or
+Epoch is positive and increases above the current adjustment stream's highest
+epoch whenever a prior attempt owned any complete or ambiguous native move range
+under the same immutable plan/key. A root in such a range receives an epoch-bearing
+adjustment even when recovery finds it never moved. Merging current adjustments
+preserves that history. An attempt with no owned native range may reuse epoch `1`
+when no earlier epoch-bearing adjustment exists: this includes an immutable
+zero-move presence-only plan and an attempt abandoned before its first active range.
+There is no native transition identity to distinguish in those cases. The old owner
+must be retired first; fresh stage identities and unique full `P`/`Q` references
+still bind each lifecycle to the same fixed source, decision and key. Empty file
+contents alone do not qualify for this exception.
+
+Phase is `outbound`, `staged`, `saving`, `returning` or
 `sources-returned`. Outbound/returned are independent move-plan cursors; returned
 cannot exceed the reconciled owned high-water boundary. Active direction is `outbound` or `return`.
 Evidence fields are `P` or `null`, purpose `outbound-evidence`/`return-evidence`.
@@ -679,6 +746,21 @@ actual native payload against exact portable membership and expected effective
 native descendants from frozen source plus valid transitions. Synthetic structural
 directories are allowed only where the tree requires them. Record their identities
 for the before/after barrier, never synthesize proof for changed file bytes.
+
+A portable empty leaf directory not covered by a move may be materialized as a
+synthetic projected presence only for a live aggregate partition when the bound
+original observation and effective post-GC source projection prove its meaningful
+directory identity, no retained partition payload below it, and nonmovable protected,
+excluded or other-partition contents preventing whole-directory transfer. The original
+directory and its protected/foreign projection remain untouched and guarded through
+final source validation; only attributed changes from other planned operations may
+adjust their effective evidence. Stage construction records the new private directory's
+actual native identity and includes it in complete pre/post-SDK membership barriers.
+Every file and every fully movable empty subtree still requires exact move coverage.
+Structural ancestors and these proven empty presences do not grant permission to
+omit payloads, move protected contents or repair/rebase original evidence.
+A presence-only partition may have zero transfer units after its move-source row, without a fabricated move
+unit or prepared-source record; its stage and final source barriers still apply.
 
 Native SDK TAR is recursive. Compare sealed stage evidence before **and after**
 the SDK call/readback, including directory ctime: transient add-then-remove members
@@ -1218,3 +1300,38 @@ object or V4b's later adjustment handoff. New sources match the committed tuple 
 original prepared evidence/root exactly. Directory allowance equals the frozen policy,
 including on resume. Per-object receipt checks inspect that object's source; shared
 pre/final barriers inspect all sources once, deduplicating new single-writer evidence.
+
+## Moving-source publication handoff
+
+Moving sources use the ordinary transfer move-plan, never the prepared-source variant.
+After observation/GC, guarded original-source reads produce hashes and unit/event
+spools before keyed metadata or evacuation. A newly captured local-writer snapshot
+is an explicit counted independent copy into fresh owned retained space; it is sealed
+before postSources/decision. Its live input is not aliased as an owned snapshot.
+Hash reuse requires genuine original-input/destination native proof from that copy,
+not a fabricated worker receipt. Uncommitted candidates may be abandoned without
+moving live originals; committed postSources are not recaptured on retry.
+
+A frozen transfer publication binds the existing complete publication/choices,
+tree/envelope, original observation or owned-source evidence spans and exact keys
+before payload placement. The first move-source row additionally binds the already captured
+post-GC native/hash Q, including live aggregate directories. Pre-key metadata rendering
+does not grant a stage receipt.
+Admission resolves live evidence through the bound observations Q and owned evidence
+through its exact committed snapshot-source root/ref. Synthetic SDK parent directories
+are structural, not permission to move protected/other-partition contents.
+
+Only after marker-owned evacuation and complete stage verification may a genuine
+staged-object capability call native SDK transport. Resume reopens the frozen plan
+and reconciles source locations from marker/epoch/evidence plus current adjustments;
+it cannot require a populated payload after sources have returned, or reconstruct
+original authority by capturing current identities. Prepared zero-transfer admission
+keeps its existing strict geometry/source checks; no caller flag bypasses them.
+
+SDK settlement and post-stage outcome remain provisional. Moving sources return and
+commit effective adjustments first, then exact-key reconciliation/readback and receipt
+issuance. Lost/failed stage evidence requires strong remote expected-byte verification;
+wrong immutable bytes invalidate the attempt. Final publication binds effective-source
+validation and completed-GC-target absence, not an already-returned flag. A returned
+stage may retain metadata/structural empty directories; its contents are not a new
+source. Existing record-last and intent/marker ownership rules remain in force.

@@ -59,6 +59,8 @@ export interface LocalStreamOptions {
   readonly installKind?: InstallKind;
   /** Only explicit zero-transfer consumers admit prepared-source plans; relocation defaults reject them. */
   readonly moveMode?: 'transfer' | 'prepared';
+  /** Explicit observation-bound shared projections; legacy inline readers remain strict. */
+  readonly gcMode?: 'inline' | 'shared';
 }
 export interface LocalStreamSeal {
   bytes: number;
@@ -82,6 +84,8 @@ export class LocalStreamGrammar {
     z.enum(localPurposes).parse(purpose);
     if (options.moveMode !== undefined && purpose !== 'move-plan')
       throw new Error('Move mode outside transfer plan.');
+    if (options.gcMode !== undefined && purpose !== 'gc-evidence')
+      throw new Error('GC mode outside GC evidence.');
     this.schemas = options.codec.schemas;
     const partitioned = [
       'native-evidence',
@@ -116,6 +120,7 @@ export class LocalStreamGrammar {
         options.maxDirectoryEntries,
         options.installKind,
         options.moveMode ?? 'transfer',
+        options.gcMode ?? 'inline',
       );
   }
   header(): Value {

@@ -51,6 +51,8 @@ export interface WalkOptions {
   /** Same-phase protected-child inventory. Returning prune never follows that object. */
   readonly inspectChild?: (child: NativeChild, signal: AbortSignal) => Promise<'prune' | void>;
   readonly signal?: AbortSignal;
+  /** Immediate parent held by a caller's checked ancestor scope. Rechecked at both boundaries. */
+  readonly parentNative?: NativeIdentity;
 }
 export type WalkEvent =
   | (NativeChild & { readonly tag: 'protected-child'; readonly nativePath: string })
@@ -104,7 +106,18 @@ export async function* walkNative(
   };
   const stat = async (path: string) => nativeIdentity(await rawStat(path));
   await root.verifyRoot();
-  if (relative) await root.parents(relative);
+  const checkParent = async () => {
+    const expected = options.parentNative!;
+    if (
+      !relative ||
+      expected[2] !== 'directory' ||
+      expected[3] !== root.binding[3] ||
+      !sameNative(await stat(parentPath(relative)), expected, true)
+    )
+      throw new Error('Scoped traversal parent changed.');
+  };
+  if (options.parentNative) await checkParent();
+  else if (relative) await root.parents(relative);
   async function* visit(
     nativePath: string,
     path: string,
@@ -234,5 +247,6 @@ export async function* walkNative(
     }
   }
   yield* visit(relative, logicalRoot, logicalRoot ? logicalRoot.split('/').length + 1 : 1);
+  if (options.parentNative) await checkParent();
   await root.verifyRoot();
 }

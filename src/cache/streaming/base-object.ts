@@ -30,19 +30,9 @@ import { writeNativeTree, readNativeTree } from './native-tree';
 import { walkNative, walkWork } from './native-walk';
 import { NativeReadPhase } from './native-read-phase';
 import { sameNative, type NativeIdentity } from './native';
-import {
-  type WorkingBudget,
-  UnitProjection,
-  normalizeMode,
-  recognizedRoot,
-  isWorkspaceRoot,
-  parentPath,
-  baseName,
-  joinPath,
-} from './tree-state';
-import { workspaceKind } from '../immutable-workspaces';
+import { type WorkingBudget, normalizeMode, parentPath, baseName } from './tree-state';
+import { BaseSourceTree } from './base-source-tree';
 import type { LocalRow } from './local-stream';
-import type { Unit } from './schema';
 import { WorkerSpool } from './worker-spool';
 import { PreparedWorkerSnapshot } from './worker-snapshot';
 import { verifyNativeEvidence } from './install-evidence';
@@ -80,7 +70,7 @@ export class ValidatedBaseObject {
     reference: ObjectRef,
     options: BaseObjectOptions,
     hashBodies = false,
-    mode: 'restore' | 'prepared' = 'restore',
+    mode: 'restore' | 'prepared' | 'moving' = 'restore',
     expectedFacts?: AsyncIterable<Value>,
   ): Promise<ValidatedBaseObject> {
     options = Object.freeze({ ...options });
@@ -338,7 +328,7 @@ export class PreparedBaseSource {
     try {
       await this.verifyStable(options);
       let envelope: Envelope | undefined;
-      await writePreparedMetadata(
+      await writeBaseSourceMetadata(
         store,
         root,
         'tree.ndjson',
@@ -353,7 +343,7 @@ export class PreparedBaseSource {
         signal,
       );
       if (!envelope) throw new Error('Missing native tree seal.');
-      const env = await writePreparedMetadata(
+      const env = await writeBaseSourceMetadata(
           store,
           root,
           'envelope.json',
@@ -423,7 +413,8 @@ export class PreparedBaseSource {
     }
     signal.throwIfAborted();
     await assertUnkeyedSource(store, root);
-    const events = await WorkerSpool.create(store, options.budget);
+    const builder = await BaseSourceTree.create(store, partition, options),
+      events = builder.events;
     const proof: AsyncIterator<LocalRow, unknown> | null = source
       ? store
           .rows(source.evidence, 'native-evidence', { ...options, partition: partition })
@@ -433,50 +424,6 @@ export class PreparedBaseSource {
       let row = await proof!.next();
       if (!row.done && tuple(row.value.value)[0] === 'local-stream') row = await proof!.next();
       return row;
-    };
-    let unit: { descriptor: Unit; rows: WorkerSpool; jars: boolean } | null = null;
-    const append = (r: Value) => (unit?.rows ?? events).append(r, signal);
-    const closeUnit = async () => {
-      if (!unit) return;
-      const u = unit;
-      if (u.descriptor[2] === 'subtree')
-        u.descriptor[0] = workspaceKind(
-          u.descriptor[1],
-          u.jars ? [u.descriptor[1] + '/classes.jar'] : [],
-        );
-      const projection = new UnitProjection(model, u.descriptor, false, partition);
-      u.rows.seal(signal);
-      let current = u.descriptor[1];
-      for await (const value of u.rows.rows(signal)) {
-        const r = tuple(value);
-        if (r[0] === 'dir-open') {
-          current = String(r[1]);
-          projection.directory(current, 'open');
-        } else if (r[0] === 'dir-close') {
-          projection.directory(current, 'close');
-          current = parentPath(current);
-        } else
-          projection.file(
-            joinPath(current, String(r[1])),
-            partition,
-            Number(r[2]),
-            Number(r[3]),
-            Number(r[4]),
-            String(r[5]),
-          );
-      }
-      const s = projection.finish();
-      await events.append(
-        ['unit-open', ...u.descriptor, 'partition-projection', s.counts, s.semantic, s.comparison],
-        signal,
-      );
-      for await (const row of u.rows.rows(signal)) await events.append(row, signal);
-      await events.append(
-        ['unit-close', u.descriptor[0], u.descriptor[1], s.counts, s.semantic, s.comparison],
-        signal,
-      );
-      await u.rows.dispose();
-      unit = null;
     };
     let completed: PreparedBaseSource | undefined,
       failure: unknown,
@@ -508,30 +455,14 @@ export class PreparedBaseSource {
           if (e.tag === 'file') trusted = String(r[3]);
         }
         if (e.tag === 'directory-open') {
-          if (unit?.descriptor[2] === 'direct') await closeUnit();
           await phase.enter(e.nativePath, e.identity);
-          await append(['dir-open', e.path]);
-          if (!unit && isWorkspaceRoot(model, e.path))
-            unit = {
-              descriptor: [workspaceKind(e.path), e.path, 'subtree'],
-              rows: await WorkerSpool.create(store, options.budget),
-              jars: false,
-            };
+          await builder.open(e.path, signal);
         } else if (e.tag === 'directory-close') {
-          if (unit?.descriptor[1] === e.path) await closeUnit();
-          await append(['dir-close', e.path]);
+          await builder.close(e.path, signal);
           await phase.leave(e.nativePath, e.identity);
         } else {
           if (model.owner(e.path)[0] !== partition)
             throw new Error('Wrong prepared native partition.');
-          if (!unit && recognizedRoot(model, e.path) !== null) {
-            if (model.tuple[2] !== 'maven') throw new Error('Missing native workspace root.');
-            unit = {
-              descriptor: ['maven-directory', parentPath(e.path), 'direct'],
-              rows: await WorkerSpool.create(store, options.budget),
-              jars: false,
-            };
-          }
           const size = Number(e.identity[5]),
             mode = normalizeMode(model.tuple[2], e.path, e.identity[6]);
           if (!Number.isSafeInteger(size) || size < 0)
@@ -540,20 +471,14 @@ export class PreparedBaseSource {
             throw new Error('Prepared native mode is not canonical.');
           const sha = await phase.hash(e.nativePath, e.identity, trusted, signal);
           await captured.append(['file', e.path, e.identity, sha], signal);
-          if (
-            unit &&
-            (e.path === unit.descriptor[1] + '/classes.jar' ||
-              e.path === unit.descriptor[1] + '/sources.jar')
-          )
-            unit.jars = true;
-          await append([
-            'file',
-            baseName(e.path),
-            Number(e.identity[5]),
-            normalizeMode(model.tuple[2], e.path, e.identity[6]),
+          await builder.file(
+            e.path,
+            size,
+            mode,
             Number(BigInt(e.identity[8]) / 1000000n),
             sha,
-          ]);
+            signal,
+          );
         }
       }
       if (proof) {
@@ -561,7 +486,7 @@ export class PreparedBaseSource {
         if (end.done || tuple(end.value.value)[0] !== 'local-end' || !(await proof.next()).done)
           throw new Error('Extra prepared source evidence.');
       }
-      events.seal(signal);
+      builder.seal(signal);
       captured.seal(signal);
       const evidence = Object.freeze(
         await store.writeStream(
@@ -586,7 +511,7 @@ export class PreparedBaseSource {
     }
     try {
       await settleBaseCleanup(
-        [() => proof?.return?.(undefined), () => unit?.rows.dispose(), () => captured?.dispose()],
+        [() => proof?.return?.(undefined), () => builder.disposeUnit(), () => captured?.dispose()],
         failure,
       );
     } catch (error) {
@@ -645,7 +570,7 @@ async function* canonicalFacts(
   store: OwnedStore,
   payload: string,
   facts: WorkerSpool,
-  mode: 'restore' | 'prepared',
+  mode: 'restore' | 'prepared' | 'moving',
   budget: WorkingBudget,
   signal: AbortSignal,
 ): AsyncGenerator<Value> {
@@ -674,7 +599,7 @@ async function* canonicalFacts(
         yield value;
       } else {
         let actual = n;
-        if (!canonicalBaseMode(n[6], Number(r[4]))) {
+        if (mode !== 'moving' && !canonicalBaseMode(n[6], Number(r[4]))) {
           if (mode === 'prepared')
             throw new Error(
               'Prepared native mode is not canonical; source evidence cannot be rewritten.',
@@ -709,7 +634,7 @@ export async function settleBaseCleanup(
 
 // An uncommitted partial render may be replayed only with the original genuine
 // source. Existing immutable metadata is compared, never replaced or adopted by name.
-async function writePreparedMetadata(
+export async function writeBaseSourceMetadata(
   store: OwnedStore,
   root: string,
   name: 'tree.ndjson' | 'envelope.json',

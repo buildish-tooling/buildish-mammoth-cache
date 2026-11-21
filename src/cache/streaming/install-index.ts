@@ -314,6 +314,33 @@ export class IndexDirectories {
     }
     return frame.node;
   }
+  /** A borrowed directory page; member records retain their own explicit lease. */
+  async member(path: string): Promise<{ node: IndexedNode; release(): void } | null> {
+    if (path === '') return indexedNode(this.scratch, this.root);
+    const directory = await this.directory(parentPath(path));
+    if (!directory) return null;
+    const frame = this.frames[this.frames.length - 1];
+    if (frame.entries === null) {
+      frame.entries = [];
+      for await (const edge of indexedEntries(this.scratch, frame.node)) {
+        const name = Buffer.from(edge[0]).toString(),
+          charge = 128 + 4 * Buffer.byteLength(name);
+        this.scratch.budget.retain(charge);
+        frame.charge += charge;
+        frame.entries.push({ name, kind: edge[1], offset: edge[2] });
+      }
+    }
+    const name = baseName(path);
+    let low = 0,
+      high = frame.entries.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (compareName(frame.entries[middle].name, name) < 0) low = middle + 1;
+      else high = middle;
+    }
+    const entry = frame.entries[low];
+    return entry?.name === name ? indexedNode(this.scratch, entry.offset) : null;
+  }
   close() {
     while (this.frames.length) this.pop();
   }

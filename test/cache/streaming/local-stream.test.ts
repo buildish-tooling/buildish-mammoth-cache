@@ -168,6 +168,7 @@ function fixture(purpose: LocalPurpose) {
       break;
     case 'move-plan':
       rows = [
+        ['move-source', f.q('native-evidence')],
         ['move-unit-open', 'file', logical, 'file'],
         ['move', 1, 'live', logical, logical, 'file', span, span],
         ['move-unit-close', 'file', logical, 1],
@@ -380,7 +381,7 @@ it.each(['overlap', 'index', 'escape', 'count', 'source'])(
     const f = fixture('move-plan'),
       rows = structuredClone(f.rows);
     if (kind === 'overlap')
-      rows.splice(2, 0, [
+      rows.splice(3, 0, [
         'move',
         2,
         'live',
@@ -390,10 +391,10 @@ it.each(['overlap', 'index', 'escape', 'count', 'source'])(
         ['span', h, 1, 2],
         ['span', h, 1, 2],
       ]);
-    if (kind === 'index') (rows[1] as Value[])[1] = 2;
-    if (kind === 'escape') (rows[1] as Value[])[4] = 'elsewhere';
-    if (kind === 'count') (rows[2] as Value[])[3] = 2;
-    if (kind === 'source') (rows[1] as Value[])[3] = 'metadata/other';
+    if (kind === 'index') (rows[2] as Value[])[1] = 2;
+    if (kind === 'escape') (rows[2] as Value[])[4] = 'elsewhere';
+    if (kind === 'count') (rows[3] as Value[])[3] = 2;
+    if (kind === 'source') (rows[2] as Value[])[3] = 'metadata/other';
     await expect(write(f, rows)).rejects.toThrow();
   },
 );
@@ -616,23 +617,25 @@ it('distinguishes file units, direct Maven directory roots and whole-directory m
   const f = fixture('move-plan'),
     span: Value = ['span', h, 1, 2];
   const bad = structuredClone(f.rows);
-  (bad[1] as Value[])[5] = 'directory';
+  (bad[2] as Value[])[5] = 'directory';
   await expect(write(f, bad)).rejects.toThrow('ordinary file');
   const root = 'repository/g',
     direct: Value[] = [
+      ['move-source', f.q('native-evidence')],
       ['move-unit-open', 'maven-directory', root, 'direct'],
       ['move', 1, 'live', root, root, 'directory', span, span],
       ['move-unit-close', 'maven-directory', root, 1],
     ];
-  expect((await write(f, direct)).seal.records).toBe(3);
+  expect((await write(f, direct)).seal.records).toBe(4);
   const group: Value[] = [
+    ['move-source', f.q('native-evidence')],
     ['move-unit-open', 'directory', 'metadata', 'subtree'],
     ['move', 1, 'live', 'metadata', 'metadata', 'directory', span, span],
     ['move-unit-close', 'directory', 'metadata', 1],
   ];
-  expect((await write(f, group)).seal.records).toBe(3);
-  (group[1] as Value[])[4] = 'metadata/child';
-  (group[1] as Value[])[3] = 'metadata/child';
+  expect((await write(f, group)).seal.records).toBe(4);
+  (group[2] as Value[])[4] = 'metadata/child';
+  (group[2] as Value[])[3] = 'metadata/child';
   await expect(write(f, group)).rejects.toThrow('single directory root');
   const install = fixture('install-plan');
   install.opts = { ...install.opts, installKind: () => 'directory' };
