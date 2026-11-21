@@ -80,6 +80,72 @@ export class NativeReadPhase {
     for await (const chunk of this.read(path, expected, signal)) hash.update(chunk);
     return hash.digest('hex');
   }
+  /** Restore-only portable mode repair under the already checked active parent. */
+  async repairMode(
+    path: string,
+    expected: NativeIdentity,
+    mode: number,
+    signal: AbortSignal,
+  ): Promise<NativeIdentity> {
+    signal.throwIfAborted();
+    if (expected[2] !== 'file' || parentPath(path) !== this.stack[this.stack.length - 1])
+      throw new Error('Mode repair has no checked parent.');
+    await this.matches(path, expected);
+    this.root.work.opens++;
+    const handle = await open(
+      this.root.resolve(path),
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      this.root.work.stats++;
+      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
+        throw new Error('Mode repair source changed.');
+      await handle.chmod(mode);
+      if (process.platform === 'win32') {
+        this.root.work.stats++;
+        await this.sync(path, nativeIdentity(await handle.stat({ bigint: true })), signal);
+      } else {
+        await handle.sync();
+        this.root.work.fileSyncs++;
+      }
+      this.root.work.stats++;
+      const after = nativeIdentity(await handle.stat({ bigint: true }));
+      if (expected.some((v, i) => ![6, 7, 9].includes(i) && v !== after[i]))
+        throw new Error('Mode repair changed unrelated native facts.');
+      await this.matches(path, after);
+      signal.throwIfAborted();
+      return after;
+    } finally {
+      await handle.close();
+    }
+  }
+  /** Sync already guarded native bytes without reading/hash allocation. Windows needs a writable handle. */
+  async sync(path: string, expected: NativeIdentity, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    if (expected[2] !== 'file' || parentPath(path) !== this.stack[this.stack.length - 1])
+      throw new Error('Native sync has no checked parent.');
+    await this.matches(path, expected);
+    this.root.work.opens++;
+    const handle = await open(
+      this.root.resolve(path),
+      (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) |
+        (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      this.root.work.stats++;
+      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
+        throw new Error('Native sync source changed.');
+      await handle.sync();
+      this.root.work.fileSyncs++;
+      this.root.work.stats++;
+      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
+        throw new Error('Native source changed during sync.');
+      await this.matches(path, expected);
+      signal.throwIfAborted();
+    } finally {
+      await handle.close();
+    }
+  }
   async *read(path: string, expected: NativeIdentity, signal: AbortSignal): AsyncGenerator<Buffer> {
     signal.throwIfAborted();
     if (
