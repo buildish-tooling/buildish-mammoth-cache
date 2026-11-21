@@ -127,7 +127,14 @@ export type WorkerEvent =
       bytes: AsyncIterable<Uint8Array>;
       assertStable(signal: AbortSignal): Promise<void>;
     };
+/** Observational counters only; never wire or acceptance authority. */
+export interface WorkerWriteWork {
+  tarBytes: number;
+  controlMembers: number;
+  controlBodyBytes: number;
+}
 export interface WorkerWriter extends WorkerContext {
+  readonly work?: WorkerWriteWork;
   readonly snapshots: readonly string[];
   assertStable(signal: AbortSignal): Promise<void>;
 }
@@ -161,6 +168,14 @@ export async function writeWorkerArchive(
   const archive = pack({ highWaterMark: 16384 }),
     gzip = createGzip({ chunkSize: 16384 });
   const output = pipeline(archive, gzip, destination, { signal }).catch(abort);
+  if (options.work) {
+    options.work.tarBytes = 0;
+    options.work.controlMembers = 0;
+    options.work.controlBodyBytes = 0;
+    archive.on('data', (chunk: Buffer) => {
+      options.work!.tarBytes = add(options.work!.tarBytes, chunk.length);
+    });
+  }
   let iterator: AsyncIterator<WorkerEvent> | undefined,
     pendingNext = false,
     completed = false;
@@ -173,6 +188,10 @@ export async function writeWorkerArchive(
           ? '.mammoth-meta/complete.json'
           : `.mammoth-meta/${state.sequence}.json`;
     const bytes = encodeRecord(value);
+    if (options.work) {
+      options.work.controlMembers = add(options.work.controlMembers);
+      options.work.controlBodyBytes = add(options.work.controlBodyBytes, bytes.length);
+    }
     await withAbort(
       new Promise<void>((resolve, reject) => {
         const sink = archive.entry({ name, mode: 384, mtime: new Date(0) }, bytes, (error) =>

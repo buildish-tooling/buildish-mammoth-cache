@@ -71,11 +71,24 @@ export class NativeReadPhase {
       parentPath(path) !== this.stack[this.stack.length - 1]
     )
       throw new Error('Leaf has no checked native parent.');
-    await this.matches(path, expected);
     if (trusted !== null) {
+      await this.matches(path, expected);
       signal.throwIfAborted();
       return trusted;
     }
+    const hash = createHash('sha256');
+    for await (const chunk of this.read(path, expected, signal)) hash.update(chunk);
+    return hash.digest('hex');
+  }
+  async *read(path: string, expected: NativeIdentity, signal: AbortSignal): AsyncGenerator<Buffer> {
+    signal.throwIfAborted();
+    if (
+      expected[2] !== 'file' ||
+      !this.stack.length ||
+      parentPath(path) !== this.stack[this.stack.length - 1]
+    )
+      throw new Error('Leaf has no checked native parent.');
+    await this.matches(path, expected);
     this.root.work.opens++;
     const handle = await open(
       this.root.resolve(path),
@@ -85,20 +98,18 @@ export class NativeReadPhase {
       this.root.work.stats++;
       if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
         throw new Error('Preimage changed on open.');
-      const hash = createHash('sha256');
       for await (const chunk of abortableValues(
         handle.createReadStream({ autoClose: false, highWaterMark: 65536 }),
         signal,
       )) {
-        hash.update(chunk);
         this.root.work.readBytes = add(this.root.work.readBytes, chunk.length);
+        yield chunk;
       }
       this.root.work.stats++;
       if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
         throw new Error('Preimage changed during hash.');
       await this.matches(path, expected);
       signal.throwIfAborted();
-      return hash.digest('hex');
     } finally {
       await handle.close();
     }

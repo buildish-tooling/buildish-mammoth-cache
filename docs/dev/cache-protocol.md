@@ -23,9 +23,10 @@ limitations under the License.
 ## Status and ownership
 
 **Draft specification for an incompatible format under implementation.** The raw worker
-transport and pure canonical/model/reduction and worker application codecs are
-implemented in isolation. Filesystem traversal, multi-input merge, native lifecycle
-and Action integration remain pending. This page does not describe the released worker format or announce availability. The `v1` profile
+transport, canonical/model/reduction and worker application codecs, guarded source
+traversal, multi-input merge and native install lifecycle are implemented in isolation.
+Native-base/generation acquisition, GC/evacuation/return, phase/daemon orchestration,
+broad scale/paging qualification and released Action integration remain pending. This page does not describe the released worker format or announce availability. The `v1` profile
 names below identify the proposed protocol, independently of the Mammoth release
 number. Mixed old/new workers are unsupported; old base caches start cold under a
 new cache family. All cooperating jobs must upgrade together.
@@ -152,6 +153,47 @@ A transport download/digest pass is separate from archive parsing. Aggregation r
 and decompresses each downloaded archive **once**, forward only. A failed operation
 may restart from immutable inputs; that is exceptional recovery, not a normal second
 archive pass. Upload still reads the completed compressed file.
+
+### Worker artifact names and discovery
+
+Use the actual immutable upload file basename:
+
+```text
+producerSha = H("worker-producer", ["producer",provider,repository,workflowName,runId,job,revision,buildTool])
+decisionSha = H("worker-decision", ["decision",observationsRef.sha,workerSourcesRef.sha])
+name = family + "-w" + producerSha + "-a" + decimal(runAttempt) + "-d" + decisionSha + ".tar.gz"
+```
+
+Here `H` is one framed canonical tuple under the stated digest domain. Context
+fields have the same values as the worker identity; runAttempt is a positive safe
+integer. Full digests keep the basename at most240 ASCII bytes, including the
+maximum-width attempt. The family makes this incompatible with legacy discovery.
+The decision digest identifies the frozen source selection; compressed wire SHA-256
+is separately bound by Q/service receipts and never inferred from the basename.
+
+For each configured producer, select the unique artifact at the greatest attempt
+not exceeding the selected execution attempt. Listing order cannot change that
+choice. A same-attempt ambiguity or malformed matching candidate rejects selection.
+Optional absence applies only when no candidate exists; a producer with only future
+candidates is not silently treated as absent. Validate all admitted artifacts,
+including optional and snapshot-only producers. There is no total cache-byte or
+legacy package/manifest-entry admission gate in this path.
+
+Raw capability is explicit and defaults false. A supporting backend honors both
+raw flags or throws; do not fall back to ZIP wrapping/extraction. Reported digests
+accept bare64 hex or `sha256:` plus64 hex and normalize to lower-case SHA-256;
+unknown algorithms or mismatches reject receipts. Raw download forwards the
+qualified expected hash, verifies the actual compressed bytes/native identity and
+syncs the single owned file before exposing Q. This transport binding checksum pass
+is separate from the one subsequent TAR/gzip parse; the SDK's computed actual hash
+is not exposed by its download result.
+
+Upload retries use exactly the frozen path/name/bytes. If upload outcome is
+ambiguous, exact-name readback must match size and reported SHA-256; without a
+reported digest, download/hash the raw bytes and compare with the frozen package.
+Never refreeze live sources to recover an upload. The backend API has no cancellation
+hook: an in-flight SDK call must settle before its local staging is retired, then
+cancellation is observed. Local streams/readers remain cancellation-aware.
 
 ### TAR profile
 
@@ -445,6 +487,15 @@ not a global path index or a second transported file catalogue.
 Union validated usage with bounded metadata cursors. Suppress it for every selected
 upsert path, selected Maven direct-file directory and workspace participating in
 complete-upsert selection, including used members absent from the winning producer.
+Selected native payload topology also suppresses incompatible **usage-only** shapes:
+a selected ordinary file `x` suppresses usage below `x/`, and a selected directory
+`x/` suppresses a usage-only file `x`. Unrelated usage below a selected directory
+remains eligible. This rule never resolves conflicting selected payload shapes;
+those still reject before live installation. Contradictory usage-only file/directory
+shapes without selected payload authority also reject because one managed activity
+tree cannot represent them. Implement the rule with a bounded immediate-directory
+name/type frontier; do not create a global per-file index or replay archive payloads.
+
 Discarded upserts do not automatically become usage. Preserve required activity in
 prepare state: timestamps alone cannot reconstruct imported reads/writes later.
 

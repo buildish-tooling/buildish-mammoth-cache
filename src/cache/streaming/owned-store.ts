@@ -97,8 +97,31 @@ export class OwnedStore {
     source: AsyncIterable<Uint8Array>,
     signal = new AbortController().signal,
   ): Promise<Reference> {
-    const target = this.prefix + 'files/' + randomUUID(),
-      candidate = target + '.tmp';
+    return this.writeAt(purpose, this.prefix + 'files/' + randomUUID(), source, signal);
+  }
+  /** SDK raw upload names artifacts from the file basename; pin it before Q publication. */
+  async writeNamedWorkerArchive(
+    name: string,
+    source: AsyncIterable<Uint8Array>,
+    signal = new AbortController().signal,
+  ): Promise<Reference> {
+    if (typeof name !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,232}\.tar\.gz$/.test(name))
+      throw new Error('Invalid raw worker artifact filename.');
+    return this.writeAt(
+      'worker-archive',
+      this.prefix + 'archives/' + randomUUID() + '/' + name,
+      source,
+      signal,
+    );
+  }
+  private async writeAt(
+    purpose: string,
+    target: string,
+    source: AsyncIterable<Uint8Array>,
+    signal: AbortSignal,
+  ): Promise<Reference> {
+    signal.throwIfAborted();
+    const candidate = target + '.tmp';
     await this.makeParents(target);
     this.root.work.opens++;
     const handle = await open(this.root.resolve(candidate), 'wx', 0o600),
@@ -126,6 +149,7 @@ export class OwnedStore {
       await this.fail('immutable-rename');
       await this.root.syncDirectory(path.posix.dirname(target));
       await this.fail('immutable-publication-barrier');
+      signal.throwIfAborted();
       return this.codec.schemas
         .ref(purpose)
         .parse(['ref', purpose, target, bytes, hash.copy().digest('hex')]);

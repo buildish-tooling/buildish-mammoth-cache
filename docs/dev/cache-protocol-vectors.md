@@ -307,3 +307,21 @@ stock normalized entry callbacks do not qualify. Parser proof must additionally
 exercise split headers/lengths/UTF-8, over-limit queued chunks and bounded multi-reader
 backpressure. Normative answers are documentation fixtures, not production parser
 or full lifecycle test results.
+
+## N0: raw worker artifact naming
+
+Use the existing Maven model/family and context
+`["github","example/repo","ci","42","A",1,"rev-1","maven"]`, observations Q SHA
+of64 `a` characters and worker-sources Q SHA of64 `b` characters. Expected digests
+and actual SDK upload basename (independently calculated with SHA-256/U64BE framing):
+
+```text
+producerSha = 7bc0bf858d916f802423c244043963037a23be107d90ccbebeeed37f091cebb5
+decisionSha = 44e8f670cbc573497679d42c1f998c5a159a84f7c161d086f972f500065d2190
+name = mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef-w7bc0bf858d916f802423c244043963037a23be107d90ccbebeeed37f091cebb5-a1-d44e8f670cbc573497679d42c1f998c5a159a84f7c161d086f972f500065d2190.tar.gz
+```
+
+Changing runAttempt alone changes its decimal name segment, not producerSha.
+Changing the job/run/revision changes producerSha; a new frozen observation or
+snapshot selection changes decisionSha. These digests do not replace the compressed
+file's actual transport SHA-256 or the archive's complete acceptance checks.
