@@ -57,6 +57,8 @@ export interface LocalStreamOptions {
   readonly maxDirectoryEntries?: number;
   /** Required for install streams: member kind from independently validated referenced evidence. */
   readonly installKind?: InstallKind;
+  /** Only explicit zero-transfer consumers admit prepared-source plans; relocation defaults reject them. */
+  readonly moveMode?: 'transfer' | 'prepared';
 }
 export interface LocalStreamSeal {
   bytes: number;
@@ -78,6 +80,8 @@ export class LocalStreamGrammar {
     private readonly options: LocalStreamOptions,
   ) {
     z.enum(localPurposes).parse(purpose);
+    if (options.moveMode !== undefined && purpose !== 'move-plan')
+      throw new Error('Move mode outside transfer plan.');
     this.schemas = options.codec.schemas;
     const partitioned = [
       'native-evidence',
@@ -111,6 +115,7 @@ export class LocalStreamGrammar {
         options.partition,
         options.maxDirectoryEntries,
         options.installKind,
+        options.moveMode ?? 'transfer',
       );
   }
   header(): Value {

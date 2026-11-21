@@ -51,7 +51,9 @@ export interface BaseCacheBackend {
   readonly capabilities: BaseCacheBackendCapabilities;
   /** Reports whether the active cache backend is usable in the current environment. */
   isFeatureAvailable(): boolean;
-  /** Restores the newest entry matching the primary prefix or the first matching fallback prefix. */
+  /** Restores the newest matching entry. Undefined reports unavailability, not proven
+   * absence: some SDK adapters suppress download/extraction failures. Native callers
+   * reject partial extraction; publication readback then remains unconfirmed. */
   restoreCache(
     paths: string[],
     primaryKeyPrefix: string,

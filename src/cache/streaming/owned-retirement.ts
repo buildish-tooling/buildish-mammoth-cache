@@ -37,7 +37,7 @@ export async function retireOwnedDirectory(
   const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
   const disposable =
     parts.length === 2 &&
-    ['planning', 'admission', 'mutation', 'worker'].includes(parts[0]) &&
+    ['planning', 'admission', 'mutation', 'worker', 'base'].includes(parts[0]) &&
     uuid.test(parts[1]);
   const parentLedger =
     parts.length === 3 && parts[0] === 'parents' && uuid.test(parts[1]) && parts[2] === 'ledger';

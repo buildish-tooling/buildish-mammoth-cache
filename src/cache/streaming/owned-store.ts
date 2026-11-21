@@ -114,6 +114,24 @@ export class OwnedStore {
       signal,
     );
   }
+  /** Native SDK metadata has fixed basenames before its immutable Q is exposed. */
+  async writeNativeMetadata(
+    root: string,
+    name: 'tree.ndjson' | 'envelope.json' | 'record.json',
+    source: AsyncIterable<Uint8Array>,
+    signal = new AbortController().signal,
+  ): Promise<Reference> {
+    this.codec.schemas.owned.parse(root);
+    if (!['tree.ndjson', 'envelope.json', 'record.json'].includes(name))
+      throw new Error('Unknown native metadata name.');
+    const purpose = {
+      'tree.ndjson': 'native-tree',
+      'envelope.json': 'envelope',
+      'record.json': 'generation',
+    }[name];
+    if (!purpose) throw new Error('Unknown native metadata name.');
+    return this.writeAt(purpose, root + '/' + name, source, signal);
+  }
   private async writeAt(
     purpose: string,
     target: string,

@@ -325,3 +325,22 @@ Changing runAttempt alone changes its decimal name segment, not producerSha.
 Changing the job/run/revision changes producerSha; a new frozen observation or
 snapshot selection changes decisionSha. These digests do not replace the compressed
 file's actual transport SHA-256 or the archive's complete acceptance checks.
+
+## L0: prepared zero-transfer source plan
+
+This exact `move-plan` local stream requires the explicit prepared reader. A default
+transfer/relocation reader rejects it. It contains one data record and zero actual
+moves/targets/roots; the referenced evidence bytes below are a syntactic fixture,
+not a claim of payload/source qualification. The source gate must separately validate
+the exact native-evidence Q/header/EOF, original N/hash and derived payload root.
+Context/model/family use the shared vectors; invocation nonce is 32 copies of `a`.
+
+```text
+["local-stream",1,"move-plan","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef","metadata"]
+["prepared-source",["ref","native-evidence",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/prepared-evidence",100,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]]
+["local-end",1,"8447ba695a15b7d7918ae46651ed56984763c42a95e86a4dc22d280fafe77a2e"]
+```
+
+Expected local event digest: `8447ba695a15b7d7918ae46651ed56984763c42a95e86a4dc22d280fafe77a2e`.
+Expected exact byte length including all three LFs: `563`.
+Expected raw SHA-256: `d868bc6cb688afdccf9a0c1b302fb0199b26a407a9036ab25c676ff3fdd9fa31`.

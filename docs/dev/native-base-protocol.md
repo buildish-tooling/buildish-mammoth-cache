@@ -98,6 +98,12 @@ A frozen publication decision supplies:
 observation and source-set digests are defined by the local lifecycle specification.
 `decisionSha = H("decision", decision)`. The decision is fixed before object keys
 or envelopes are written; a retry cannot refreeze changed inputs under that key.
+Capture prepared source N/hash evidence before identity derivation, so authoritative
+single-writer sources can commit postSourcesRef first. Then render the keyed portable
+tree/envelope from checked metadata spools and that same original evidence without
+another capture body read. Aggregate prepared-source evidence is bound by the exclusive
+prepared-source move-plan variant in the local lifecycle contract, not by broadening
+single-writer source tuples. SDK native archiving still reads the payload separately.
 
 ```text
 lineagePrefix = familyId + "-r-" + lineageId + "-g-"
@@ -229,14 +235,30 @@ links and unknown descendants. Native file mode may be repaired to its declared
 canonical form under guarded evidence; compare its normalized portable form first.
 Do not claim raw mode 0600 and wire mode 0644 are an unexplained content difference.
 Directory tree records bind structure, not source directory mode/mtime; native stage
-mutation evidence is separate from portable directory facts.
+mutation evidence is separate from portable directory facts. Restore-only mode repair
+uses the checked native parent and file identity, changes only the supported permission
+representation and attributable ctime, then seals the resulting full native facts.
+Windows exposes writable/read-only attributes rather than Unix executable bits; apply
+its supported native permissions without claiming Unix mode equivalence. Portable
+launcher normalization remains part of the tree contract.
+
+An already sealed prepared snapshot/source is not a restore repair target. Its producer
+must establish canonical supported permissions before source-set commit; later native
+changes invalidate that proof. Capture retains the original full native identities
+that bound its computed/reused hashes through metadata publication and final sealing.
+Fresh stats after hashing cannot rebase changed ctime into authority for an old hash.
+Final native guards after evidence-Q publication are metadata-only, not body rehashes.
 Base restore does not rehash file bytes, preserving the trusted-base policy. Worker
 content verification remains mandatory and is unaffected by this distinction.
 
 Use operation-local guarded evidence; validate all available objects/groups before
 first live installation. Whole-workspace and authoritative snapshot replacement
 obligations still apply. The [local lifecycle specification](../cache-lifecycle-protocol/) defines install
-batches and recovery.
+batches and recovery. Before durable install receipts, sync extracted file data and
+directories under their checked native identities; SDK extraction alone is not that
+persistence barrier. This phase reads no payload bytes. Independent selected snapshot
+copies sync their new bytes and retain their own full native evidence. Ordinary
+aggregate staging has no payload-copy fallback.
 Do not create a new global extracted-file inventory or rerun the full scan per unit.
 
 ## Generation record
@@ -284,7 +306,13 @@ are projections, not evidence that an incomplete unit is complete.
 Co-read partition trees by directory before routing restore output. A group with
 any unavailable object remains cold as a group; no member is partly installed as
 its successful hit. Missing does not mean malformed: validate every available
-transport/envelope/tree even when another member is missing. With partial availability,
+transport/envelope/tree even when another member is missing. Availability is what the
+backend reports, not proof of service-side nonexistence. In particular, the current
+cache SDK can warn and return `undefined` for both a miss and some transport/extraction
+failures. An empty destination with that result is unavailable/cold; any partial
+extraction or exposed error rejects. It is never an explicit empty partition or a
+successful validation. Publication readback with the same unavailable result remains
+unconfirmed, not evidence that the immutable key is absent or a prior save failed. With partial availability,
 observed connections must not split declared groups; fully available groups must
 match derived connectivity exactly, with no invented joins. Group reconstruction
 preflight finishes before any live install. No later read may silently switch refs.
@@ -298,12 +326,23 @@ return all planned sources → commit effective identity adjustments → confirm
 receipt. A failed return blocks prepare/publication. Uploaded bytes alone are not
 a receipt. Complete all partitions and final source barrier before saving `record.json`.
 
+An isolated zero-transfer source is already physically at its final owned archive
+root's `payload/`, with `envelope.json` and `tree.ndjson` siblings. Owning another
+native root does not supply that geometry. Renaming a retained snapshot into it
+is a transfer requiring return/adjustment evidence, not a zero-transfer shortcut.
+There is no general save-side payload copy or alias fallback. A provisional SDK
+confirmation carries no object receipt or generation publication authority. The
+zero-transfer gate must check exact prepared identity/evidence and absence of
+outstanding transfers; moving-source gates additionally require their real durable
+return and adjustment proofs. A callback echo or serialized flag cannot supply them.
+
 Use exact-key restore/readback to reconcile an ambiguous save. A valid expected
 object can be reused; a wrong immutable object cannot be overwritten or silently
 given a new key in the same frozen attempt. A save with a failed stage mutation
-barrier needs exact readback including byte hashes before receipt acceptance. A
-missing object may be retried under its original key after source recovery; unknown
-backend outcome is not a success. Confirm an ambiguous record by exact record-byte
+barrier needs exact readback including byte hashes before receipt acceptance. An
+idempotent same-key retry is allowed only with the exact frozen bytes and completed
+source recovery/readiness. Unavailable readback does not prove absence or save failure;
+unknown backend outcome is never success. Confirm an ambiguous record by exact record-byte
 comparison/readback, not latest-key discovery. Object receipts never authorize
 record publication with pending relocation or unvalidated source changes.
 

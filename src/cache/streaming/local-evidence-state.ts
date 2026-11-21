@@ -102,6 +102,7 @@ export class LocalEvidenceState {
   private previousUnit: readonly Value[] | null = null;
   private epoch: number | null = null;
   private snapshotIndex = -1;
+  private preparedSeen = false;
   private gc?: GcTreeState;
   constructor(
     private readonly purpose: string,
@@ -110,6 +111,7 @@ export class LocalEvidenceState {
     private readonly partition: string | null,
     private readonly maxEntries = 100000,
     private readonly installKind?: InstallKind,
+    private readonly moveMode: 'transfer' | 'prepared' = 'transfer',
   ) {
     if (purpose === 'native-evidence' || purpose === 'stage-evidence')
       this.flat = new FlatTree(budget, maxEntries, (path) => {
@@ -220,6 +222,18 @@ export class LocalEvidenceState {
     if (!Array.isArray(value) || typeof value[0] !== 'string')
       throw new Error('Invalid evidence row.');
     const tag = value[0];
+    if (this.purpose === 'move-plan') {
+      if (this.moveMode === 'prepared') {
+        if (this.preparedSeen || tag !== 'prepared-source')
+          throw new Error('Prepared-source plan requires exactly one source and no moves.');
+        z.tuple([z.literal('prepared-source'), this.schemas.ref('native-evidence')]).parse(value);
+        this.preparedSeen = true;
+        return;
+      }
+      if (tag === 'prepared-source')
+        throw new Error('Prepared-source plan is not a relocation plan.');
+    }
+
     if (this.purpose.startsWith('install')) {
       if (tag === 'install-context') {
         if (this.installContext || this.unit) throw new Error('Duplicate/late install context.');
@@ -360,6 +374,8 @@ export class LocalEvidenceState {
     } else throw new Error('Unknown GC evidence row.');
   }
   finish(): void {
+    if (this.purpose === 'move-plan' && this.moveMode === 'prepared' && !this.preparedSeen)
+      throw new Error('Missing prepared-source binding.');
     if (this.purpose.startsWith('install') && !this.installContext)
       throw new Error('Missing install context.');
     this.flat?.finish();

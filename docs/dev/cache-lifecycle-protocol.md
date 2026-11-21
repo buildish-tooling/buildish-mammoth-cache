@@ -219,7 +219,10 @@ worker activity stream, including imported usage, and is nonnull at build-ready
 (an empty stream is valid). Final local-writer post-build views are **not** captured
 in prepare bindings. The shared snapshotSource tuple's source kind is `baseline`, `local-writer` or
 `worker-writer`; identity is `[kind,originId]`, where originId is its pinned object
-key, this invocation ID or the selected artifact ID respectively. Metadata ref
+key, this invocation ID or the selected artifact ID respectively. For a baseline
+explicit-empty generation entry, originId is instead the selected generation's exact
+recordKey; the outer partition ID disambiguates its empty source. It still has a sealed
+empty native tree and no fabricated object reference/upload. Metadata ref
 binds the exact source's validated tree/activity and nativeRoot is an owned native
 staging path under the same managed root. Retained snapshot nativeRoot rejects the
 first-component `install` subtree, including native case/trailing-dot/space aliases;
@@ -552,6 +555,31 @@ Purpose `move-plan` contains:
 ["move",index,sourceSpace,sourcePath,logicalPath,kind,treeSpan,sourceEvidenceSpan]
 ["move-unit-close",kind,root,rootCount]
 ```
+
+A **prepared zero-transfer** variant instead contains exactly one data row:
+
+```text
+["prepared-source",nativeEvidenceRef]
+```
+
+`nativeEvidenceRef` has purpose `native-evidence`. Its complete stream header must
+match invocation/model/family and this plan's partition, with valid Q hash and EOF.
+The source root is derived exactly as `objects/<partition>/payload` under this
+invocation; no path override is encoded. This is an original N/hash provenance binding,
+not evidence of a completed move/return. It cannot mix with move/unit rows, repeat or
+be empty. The common local record count is one; moves/targets/roots are zero.
+Relocation/cursor/batch readers must reject this variant. Only an explicit prepared
+reader accepts it and revalidates actual original native evidence plus all fixed
+intent/relocation paths. Single-writer sources additionally match the exact committed
+postSources entry, including metadata ref/root/provenance. No boolean or callback echo
+replaces these gates, and the prepared variant never advances a relocation cursor.
+
+Compatibility decision: this extends the unreleased draft `local-v1` grammar before
+activation; earlier draft readers reject the new tag. It changes neither worker/native
+wire records nor the publication-new tuple. Transfer decoding remains the default and
+rejects prepared records, preventing old transfer consumers from treating the variant
+as an empty successful move plan. Persistent development fixtures using it require
+updated prepared readers; no released Action state is migrated or reinterpreted.
 
 Index starts at 1; moves and units follow canonical hierarchical order. Unit kinds
 are `file`/scope `file`, existing recognized kinds/scopes, or the local-only
@@ -963,6 +991,18 @@ Unpublished planning spools and admission/mutation lookup directories are dispos
 process state. Close unpublished container handles before guarded retirement;
 unpublished lookups never become restart authority.
 
+A `base/<uuid>` container holds one isolated SDK native-object or generation download.
+The SDK must settle before validation or guarded cleanup, including on cancellation;
+its current API has no cancellation hook. Exact root layout and no-follow native
+membership checks precede acceptance. Per-object validation is provisional until
+all available objects and recovery groups pass. Metadata refs and any retained
+consumers keep their container alive; disposal is explicit and cannot delete an
+install/snapshot source published outside it. Native-base acceptance copies the bounded
+generation record into an independent invocation-owned immutable Q before handing its
+baseline tuple to prepare/post. Disposing download/pin owners cannot invalidate that
+returned baseline reference; it follows the invocation's normal binding/retirement
+lifetime. This is at most one 64-KiB metadata document, not a payload copy.
+
 A `worker/<uuid>` container holds one unpublished worker merge
 candidate, with selected payload partition directories and no live-cache authority.
 It may retire under the same guarded, no-follow owned-container rules after all
@@ -973,6 +1013,13 @@ pathname as source authority. Retain each partition's sealed pre-publication roo
 identity in bounded process state and require full native equality before its move;
 a fresh stat must not rebase unexplained ctime changes into a later rename exception.
 Only that verified own move permits the documented root rename adjustments.
+
+Native-base incoming and selected snapshot copies use the same publication ownership
+rules. Register attempted private renames before their syscall: a post-syscall error
+must reconcile guarded source-only/target-only/ambiguous endpoints, never forget a
+completed move. Snapshot copy verification joins planned created-directory IDs/final
+N and file N/hash facts against the final native traversal, including meaningful empty
+directories; a fresh post-copy listing cannot adopt unexpected directories.
 
 A failure after publishing these roots but before returning a common accepted merge
 can leave unclaimed, invocation-owned install/snapshot sources. Do not adopt or erase
@@ -1136,3 +1183,38 @@ units, unknown descendants, native identities, platform durability, daemon cover
 and EXDEV on Linux/macOS/Windows. Measure active names/records, stream buffers and
 SDK children under representative hosted-runner memory load. These schemas do not
 claim qualification has already happened or introduce total-byte/disk admission.
+
+## Isolated prepared-base publisher
+
+New SDK object uploads in the V3 vertical slice accept only prearranged native
+`objects/<partition>/payload` roots. Unchanged inherited single-writer reuse keeps
+its committed owned baseline root, without transfer or upload. Its zero-transfer gate reads the actual committed observations, whose only
+three data rows are root `dir-open`, the protected `.mammoth` directory child and
+root `dir-close`. It checks full original root identity, the protected child native
+ID, actual root membership, a completed zero-target GC cursor, exact committed
+postSourcesRef and original prepared native evidence. All fixed intents/relocations
+must be absent. Live observation members or transfer plans are rejected until V4b
+supplies real evacuation/return and deleted-target evidence. This is an internal
+service restriction; it does not enable the Action lifecycle or stop daemons.
+
+A crash before the full publicationRef pointer is installed leaves an **uncommitted
+freeze**. No SDK save may have started. Such an attempt cannot be resumed by finding
+files or recapturing current native identities; V5 must abandon it and retire its
+owned orphans with ownership checks. In the same process, the genuine original
+prepared source may reconcile partial tree/envelope metadata under the same identity.
+Fresh capture rejects a root where either keyed metadata file already exists, before
+reading payload bodies and again before returning its capability:
+compare exact expected bytes, never overwrite an existing immutable file. Candidate
+record reconciliation likewise compares exact bytes. After full pointer commit,
+restart uses only the frozen publication, choices and original prepared-source
+NativeEvidence references. This design intentionally supplies no extra durable
+preparation phase for cross-process recovery of an uncommitted freeze.
+
+Every single-writer partition choice agrees with its committed post-source. `empty`
+requires root-only native evidence (no meaningful empty subdirectory). The isolated
+publisher's `reuse` case requires baseline origin, that exact object key as provenance
+and an identical prepare/post source tuple; changed inherited views require a new
+object or V4b's later adjustment handoff. New sources match the committed tuple and
+original prepared evidence/root exactly. Directory allowance equals the frozen policy,
+including on resume. Per-object receipt checks inspect that object's source; shared
+pre/final barriers inspect all sources once, deduplicating new single-writer evidence.
