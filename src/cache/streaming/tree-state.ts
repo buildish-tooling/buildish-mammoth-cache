@@ -31,6 +31,7 @@ import {
 export class WorkingBudget {
   private names = 0;
   private records = 0;
+  private peak = 0;
   constructor(readonly limit = 16 * 1024 * 1024) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Invalid working budget.');
   }
@@ -38,6 +39,7 @@ export class WorkingBudget {
     if (this.names + bytes > this.limit)
       throw new Error('Active metadata/name working budget exceeded.');
     this.names += bytes;
+    this.peak = Math.max(this.peak, this.retained);
   }
   release(bytes: number): void {
     this.names -= bytes;
@@ -48,6 +50,7 @@ export class WorkingBudget {
     if (this.records + charge > this.limit)
       throw new Error('Active decoded-record working budget exceeded.');
     this.records += charge;
+    this.peak = Math.max(this.peak, this.retained);
     let held = true;
     return () => {
       if (held) {
@@ -55,6 +58,9 @@ export class WorkingBudget {
         held = false;
       }
     };
+  }
+  get peakRetained(): number {
+    return this.peak;
   }
   get retained(): number {
     return this.names + this.records;
@@ -176,6 +182,10 @@ export class TreeState {
     filePathSchema.parse(path);
     if (parentPath(path) !== this.path) throw new Error('File outside current directory.');
     this.child(baseName(path), false);
+  }
+  /** A no-follow protected child participates in order/breadth without opening its subtree. */
+  protectedChild(name: string, directory: boolean): void {
+    this.child(name, directory);
   }
   endFiles(): void {
     if (!this.frames.length) throw new Error('Missing directory.');

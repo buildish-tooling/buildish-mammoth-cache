@@ -43,7 +43,7 @@ export function localOptions(): LocalOptions {
     access: 'writable',
   };
 }
-export function localFixtures(options = localOptions()) {
+export function localFixtures(options = localOptions(), invocationNonce = nonce) {
   const codec = new LocalCodec(options),
     prefix = codec.schemas.prefix;
   const q = (purpose: string, sha = h): Value[] => [
@@ -53,6 +53,7 @@ export function localFixtures(options = localOptions()) {
     100,
     sha,
   ];
+  const evidence = (): Value => ['evidence', q('native-evidence'), ['span', h, 1, 2]];
   const cursor = (n = 0): Value[] => ['cursor', h, n, n, n, null];
   const policy: Value = [
     'policy',
@@ -72,7 +73,7 @@ export function localFixtures(options = localOptions()) {
     1,
     options.invocation,
     options.context,
-    nonce,
+    invocationNonce,
     ['/cache', directory],
     q('model'),
     options.model.familyProjection,
@@ -140,5 +141,5 @@ export function localFixtures(options = localOptions()) {
     null,
     null,
   ];
-  return { codec, options, prefix, q, cursor, bindings, state, publication, relocation };
+  return { codec, options, prefix, q, evidence, cursor, bindings, state, publication, relocation };
 }

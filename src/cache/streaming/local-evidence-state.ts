@@ -77,7 +77,7 @@ const moveClose = z.tuple([
 ]);
 const installClose = z.tuple([
   z.literal('install-unit-close'),
-  z.union([z.literal('file'), z.literal('snapshot'), unitKindSchema]),
+  z.union([z.literal('file'), z.literal('snapshot'), z.literal('empty-directory'), unitKindSchema]),
   filePathSchema,
 ]);
 const moveDescriptor = z.union([
@@ -86,6 +86,7 @@ const moveDescriptor = z.union([
 ]);
 const installDescriptor = z.union([
   semanticUnitSchema,
+  z.tuple([z.literal('empty-directory'), filePathSchema, z.literal('subtree')]),
   z.tuple([z.literal('snapshot'), filePathSchema, z.literal('partition')]),
 ]);
 // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-publication-and-native-transfer-plans
@@ -95,6 +96,8 @@ export class LocalEvidenceState {
   private unitDigest: Digest | null = null;
   private roots = 0;
   private index = 0;
+  private installContext = false;
+  private haveInstallIndex = false;
   private previous: readonly Value[] | null = null;
   private previousUnit: readonly Value[] | null = null;
   private epoch: number | null = null;
@@ -121,6 +124,8 @@ export class LocalEvidenceState {
     if (!u) throw new Error('Evidence outside complete semantic unit.');
     const root = String(u[1]),
       scope = u[2];
+    if (u[0] === 'empty-directory' && (path !== root || kind !== 'directory'))
+      throw new Error('Empty-directory presence requires its exact directory root.');
     if (u[0] === 'directory' && (path !== root || kind !== 'directory'))
       throw new Error('Directory move group requires its single directory root.');
     if (scope === 'file' && kind !== undefined && kind !== 'file')
@@ -128,7 +133,7 @@ export class LocalEvidenceState {
     if (scope === 'direct' && path === root && kind === 'directory' && this.purpose === 'move-plan')
       return;
     if (scope === 'partition') {
-      const owner = this.schemas.options.model.owner(path)[0];
+      const owner = kind === 'directory' ? root : this.schemas.options.model.owner(path)[0];
       if (owner !== root) throw new Error('Wrong snapshot install owner.');
     } else if (
       scope === 'file'
@@ -157,7 +162,12 @@ export class LocalEvidenceState {
         ? moveDescriptor.parse(value.slice(1))
         : semanticUnitSchema.parse(value.slice(1));
     if (descriptor[0] === 'snapshot') this.schemas.partition.parse(descriptor[1]);
-    if (descriptor[0] !== 'snapshot' && descriptor[0] !== 'file' && descriptor[0] !== 'directory') {
+    if (
+      descriptor[0] !== 'snapshot' &&
+      descriptor[0] !== 'file' &&
+      descriptor[0] !== 'directory' &&
+      descriptor[0] !== 'empty-directory'
+    ) {
       if ((descriptor[0] === 'maven-directory') !== (descriptor[2] === 'direct'))
         throw new Error('Wrong evidence unit scope.');
     }
@@ -165,6 +175,13 @@ export class LocalEvidenceState {
     if (descriptor[0] === 'file') {
       if (recognizedRoot(this.schemas.options.model, descriptor[1]) !== null)
         throw new Error('Indivisible unit labeled ordinary file.');
+    } else if (descriptor[0] === 'empty-directory') {
+      const model = this.schemas.options.model,
+        probe = descriptor[1] + '/.workspace-directory-probe';
+      if (model.owner(probe)[3] !== 'aggregate')
+        throw new Error('Empty-directory presence requires aggregate owner.');
+      if (model.tuple[2] !== 'maven' && recognizedRoot(model, probe) !== null)
+        throw new Error('Indivisible unit labeled empty-directory.');
     } else if (descriptor[0] !== 'snapshot' && descriptor[0] !== 'directory')
       validateUnit(this.schemas.options.model, descriptor);
     const order: Value[] = ['member', descriptor[0] === 'file' ? 'file' : 'unit', descriptor[1]];
@@ -203,6 +220,15 @@ export class LocalEvidenceState {
     if (!Array.isArray(value) || typeof value[0] !== 'string')
       throw new Error('Invalid evidence row.');
     const tag = value[0];
+    if (this.purpose.startsWith('install')) {
+      if (tag === 'install-context') {
+        if (this.installContext || this.unit) throw new Error('Duplicate/late install context.');
+        z.tuple([z.literal('install-context'), this.schemas.ref('install-current')]).parse(value);
+        this.installContext = true;
+        return;
+      }
+      if (!this.installContext) throw new Error('Missing install context.');
+    }
     if (this.flat) {
       const row =
         tag === 'directory'
@@ -264,7 +290,12 @@ export class LocalEvidenceState {
       if (kind === 'move' && this.unit[0] === 'directory' && this.roots !== 1)
         throw new Error('Directory group root count.');
       if (kind === 'move' && row[3] !== this.roots) throw new Error('Wrong move root count.');
-      if (kind !== 'gc' && this.roots === 0 && this.unit[0] !== 'snapshot')
+      if (
+        kind !== 'gc' &&
+        this.roots === 0 &&
+        this.unit[0] !== 'snapshot' &&
+        this.unit[0] !== 'empty-directory'
+      )
         throw new Error('Empty operation unit.');
       this.unit = null;
       this.unitDigest = null;
@@ -280,6 +311,16 @@ export class LocalEvidenceState {
       this.roots++;
       return;
     }
+    if (kind === 'install' && tag === 'install-parent') {
+      const row = this.schemas.rows.installParent.parse(value);
+      if (!this.haveInstallIndex && this.purpose === 'install-evidence') this.index = row[1] - 1;
+      if (row[1] !== this.index + 1) throw new Error('Noncontiguous install index.');
+      this.haveInstallIndex = true;
+      // Structural ancestors may cross a unit root. Admission binds each to a later
+      // member of this unit and proves empty source/absent destination before intent.
+      this.index = row[1];
+      return;
+    }
     if (kind === 'install') {
       const row = this.schemas.rows.install.parse(value);
       if (!this.installKind)
@@ -288,10 +329,16 @@ export class LocalEvidenceState {
       if (memberKind !== 'file' && memberKind !== 'directory')
         throw new Error('Invalid install evidence kind.');
       this.within(row[2], memberKind);
+      if (!this.haveInstallIndex && this.purpose === 'install-evidence') this.index = row[1] - 1;
       if (row[1] !== this.index + 1) throw new Error('Noncontiguous install index.');
+      this.haveInstallIndex = true;
       this.ordered(row[2], memberKind);
       this.index = row[1];
       this.roots++;
+      if (this.unit[0] === 'empty-directory' && this.roots > 1)
+        throw new Error('Multiple empty-directory operations.');
+      if (this.unit[0] === 'empty-directory' && row[6] === 'delete')
+        throw new Error('Empty-directory presence cannot delete.');
       return;
     }
     if (tag === 'directory') {
@@ -313,6 +360,8 @@ export class LocalEvidenceState {
     } else throw new Error('Unknown GC evidence row.');
   }
   finish(): void {
+    if (this.purpose.startsWith('install') && !this.installContext)
+      throw new Error('Missing install context.');
     this.flat?.finish();
     if (this.unit) throw new Error('Incomplete evidence unit.');
   }

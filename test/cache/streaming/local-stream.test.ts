@@ -20,6 +20,7 @@ import * as encoding from '../../../src/cache/streaming/encoding';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
 import {
   readLocalStream,
+  readLocalRows,
   readLocalPrefix,
   writeLocalStream,
   type LocalPurpose,
@@ -77,6 +78,13 @@ function fixture(purpose: LocalPurpose) {
       rows = [
         ['model-header', o.model.tuple[2], o.model.tuple[3]],
         ...o.model.partitions.map((p) => ['partition', ...p] as Value),
+      ];
+      break;
+    case 'install-current':
+      rows = [
+        ['dir-open', '', directory],
+        ['parent-child', '', '.mammoth', 'directory', '1', '99'],
+        ['dir-close', '', directory],
       ];
       break;
     case 'installations':
@@ -169,16 +177,7 @@ function fixture(purpose: LocalPurpose) {
     case 'install-evidence':
       rows = [
         ['install-unit-open', 'file', logical, 'file'],
-        [
-          'install',
-          1,
-          logical,
-          f.prefix + 'install/source',
-          f.q('native-evidence'),
-          null,
-          'insert',
-          null,
-        ],
+        ['install', 1, logical, f.prefix + 'install/source', f.evidence(), null, 'insert', null],
         ['install-unit-close', 'file', logical],
       ];
       break;
@@ -208,6 +207,8 @@ function fixture(purpose: LocalPurpose) {
       ];
       break;
   }
+  if (purpose === 'install-plan' || purpose === 'install-evidence')
+    rows.unshift(['install-context', f.q('install-current')]);
   const header: Value = [
     'local-stream',
     1,
@@ -233,6 +234,11 @@ function fixture(purpose: LocalPurpose) {
   return { ...f, opts, rows, header, bytes, reference, digest };
 }
 async function write(f: ReturnType<typeof fixture>, rows = f.rows) {
+  if (
+    (f.header[2] === 'install-plan' || f.header[2] === 'install-evidence') &&
+    (!Array.isArray(rows[0]) || rows[0][0] !== 'install-context')
+  )
+    rows = [['install-context', f.q('install-current')], ...rows];
   let seal!: LocalStreamSeal;
   const output: Buffer[] = [];
   for await (const bytes of writeLocalStream(
@@ -398,20 +404,11 @@ it('requires independent install kinds and supports authoritative empty snapshot
   f.opts = { ...f.opts, installKind: () => 'file' };
   const rows: Value[] = [
     ['install-unit-open', 'snapshot', 'metadata', 'partition'],
-    [
-      'install',
-      1,
-      'metadata/stale',
-      null,
-      null,
-      f.q('native-evidence'),
-      'delete',
-      f.prefix + 'backup/1',
-    ],
+    ['install', 1, 'metadata/stale', null, null, f.evidence(), 'delete', f.prefix + 'backup/1'],
     ['install-unit-close', 'snapshot', 'metadata'],
   ];
-  expect((await write(f, rows)).seal.records).toBe(3);
-  expect((await write(f, [rows[0], rows[2]])).seal.records).toBe(2);
+  expect((await write(f, rows)).seal.records).toBe(4);
+  expect((await write(f, [rows[0], rows[2]])).seal.records).toBe(3);
 });
 it('checks prefix hash/count without a closing end and restores incremental hash state', async () => {
   const f = fixture('outbound-evidence'),
@@ -793,4 +790,232 @@ it('serializes each activity row once across several files sharing a directory',
     serialized.mockRestore();
     genericDigest.mockRestore();
   }
+});
+
+it('encodes intent-owned parent renames without widening ordinary content units', async () => {
+  const f = fixture('install-plan');
+  const rows = structuredClone(f.rows);
+  (rows[2] as Value[])[1] = 2;
+  rows.splice(2, 0, ['install-parent', 1, 'metadata', f.prefix + 'parents/one', directory]);
+  expect((await write(f, rows)).seal.records).toBe(5);
+  const badIdentity = structuredClone(rows);
+  (badIdentity[2] as Value[])[4] = native;
+  await expect(write(f, badIdentity)).rejects.toThrow();
+  const gap = structuredClone(rows);
+  (gap[2] as Value[])[1] = 2;
+  await expect(write(f, gap)).rejects.toThrow('Noncontiguous');
+  await expect(write(f, [rows[0], rows[1], rows[2], rows[4]])).rejects.toThrow('Empty operation');
+  expect(f.opts.budget.retained).toBe(0);
+});
+it('keeps empty aggregate directory presence distinct from file and subtree move units', async () => {
+  const f = fixture('install-plan');
+  f.opts = { ...f.opts, installKind: () => 'directory' };
+  const rows: Value[] = [
+    ['install-unit-open', 'empty-directory', 'repository/empty', 'subtree'],
+    [
+      'install',
+      1,
+      'repository/empty',
+      f.prefix + 'source/empty',
+      f.evidence(),
+      null,
+      'insert',
+      null,
+    ],
+    ['install-unit-close', 'empty-directory', 'repository/empty'],
+  ];
+  expect((await write(f, rows)).seal.records).toBe(4);
+  const snapshotOwner = structuredClone(rows);
+  snapshotOwner[0] = ['install-unit-open', 'empty-directory', 'metadata/empty', 'subtree'];
+  snapshotOwner[2] = ['install-unit-close', 'empty-directory', 'metadata/empty'];
+  await expect(write(f, snapshotOwner)).rejects.toThrow('aggregate owner');
+  expect((await write(f, [rows[0], rows[2]])).seal.records).toBe(3);
+  const child = structuredClone(rows);
+  (child[1] as Value[])[2] = 'repository/empty/child';
+  await expect(write(f, child)).rejects.toThrow('exact directory');
+  const deletion = structuredClone(rows);
+  deletion[1] = [
+    'install',
+    1,
+    'repository/empty',
+    null,
+    null,
+    f.evidence(),
+    'delete',
+    f.prefix + 'backup/empty',
+  ];
+  await expect(write(f, deletion)).rejects.toThrow('cannot delete');
+  f.opts = { ...f.opts, installKind: () => 'file' };
+  await expect(write(f, rows)).rejects.toThrow('exact directory');
+  expect(f.opts.budget.retained).toBe(0);
+});
+
+it('exposes exact checked row positions for bounded joins and releases on early return', async () => {
+  const f = fixture('installations');
+  const iterator = readLocalRows(chunks(f.bytes), 'installations', f.opts, f.reference);
+  let offset = 0,
+    record = 0;
+  while (true) {
+    const row = await iterator.next();
+    if (row.done) {
+      expect(row.value.bytes).toBe(f.bytes.length);
+      break;
+    }
+    expect(row.value.start).toBe(offset);
+    expect(row.value.record).toBe(record++);
+    expect(f.bytes.subarray(row.value.start, row.value.end)).toEqual(encodeRecord(row.value.value));
+    offset = row.value.end;
+  }
+  expect(offset).toBe(f.bytes.length);
+  expect(f.opts.budget.retained).toBe(0);
+  for await (const row of readLocalRows(chunks(f.bytes), 'installations', f.opts, f.reference)) {
+    void row;
+    break;
+  }
+  expect(f.opts.budget.retained).toBe(0);
+  const bad = structuredClone(f.reference) as Value[];
+  bad[4] = '0'.repeat(64);
+  await expect(
+    (async () => {
+      for await (const _ of readLocalRows(chunks(f.bytes), 'installations', f.opts, bad)) void _;
+    })(),
+  ).rejects.toThrow('local reference');
+  expect(f.opts.budget.retained).toBe(0);
+});
+
+it.each(['changed-close', 'wrong-parent', 'collision', 'directory-file'])(
+  'rejects invalid hash-free current inventory %s',
+  async (kind) => {
+    const f = fixture('install-current');
+    const rows: Value[] = [
+      ['dir-open', '', directory],
+      ['file', 'a', native],
+      ['parent-child', '', '.mammoth', 'directory', '1', '99'],
+      ['dir-close', '', directory],
+    ];
+    if (kind === 'changed-close') {
+      const changed = [...directory] as Value[];
+      changed[4] = '999';
+      rows[3] = ['dir-close', '', changed];
+    }
+    if (kind === 'wrong-parent') (rows[2] as Value[])[1] = 'other';
+    if (kind === 'collision') rows[2] = ['parent-child', '', 'a', 'directory', '1', '99'];
+    if (kind === 'directory-file') (rows[1] as Value[])[2] = directory;
+    await expect(write(f, rows)).rejects.toThrow();
+    expect(f.opts.budget.retained).toBe(0);
+  },
+);
+
+it('resolves install evidence kind before the existing grammar accepts each provisional row', async () => {
+  const f = fixture('install-plan');
+  let resolved: Value | undefined;
+  const opts = {
+    ...f.opts,
+    installKind: (row: Value) => {
+      expect(resolved).toEqual(row);
+      return 'file' as const;
+    },
+  };
+  for await (const row of readLocalRows(
+    chunks(f.bytes),
+    'install-plan',
+    opts,
+    f.reference,
+    new AbortController().signal,
+    async (value) => {
+      resolved = value;
+    },
+  )) {
+    if (Array.isArray(row.value) && row.value[0] === 'install') expect(resolved).toBe(row.value);
+  }
+  expect(opts.budget.retained).toBe(0);
+});
+it('cancels a pending pre-accept evidence join and releases the held parser record', async () => {
+  const f = fixture('install-plan'),
+    controller = new AbortController();
+  let entered!: () => void;
+  const called = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const pending = (async () => {
+    for await (const row of readLocalRows(
+      chunks(f.bytes),
+      'install-plan',
+      f.opts,
+      f.reference,
+      controller.signal,
+      async () => {
+        entered();
+        await new Promise<void>(() => {});
+      },
+    ))
+      void row;
+  })();
+  await called;
+  controller.abort(new Error('cancel evidence frontier'));
+  await expect(pending).rejects.toThrow('cancel evidence frontier');
+  expect(f.opts.budget.retained).toBe(0);
+});
+
+it('requires exactly one leading frozen current context and accepts later global evidence indices', async () => {
+  const plan = fixture('install-plan'),
+    evidence = fixture('install-evidence');
+  await expect(
+    (async () => {
+      for await (const row of writeLocalStream(
+        records(plan.rows.slice(1)),
+        'install-plan',
+        plan.opts,
+        () => {},
+      ))
+        void row;
+    })(),
+  ).rejects.toThrow('Missing install context');
+  await expect(write(plan, [plan.rows[0], ...plan.rows])).rejects.toThrow('Duplicate/late');
+  const later = structuredClone(evidence.rows);
+  (later[2] as Value[])[1] = 17;
+  expect((await write(evidence, later)).seal.records).toBe(4);
+  await expect(write(plan, later)).rejects.toThrow('Noncontiguous');
+  expect(plan.opts.budget.retained).toBe(0);
+  expect(evidence.opts.budget.retained).toBe(0);
+});
+
+it('defers snapshot structural-directory ownership to full-subtree admission but still checks files', async () => {
+  const f = fixture('install-plan'),
+    original = localOptions();
+  const model = resolveModel(
+    [
+      'model',
+      1,
+      'maven',
+      ['.mammoth/**'],
+      [['metadata', ['cache/**/*.bin'], ['.mammoth/**'], 'single-writer', 'A', 'default']],
+    ],
+    'structural-',
+    1,
+  );
+  f.opts = {
+    ...f.opts,
+    codec: new LocalCodec({ ...original, model }),
+    installKind: () => 'directory',
+  };
+  const rows: Value[] = [
+    ['install-unit-open', 'snapshot', 'metadata', 'partition'],
+    [
+      'install',
+      1,
+      'cache',
+      f.prefix + 'install/metadata/cache',
+      f.evidence(),
+      null,
+      'insert',
+      null,
+    ],
+    ['install-unit-close', 'snapshot', 'metadata'],
+  ];
+  expect(() => model.owner('cache')).toThrow();
+  expect((await write(f, rows)).seal.records).toBe(4);
+  f.opts = { ...f.opts, installKind: () => 'file' };
+  await expect(write(f, rows)).rejects.toThrow();
+  expect(f.opts.budget.retained).toBe(0);
 });
