@@ -1,0 +1,104 @@
+# Copyright 2026 The Buildish Authors
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+--- a/extract.js
++++ b/extract.js
+@@ -1,7 +1,9 @@
++// Modified by The Buildish Authors: opt-in Mammoth worker TAR profile.
+ const { Writable, Readable, getStreamError } = require('streamx')
+ const FIFO = require('fast-fifo')
+ const b4a = require('b4a')
+ const headers = require('./headers')
++const mammoth = require('./mammoth.cjs')
+ 
+ const EMPTY = b4a.alloc(0)
+ const MAX_HEADER_SIZE = 4 * 1024 * 1024 // arbitrary big number
+@@ -106,6 +108,8 @@
+ 
+     if (!opts) opts = {}
+ 
++    this._mammothStrict = opts.mammothStrict === true
++    this._mammothEnds = 0
+     this._buffer = new BufferList()
+     this._offset = 0
+     this._header = null
+@@ -142,7 +146,18 @@
+     this._offset = this._buffer.shifted
+ 
+     try {
+-      this._header = headers.decode(this._buffer.shift(512), this._filenameEncoding, this._allowUnknownFormat)
++      const raw = this._buffer.shift(512)
++      if (this._mammothStrict) {
++        if (raw.every(byte => byte === 0)) {
++          this._mammothEnds = Math.min(2, this._mammothEnds + 1)
++          this._header = null
++          return true
++        }
++        if (this._mammothEnds) throw new Error('Invalid Mammoth TAR: member after ends')
++        mammoth.checkHeader(raw)
++      }
++      this._header = headers.decode(raw, this._filenameEncoding, this._allowUnknownFormat)
++      if (this._mammothStrict) mammoth.admit(this._header, this._pax !== null)
+     } catch (err) {
+       this._continueWrite(err)
+       return false
+@@ -167,7 +182,14 @@
+     }
+ 
+     this._locked = true
++    const rawName = this._header.name
+     this._applyLongHeaders()
++    if (this._mammothStrict) {
++      try { mammoth.effective(this._header, rawName) } catch (err) {
++        this._continueWrite(err)
++        return false
++      }
++    }
+ 
+     if (!(this._header.size >= 0)) {
+       this._continueWrite(new Error('Invalid header'))
+@@ -218,7 +240,7 @@
+         this._paxGlobal = headers.decodePax(buf)
+         break
+       case 'pax-header':
+-        this._pax = this._paxGlobal === null
++        this._pax = this._mammothStrict ? mammoth.decodePax(buf) : this._paxGlobal === null
+           ? headers.decodePax(buf)
+           : Object.assign({}, this._paxGlobal, headers.decodePax(buf))
+         break
+@@ -276,7 +298,13 @@
+         }
+ 
+         const ignore = this._buffer.shiftFirst(this._missing)
+-        if (ignore !== null) this._missing -= ignore.byteLength
++        if (ignore !== null) {
++          if (this._mammothStrict && ignore.some(byte => byte !== 0)) {
++            this._continueWrite(new Error('Invalid Mammoth TAR: nonzero padding'))
++            return false
++          }
++          this._missing -= ignore.byteLength
++        }
+         continue
+       }
+ 
+@@ -300,7 +328,8 @@
+   }
+ 
+   _final (cb) {
+-    this._finished = this._missing === 0 && this._buffer.buffered === 0
++    this._finished = this._missing === 0 && this._buffer.buffered === 0 &&
++      (!this._mammothStrict || (this._mammothEnds === 2 && this._pax === null))
+     cb(this._finished ? null : new Error('Unexpected end of data'))
+   }
+ 

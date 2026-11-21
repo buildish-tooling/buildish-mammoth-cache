@@ -26,6 +26,14 @@ and the full validation gate.
 
 - [Architecture](../architecture/) explains the cache model, key design, and
   delta protocol.
+- [Streaming cache protocol](cache-protocol/) specifies the proposed next-format
+  wire contract, parser states, integrity rules and implementation reference requirements.
+- [Native base and generation protocol](native-base-protocol/) defines tree/envelope
+  schemas, immutable references, recovery groups and cache-key derivation.
+- [Local cache lifecycle protocol](cache-lifecycle-protocol/) defines persisted state,
+  mutation intents, snapshot lifetimes, checkpoints and crash recovery.
+- [Protocol conformance vectors](cache-protocol-vectors/) fix canonical bytes,
+  digest answers, raw PAX cases and ordered three-producer conflict outcomes.
 - [CI provider portability](portability/) records the boundaries for possible
   providers beyond GitHub Actions.
 - [Additional build tools](build-tools/) assesses possible adapters beyond

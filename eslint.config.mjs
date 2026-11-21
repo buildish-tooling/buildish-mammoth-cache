@@ -23,6 +23,7 @@ import tsParser from '@typescript-eslint/parser';
 export default [
   {
     ignores: [
+      '.agents/**',
       'build/**',
       'coverage/**',
       'dist/**',
@@ -84,6 +85,13 @@ export default [
     },
     rules: {
       'no-console': 'off',
+    },
+  },
+  {
+    files: ['patches/**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { Buffer: 'readonly', TextDecoder: 'readonly' },
     },
   },
   eslintConfigPrettier,

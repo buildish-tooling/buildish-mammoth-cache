@@ -41,6 +41,8 @@ export interface WorkflowArtifactDescriptor {
 export interface WorkflowArtifactDownloadOptions extends ArtifactLookupOptions {
   readonly path?: string;
   readonly expectedHash?: string;
+  /** Raw worker mode: supporting backends honor this or throw, never extract a wrapper. */
+  readonly skipDecompress?: boolean;
 }
 
 /** Download result returned by artifact backends. */
@@ -51,6 +53,8 @@ export interface WorkflowArtifactDownloadResult {
 
 /** Capability flags shared code can use to understand backend-specific artifact behavior. */
 export interface WorkflowArtifactBackendCapabilities {
+  /** Optional/default false; both raw flags must be honored or rejected. */
+  readonly supportsRawWorkerArchives?: boolean;
   /** Whether the backend may report artifact digests that can be passed back during download. */
   readonly supportsReportedDigests: boolean;
   /** Whether upload calls support explicit retention-day overrides. */
@@ -81,6 +85,8 @@ export interface WorkflowArtifactBackend {
     options?: {
       readonly retentionDays?: number;
       readonly compressionLevel?: number;
+      /** Raw worker mode accepts exactly one file and preserves its basename/bytes. */
+      readonly skipArchive?: boolean;
     },
   ): Promise<WorkflowArtifactDescriptor>;
   listArtifacts(
