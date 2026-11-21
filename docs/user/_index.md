@@ -33,3 +33,6 @@ prepare/finalize design and most configuration options:
 Start with [Adoption and Migration](adoption/) to choose a topology and plan a pilot, then use
 [Getting Started](getting-started/) for workflow wiring. Jump directly to
 [Configuration](configuration/) for a full input reference.
+
+Use [GitHub Dependency Submission](dependency-submission/) to pair Mammoth with existing Gradle
+and Maven actions that populate GitHub's dependency graph.

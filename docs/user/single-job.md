@@ -143,6 +143,7 @@ checked-out config file cannot lower the pull-request safety floor.
 
 ## Next steps
 
+- [GitHub Dependency Submission](../dependency-submission/) — Gradle and Maven submission recipes
 - [Configuration Reference](../configuration/) — all inputs and config-file options
 - [Cache Partitions](../cache-partitions/) — customize which parts of the build tool cache are saved
 - [Distributed multi-job builds](../distributed-jobs/) — if you run multiple build jobs in parallel
