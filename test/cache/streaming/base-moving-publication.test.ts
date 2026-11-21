@@ -17,16 +17,24 @@
 import { readFile, mkdir, utimes } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { FrozenMovingPublication } from '../../../src/cache/streaming/base-moving-publication';
+import { RelocationProgram } from '../../../src/cache/streaming/relocation-program';
+import { RelocationSource } from '../../../src/cache/streaming/relocation-source';
+import { RelocationTreeFile } from '../../../src/cache/streaming/relocation-tree-file';
+import { checkMoveMember } from '../../../src/cache/streaming/relocation-member';
+import { RelocationEpoch } from '../../../src/cache/streaming/relocation-epoch';
 import { FrozenBaseTree } from '../../../src/cache/streaming/base-frozen-tree';
 import { checkMoveSourceBindings } from '../../../src/cache/streaming/move-source';
-import { checkMovePlanMetadata } from '../../../src/cache/streaming/base-move-plan';
+import {
+  freezeMovePlans,
+  checkMovePlanMetadata,
+} from '../../../src/cache/streaming/base-move-plan';
 import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
 import { LiveBaseInputs } from '../../../src/cache/streaming/live-base-inputs';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
 import { executeGc } from '../../../src/cache/streaming/gc-execute';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
-import { tuple, type Value } from '../../../src/cache/streaming/encoding';
+import { decodeRecords, tuple, type Value } from '../../../src/cache/streaming/encoding';
 import { observationFixture } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [],
   inputs: LiveBaseInputs[] = [],
@@ -42,10 +50,10 @@ afterEach(async () => {
 });
 async function fixture(
   tool: 'gradle' | 'maven' = 'maven',
-  files: Record<string, string> = { 'data/a': 'aggregate', 'state/b': 'snapshot' },
-  shared = false,
+  files: Record<string, string | null> = { 'data/a': 'aggregate', 'state/b': 'snapshot' },
+  shared: boolean | Parameters<typeof observationFixture>[1] = false,
 ) {
-  const f = await observationFixture(tool, { shared });
+  const f = await observationFixture(tool, typeof shared === 'boolean' ? { shared } : shared);
   fixtures.push(f);
   await f.files('', files);
   await captureObservations(f.store, { budget: f.budget });
@@ -612,4 +620,217 @@ it('releases source-join record charges when a portable record is not a tuple', 
   } finally {
     await original.dispose();
   }
+});
+
+// Independently assemble the existing physical-group shape before its planner emits it.
+async function coarseRows(pub: FrozenMovingPublication, root: string): Promise<Value[][]> {
+  const observation = (await pub.state())[6]!,
+    index = await ObservationIndex.open(pub.store, observation, pub.options);
+  let native: Value;
+  try {
+    const lease = await index.directory(root);
+    try {
+      native = ['span', observation[4], lease.node[5], lease.node[6]];
+    } finally {
+      lease.release();
+    }
+  } finally {
+    await index.dispose();
+  }
+  let start = -1,
+    end = -1;
+  for await (const row of decodeRecords(pub.store.read(pub.tree('data').tree, 'native-tree'))) {
+    const r = tuple(row.value);
+    if (r[0] === 'dir-open' && r[1] === root) start = row.start;
+    if (r[0] === 'dir-close' && r[1] === root) end = row.end;
+  }
+  if (start < 0 || end < 0) throw new Error('Missing coarse test subtree.');
+  return [
+    ['move-unit-open', 'directory', root, 'subtree'],
+    [
+      'move',
+      1,
+      'live',
+      root,
+      root,
+      'directory',
+      ['span', pub.tree('data').tree[4], start, end],
+      native!,
+    ],
+    ['move-unit-close', 'directory', root, 1],
+  ];
+}
+it.each(['repository', 'repository/org'])(
+  'admits a handcrafted Maven physical group at %s through exact source/tree readers',
+  async (root) => {
+    const f = await fixture('maven', {
+        'repository/org/a/1/a.jar': 'a',
+        'repository/org/b/1/b.jar': 'b',
+      }),
+      pub = await FrozenMovingPublication.freeze(f.input, 'main');
+    publications.push(pub);
+    const rows = await coarseRows(pub, root);
+    await replacePlan(pub, 'data', () => rows);
+    const resumed = await FrozenMovingPublication.resume(f.store, { budget: f.budget });
+    publications.push(resumed);
+    const program = await RelocationProgram.create(resumed, 'data'),
+      source = await RelocationSource.open(program),
+      tree = await RelocationTreeFile.open(resumed.tree('data'), resumed.options);
+    try {
+      expect(program.rootCount).toBe(1);
+      for await (const range of program.ranges())
+        for await (const move of program.moves(range)) {
+          const fact = await source.member(move);
+          const checked = await checkMoveMember(
+            program,
+            move,
+            move[3],
+            source.evidence,
+            fact.span,
+            tree,
+          );
+          expect(checked.work.files).toBe(2);
+        }
+    } finally {
+      await tree.close();
+      await source.close();
+      await program.close();
+    }
+  },
+);
+it.each(['direct', 'portable-span', 'observation-span', 'overlap'])(
+  'rejects a resealed invalid coarse Maven %s plan',
+  async (bad) => {
+    const f = await fixture('maven', {
+        'repository/org/a/1/a.jar': 'a',
+        'repository/org/b/1/b.jar': 'b',
+      }),
+      pub = await FrozenMovingPublication.freeze(f.input, 'main');
+    publications.push(pub);
+    const rows = await coarseRows(pub, 'repository');
+    if (bad === 'direct') {
+      rows[0] = ['move-unit-open', 'maven-directory', 'repository', 'direct'];
+      rows[2] = ['move-unit-close', 'maven-directory', 'repository', 1];
+    }
+    if (bad === 'portable-span') (rows[1][6] as Value[])[3] = (rows[1][6] as number[])[3] - 1;
+    if (bad === 'observation-span') (rows[1][7] as Value[])[3] = (rows[1][7] as number[])[3] - 1;
+    if (bad === 'overlap') rows.push(...(await coarseRows(pub, 'repository/org')));
+    await expect(
+      (async () => {
+        await replacePlan(pub, 'data', () => rows);
+        const resumed = await FrozenMovingPublication.resume(f.store, { budget: f.budget });
+        publications.push(resumed);
+      })(),
+    ).rejects.toThrow();
+    expect(await f.store.readFixed(f.store.prefix + 'relocation/data.json')).toBeNull();
+  },
+);
+it('rejects an extra excluded descendant before a coarse-root relocation intent', async () => {
+  const f = await fixture('maven', {
+      'repository/org/a/1/a.jar': 'a',
+      'repository/org/b/1/b.jar': 'b',
+    }),
+    pub = await FrozenMovingPublication.freeze(f.input, 'main');
+  publications.push(pub);
+  const rows = await coarseRows(pub, 'repository');
+  await replacePlan(pub, 'data', () => rows);
+  const resumed = await FrozenMovingPublication.resume(f.store, { budget: f.budget });
+  publications.push(resumed);
+  await f.files('', { 'repository/late.lock': 'excluded' });
+  await expect(RelocationEpoch.open(resumed, 'data')).rejects.toThrow();
+  expect(await f.store.readFixed(f.store.prefix + 'relocation/data.json')).toBeNull();
+  expect(await readFile(f.store.root.resolve('repository/late.lock'), 'utf8')).toBe('excluded');
+});
+
+it('coarsens a clean Maven repository without changing its logical direct units', async () => {
+  const files = {
+      'repository/org/a/1/_remote.repositories': 'marker',
+      'repository/org/a/1/a.jar': 'a',
+      'repository/org/a/1/child/b.jar': 'b',
+      'repository/org/b/1/b.jar': 'b',
+      'repository/empty': null,
+    },
+    f = await fixture('maven', files),
+    pub = await FrozenMovingPublication.freeze(f.input, 'main');
+  publications.push(pub);
+  const plan = await moves(pub, 'data');
+  expect(plan.filter((r) => r[0] === 'move-unit-open').map((r) => r.slice(1))).toEqual([
+    ['directory', 'repository', 'subtree'],
+  ]);
+  expect(plan.filter((r) => r[0] === 'move').map((r) => r.slice(2, 6))).toEqual([
+    ['live', 'repository', 'repository', 'directory'],
+  ]);
+  const units = [];
+  for await (const row of decodeRecords(f.store.read(pub.tree('data').tree, 'native-tree'))) {
+    const r = tuple(row.value);
+    if (r[0] === 'unit-open') units.push(r.slice(1, 4));
+  }
+  expect(units).toEqual([
+    ['maven-directory', 'repository/org/a/1', 'direct'],
+    ['maven-directory', 'repository/org/a/1/child', 'direct'],
+    ['maven-directory', 'repository/org/b/1', 'direct'],
+  ]);
+  const resumed = await FrozenMovingPublication.resume(f.store, { budget: f.budget });
+  publications.push(resumed);
+  expect(resumed.publication).toEqual(pub.publication);
+  expect(await moves(resumed, 'data')).toEqual(plan);
+});
+it.each(['lock', 'custom'] as const)(
+  'coarsens only the eligible Maven ancestor beside a %s exclusion',
+  async (kind) => {
+    const excluded = kind === 'lock' ? 'repository/keep.lock' : 'repository/private.bin',
+      f = await fixture(
+        'maven',
+        { 'repository/org/a/1/a.jar': 'a', 'repository/org/b/1/b.jar': 'b', [excluded]: 'private' },
+        { excluded: kind === 'custom' ? ['**/private.bin'] : [] },
+      ),
+      pub = await FrozenMovingPublication.freeze(f.input, 'main');
+    publications.push(pub);
+    const plan = await moves(pub, 'data');
+    expect(plan.filter((r) => r[0] === 'move').map((r) => r[4])).toEqual(['repository/org']);
+    expect(await readFile(f.store.root.resolve(excluded), 'utf8')).toBe('private');
+  },
+);
+it.each(['aggregate', 'single-writer'] as const)(
+  'keeps mixed Maven %s ownership in separate physical sources',
+  async (mode) => {
+    const f = await fixture(
+        'maven',
+        {
+          'repository/org/a/1/a.jar': 'a',
+          'repository/org/b/1/b.jar': 'b',
+          'repository/other/c/1/c.jar': 'c',
+        },
+        { repositorySplit: mode },
+      ),
+      pub = await FrozenMovingPublication.freeze(f.input, 'main');
+    publications.push(pub);
+    expect(
+      (await moves(pub, 'data')).filter((r) => r[0] === 'move').map((r) => [r[2], r[4]]),
+    ).toEqual([['live', 'repository/org']]);
+    expect(
+      (await moves(pub, 'state')).filter((r) => r[0] === 'move').map((r) => [r[2], r[4]]),
+    ).toEqual(mode === 'aggregate' ? [['live', 'repository/other']] : [['owned', 'repository']]);
+  },
+);
+
+it('does not coarsen across an unselected Maven owner', async () => {
+  const f = await fixture(
+      'maven',
+      { 'repository/org/a/1/a.jar': 'a', 'repository/other/c/1/c.jar': 'c' },
+      { repositorySplit: 'aggregate' },
+    ),
+    pub = await FrozenMovingPublication.freeze(f.input, 'main');
+  publications.push(pub);
+  const plans = await freezeMovePlans(f.input, [pub.tree('data')]);
+  expect([...plans.keys()]).toEqual(['data']);
+  const roots = [];
+  for await (const row of f.store.rows(plans.get('data')!, 'move-plan', {
+    ...pub.options,
+    partition: 'data',
+  })) {
+    const r = tuple(row.value);
+    if (r[0] === 'move') roots.push(r[4]);
+  }
+  expect(roots).toEqual(['repository/org']);
 });

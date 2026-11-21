@@ -84,3 +84,39 @@ it.each([
   },
   30000,
 );
+
+it.each([
+  'relocation-outbound-rename',
+  'relocation-outbound-cursor',
+  'relocation-return-rename',
+  'moving-adjustment-pointer',
+] as const)(
+  'returns the same Maven coarse root after process exit at %s',
+  async (point) => {
+    const f = await installFixture('maven');
+    fixtures.push(f);
+    let status: unknown;
+    try {
+      execFileSync(process.execPath, [bundle, 'start', f.root, point, '1', 'maven'], {
+        stdio: 'pipe',
+      });
+    } catch (error) {
+      status = (error as { status: unknown }).status;
+    }
+    expect(status).toBe(73);
+    const before = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
+    execFileSync(process.execPath, [bundle, 'recover', f.root, 'unused', '1', 'maven'], {
+      stdio: 'pipe',
+    });
+    const after = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
+    expect(after[6]).toEqual(before[6]);
+    expect(after[8]).toEqual(before[8]);
+    await f.store.assertNoIntents();
+    expect(await readFile(f.store.root.resolve('repository/org/a/1/a.jar'), 'utf8')).toBe('a');
+    expect(await readFile(f.store.root.resolve('repository/org/b/1/b.jar'), 'utf8')).toBe('b');
+    expect(
+      await readFile(f.store.root.resolve('repository/org/a/1/_remote.repositories'), 'utf8'),
+    ).toBe('marker');
+  },
+  30000,
+);

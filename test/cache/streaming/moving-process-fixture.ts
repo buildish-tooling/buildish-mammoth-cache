@@ -22,27 +22,37 @@ import { MovingBasePublication } from '../../../src/cache/streaming/moving-publi
 import type { BaseCacheBackend } from '../../../src/cache/backend';
 import { observationFixture } from './observation-fixtures';
 import { installFixture } from './install-fixture';
-const [mode, root, point, nthText] = process.argv.slice(2);
+const [mode, root, point, nthText, fixtureKind] = process.argv.slice(2);
 let hit = 0;
 const fail = async (name: string) => {
   if (name === point && ++hit === Number(nthText)) process.exit(73);
 };
+const tool = fixtureKind === 'maven' ? 'maven' : 'gradle';
 const f =
   mode === 'start'
-    ? await observationFixture('gradle', { root, fail })
-    : await installFixture('gradle', { root, fail });
+    ? await observationFixture(tool, { root, fail })
+    : await installFixture(tool, { root, fail });
 let pub: FrozenMovingPublication, input: LiveBaseInputs | undefined;
 if (mode === 'start') {
   const unit = 'caches/transforms-4/' + 'a'.repeat(32);
-  await f.files('', {
-    'caches/a': 'a',
-    'caches/b': 'b',
-    [unit + '/metadata.bin']: 'm',
-    [unit + '/results.bin']: 'r',
-    [unit + '/transformed/a']: 'a',
-    [unit + '/keep.lock']: 'protected',
-    'state/b': 'snapshot',
-  });
+  await f.files(
+    '',
+    tool === 'maven'
+      ? {
+          'repository/org/a/1/_remote.repositories': 'marker',
+          'repository/org/a/1/a.jar': 'a',
+          'repository/org/b/1/b.jar': 'b',
+        }
+      : {
+          'caches/a': 'a',
+          'caches/b': 'b',
+          [unit + '/metadata.bin']: 'm',
+          [unit + '/results.bin']: 'r',
+          [unit + '/transformed/a']: 'a',
+          [unit + '/keep.lock']: 'protected',
+          'state/b': 'snapshot',
+        },
+  );
   await captureObservations(f.store, { budget: f.budget });
   await executeGc(f.store, { budget: f.budget });
   input = await LiveBaseInputs.capture(f.store, { budget: f.budget });

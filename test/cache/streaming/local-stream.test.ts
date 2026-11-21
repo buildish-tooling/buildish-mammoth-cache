@@ -627,6 +627,10 @@ it('distinguishes file units, direct Maven directory roots and whole-directory m
       ['move-unit-close', 'maven-directory', root, 1],
     ];
   expect((await write(f, direct)).seal.records).toBe(4);
+  const child = structuredClone(direct);
+  (child[2] as Value[])[3] = root + '/child';
+  (child[2] as Value[])[4] = root + '/child';
+  await expect(write(f, child)).rejects.toThrow('match its direct unit root');
   const group: Value[] = [
     ['move-source', f.q('native-evidence')],
     ['move-unit-open', 'directory', 'metadata', 'subtree'],

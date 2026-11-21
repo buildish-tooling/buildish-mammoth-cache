@@ -141,7 +141,7 @@ export async function freezeMovePlans(
               directories = true;
               break;
             }
-        const eligible = !!n[2] && n[6] === 0 && contributes && !(maven && directories);
+        const eligible = !!n[2] && n[6] === 0 && contributes;
         const scope = n[1] === 'directory' ? await workspace(n) : null;
         if (eligible) {
           if (active) {
@@ -153,7 +153,10 @@ export async function freezeMovePlans(
             n[1] === 'file'
               ? ['file', n[2], 'file']
               : (scope ??
-                (maven ? ['maven-directory', n[2], 'direct'] : ['directory', n[2], 'subtree']));
+                // Physical ancestors may contain several complete direct Maven units.
+                (maven && !directories
+                  ? ['maven-directory', n[2], 'direct']
+                  : ['directory', n[2], 'subtree']));
           await group(p!, descriptor, async () => {
             await rootRow(p!, n, source!);
             return 1;
@@ -351,7 +354,7 @@ class TreeSpans {
       release();
     }
   }
-  async member(path: string, kind: string): Promise<Value> {
+  async member(path: string, kind: string, direct = false): Promise<Value> {
     const signal = this.options.signal;
     while (true) {
       signal?.throwIfAborted();
@@ -366,6 +369,8 @@ class TreeSpans {
         signal?.throwIfAborted();
         const end = await this.next();
         if (!end) throw new Error('Incomplete portable transfer subtree.');
+        if (direct && end.tag === 'dir-open')
+          throw new Error('Direct Maven directory move contains a child directory.');
         if (end.path === path && end.tag === 'dir-close')
           return ['span', this.tree.tree[4], r.start, end.end];
       }
@@ -416,6 +421,7 @@ export async function checkMovePlanMetadata(
     tree: TreeSpans;
     native: NativeSpans | null;
     source: Reference | null;
+    direct: boolean;
     release: () => void;
   }[] = [];
   let failure: unknown;
@@ -432,6 +438,8 @@ export async function checkMovePlanMetadata(
         cursor.source = store.codec.schemas.ref('native-evidence').parse(r[1]);
         cursor.release = options.budget.holdRecord(encodeRecord(cursor.source).length);
       }
+      if (r[0] === 'move-unit-open') cursor.direct = r[1] === 'maven-directory';
+      if (r[0] === 'move-unit-close') cursor.direct = false;
       if (r[0] === 'move') {
         cursor.head = r;
         return;
@@ -456,6 +464,7 @@ export async function checkMovePlanMetadata(
         ),
         native: p.source ? new NativeSpans(store, p.source, options) : null,
         source: null as Reference | null,
+        direct: false,
         release: () => {},
       };
       cursors.push(cursor);
@@ -479,7 +488,11 @@ export async function checkMovePlanMetadata(
         p = cursor.plan,
         path = String(r[4]),
         kind = String(r[5]);
-      equal(r[6], await cursor.tree.member(path, kind), 'exact portable move member span');
+      equal(
+        r[6],
+        await cursor.tree.member(path, kind, cursor.direct),
+        'exact portable move member span',
+      );
       if (cursor.native) {
         equal(r[2], 'owned', 'owned move namespace');
         equal(r[3], p.source!.nativeRoot + '/' + path, 'exact owned move root');

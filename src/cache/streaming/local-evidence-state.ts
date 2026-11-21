@@ -136,8 +136,10 @@ export class LocalEvidenceState {
       throw new Error('Directory move group requires its single directory root.');
     if (scope === 'file' && kind !== undefined && kind !== 'file')
       throw new Error('Directory operation in ordinary file unit.');
-    if (scope === 'direct' && path === root && kind === 'directory' && this.purpose === 'move-plan')
+    if (scope === 'direct' && kind === 'directory' && this.purpose === 'move-plan') {
+      if (path !== root) throw new Error('Maven directory move must match its direct unit root.');
       return;
+    }
     if (scope === 'partition') {
       const owner = kind === 'directory' ? root : this.schemas.options.model.owner(path)[0];
       if (owner !== root) throw new Error('Wrong snapshot install owner.');

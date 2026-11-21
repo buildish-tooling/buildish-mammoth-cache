@@ -34,6 +34,7 @@ export async function installFixture(
     foreignSibling?: boolean;
     upperSibling?: boolean;
     excluded?: string[];
+    repositorySplit?: 'aggregate' | 'single-writer';
     access?: 'writable' | 'read-only';
     root?: string;
     nonce?: string;
@@ -61,23 +62,29 @@ export async function installFixture(
                 : configuration.shared
                   ? ['shared/data/**']
                   : ['data/**', 'caches/**', 'repository/**'],
-              configuration.foreignSibling ? [...hard, 'data/empty/foreign'] : hard,
+              configuration.foreignSibling
+                ? [...hard, 'data/empty/foreign']
+                : configuration.repositorySplit
+                  ? [...hard, 'repository/other/**']
+                  : hard,
               'aggregate',
               null,
               'default',
             ],
             [
               'state',
-              configuration.foreignSibling
-                ? ['data/empty/foreign']
-                : configuration.upperSibling
-                  ? ['shared/LOWER/**']
-                  : configuration.shared
-                    ? ['shared/state/**']
-                    : ['state/**'],
+              configuration.repositorySplit
+                ? ['repository/other/**']
+                : configuration.foreignSibling
+                  ? ['data/empty/foreign']
+                  : configuration.upperSibling
+                    ? ['shared/LOWER/**']
+                    : configuration.shared
+                      ? ['shared/state/**']
+                      : ['state/**'],
               hard,
-              'single-writer',
-              'A',
+              configuration.repositorySplit ?? 'single-writer',
+              configuration.repositorySplit === 'aggregate' ? null : 'A',
               'default',
             ],
           ],

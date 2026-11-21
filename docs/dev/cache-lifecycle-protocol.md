@@ -645,6 +645,19 @@ This transfer grouping may contain several ordinary files or complete recognized
 units; frozen referenced projections must prove all selected contents belong to
 this partition and no indivisible unit straddles its boundary. It does not alter
 worker conflict units or introduce a GC/install directory-group descriptor.
+A physical directory group may include multiple complete Maven direct units, including
+nested coordinates. For example, if `repository/org/example/a/1/a-1.jar` and
+`repository/org/example/b/1/b-1.jar` are the only physical repository contents and
+belong to one selected partition, `directory/repository/subtree` moves `repository/`
+once out and once back. Their logical Maven units in worker conflict reduction,
+observation/GC, native trees and install/recovery groups remain separate. An excluded
+lock/bookkeeping entry or another partition's coordinate disqualifies each ancestor
+containing it; select maximal smaller eligible roots instead, leaving excluded data
+live and outside the SDK archive. No parking or consume-on-save permission is implied.
+Exact original observation, post-GC source and portable tree spans still cover the
+complete physical group. Existing frozen plans retain their original descriptors,
+keys and cursors on resume; recovery never reruns the planner to coarsen old plans.
+
 Maximality applies within these admitted move groups. An ordinary file unit moves
 one file, never a directory disguised as a file. A direct Maven unit may move its
 own directory root only when its complete frozen projection proves no child directories,
