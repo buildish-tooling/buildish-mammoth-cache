@@ -197,6 +197,58 @@ it.each(['maven', 'gradle'] as const)(
     expect(f.provision).toHaveBeenCalledTimes(1);
   },
 );
+it('canonicalizes repeated configured producers before freezing and requests them once in first-occurrence order', async () => {
+  const service = memoryArtifacts();
+  for (const job of ['A', 'B']) {
+    const worker = await fixture('maven', { 'job-mode': 'distributed-worker' });
+    await runStreamingPrepare({
+      ...worker.deps,
+      ciProvider: {
+        ...worker.deps.ciProvider,
+        context: { ...worker.ci, jobName: job },
+      },
+    });
+    await mkdir(worker.home + '/data');
+    await writeFile(worker.home + '/data/only-' + job, job);
+    expect(
+      (
+        await runStreamingPost({
+          ...worker.post,
+          artifactBackend: async () => service.api,
+        })
+      ).outcome,
+    ).toBe('worker-uploaded');
+  }
+  const f = await fixture('maven', {
+    'job-mode': 'distributed-aggregator',
+    'dependent-jobs': 'B,A,B',
+  });
+  expect(f.config.dependentJobs).toEqual(['B', 'A', 'B']);
+  await runStreamingPrepare({
+    ...f.deps,
+    ciProvider: {
+      ...f.deps.ciProvider,
+      context: { ...f.ci, jobName: 'parent' },
+    },
+    artifactBackend: async () => service.api,
+  });
+  const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
+  if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  const opened = await OpenedInvocation.open(anchor, f.budget),
+    facts = await PrepareFacts.open(opened.store, { budget: f.budget });
+  try {
+    expect(facts.bindings[8][10]).toEqual(['B', 'A']);
+    expect(
+      (facts.selection![6] as ['selected', Array<unknown[]>])[1].map((r) => (r[4] as string[])[4]),
+    ).toEqual(['B', 'A']);
+  } finally {
+    facts.close();
+  }
+  expect(service.list).toHaveBeenCalledTimes(1);
+  expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
+  expect(await readFile(f.home + '/data/only-A', 'utf8')).toBe('A');
+  expect(await readFile(f.home + '/data/only-B', 'utf8')).toBe('B');
+}, 20_000);
 it('duplicate and missing prepare stop before anchor, backends, reports or deferred provider graph', async () => {
   const f = await fixture();
   expect((await runStreamingPost(f.post)).outcome).toBe('skipped');

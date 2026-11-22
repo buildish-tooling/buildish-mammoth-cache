@@ -38,6 +38,7 @@ import { freezeInstallPlan } from './install-plan';
 import { executeInstall } from './install-execute';
 import { discoverWorkerArtifacts, acquireWorkerArtifacts } from './worker-service';
 import { mergeWorkerArchives, type WorkerMergeResult } from './worker-merge';
+import { ordinaryOrder } from './reduction';
 import { acceptWorkerMerge, installWorkerMerge } from './worker-incoming';
 import type { PreparedWorkerSnapshot } from './worker-snapshot';
 import {
@@ -149,14 +150,13 @@ function assertRequest(request: StreamingPrepareRequest, facts: PrepareFacts) {
 export async function prepareStreaming(
   input: StreamingPrepareRequest,
 ): Promise<StreamingPrepareResult> {
-  if (input.policy.ordinaryOrder.length > 16)
-    throw new Error('Prepare producer admission exceeded.');
+  const order = Object.freeze(ordinaryOrder(input.policy.ordinaryOrder));
   const request: StreamingPrepareRequest = Object.freeze({
     ...input,
     context: contextSchema.parse(input.context),
     policy: Object.freeze({
       ...input.policy,
-      ordinaryOrder: Object.freeze([...input.policy.ordinaryOrder]),
+      ordinaryOrder: order,
     }),
     defaultRef: input.defaultRef === input.currentRef ? undefined : input.defaultRef,
   });

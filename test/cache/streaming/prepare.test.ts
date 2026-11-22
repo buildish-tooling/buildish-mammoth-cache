@@ -281,7 +281,11 @@ it('composes two real worker archives in configured order, installing complete s
     { service, request } = await workerArtifacts(f);
   await f.files('', { 'data/local': 'keep local aggregate', 'state/stale': 'old' });
   const warnings = vi.fn(),
-    ready = await prepareStreaming({ ...request, onWorkerWarnings: warnings });
+    ready = await prepareStreaming({
+      ...request,
+      policy: { ...request.policy, ordinaryOrder: ['B', 'A', 'B'] },
+      onWorkerWarnings: warnings,
+    });
   expect(warnings).toHaveBeenCalledWith({ count: 0, details: [] });
   for (const [name, body] of Object.entries({
     'data/only-A': 'A',
@@ -294,9 +298,10 @@ it('composes two real worker archives in configured order, installing complete s
   expect(await f.store.root.stat('state/stale')).toBeNull();
   expect(ready.workerCount).toBe(2);
   expect(service.list).toHaveBeenCalledTimes(1);
-  expect(service.download).toHaveBeenCalledTimes(2);
+  expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
   const facts = await PrepareFacts.open(ready.store, { budget: f.budget });
   try {
+    expect(facts.bindings[8][10]).toEqual(['B', 'A']);
     expect(facts.selection![6][0]).toBe('selected');
     expect(
       (facts.selection![6] as ['selected', Array<unknown[]>])[1].map((r) => (r[4] as string[])[4]),
@@ -310,23 +315,119 @@ it('composes two real worker archives in configured order, installing complete s
     facts.close();
   }
 });
-it('retry after worker application and hook failure never lists/downloads again or reapplies changed live inputs', async () => {
+it.each([
+  [
+    ['B', 'A', 'B'],
+    ['B', 'A'],
+  ],
+  [
+    ['B', 'A'],
+    ['B', 'A', 'B'],
+  ],
+])(
+  'retry with equivalent ordinary order %j → %j preserves frozen selection',
+  async (initial, equivalent) => {
+    const f = await fixture(),
+      { service, request } = await workerArtifacts(f);
+    let fail = true;
+    const retry = {
+      ...request,
+      policy: { ...request.policy, ordinaryOrder: initial },
+      installHooks: async () => {
+        if (fail) throw new Error('hook failed');
+      },
+    };
+    await expect(prepareStreaming(retry)).rejects.toThrow('hook failed');
+    await f.files('', { 'data/only-A': 'later local change' });
+    fail = false;
+    await prepareStreaming({
+      ...retry,
+      policy: { ...retry.policy, ordinaryOrder: equivalent },
+    });
+    expect(await readFile(f.store.root.resolve('data/only-A'), 'utf8')).toBe('later local change');
+    expect(service.list).toHaveBeenCalledTimes(1);
+    expect(service.download).toHaveBeenCalledTimes(2);
+  },
+);
+it('admits seventeen repetitions of one ordinary producer as a single request', async () => {
   const f = await fixture(),
-    { service, request } = await workerArtifacts(f);
-  let fail = true;
-  const retry = {
-    ...request,
-    installHooks: async () => {
-      if (fail) throw new Error('hook failed');
-    },
-  };
-  await expect(prepareStreaming(retry)).rejects.toThrow('hook failed');
-  await f.files('', { 'data/only-A': 'later local change' });
-  fail = false;
-  await prepareStreaming(retry);
-  expect(await readFile(f.store.root.resolve('data/only-A'), 'utf8')).toBe('later local change');
-  expect(service.list).toHaveBeenCalledTimes(1);
-  expect(service.download).toHaveBeenCalledTimes(2);
+    { service, request } = await workerArtifacts(f, ['A']),
+    ready = await prepareStreaming({
+      ...request,
+      policy: { ...request.policy, ordinaryOrder: Array(17).fill('A') },
+    }),
+    facts = await PrepareFacts.open(ready.store, { budget: f.budget });
+  try {
+    expect(facts.bindings[8][10]).toEqual(['A']);
+    expect(ready.workerCount).toBe(1);
+    expect(service.list).toHaveBeenCalledTimes(1);
+    expect(service.download.mock.calls.map(([id]) => id)).toEqual([1]);
+    expect(await readFile(ready.store.root.resolve('state/from-A'), 'utf8')).toBe(
+      'complete snapshot',
+    );
+  } finally {
+    facts.close();
+  }
+});
+it('keeps a snapshot-only writer outside the deduplicated ordinary order', async () => {
+  const f = await fixture(),
+    { service, request } = await workerArtifacts(f),
+    ready = await prepareStreaming({
+      ...request,
+      policy: { ...request.policy, ordinaryOrder: ['B', 'B'] },
+    }),
+    facts = await PrepareFacts.open(ready.store, { budget: f.budget });
+  try {
+    expect(facts.bindings[8][10]).toEqual(['B']);
+    expect(ready.workerCount).toBe(2);
+    expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
+    expect(await ready.store.root.stat('data/only-A')).toBeNull();
+    expect(await readFile(ready.store.root.resolve('data/only-B'), 'utf8')).toBe('B');
+    expect(await readFile(ready.store.root.resolve('state/from-A'), 'utf8')).toBe(
+      'complete snapshot',
+    );
+  } finally {
+    facts.close();
+  }
+});
+it('rejects seventeen distinct ordinary producers before provisioning or backend work', async () => {
+  const f = await fixture(),
+    backend = vi.fn(f.request.cacheBackend);
+  await expect(
+    prepareStreaming({
+      ...f.request,
+      policy: {
+        ...f.request.policy,
+        role: 'distributed-aggregator',
+        ordinaryOrder: Array.from({ length: 17 }, (_, i) => 'job-' + i),
+      },
+      cacheBackend: backend,
+    }),
+  ).rejects.toThrow(/producer admission exceeded/i);
+  expect(f.provision).not.toHaveBeenCalled();
+  expect(f.hooks).not.toHaveBeenCalled();
+  expect(backend).not.toHaveBeenCalled();
+});
+it('counts an additional snapshot-only writer toward the total producer limit', async () => {
+  const f = await fixture(),
+    service = memoryArtifacts(),
+    context = [...f.request.context] as typeof f.request.context;
+  context[4] = 'parent';
+  await expect(
+    prepareStreaming({
+      ...f.request,
+      context,
+      artifactBackend: async () => service.api,
+      policy: {
+        ...f.request.policy,
+        role: 'distributed-aggregator',
+        ordinaryOrder: Array.from({ length: 16 }, (_, i) => 'job-' + i),
+      },
+    }),
+  ).rejects.toThrow('Invalid prepare producer requests');
+  expect(service.list).not.toHaveBeenCalled();
+  expect(service.download).not.toHaveBeenCalled();
+  expect(f.hooks).not.toHaveBeenCalled();
 });
 it('distinguishes missing required artifacts from a valid committed empty optional selection', async () => {
   const f = await fixture(),
