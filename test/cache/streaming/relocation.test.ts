@@ -641,7 +641,7 @@ it('shares one original index/parent phase through two partition return candidat
     await epoch.close();
   }
   await window.verify();
-  expect(opens).toHaveBeenCalledTimes(1);
+  expect(opens).not.toHaveBeenCalled(); // the capture-owned index crosses both returns
 });
 
 it('saves native live/owned SDK objects, commits returns and publishes the generation last', async () => {

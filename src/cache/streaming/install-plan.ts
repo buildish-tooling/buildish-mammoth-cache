@@ -37,6 +37,28 @@ export interface FrozenInstall {
   readonly parentsPrefix: string;
   readonly maxDirectoryEntries: number;
 }
+interface InstallIndexes {
+  readonly scratch: InstallScratch;
+  readonly current: number;
+  readonly sources: ReadonlyMap<number, number>;
+}
+const indexes = new WeakMap<FrozenInstall, InstallIndexes>();
+export async function takeInstallIndexes(
+  store: OwnedStore,
+  frozen: FrozenInstall,
+): Promise<InstallIndexes | undefined> {
+  assertFrozenInstall(store, frozen);
+  const value = indexes.get(frozen);
+  if (!value) return undefined;
+  indexes.delete(frozen);
+  try {
+    await value.scratch.reopen();
+    return value;
+  } catch (error) {
+    await value.scratch.close();
+    throw error;
+  }
+}
 const frozenPlans = new WeakSet<object>();
 export function assertFrozenInstall(store: OwnedStore, plan: FrozenInstall): void {
   if (!frozenPlans.has(plan) || plan.store !== store)
@@ -86,6 +108,7 @@ export async function freezeInstallPlan(
   }
   const current = await captureInstallCurrent(store, { budget, signal, maxDirectoryEntries });
   const owned: InstallScratch[] = [];
+  let retained: InstallScratch | undefined;
   async function spool() {
     const value = await InstallScratch.create(store, budget);
     owned.push(value);
@@ -316,10 +339,17 @@ export async function freezeInstallPlan(
       parentsPrefix: parents.prefix,
       maxDirectoryEntries,
     });
+    await scratch.park();
+    indexes.set(frozen, {
+      scratch,
+      current: currentRoot,
+      sources: new Map(desired.map((d) => [d.partition, d.root])),
+    });
+    retained = scratch;
     frozenPlans.add(frozen);
     return frozen;
   } finally {
     for (const frame of activeParents) frame.release();
-    await Promise.all(owned.map((s) => s.close()));
+    await Promise.all(owned.filter((s) => s !== retained).map((s) => s.close()));
   }
 }

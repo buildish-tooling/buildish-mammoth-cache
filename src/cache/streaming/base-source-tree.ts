@@ -15,6 +15,7 @@
  */
 
 import { tuple, type Value } from './encoding';
+import { InstallScratch } from './install-scratch';
 import { WorkerSpool } from './worker-spool';
 import {
   UnitProjection,
@@ -32,7 +33,8 @@ import type { BaseObjectOptions } from './base-object';
 // Protocol: docs/dev/native-base-protocol.md#native-tree-grammar.
 // Common metadata-only complete-unit framing for prepared and moving sources.
 export class BaseSourceTree {
-  private unit: { descriptor: Unit; rows: WorkerSpool; jars: boolean } | null = null;
+  private unit: { descriptor: Unit; start: number; jars: boolean } | null = null;
+  private units?: InstallScratch;
   private constructor(
     readonly store: OwnedStore,
     readonly partition: string,
@@ -47,8 +49,15 @@ export class BaseSourceTree {
       options,
     );
   }
-  private append(row: Value, signal: AbortSignal) {
-    return (this.unit?.rows ?? this.events).append(row, signal);
+  private async append(row: Value, signal: AbortSignal) {
+    signal.throwIfAborted();
+    if (this.unit) await this.units!.append(row);
+    else await this.events.append(row, signal);
+    signal.throwIfAborted();
+  }
+  private async begin(descriptor: Unit) {
+    this.units ??= await InstallScratch.create(this.store, this.options.budget);
+    return { descriptor, start: this.units.position, jars: false };
   }
   private async closeUnit(signal: AbortSignal) {
     if (!this.unit) return;
@@ -60,9 +69,10 @@ export class BaseSourceTree {
         u.jars ? [u.descriptor[1] + '/classes.jar'] : [],
       );
     const projection = new UnitProjection(model, u.descriptor, false, this.partition);
-    u.rows.seal(signal);
+    const end = this.units!.position;
     let current = u.descriptor[1];
-    for await (const value of u.rows.rows(signal)) {
+    for await (const value of this.units!.rows(u.start, end)) {
+      signal.throwIfAborted();
       const r = tuple(value);
       if (r[0] === 'dir-open') {
         current = String(r[1]);
@@ -85,23 +95,18 @@ export class BaseSourceTree {
       ['unit-open', ...u.descriptor, 'partition-projection', s.counts, s.semantic, s.comparison],
       signal,
     );
-    for await (const row of u.rows.rows(signal)) await this.events.append(row, signal);
+    for await (const row of this.units!.rows(u.start, end)) await this.events.append(row, signal);
     await this.events.append(
       ['unit-close', u.descriptor[0], u.descriptor[1], s.counts, s.semantic, s.comparison],
       signal,
     );
-    await u.rows.dispose();
     this.unit = null;
   }
   async open(path: string, signal: AbortSignal) {
     if (this.unit?.descriptor[2] === 'direct') await this.closeUnit(signal);
     await this.append(['dir-open', path], signal);
     if (!this.unit && isWorkspaceRoot(this.store.codec.options.model, path))
-      this.unit = {
-        descriptor: [workspaceKind(path), path, 'subtree'],
-        rows: await WorkerSpool.create(this.store, this.options.budget),
-        jars: false,
-      };
+      this.unit = await this.begin([workspaceKind(path), path, 'subtree']);
   }
   async close(path: string, signal: AbortSignal) {
     if (this.unit?.descriptor[1] === path) await this.closeUnit(signal);
@@ -119,11 +124,7 @@ export class BaseSourceTree {
     if (model.owner(path)[0] !== this.partition) throw new Error('Wrong source tree owner.');
     if (!this.unit && recognizedRoot(model, path) !== null) {
       if (model.tuple[2] !== 'maven') throw new Error('Missing native workspace root.');
-      this.unit = {
-        descriptor: ['maven-directory', parentPath(path), 'direct'],
-        rows: await WorkerSpool.create(this.store, this.options.budget),
-        jars: false,
-      };
+      this.unit = await this.begin(['maven-directory', parentPath(path), 'direct']);
     }
     if (
       this.unit &&
@@ -133,12 +134,17 @@ export class BaseSourceTree {
       this.unit.jars = true;
     await this.append(['file', baseName(path), size, mode, mtime, sha], signal);
   }
-  seal(signal: AbortSignal) {
+  async seal(signal: AbortSignal) {
     if (this.unit) throw new Error('Unclosed source tree unit.');
+    // Units share one unpublished backing file. Check its original identity once
+    // before completed events escape; never create/read a separate file per unit.
+    await this.units?.assertStable();
+    signal.throwIfAborted();
     this.events.seal(signal);
   }
   async disposeUnit() {
-    await this.unit?.rows.dispose();
+    await this.units?.close();
+    this.units = undefined;
     this.unit = null;
   }
 }

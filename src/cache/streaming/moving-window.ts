@@ -19,6 +19,7 @@ import { verifyNativeEvidence } from './install-evidence';
 import { randomUUID } from 'node:crypto';
 import { FrozenMovingPublication } from './base-moving-publication';
 import { MovingAdjustments } from './moving-adjustments';
+import { partitionBit } from './install-index';
 import { ObservationIndex } from './observation-index';
 import { checkCompleteGc } from './move-source';
 import { checkGcProjection, type GcRelocationProjection } from './gc-projection';
@@ -55,6 +56,8 @@ export class MovingWindow {
   private busy = false;
   private failed = false;
   private checked = false;
+  private finalized = false;
+  private capturedDirectories?: () => AsyncIterable<{ path: string; native: NativeIdentity }>;
   private borrowed: { p: string; epoch: RelocationEpoch | null } | null = null;
   get verified() {
     return this.checked && !this.failed && !this.closed;
@@ -66,6 +69,8 @@ export class MovingWindow {
     private readonly parts: Map<string, MovingPartition>,
     private readonly container: string,
     private readonly owner: NativeIdentity,
+    private readonly releaseOriginal: () => Promise<void> | void,
+    private readonly guardPlanning: () => Promise<void>,
   ) {
     windows.add(this);
   }
@@ -82,11 +87,16 @@ export class MovingWindow {
     )
       throw new Error('Moving window requires writable base role.');
     const state = await pub.state(),
-      original = await ObservationIndex.open(pub.store, state[6]!, pub.options),
+      borrowed = pub.borrowOriginal(),
+      original =
+        borrowed?.index ?? (await ObservationIndex.open(pub.store, state[6]!, pub.options)),
+      releaseOriginal = borrowed ? borrowed.release : () => original.dispose(),
       parts = new Map<string, MovingPartition>(),
       container = pub.store.prefix + 'planning/' + randomUUID();
-    let window: MovingWindow | undefined;
+    let window: MovingWindow | undefined,
+      fresh = false;
     try {
+      await borrowed?.guard();
       await checkCompleteGc(original);
       await pub.store.makeParents(container + '/live/pending');
       const owner = (await pub.store.root.stat(container))!,
@@ -96,6 +106,7 @@ export class MovingWindow {
           container + '/live/',
           pub.options.budget,
           async (path) => {
+            if (fresh && borrowed) return borrowed.native(path);
             const d = await original.directory(path);
             try {
               return structuredClone(d.node[2]);
@@ -104,10 +115,29 @@ export class MovingWindow {
             }
           },
           pub.options.signal,
+          borrowed
+            ? {
+                native: (path) => (fresh ? borrowed.native(path) : Promise.resolve(null)),
+                projection: (path) => (fresh ? borrowed.projection(path) : Promise.resolve(null)),
+              }
+            : undefined,
         );
-      window = new MovingWindow(pub, original, phase, parts, container, owner);
+      window = new MovingWindow(
+        pub,
+        original,
+        phase,
+        parts,
+        container,
+        owner,
+        releaseOriginal,
+        borrowed?.guard ?? (async () => {}),
+      );
       const cells = await pub.cells();
       try {
+        fresh =
+          !!borrowed &&
+          state[4] === 'objects-frozen' &&
+          cells.rows.every((c) => c[3] === null && c[5] === null && c[6] === null);
         for (const choice of pub.choices)
           if (choice[0] === 'new') {
             const p = choice[1],
@@ -163,15 +193,24 @@ export class MovingWindow {
       } finally {
         cells.release();
       }
+      // The complete original/post-GC co-read and per-file capture already
+      // admitted this process-local view. Reuse it only before any source epoch.
+      if (fresh) {
+        window.checked = true;
+        // No selected tree needs a random-access planning index. Reuse the
+        // captured facts as one postorder frontier for the final common join.
+        if (!parts.size) window.capturedDirectories = borrowed!.directories;
+      }
       return window;
     } catch (error) {
-      await settleBaseCleanup(window ? [() => window!.close()] : [() => original.dispose()], error);
+      await settleBaseCleanup(window ? [() => window!.close()] : [releaseOriginal], error);
       throw error;
     }
   }
   acquire(p: string) {
     MovingWindow.assert(this);
-    if (this.busy || this.borrowed) throw new Error('Moving window already borrowed/active.');
+    if (this.busy || this.borrowed || this.finalized)
+      throw new Error('Moving window already borrowed/active/finalized.');
     this.currentPart(p);
     const owner = { p, epoch: null as RelocationEpoch | null };
     this.borrowed = owner;
@@ -204,7 +243,10 @@ export class MovingWindow {
       throw new Error('Moving window operation/borrow active.');
     this.busy = true;
     try {
-      return await work();
+      await this.guardPlanning();
+      const result = await work();
+      await this.guardPlanning();
+      return result;
     } finally {
       this.busy = false;
     }
@@ -331,8 +373,8 @@ export class MovingWindow {
           continue;
         }
         if (row[0] !== 'directory') throw new Error('Unproven live context file.');
-        const expected = await this.livePhase.known(path),
-          actual = await this.publication.store.root.stat(path);
+        const actual = await this.publication.store.root.stat(path),
+          expected = actual ? await this.livePhase.known(path, actual) : null;
         if (!expected || !actual || !sameNative(expected, actual, true))
           throw new Error('Live source context changed.');
       } finally {
@@ -599,7 +641,7 @@ export class MovingWindow {
       throw error;
     }
   }
-  async verify(active?: RelocationEpoch) {
+  async verify(active?: RelocationEpoch, final = false) {
     MovingWindow.assert(this);
     if (
       this.busy ||
@@ -612,6 +654,7 @@ export class MovingWindow {
       signal = pub.options.signal ?? new AbortController().signal,
       heads: {
         p: string;
+        bit: bigint;
         part: MovingPartition;
         iterator: AsyncGenerator<MoveRow>;
         head: IteratorResult<MoveRow>;
@@ -619,13 +662,17 @@ export class MovingWindow {
       frames: {
         path: string;
         native: NativeIdentity;
+        known: NativeIdentity | null;
+        owners: bigint;
         effects: readonly Value[][];
         missing: [string, string][];
         release: () => void;
         charge: number;
       }[] = [];
+    const captured = this.capturedDirectories?.()[Symbol.asyncIterator]();
     let failure: unknown;
     try {
+      await this.guardPlanning();
       await pub.store.assertNoIntents(active?.current ?? undefined);
       const catalog = await pub.cells();
       try {
@@ -645,12 +692,31 @@ export class MovingWindow {
       } finally {
         catalog.release();
       }
+      // Validate all sparse adjustment effects even when an unchanged captured
+      // context makes per-directory partition lookups unnecessary.
+      for (const part of this.parts.values())
+        if (!part.ownedRoot)
+          for await (const effect of part.current.effects(signal)) {
+            const d = await this.original.directory(String(effect[1]));
+            try {
+              equal(effect.slice(2, 4), d.node[2].slice(3, 5), 'live ancestor stable identity');
+              equal(effect[4], d.node[10][7], 'complete live ancestor projection');
+            } finally {
+              d.release();
+            }
+          }
       for (const [p, part] of this.parts)
         if (!part.ownedRoot) {
           const iterator = (async function* () {
             for await (const range of part.program.ranges()) yield* part.program.moves(range);
           })();
-          heads.push({ p, part, iterator, head: await iterator.next() });
+          heads.push({
+            p,
+            bit: partitionBit(pub.store.codec.options.model, p),
+            part,
+            iterator,
+            head: await iterator.next(),
+          });
         }
       const least = () => {
         let chosen: (typeof heads)[number] | undefined;
@@ -713,9 +779,17 @@ export class MovingWindow {
         directory: async (d, n, gcChanged) => {
           const frame = frames[frames.length - 1];
           if (frame.path !== d[1]) throw new Error('Moving projection stack mismatch.');
-          const known = await this.livePhase.known(d[1]);
+          const prior = captured ? await captured.next() : null;
+          if (prior && (prior.done || prior.value.path !== d[1]))
+            throw new Error('Captured parent frontier mismatch.');
+          const known = prior && !prior.done ? prior.value.native : frame.known;
+          if (known) {
+            if (!sameNative(known, n, true)) throw new Error('Known live context changed.');
+            return;
+          }
           let frozen: NativeIdentity | null = null;
           for (const h of heads) {
+            if (!(frame.owners & h.bit)) continue;
             const candidate = await h.part.source.directory(d[1]);
             if (candidate) {
               if (frozen && !sameNative(frozen, candidate, true))
@@ -744,10 +818,6 @@ export class MovingWindow {
             }
             changed = true;
           }
-          if (known) {
-            if (!sameNative(known, n, true)) throw new Error('Known live context changed.');
-            return;
-          }
           const expected = frozen ?? d[2];
           if (
             !(changed || (!frozen && gcChanged)
@@ -759,16 +829,30 @@ export class MovingWindow {
       };
       await checkGcProjection(
         this.original,
-        this.original.completed[4],
-        this.original.completed[4],
+        this.original.completed[2],
+        this.original.completed[2],
         undefined,
         undefined,
         {
           open: async (d, n) => {
+            const known = captured ? null : await this.livePhase.known(d[1], n);
+            // Conservative source-context mask: retained files, descendant
+            // directories, remaining owners, and the capture's empty-owner rule.
+            // This only filters lookups; it never grants membership or ownership.
+            let owners =
+              BigInt('0x' + d[10][1]) | BigInt('0x' + d[10][2]) | BigInt('0x' + d[10][3]);
+            try {
+              const model = pub.store.codec.options.model,
+                owner = model.owner((d[1] ? d[1] + '/' : '') + '.workspace-directory-probe')[0];
+              owners |= partitionBit(model, owner);
+            } catch {
+              /* unowned structural directory; descendant masks still apply */
+            }
             const effects: Value[][] = [];
             let charge = 0;
             try {
-              for (const h of heads) {
+              for (const h of known ? [] : heads) {
+                if (!(owners & h.bit)) continue;
                 const effect = await h.part.current.effect(d[1]);
                 if (effect) {
                   const owned = structuredClone([...effect]),
@@ -781,6 +865,8 @@ export class MovingWindow {
               frames.push({
                 path: d[1],
                 native: n,
+                known,
+                owners,
                 effects,
                 missing: [],
                 release: pub.options.budget.holdRecord(512 + Buffer.byteLength(d[1])),
@@ -796,7 +882,7 @@ export class MovingWindow {
           close: async (d, n) => {
             const frame = frames.pop()!;
             try {
-              await this.livePhase.created(d[1], n, d[10][7]);
+              if (!final) await this.livePhase.created(d[1], n, d[10][7]);
             } finally {
               frame.release();
               pub.options.budget.release(frame.charge);
@@ -805,12 +891,15 @@ export class MovingWindow {
         },
         join,
       );
+      if (captured && !(await captured.next()).done) throw new Error('Extra captured parent.');
       if (heads.some((h) => !h.head.done)) throw new Error('Unvisited live move roots.');
       for (const [p, part] of this.parts)
         if (part.ownedRoot && active?.partition !== p) await this.verifyOwned(p);
       await this.retainedSources();
+      await this.guardPlanning();
       signal.throwIfAborted();
       this.checked = true;
+      if (final) this.finalized = true;
     } catch (error) {
       failure = error;
       this.failed = true;
@@ -822,7 +911,7 @@ export class MovingWindow {
       }
       try {
         await settleBaseCleanup(
-          heads.map((h) => () => h.iterator.return(undefined)),
+          [...heads.map((h) => () => h.iterator.return(undefined)), () => captured?.return?.()],
           failure,
         );
       } finally {
@@ -850,7 +939,9 @@ export class MovingWindow {
           () => p.program.close(),
         ])
         .concat([
-          () => this.original.dispose(),
+          async () => {
+            await this.releaseOriginal();
+          },
           () => retireOwnedDirectory(pub.store, this.container, this.owner, pub.options.budget),
         ]),
     );

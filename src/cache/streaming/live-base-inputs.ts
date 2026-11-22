@@ -18,9 +18,12 @@ import { createHash } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { tuple, equal, add, type Value } from './encoding';
 import { requirePostBindings } from './post-admission';
+import type { InstallScratch } from './install-scratch';
+import { IndexDirectories } from './install-index';
 import { ObservationIndex } from './observation-index';
 import { GcProgram } from './gc-program';
-import { checkGcProjection } from './gc-projection';
+import { captureGcProjection } from './gc-execute';
+import { checkGcProjection, type GcProjectionObserver } from './gc-projection';
 import { WorkerSpool } from './worker-spool';
 import { WorkerStage } from './worker-stage';
 import { writeWorkerNativeEvidence } from './worker-native';
@@ -75,12 +78,18 @@ function closeScope(parent: SourceScope | undefined, child: SourceScope) {
 // and #moving-source-publication-handoff. A complete original/native co-read,
 // before hashes, keys or live renames. No serialized row can mint this capability.
 export class LiveNativeView {
-  private readonly life = { disposed: false, busy: false, retiring: false };
+  private readonly life = { disposed: false, busy: false, retiring: false, leases: 0 };
+  private readonly planning: {
+    scratch?: InstallScratch;
+    directories?: IndexDirectories;
+    busy: boolean;
+  } = { busy: false };
   private constructor(
     readonly store: OwnedStore,
     readonly observations: Reference,
     readonly progress: Reference,
     private readonly facts: WorkerSpool,
+    readonly original: ObservationIndex,
     readonly options: BaseObjectOptions,
   ) {
     immutable(observations);
@@ -100,13 +109,13 @@ export class LiveNativeView {
     });
     options.signal.throwIfAborted();
     await store.assertNoIntents();
-    const state = store.codec.schemas.documents['local-state'].parse(await store.state()),
-      bindings = store.codec.schemas.documents.bindings.parse(
-        await store.readDocument(state[5], 'bindings'),
-      );
+    let state = store.codec.schemas.documents['local-state'].parse(await store.state());
+    const bindings = store.codec.schemas.documents.bindings.parse(
+      await store.readDocument(state[5], 'bindings'),
+    );
     await requirePostBindings(store, state, bindings, options);
     if (
-      state[4] !== 'gc-complete' ||
+      !['observations-frozen', 'gc-complete'].includes(state[4]) ||
       !state[6] ||
       !state[10] ||
       (state[7] !== null && state[7][1] !== 'post-sources') ||
@@ -127,16 +136,16 @@ export class LiveNativeView {
     );
     equal(progress[3], state[6], 'live source GC observations');
     if (progress[5] !== null) throw new Error('Active GC source owner.');
-    const index = await ObservationIndex.open(store, state[6], options);
-    let program: GcProgram | undefined, facts: WorkerSpool | undefined, failure: unknown;
+    let index: ObservationIndex | undefined,
+      program: GcProgram | undefined,
+      facts: WorkerSpool | undefined,
+      failure: unknown;
     try {
-      program = await GcProgram.create(index, {}, [progress[4]]);
-      equal(progress[4], program.final, 'complete original GC source cursor');
       facts = await WorkerSpool.create(store, options.budget);
       const append = (r: Value) => facts!.append(r, options.signal);
       const coordinates: { maven: boolean; protectedArtifact: boolean; contributes: boolean }[] =
         [];
-      await checkGcProjection(index, progress[4][2], progress[4][2], undefined, undefined, {
+      const observer: GcProjectionObserver = {
         open: async (d, n) => {
           coordinates.push({
             maven: d[9]?.[1] === 'maven-directory',
@@ -173,30 +182,106 @@ export class LiveNativeView {
           coordinates.pop();
           await append(['dir-close', d[1], n]);
         },
-      });
+      };
+      if (state[4] === 'observations-frozen') {
+        const result = await captureGcProjection(store, options, observer);
+        index = result.index;
+        if (!result.complete || !index) throw new Error('GC capture did not complete.');
+        const after = store.codec.schemas.documents['local-state'].parse(await store.state());
+        equal(after[6], state[6], 'captured GC original observation');
+        if (after[4] !== 'gc-complete' || !after[10]) throw new Error('GC capture phase changed.');
+        state = after;
+      } else {
+        index = await ObservationIndex.open(store, state[6], options);
+        program = await GcProgram.create(index, {}, [progress[4]]);
+        equal(progress[4], program.final, 'complete original GC source cursor');
+        await checkGcProjection(
+          index,
+          progress[4][2],
+          progress[4][2],
+          undefined,
+          undefined,
+          observer,
+        );
+      }
       facts.seal(options.signal);
       equal(await store.state(), state, 'live source capture state');
     } catch (e) {
       failure = e;
     }
     try {
-      await settleBaseCleanup([() => program?.close(), () => index.dispose()], failure);
+      await settleBaseCleanup([() => program?.close()], failure);
     } catch (e) {
       failure = e;
     }
     if (failure !== undefined) {
-      await settleBaseCleanup([() => facts?.dispose()], failure);
+      await settleBaseCleanup([() => facts?.dispose(), () => index?.dispose()], failure);
       throw failure;
     }
-    const result = new LiveNativeView(store, state[6], state[10], facts!, options);
+    const result = new LiveNativeView(store, state[6]!, state[10]!, facts!, index!, options);
     try {
-      await result.assertStable();
       options.signal.throwIfAborted();
       return result;
     } catch (e) {
       await settleBaseCleanup([() => result.dispose()], e);
       throw e;
     }
+  }
+  async retainPlanningIndex(scratch: InstallScratch, root: number) {
+    LiveNativeView.assert(this);
+    if (this.life.leases !== 1 || this.planning.busy)
+      throw new Error('Planning index owner active.');
+    this.planning.directories?.close();
+    await this.planning.scratch?.close();
+    await scratch.park();
+    await scratch.reopen();
+    this.planning.scratch = scratch;
+    this.planning.directories = new IndexDirectories(scratch, root);
+  }
+  private async plannedNative(path: string) {
+    LiveNativeView.assert(this);
+    if (this.planning.busy) throw new Error('Planning native lookup active.');
+    this.planning.busy = true;
+    try {
+      const row = await this.planning.directories?.directory(path);
+      return row ? (structuredClone(row[3]) as NativeIdentity) : null;
+    } finally {
+      this.planning.busy = false;
+    }
+  }
+  borrowOriginal() {
+    if (this.life.disposed || this.life.retiring) return undefined;
+    LiveNativeView.assert(this);
+    this.life.leases++;
+    let released = false;
+    const view = this;
+    return {
+      index: this.original,
+      directories: async function* (this: void) {
+        for await (const value of view.rows()) {
+          const r = tuple(value);
+          if (r[0] === 'dir-close') yield { path: String(r[1]), native: r[2] as NativeIdentity };
+        }
+      },
+      guard: async () => {
+        await this.planning.scratch?.assertStable();
+      },
+      native: (path: string) => this.plannedNative(path),
+      projection: async (path: string) => {
+        const d = await this.original.directory(path);
+        try {
+          return d.node[10][7];
+        } finally {
+          d.release();
+        }
+      },
+      release: () => {
+        if (!released) {
+          this.life.leases--;
+          released = true;
+        }
+      },
+    };
   }
   async *rows(signal = this.options.signal ?? new AbortController().signal) {
     LiveNativeView.assert(this);
@@ -228,11 +313,17 @@ export class LiveNativeView {
   }
   async dispose() {
     if (this.life.disposed) return;
-    if (this.life.busy) throw new Error('Live source retirement active.');
+    if (this.life.busy || this.life.leases)
+      throw new Error('Live source retirement/borrow active.');
     this.life.busy = true;
     this.life.retiring = true;
     try {
-      await this.facts.dispose();
+      this.planning.directories?.close();
+      await settleBaseCleanup([
+        () => this.facts.dispose(),
+        () => this.original.dispose(),
+        () => this.planning.scratch?.close(),
+      ]);
       this.life.disposed = true;
     } finally {
       this.life.busy = false;
@@ -375,7 +466,6 @@ export class LocalBaseSnapshot {
           ),
         );
       }
-      await view.assertStable();
       stage.adopt(); // Retained invocation ownership; postSources commit happens below.
       completed = { snapshots: Object.freeze(result), copyBytes };
     } catch (e) {
@@ -552,7 +642,6 @@ export class LiveBaseInputs {
           values(sources.map((s) => ['snapshot-source', s])),
           signal,
         ));
-      await view.assertStable();
       const state = store.codec.schemas.documents['local-state'].parse(await store.state());
       equal(state, initial, 'post source capture state');
       if (!committed) {
@@ -561,7 +650,6 @@ export class LiveBaseInputs {
         await store.updateState(state);
         await store.fail('post-sources-pointer');
       }
-      await view.assertStable();
       for (const source of sources)
         await verifyNativeEvidence(store, source[3], source[4], source[0], view.options);
       result = new LiveBaseInputs(

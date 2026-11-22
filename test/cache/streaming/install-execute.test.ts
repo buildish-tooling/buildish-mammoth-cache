@@ -19,6 +19,7 @@ import { readFile, writeFile, mkdtemp, rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
+import { mixedDirectoryFixture } from './mixed-directory-fixture';
 import { installFixture } from './install-fixture';
 import { freezeInstallPlan } from '../../../src/cache/streaming/install-plan';
 import { executeInstall, recoverInstall } from '../../../src/cache/streaming/install-execute';
@@ -61,10 +62,14 @@ it.each([
   'install-progress-pointer',
   'install-intent-retired',
 ])('recovers insert interruption at %s', async (point) => {
-  const f = await fixture();
+  const mixed = point === 'install-parent-renamed' ? await mixedDirectoryFixture() : null;
+  const f = mixed ?? (await fixture());
+  if (mixed) fixtures.push(mixed);
   const plan = await freezeInstallPlan(
     f.store,
-    [await f.incoming('data', { 'data/a': 'a', 'data/b': 'b', 'data/sub/c': 'c' })],
+    mixed
+      ? mixed.inputs
+      : [await f.incoming('data', { 'data/a': 'a', 'data/b': 'b', 'data/sub/c': 'c' })],
     f.budget,
   );
   let calls = 0;
@@ -133,16 +138,36 @@ it.each([
   fixtures.push(f);
   let status: unknown;
   try {
-    execFileSync(process.execPath, [processBundle, 'start', f.root, point, String(nth)], {
-      stdio: 'pipe',
-    });
+    execFileSync(
+      process.execPath,
+      [
+        processBundle,
+        point === 'install-parent-renamed' ? 'start-mixed' : 'start',
+        f.root,
+        point,
+        String(nth),
+      ],
+      {
+        stdio: 'pipe',
+      },
+    );
   } catch (error) {
     status = (error as { status: unknown }).status;
   }
   expect(status).toBe(73);
-  execFileSync(process.execPath, [processBundle, 'recover', f.root, 'unused', '1'], {
-    stdio: 'pipe',
-  });
+  execFileSync(
+    process.execPath,
+    [
+      processBundle,
+      point === 'install-parent-renamed' ? 'recover-mixed' : 'recover',
+      f.root,
+      'unused',
+      '1',
+    ],
+    {
+      stdio: 'pipe',
+    },
+  );
   await f.store.assertNoIntents();
   expect(await readFile(f.store.root.resolve('data/sub/c'), 'utf8')).toBe('c');
 });
@@ -196,6 +221,7 @@ it('verifies a retired-intent committed prefix before abandoning its suffix', as
 });
 it('reconciles only the active batch after earlier complete batches', async () => {
   const f = await fixture();
+  await f.files('', { data: null }); // Exercise the required fine merge into an existing directory.
   const plan = await freezeInstallPlan(
     f.store,
     [await f.incoming('data', { 'data/a': 'a', 'data/b': 'b', 'data/sub/c': 'c' })],
@@ -218,6 +244,7 @@ it('reconciles only the active batch after earlier complete batches', async () =
 });
 it('blocks a lost source and target without discarding the intent', async () => {
   const f = await fixture();
+  await f.files('', { data: null }); // Exercise the required fine merge into an existing directory.
   const plan = await freezeInstallPlan(
     f.store,
     [await f.incoming('data', { 'data/a': 'a' })],
@@ -236,13 +263,10 @@ it('blocks a lost source and target without discarding the intent', async () => 
   expect(f.budget.retained).toBe(0);
 });
 it('preserves intent ownership on cancellation after a parent rename', async () => {
-  const f = await fixture(),
-    controller = new AbortController();
-  const plan = await freezeInstallPlan(
-    f.store,
-    [await f.incoming('data', { 'data/a': 'a' })],
-    f.budget,
-  );
+  const f = await mixedDirectoryFixture();
+  fixtures.push(f);
+  const controller = new AbortController();
+  const plan = await freezeInstallPlan(f.store, f.inputs, f.budget);
   const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
     if (name === 'install-parent-renamed') controller.abort(new Error('cancelled'));
   });
@@ -259,6 +283,7 @@ it('preserves intent ownership on cancellation after a parent rename', async () 
 it('cancels during endpoint checks before initiating another rename', async () => {
   const f = await fixture(),
     controller = new AbortController();
+  await f.files('', { data: null });
   const input = await f.incoming('data', { 'data/a': 'a' }),
     plan = await freezeInstallPlan(f.store, [input], f.budget);
   const { InstallParentPhase } = await import('../../../src/cache/streaming/install-parent-phase');
@@ -373,6 +398,7 @@ it('amortizes shared-parent traversal and durable cycles across ordinary units',
 
 it('reconciles completed active rename parents before committing the recovered cursor', async () => {
   const f = await fixture();
+  await f.files('', { data: null }); // Exercise the required fine merge into an existing directory.
   const input = await f.incoming('data', { 'data/a': 'a', 'data/b': 'b' });
   const plan = await freezeInstallPlan(f.store, [input], f.budget);
   let moves = 0;

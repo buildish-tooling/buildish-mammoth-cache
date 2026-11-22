@@ -26,6 +26,7 @@ import {
   parentPath,
   recognizedRoot,
   validateUnit,
+  isWorkspaceScaffolding,
   type WorkingBudget,
 } from './tree-state';
 
@@ -78,7 +79,13 @@ const moveClose = z.tuple([
 ]);
 const installClose = z.tuple([
   z.literal('install-unit-close'),
-  z.union([z.literal('file'), z.literal('snapshot'), z.literal('empty-directory'), unitKindSchema]),
+  z.union([
+    z.literal('file'),
+    z.literal('directory'),
+    z.literal('snapshot'),
+    z.literal('empty-directory'),
+    unitKindSchema,
+  ]),
   filePathSchema,
 ]);
 const moveDescriptor = z.union([
@@ -87,6 +94,7 @@ const moveDescriptor = z.union([
 ]);
 const installDescriptor = z.union([
   semanticUnitSchema,
+  z.tuple([z.literal('directory'), filePathSchema, z.literal('subtree')]),
   z.tuple([z.literal('empty-directory'), filePathSchema, z.literal('subtree')]),
   z.tuple([z.literal('snapshot'), filePathSchema, z.literal('partition')]),
 ]);
@@ -101,6 +109,7 @@ export class LocalEvidenceState {
   private haveInstallIndex = false;
   private previous: readonly Value[] | null = null;
   private previousUnit: readonly Value[] | null = null;
+  private previousDirectoryGroup = false;
   private epoch: number | null = null;
   private snapshotIndex = -1;
   private preparedSeen = false;
@@ -190,6 +199,14 @@ export class LocalEvidenceState {
         throw new Error('Empty-directory presence requires aggregate owner.');
       if (model.tuple[2] !== 'maven' && recognizedRoot(model, probe) !== null)
         throw new Error('Indivisible unit labeled empty-directory.');
+    } else if (install && descriptor[0] === 'directory') {
+      const model = this.schemas.options.model,
+        probe = descriptor[1] + '/.workspace-directory-probe';
+      if (!isWorkspaceScaffolding(model, descriptor[1])) {
+        const root = recognizedRoot(model, probe);
+        if (root !== null && root !== descriptor[1])
+          throw new Error('Directory insertion splits semantic unit.');
+      }
     } else if (descriptor[0] !== 'snapshot' && descriptor[0] !== 'directory')
       validateUnit(this.schemas.options.model, descriptor);
     const order: Value[] = ['member', descriptor[0] === 'file' ? 'file' : 'unit', descriptor[1]];
@@ -203,9 +220,16 @@ export class LocalEvidenceState {
     } else {
       if (install && this.snapshotIndex >= 0)
         throw new Error('Aggregate install unit after snapshots.');
+      if (
+        this.previousUnit &&
+        this.previousDirectoryGroup &&
+        String(descriptor[1]).startsWith(String(this.previousUnit[2]) + '/')
+      )
+        throw new Error('Overlapping directory insertion units.');
       if (this.previousUnit && compareMembership(this.previousUnit, order) >= 0)
         throw new Error('Unordered evidence units.');
       this.previousUnit = order;
+      this.previousDirectoryGroup = descriptor[0] === 'directory';
     }
     if (install) this.previous = null;
 
@@ -324,7 +348,11 @@ export class LocalEvidenceState {
         throw new Error('Unbalanced evidence unit.');
       if (kind === 'gc') this.gc!.finish();
       if (kind === 'gc') equal(row[3]!, this.unitDigest!.digest(), 'GC projection');
-      if (kind === 'move' && this.unit[0] === 'directory' && this.roots !== 1)
+      if (
+        (kind === 'move' || kind === 'install') &&
+        this.unit[0] === 'directory' &&
+        this.roots !== 1
+      )
         throw new Error('Directory group root count.');
       if (kind === 'move' && row[3] !== this.roots) throw new Error('Wrong move root count.');
       if (
@@ -366,6 +394,17 @@ export class LocalEvidenceState {
       if (memberKind !== 'file' && memberKind !== 'directory')
         throw new Error('Invalid install evidence kind.');
       this.within(row[2], memberKind);
+      if (this.unit[0] === 'directory' && row[6] !== 'insert')
+        throw new Error('Directory insertion cannot replace or delete.');
+      if (
+        this.unit[0] === 'directory' &&
+        !this.schemas.options.model.partitions.some(
+          (p) =>
+            p[3] === 'aggregate' &&
+            row[3] === this.schemas.prefix + 'install/' + p[0] + '/' + row[2],
+        )
+      )
+        throw new Error('Directory insertion requires an exact aggregate source.');
       if (!this.haveInstallIndex && this.purpose === 'install-evidence') this.index = row[1] - 1;
       if (row[1] !== this.index + 1) throw new Error('Noncontiguous install index.');
       this.haveInstallIndex = true;

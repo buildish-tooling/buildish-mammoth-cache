@@ -22,7 +22,6 @@ import { assertLifecycleWindow } from './post-admission';
 import { BaselineMetadata, type BaseMetadata } from './baseline-metadata';
 import { baselineGeneration } from './base-publication';
 import { captureObservations } from './observation-capture';
-import { executeGc } from './gc-execute';
 import { LiveBaseInputs } from './live-base-inputs';
 import { FrozenMovingPublication } from './base-moving-publication';
 import { MovingBasePublication } from './moving-publication';
@@ -160,11 +159,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       }
       if (!backend.capabilities.supportsExplicitSave)
         throw new Error('Native base backend cannot publish.');
-      if (state[4] === 'observations-frozen') {
-        await executeGc(store, options);
-        state = store.codec.schemas.documents['local-state'].parse(await store.state());
-      }
-      if (state[4] === 'gc-complete') {
+      if (['observations-frozen', 'gc-complete'].includes(state[4])) {
         live = await LiveBaseInputs.capture(store, options);
         await assertLifecycleWindow(store, facts.bindings, options);
         frozen = await FrozenMovingPublication.freeze(

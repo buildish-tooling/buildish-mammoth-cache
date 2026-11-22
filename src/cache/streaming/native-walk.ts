@@ -118,6 +118,8 @@ export async function* walkNative(
     return lstat(path ? root.resolve(path) : root.path, { bigint: true });
   };
   const stat = async (path: string) => nativeIdentity(await rawStat(path));
+  signal.throwIfAborted();
+  root.work.nativeWalks++;
   await root.verifyRoot();
   const checkParent = async () => {
     const expected = options.parentNative!;
@@ -188,6 +190,7 @@ export async function* walkNative(
         entries = 0;
       try {
         work.listings++;
+        root.work.nativeListings++;
         const directory = await opendir(nativePath ? root.resolve(nativePath) : root.path, {
           bufferSize: 32,
         });

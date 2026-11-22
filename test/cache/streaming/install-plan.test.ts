@@ -16,6 +16,7 @@
 
 import { afterEach, expect, it, vi } from 'vitest';
 import { readdir, readFile } from 'node:fs/promises';
+import { mixedDirectoryFixture } from './mixed-directory-fixture';
 import { installFixture } from './install-fixture';
 import {
   freezeInstallPlan,
@@ -72,16 +73,16 @@ async function read(
     for (const reader of readers.values()) await reader.close();
   }
 }
-it('freezes canonical cold-root units with disjoint empty parent sources and contiguous indices', async () => {
-  const f = await fixture(),
-    input = await f.incoming('data', { 'data/a': 'a', 'data/sub/b': 'b' }),
-    plan = await freezeInstallPlan(f.store, [input], f.budget),
+it('freezes canonical mixed-owner cold-root units with disjoint empty parents and contiguous indices', async () => {
+  const f = await mixedDirectoryFixture();
+  fixtures.push(f);
+  const plan = await freezeInstallPlan(f.store, f.inputs, f.budget),
     rows = await read(plan, f.budget);
   assertFrozenInstall(f.store, plan);
   const mutations = rows.filter(
     (r) => Array.isArray(r) && ['install', 'install-parent'].includes(String(r[0])),
   ) as Value[][];
-  expect(mutations.map((r) => r[1])).toEqual([1, 2, 3, 4]);
+  expect(mutations.map((r) => r[1])).toEqual([1, 2, 3, 4, 5, 6, 7]);
   const parents = mutations.filter((r) => r[0] === 'install-parent');
   expect(parents.map((r) => r[2])).toEqual(['data', 'data/sub']);
   for (const parent of parents)
@@ -100,7 +101,7 @@ it('reuses the original missing parent binding when snapshots follow aggregate u
   const parents = rows.filter((r) => Array.isArray(r) && r[0] === 'install-parent') as Value[][];
   expect(parents.filter((r) => r[2] === 'shared')).toHaveLength(1);
   const units = rows.filter((r) => Array.isArray(r) && r[0] === 'install-unit-open') as Value[][];
-  expect(units.map((r) => r[1])).toEqual(['file', 'snapshot']);
+  expect(units.map((r) => r[1])).toEqual(['directory', 'snapshot']);
   expect(f.budget.retained).toBe(0);
 });
 it('binds complete current context and exact old/new spans without installing payloads', async () => {
@@ -166,8 +167,9 @@ it.each(['aggregate', 'parents'] as const)(
   },
 );
 it('releases previously gathered parent frames when a later ancestor read fails', async () => {
-  const f = await fixture(),
-    input = await f.incoming('data', { 'data/sub/deep/a': 'a' }),
+  const f = await fixture();
+  await f.files('', { data: null });
+  const input = await f.incoming('data', { 'data/sub/deep/a': 'a' }),
     record = InstallScratch.prototype.record;
   let ancestors = 0;
   const reads = vi.spyOn(InstallScratch.prototype, 'record').mockImplementation(async function (

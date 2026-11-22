@@ -111,6 +111,17 @@ export class MovingAdjustments {
       claim?.release();
     }
   }
+  /** Sparse effects only; used once at common admission, not per live directory. */
+  async *effects(signal: AbortSignal) {
+    if (!this.reference) return;
+    for await (const [, value] of this.roots.entries(
+      (claim) => (tuple(tuple(claim)[1])[3] as NativeIdentity)[2] === 'directory',
+      signal,
+    )) {
+      const r = tuple(value);
+      if (r[0] === 'context' && r[2]) yield tuple(r[2]);
+    }
+  }
   async close() {
     await this.roots.close();
   }

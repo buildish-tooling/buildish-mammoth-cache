@@ -87,17 +87,49 @@ export class EvidenceFile {
     );
     try {
       if (BigInt(identity[5]) !== BigInt(ref[3])) throw new Error('Evidence file length mismatch.');
-      for await (const row of readLocalRows(
-        reader.range(0, ref[3], 'validationBytes', signal),
-        'native-evidence',
-        { codec: store.codec, budget, partition, maxDirectoryEntries },
-        ref,
-        signal,
-      )) {
-        const value = row.value as readonly Value[];
-        if (value[0] === 'local-stream') reader.headerEnd = row.end;
-        if (value[0] === 'local-end') reader.footerStart = row.start;
-        if (observed) await withAbort(observed(row), signal);
+      const proof = store.completedStream(reference);
+      if (
+        proof &&
+        proof.purpose === 'native-evidence' &&
+        proof.partition === partition &&
+        proof.maxDirectoryEntries === maxDirectoryEntries
+      ) {
+        if (!sameNative(proof.native, identity, true))
+          throw new Error('Completed evidence metadata changed.');
+        reader.headerEnd = proof.headerEnd;
+        reader.footerStart = proof.footerStart;
+        if (observed) {
+          let record = 0;
+          for await (const row of decodeRecords(
+            reader.range(0, ref[3], 'validationBytes', signal),
+          )) {
+            const release = budget.holdRecord(row.raw.length);
+            try {
+              store.root.work.metadataRowsRead++;
+              await withAbort(
+                observed({ value: row.value, start: row.start, end: row.end, record: record++ }),
+                signal,
+              );
+            } finally {
+              release();
+            }
+          }
+        }
+      } else {
+        store.root.work.metadataValidations++;
+        for await (const row of readLocalRows(
+          reader.range(0, ref[3], 'validationBytes', signal),
+          'native-evidence',
+          { codec: store.codec, budget, partition, maxDirectoryEntries },
+          ref,
+          signal,
+        )) {
+          store.root.work.metadataRowsRead++;
+          const value = row.value as readonly Value[];
+          if (value[0] === 'local-stream') reader.headerEnd = row.end;
+          if (value[0] === 'local-end') reader.footerStart = row.start;
+          if (observed) await withAbort(observed(row), signal);
+        }
       }
       await reader.stable();
       signal.throwIfAborted();

@@ -27,6 +27,7 @@ import { parentPath, type WorkingBudget } from './tree-state';
 // Process-local mutable directory facts. Only popped dirty frames are spooled;
 // restart derives authority from the sealed plan/current projection instead.
 export class InstallParentPhase {
+  private hasSaved = true;
   private readonly frames: {
     path: string;
     native: NativeIdentity;
@@ -41,7 +42,15 @@ export class InstallParentPhase {
     readonly budget: WorkingBudget,
     readonly expected: (physical: string) => Promise<NativeIdentity | null>,
     readonly signal?: AbortSignal,
-  ) {}
+    private readonly baseline?: {
+      native(path: string): Promise<NativeIdentity | null>;
+      projection(path: string): Promise<string | null>;
+    },
+  ) {
+    // A supplied baseline belongs to a newly created moving-window ledger.
+    // Other callers can reopen an epoch ledger and must probe existing records.
+    if (baseline) this.hasSaved = false;
+  }
   private key(path: string) {
     return this.ledger + createHash('sha256').update(path).digest('hex');
   }
@@ -62,6 +71,7 @@ export class InstallParentPhase {
   private async savedFull(
     path: string,
   ): Promise<{ native: NativeIdentity; projection: string | null } | null> {
+    if (!this.hasSaved) return null;
     try {
       const file = this.key(path),
         stat = await this.store.root.stat(file);
@@ -88,11 +98,20 @@ export class InstallParentPhase {
     return (
       this.frames.find((f) => f.path === path)?.projection ??
       (await this.savedFull(path))?.projection ??
+      (await this.baseline?.projection(path)) ??
       null
     );
   }
-  async known(path: string): Promise<NativeIdentity | null> {
-    return this.frames.find((f) => f.path === path)?.native ?? (await this.saved(path));
+  async known(path: string, actual?: NativeIdentity): Promise<NativeIdentity | null> {
+    // An unchanged admitted context needs no lookup of a mutation checkpoint.
+    const baseline = actual ? await this.baseline?.native(path) : null;
+    if (baseline && sameNative(baseline, actual!, true)) return baseline;
+    return (
+      this.frames.find((f) => f.path === path)?.native ??
+      (await this.saved(path)) ??
+      (await this.baseline?.native(path)) ??
+      null
+    );
   }
   async effective(path: string): Promise<NativeIdentity | null> {
     const frame = this.frames.find((f) => f.path === path);
@@ -100,6 +119,7 @@ export class InstallParentPhase {
   }
   async created(path: string, native: NativeIdentity, projection: string | null = null) {
     const bytes = encodeRecord([path, native, projection]);
+    this.hasSaved = true;
     await writeFile(this.store.root.resolve(this.key(path)), bytes, {
       mode: 0o600,
     });
@@ -148,7 +168,7 @@ export class InstallParentPhase {
         path,
         native,
         dirty: false,
-        projection: saved?.projection ?? null,
+        projection: saved?.projection ?? (await this.baseline?.projection(path)) ?? null,
         release: this.budget.holdRecord(512 + Buffer.byteLength(path)),
       };
       this.frames.push(frame);

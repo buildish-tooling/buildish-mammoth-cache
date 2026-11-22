@@ -109,6 +109,7 @@ it('hashes only selected old roots once and leaves untouched aggregate payload u
   expect(members.filter((v) => (v as Value[])[0] === 'file').map((v) => (v as Value[])[3])).toEqual(
     [rawSha(Buffer.from('old-a')), rawSha(Buffer.from('old-b'))],
   );
+  await p.scratch.close();
   expect(f.budget.retained).toBe(0);
 });
 it('writes old evidence in its own physical order and supplies exact spans for opposite desired kinds', async () => {
@@ -133,6 +134,7 @@ it('writes old evidence in its own physical order and supplies exact spans for o
     await reader.close();
   }
   expect(result.work.hashedFiles).toBe(2);
+  await p.scratch.close();
   expect(f.budget.retained).toBe(0);
 });
 it.each([false, true])(
@@ -151,6 +153,7 @@ it.each([false, true])(
         ? { hashedFiles: 1, hashedBytes: 11, trustedFiles: 0 }
         : { hashedFiles: 0, hashedBytes: 0, trustedFiles: 1 },
     );
+    await p.scratch.close();
     expect(f.budget.retained).toBe(0);
   },
 );
@@ -162,6 +165,7 @@ it('rejects a selected old body changed after frozen inventory instead of granti
   await expect(captureInstallPreimages(f.store, p.scratch, p.root)).rejects.toThrow(
     'preimage changed',
   );
+  await p.scratch.close();
   expect(f.budget.retained).toBe(0);
 });
 it('uses active parent guards with linear selected-leaf stats across a shared directory', async () => {

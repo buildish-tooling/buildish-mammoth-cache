@@ -67,55 +67,68 @@ async function fixture() {
   }
   return { root, store, budget, create };
 }
-it('reads opposite source/preimage orders from two once-validated open evidence files', async () => {
-  const f = await fixture(),
-    old = await f.create(),
-    desired = await f.create(true),
-    before = f.store.root.work.opens;
-  const oldReader = await EvidenceFile.open(f.store, old.ref, 'metadata', f.budget),
-    newReader = await EvidenceFile.open(f.store, desired.ref, 'metadata', f.budget);
-  try {
-    const paths: string[] = [];
-    for (const [logical, newKind, oldKind] of [
-      ['metadata/a', 'file', 'directory'],
-      ['metadata/b', 'directory', 'file'],
-    ] as const) {
-      await newReader.member(
-        desired.bind(logical, newKind === 'directory'),
-        logical,
-        newKind,
-        async (row) => {
-          paths.push(String((row as Value[])[1]));
-        },
+it.each([false, true])(
+  'reads opposite source/preimage orders with a writer receipt=%s',
+  async (produced) => {
+    const f = await fixture(),
+      old = await f.create(),
+      desired = await f.create(true),
+      before = f.store.root.work.opens;
+    const oldReader = await EvidenceFile.open(
+        f.store,
+        produced ? old.ref : structuredClone(old.ref),
+        'metadata',
+        f.budget,
+      ),
+      newReader = await EvidenceFile.open(
+        f.store,
+        produced ? desired.ref : structuredClone(desired.ref),
+        'metadata',
+        f.budget,
       );
-      await oldReader.member(
-        old.bind(logical, oldKind === 'directory'),
-        logical,
-        oldKind,
-        async (row) => {
-          paths.push(String((row as Value[])[1]));
-        },
-      );
+    try {
+      const paths: string[] = [];
+      for (const [logical, newKind, oldKind] of [
+        ['metadata/a', 'file', 'directory'],
+        ['metadata/b', 'directory', 'file'],
+      ] as const) {
+        await newReader.member(
+          desired.bind(logical, newKind === 'directory'),
+          logical,
+          newKind,
+          async (row) => {
+            paths.push(String((row as Value[])[1]));
+          },
+        );
+        await oldReader.member(
+          old.bind(logical, oldKind === 'directory'),
+          logical,
+          oldKind,
+          async (row) => {
+            paths.push(String((row as Value[])[1]));
+          },
+        );
+      }
+      expect(paths).toEqual([
+        'metadata/a',
+        'metadata/a',
+        'metadata/a/x',
+        'metadata/b',
+        'metadata/b/x',
+        'metadata/b',
+      ]);
+      expect(f.store.root.work.opens - before).toBe(2);
+      expect(oldReader.work.validationBytes).toBe(produced ? 0 : old.ref[3]);
+      expect(newReader.work.validationBytes).toBe(produced ? 0 : desired.ref[3]);
+      expect(oldReader.work.lookaheadBytes).toBeLessThanOrEqual(256);
+      expect(newReader.work.lookaheadBytes).toBeLessThanOrEqual(256);
+    } finally {
+      await oldReader.close();
+      await newReader.close();
     }
-    expect(paths).toEqual([
-      'metadata/a',
-      'metadata/a',
-      'metadata/a/x',
-      'metadata/b',
-      'metadata/b/x',
-      'metadata/b',
-    ]);
-    expect(f.store.root.work.opens - before).toBe(2);
-    expect(oldReader.work.validationBytes).toBe(old.ref[3]);
-    expect(newReader.work.validationBytes).toBe(desired.ref[3]);
-    expect(oldReader.work.lookaheadBytes).toBeLessThanOrEqual(256);
-    expect(newReader.work.lookaheadBytes).toBeLessThanOrEqual(256);
-  } finally {
-    await oldReader.close();
-    await newReader.close();
-  }
-  expect(f.budget.retained).toBe(0);
-});
+    expect(f.budget.retained).toBe(0);
+  },
+);
 it.each(['mid-start', 'mid-end', 'wrong-member', 'file-extra', 'directory-short', 'framing'])(
   'rejects %s range despite tuple-valid offsets',
   async (kind) => {

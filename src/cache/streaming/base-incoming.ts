@@ -18,7 +18,8 @@ import { randomUUID } from 'node:crypto';
 import { decodeRecords, tuple, add, type Value } from './encoding';
 import type { OwnedStore, Reference } from './owned-store';
 import { ProvisionalBaseSet } from './base-generation';
-import { ValidatedBaseObject, settleBaseCleanup, type BaseObjectOptions } from './base-object';
+import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
+import { assertBaseMetadata, type BaseMetadata } from './baseline-metadata';
 import { FrozenBaseTree } from './base-frozen-tree';
 import { RecoveryGroups } from './native-records';
 import { compareMembership } from './tree-state';
@@ -34,7 +35,7 @@ import { retireOwnedDirectory } from './owned-retirement';
 // One direct-unit root frontier per input, never a coordinate/file catalogue.
 export async function deriveBaseGroups(
   store: OwnedStore,
-  objects: readonly (ValidatedBaseObject | FrozenBaseTree)[],
+  objects: readonly (BaseMetadata | FrozenBaseTree)[],
   options: BaseObjectOptions,
 ): Promise<RecoveryGroups> {
   options = Object.freeze({ ...options });
@@ -43,7 +44,7 @@ export async function deriveBaseGroups(
   const owners = new Set<string>();
   for (const object of objects) {
     if (object instanceof FrozenBaseTree) FrozenBaseTree.assert(object, store);
-    else ValidatedBaseObject.assertReceipt(object, store);
+    else assertBaseMetadata(object, store);
     if (owners.has(object.reference[1][2])) throw new Error('Duplicate base group projection.');
     owners.add(object.reference[1][2]);
   }
@@ -54,7 +55,7 @@ export async function deriveBaseGroups(
     iterator: AsyncIterator<string>;
     head: IteratorResult<string>;
   }[] = [];
-  async function* roots(object: ValidatedBaseObject | FrozenBaseTree): AsyncGenerator<string> {
+  async function* roots(object: BaseMetadata | FrozenBaseTree): AsyncGenerator<string> {
     for await (const row of decodeRecords(store.read(object.tree, 'native-tree'))) {
       signal.throwIfAborted();
       const release = options.budget.holdRecord(row.raw.length);
@@ -70,7 +71,7 @@ export async function deriveBaseGroups(
   try {
     for (const object of objects) {
       if (object instanceof FrozenBaseTree) FrozenBaseTree.assert(object, store);
-      else ValidatedBaseObject.assertReceipt(object, store);
+      else assertBaseMetadata(object, store);
       const iterator = roots(object)[Symbol.asyncIterator]();
       const cursor = { partition: object.reference[1][2], iterator, head: await iterator.next() };
       cursors.push(cursor);
@@ -132,7 +133,7 @@ export async function acceptBaseGeneration(
     await store.assertNoIntents();
     await set.pin.assertStable();
     const objects = set.downloads.flatMap((d) => (d.object ? [d.object] : []));
-    for (const object of objects) await object.verifyStable(options);
+    for (const object of objects) await object.verifyMetadataStable(options);
     const groups = await deriveBaseGroups(store, objects, options),
       cold = groups.check(set.pin.generation[9], set.available()),
       unavailable = new Set(cold.flat()),
@@ -183,6 +184,7 @@ export async function acceptBaseGeneration(
         provenance: string;
       }[] = [];
     let snapshotCopyBytes = 0;
+    const incoming: VerifiedIncoming[] = [];
     for (const stage of stages) {
       signal.throwIfAborted();
       const partition = store.codec.options.model.partitions.find((p) => p[0] === stage.partition)!;
@@ -212,6 +214,13 @@ export async function acceptBaseGeneration(
           provenance: stage.provenance,
         });
       }
+      const object = objects.find((o) => o.reference[1][2] === stage.partition);
+      if (object) {
+        incoming.push(
+          await VerifiedIncoming.fromBase(object, options, (attempt) => moves.push(attempt)),
+        );
+        continue;
+      }
       // Keep the sealed root identity; a fresh stat cannot rebase a changed source.
       let source: NativeIdentity | undefined;
       for await (const row of baseEvidence(
@@ -233,13 +242,12 @@ export async function acceptBaseGeneration(
     await set.pin.assertStable();
     // Unselected available inputs still belong to the common gate; none become optional malformed data.
     for (const object of objects)
-      if (unavailable.has(object.reference[1][2])) await object.verifyStable(options);
+      if (unavailable.has(object.reference[1][2])) await object.verifyMetadataStable(options);
     const check = () => {
       ProvisionalBaseSet.assertReceipt(set, store);
       signal.throwIfAborted();
     };
-    const snapshots: PreparedWorkerSnapshot[] = [],
-      incoming: VerifiedIncoming[] = [];
+    const snapshots: PreparedWorkerSnapshot[] = [];
     for (const s of snapshotFacts)
       snapshots.push(
         await PreparedWorkerSnapshot.verify(

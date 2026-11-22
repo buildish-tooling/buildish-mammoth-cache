@@ -301,7 +301,7 @@ export class MovingBasePublication {
       )
         return false;
       if (await movingMarker(pub)) throw new Error('Unchanged publication still owns sources.');
-      await (await this.sourceWindow()).verify();
+      await (await this.sourceWindow()).verify(undefined, true);
       equal(await pub.state(), state, 'unchanged final source barrier');
       pub.options.signal?.throwIfAborted();
       return true;
@@ -330,7 +330,7 @@ export class MovingBasePublication {
       state[4] = 'final-source-barrier';
       await pub.store.updateState(state);
       const window = await this.sourceWindow();
-      await window.verify();
+      await window.verify(undefined, true);
       await saveNativeRecord(pub.store, backend, pub.record, pub.generation[11], pub.options);
       const current = await pub.state();
       equal(current, state, 'record-save moving lifecycle');

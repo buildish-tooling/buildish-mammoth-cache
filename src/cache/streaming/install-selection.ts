@@ -235,6 +235,8 @@ export async function selectInstall(
         const p = single,
           source = dirs[0],
           snapshot = model.partitions[p][3] === 'single-writer';
+        if (!old && !snapshot && scope === null && source.node[6] === 0)
+          return appendOp(p, source.offset, null, 'directory', ['directory', path, 'subtree']);
         if ((snapshot || scope !== null) && (!old || physicalOld(p)))
           return appendOp(
             p,

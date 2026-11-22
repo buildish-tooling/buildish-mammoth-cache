@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
-import { LiveBaseInputs } from './live-base-inputs';
-import { FrozenBaseTree } from './base-frozen-tree';
+import { LiveBaseInputs, type LiveNativeView } from './live-base-inputs';
+import { FrozenBaseTree, PreparedBaseTree } from './base-frozen-tree';
 import type { PartitionSummaries } from './partition-summaries';
 import { freezeMovePlans, checkMovePlanMetadata } from './base-move-plan';
 import { assertBaseMetadata, type BaseMetadata } from './baseline-metadata';
 import { type BaseObjectOptions } from './base-object';
 import { baselineGeneration, freezeRecord, checkInheritedChoice } from './base-publication';
 import { deriveBaseGroups } from './base-incoming';
-import { verifyNativeEvidence } from './install-evidence';
 import { requirePostBindings } from './post-admission';
 import { checkPublicationBindings } from './local-bindings';
 import { equal, tuple, encodeRecord, type Value } from './encoding';
@@ -72,6 +71,7 @@ export class FrozenMovingPublication {
     >,
     readonly options: BaseObjectOptions,
     private readonly release: () => void,
+    private readonly liveView?: LiveNativeView,
   ) {
     immutable(publication);
     immutable(generation);
@@ -102,7 +102,8 @@ export class FrozenMovingPublication {
     if (baseline.length > model.partitions.length)
       throw new Error('Baseline metadata frontier exceeded.');
     baseline = Object.freeze([...baseline]);
-    let retained = 0;
+    let retained = 0,
+      transferred = false;
     const hold = (value: Value, extra = 0) => {
       const n = 512 + encodeRecord(value).length * 8 + extra;
       options.budget.retain(n);
@@ -140,11 +141,10 @@ export class FrozenMovingPublication {
         rows: Choice[] = [],
         drafts: (Choice | FrozenBaseTree)[] = [],
         cells: MovingCell[] = [],
-        all: FrozenBaseTree[] = [],
+        all: (FrozenBaseTree | BaseMetadata)[] = [],
         changed: FrozenBaseTree[] = [];
       if (previous) hold(previous);
       hold(decision);
-      await input.view.assertStable();
       const seen = new Set<string>();
       for (const old of baseline) {
         assertBaseMetadata(old, store);
@@ -160,32 +160,31 @@ export class FrozenMovingPublication {
       for (const [i, source] of input.partitions.entries()) {
         const p = model.partitions[i][0],
           old = previous?.[8][i],
-          tree = await FrozenBaseTree.render(input, p, [
-            model.family,
-            model.id,
-            p,
-            lineage,
-            writer,
-            sha,
-          ]);
-        hold([tree.reference, tree.envelope, tree.tree, tree.envelopeRef], 8192);
-        all.push(tree);
-        const prior = baseline.find((o) => o.reference[1][2] === p);
+          draft = await PreparedBaseTree.create(input, p),
+          prior = baseline.find((o) => o.reference[1][2] === p);
         let row: Choice | FrozenBaseTree;
         const inherited = source.snapshot;
-        if (tree.empty) row = ['empty', p];
-        else if (
-          prior &&
-          old?.[0] === 'object' &&
-          encodeRecord([prior.envelope[7], prior.envelope[8]]).equals(
-            encodeRecord([tree.envelope[7], tree.envelope[8]]),
-          ) &&
-          (!inherited || (inherited[1] === 'baseline' && inherited[2][1] === old[2][2]))
-        )
-          row = ['reuse', p, old[2]];
-        else {
-          changed.push(tree);
-          row = tree;
+        try {
+          if (draft.summary.counts[0] === 0 && draft.summary.counts[1] === 1) row = ['empty', p];
+          else if (
+            prior &&
+            old?.[0] === 'object' &&
+            encodeRecord([prior.envelope[7], prior.envelope[8]]).equals(
+              encodeRecord([draft.summary.counts, draft.summary.semantic]),
+            ) &&
+            (!inherited || (inherited[1] === 'baseline' && inherited[2][1] === old[2][2]))
+          ) {
+            row = ['reuse', p, old[2]];
+            all.push(prior);
+          } else {
+            const tree = await draft.render([model.family, model.id, p, lineage, writer, sha]);
+            hold([tree.reference, tree.envelope, tree.tree, tree.envelopeRef], 8192);
+            all.push(tree);
+            changed.push(tree);
+            row = tree;
+          }
+        } finally {
+          await draft.dispose();
         }
         drafts.push(row);
         if (inherited && !(row instanceof FrozenBaseTree))
@@ -270,8 +269,7 @@ export class FrozenMovingPublication {
         generation[11],
       ]);
       hold(publication);
-      await input.view.assertStable();
-      for (const tree of all) await tree.assertStable(options);
+      for (const tree of changed) await tree.assertStable(options);
       await store.assertNoIntents();
       equal(await store.state(), state, 'moving freeze state');
       await store.fail('moving-publication-candidate');
@@ -281,21 +279,33 @@ export class FrozenMovingPublication {
       state[9] = store.codec.schemas.ref('partition-state').parse(catalog);
       await store.updateState(state);
       await store.fail('moving-publication-pointer');
-      await input.view.assertStable();
-      for (const source of input.partitions)
-        if (source.nativeRoot)
-          await verifyNativeEvidence(
-            store,
-            source.evidence,
-            source.nativeRoot,
-            source.partition,
-            options,
-          );
-      const result = await FrozenMovingPublication.resume(store, options);
+      // Normal handoff retains the exact completed metadata/choices. Cold resume
+      // below remains an independent parser and never obtains this capability.
+      const result = new FrozenMovingPublication(
+        store,
+        publication,
+        generation,
+        record,
+        Object.freeze(rows),
+        new Map(changed.map((tree) => [tree.reference[1][2], tree])),
+        [state[5], state[6], state[7], state[10], state[13]],
+        previous,
+        new Map(
+          input.partitions.flatMap((source) =>
+            source.snapshot ? [[source.partition, source.snapshot] as const] : [],
+          ),
+        ),
+        options,
+        () => options.budget.release(retained),
+        input.view,
+      );
+      equal(await store.state(), state, 'moving freeze handoff state');
+      signal.throwIfAborted();
       for (const choice of result.choices) summaries?.choice(choice[1], choice[0]);
+      transferred = true;
       return result;
     } finally {
-      options.budget.release(retained);
+      if (!transferred) options.budget.release(retained);
     }
   }
   static async resume(
@@ -461,6 +471,10 @@ export class FrozenMovingPublication {
     } finally {
       if (!returned) options.budget.release(charge);
     }
+  }
+  borrowOriginal() {
+    FrozenMovingPublication.assert(this);
+    return this.liveView?.borrowOriginal();
   }
   async state(): Promise<State> {
     FrozenMovingPublication.assert(this);

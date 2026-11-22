@@ -25,7 +25,11 @@ import { retireOwnedDirectory } from './owned-retirement';
 import { GcProgram, type GcCursor, type GcBatch } from './gc-program';
 import { ObservationIndex } from './observation-index';
 import { checkSharedGcMetadata } from './gc-metadata';
-import { checkGcProjection, type GcProjectionWork } from './gc-projection';
+import {
+  checkGcProjection,
+  type GcProjectionWork,
+  type GcProjectionObserver,
+} from './gc-projection';
 import type { OwnedStore, Reference } from './owned-store';
 import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
 
@@ -208,7 +212,13 @@ async function exactEvidence(program: GcProgram, intent: Intent) {
 // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas.
 // Recovery completes ONLY the discoverable active range. Forward execution may
 // subsequently continue the frozen suffix, without recapturing policy/timestamps.
-async function run(store: OwnedStore, input: GcOptions, recovering: boolean) {
+async function run(
+  store: OwnedStore,
+  input: GcOptions,
+  recovering: boolean,
+  observer?: GcProjectionObserver,
+  retainIndex = false,
+) {
   const options = Object.freeze({ ...input, signal: input.signal ?? defaultSignal() }),
     { state, saved, intent } = await admission(store, options, recovering),
     index = await ObservationIndex.open(store, state[6]!, options);
@@ -219,7 +229,13 @@ async function run(store: OwnedStore, input: GcOptions, recovering: boolean) {
   const work: GcProjectionWork = { directories: 0, entries: 0 };
   let failure: unknown;
   let completedResult:
-    { cursor: GcCursor; complete: boolean; work: Readonly<GcProjectionWork> } | undefined;
+    | {
+        cursor: GcCursor;
+        complete: boolean;
+        work: Readonly<GcProjectionWork>;
+        index?: ObservationIndex;
+      }
+    | undefined;
   try {
     program = await GcProgram.create(
       index,
@@ -242,7 +258,10 @@ async function run(store: OwnedStore, input: GcOptions, recovering: boolean) {
       options.signal,
     );
     const committed = intent && canonical(saved[4]).equals(canonical(intent[5]));
-    await checkGcProjection(index, saved[4][2], intent ? intent[5][2] : saved[4][2], phase, work);
+    // With no deletions there is no mutation/recovery boundary to admit here;
+    // the complete final projection below is the sole native co-read.
+    if (intent || program.units.position !== 0)
+      await checkGcProjection(index, saved[4][2], intent ? intent[5][2] : saved[4][2], phase, work);
     options.signal.throwIfAborted();
     await phase.barrier(); // Parent checkpoints precede any recovered cursor/cleanup.
     options.signal.throwIfAborted();
@@ -308,31 +327,54 @@ async function run(store: OwnedStore, input: GcOptions, recovering: boolean) {
       }
     }
     // Final absence/projection consumer also detects recreation of completed paths.
-    await checkGcProjection(index, cursor[2], cursor[2], undefined, work);
+    await checkGcProjection(index, cursor[2], cursor[2], undefined, work, observer);
     completedResult = Object.freeze({
       cursor,
       complete: cursor[2] === program.final[2],
       work: Object.freeze(work),
+      ...(retainIndex ? { index } : {}),
     });
   } catch (error) {
     failure = error;
-    throw error;
   } finally {
     phase?.release();
-    await settleBaseCleanup(
-      [
-        () => program?.close(),
-        () => index.dispose(),
-        () =>
-          container && native
-            ? retireOwnedDirectory(store, container, native, options.budget)
-            : undefined,
-      ],
-      failure,
-    );
+    try {
+      await settleBaseCleanup(
+        [
+          () => program?.close(),
+          () => (!retainIndex || failure !== undefined ? index.dispose() : undefined),
+          () =>
+            container && native
+              ? retireOwnedDirectory(store, container, native, options.budget)
+              : undefined,
+        ],
+        failure,
+      );
+    } catch (error) {
+      failure = error;
+      if (retainIndex)
+        try {
+          await settleBaseCleanup([() => index.dispose()], error);
+        } catch (cleanup) {
+          failure = cleanup;
+        }
+    }
   }
-  options.signal.throwIfAborted();
+  if (failure !== undefined) throw failure;
+  try {
+    options.signal.throwIfAborted();
+  } catch (error) {
+    if (retainIndex) await settleBaseCleanup([() => index.dispose()], error);
+    throw error;
+  }
   return completedResult!;
 }
 export const executeGc = (store: OwnedStore, options: GcOptions) => run(store, options, false);
 export const recoverGc = (store: OwnedStore, options: GcOptions) => run(store, options, true);
+
+/** Internal live-capture handoff: final co-read populates facts and transfers its index. */
+export const captureGcProjection = (
+  store: OwnedStore,
+  options: GcOptions,
+  observer: GcProjectionObserver,
+) => run(store, options, false, observer, true);

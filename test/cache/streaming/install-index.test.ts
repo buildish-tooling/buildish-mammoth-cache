@@ -191,7 +191,7 @@ it('poisons a partial failed append and leases every decoded random-access recor
   writes
     .mockResolvedValueOnce({ bytesWritten: 1, buffer: 'unconsumed partial-write return' })
     .mockRejectedValueOnce(new Error('partial write failure'));
-  await expect(scratch.append(['next', 'record'])).rejects.toThrow('partial write');
+  await expect(scratch.append(['next', 'x'.repeat(65520)])).rejects.toThrow('partial write');
   await expect(scratch.append(['forbidden'])).rejects.toThrow('failed');
   await expect(scratch.record(at)).rejects.toThrow();
   writes.mockRestore();
@@ -284,8 +284,9 @@ it('cancels a wide postorder close between bounded scratch reads and retires its
   reads.mockRestore();
   await retirement;
   expect(retired).toBe(true);
-  expect(f.budget.retained).toBe(0);
+  expect(f.budget.retained).toBe(65536); // Only the scratch owner's bounded raw buffer remains.
   await scratch.close();
+  expect(f.budget.retained).toBe(0);
 });
 
 it('cancels a pending source read and releases the whole-build claim', async () => {

@@ -29,6 +29,7 @@ export class WorkerSpool {
   private sealed: string | null = null;
   private count = 0;
   private readers = 0;
+  private ready?: Promise<void>;
   private disposed = false;
   private writing = false;
   private failed = false;
@@ -72,6 +73,14 @@ export class WorkerSpool {
     const digest = new Digest('worker-spool');
     let count = 0;
     try {
+      if (this.ready) {
+        await this.ready;
+        await this.scratch.assertStable();
+      } else {
+        this.ready = this.scratch.flush();
+        await this.ready;
+      }
+      signal.throwIfAborted();
       for await (const row of this.scratch.rows(0, this.scratch.position, (bytes) =>
         digest.encoded(bytes.subarray(0, -1)),
       )) {
@@ -80,10 +89,12 @@ export class WorkerSpool {
         yield row;
       }
       signal.throwIfAborted();
+      await this.scratch.assertStable();
       if (count !== this.count || digest.digest() !== this.sealed)
         throw new Error('Changed worker spool.');
     } finally {
       this.readers--;
+      if (!this.readers) this.scratch.releaseReadCache();
     }
   }
   async dispose(): Promise<void> {

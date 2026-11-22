@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { mixedDirectoryModel, mixedDirectoryInputs } from './mixed-directory-fixture';
 import { installFixture } from './install-fixture';
 import { freezeInstallPlan } from '../../../src/cache/streaming/install-plan';
 import { executeInstall, recoverInstall } from '../../../src/cache/streaming/install-execute';
@@ -42,18 +43,29 @@ if (mode.startsWith('retire-')) {
   if (next.budget.retained) throw new Error('Retirement fixture leaked budget.');
   process.exit(0);
 }
-const f = await installFixture('gradle', { root, fail: hook });
+const mixed = mode.endsWith('-mixed');
+const f = await installFixture('gradle', {
+  root,
+  fail: hook,
+  ...(mixed ? { model: mixedDirectoryModel() } : {}),
+});
 if (mode.startsWith('start')) {
   await f.store.initialize(f.bindings);
-  if (mode !== 'start') await f.files('', { 'state/old': 'old', 'state/sub/old': 'old-sub' });
-  const input =
-    mode === 'start-replace'
+  if (mode === 'start-replace' || mode === 'start-delete')
+    await f.files('', { 'state/old': 'old', 'state/sub/old': 'old-sub' });
+  const input = mixed
+    ? null
+    : mode === 'start-replace'
       ? await f.incoming('state', { 'state/new': 'new' })
       : mode === 'start-delete'
         ? await f.incoming('state', {})
         : await f.incoming('data', { 'data/a': 'a', 'data/b': 'b', 'data/sub/c': 'c' });
-  const plan = await freezeInstallPlan(f.store, [input], f.budget);
+  const plan = await freezeInstallPlan(
+    f.store,
+    mixed ? await mixedDirectoryInputs(f) : [input!],
+    f.budget,
+  );
   await executeInstall(f.store, plan, f.budget);
-} else if (mode === 'recover') await recoverInstall(f.store, f.budget);
+} else if (mode === 'recover' || mode === 'recover-mixed') await recoverInstall(f.store, f.budget);
 else throw new Error('Unknown process fixture mode.');
 if (f.budget.retained) throw new Error('Process fixture leaked working budget.');

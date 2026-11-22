@@ -111,11 +111,23 @@ class NativeTreeState {
   private assertion: UnitSummary | null = null;
   private closeRoot: string | null = null;
   private requiredUnit: string | null = null;
-  constructor(private readonly options: NativeTreeOptions) {
-    checkIdentity(options.identity, options.model);
+  constructor(
+    private readonly options:
+      NativeTreeOptions | (Omit<NativeTreeOptions, 'identity'> & { partition: string }),
+  ) {
+    if ('identity' in options) checkIdentity(options.identity, options.model);
+    else {
+      if (!options.model.partitions.some((p) => p[0] === options.partition))
+        throw new Error('Unknown native projection partition.');
+      this.started = true;
+    }
     this.tree = new TreeState(options.budget, options.maxDirectoryEntries);
   }
+  private get partition() {
+    return 'identity' in this.options ? this.options.identity[2] : this.options.partition;
+  }
   header(): Value {
+    if (!('identity' in this.options)) throw new Error('Projection has no object identity.');
     return ['tree', 1, 'native-tree-v1', this.options.identity, 'partition-projection'];
   }
   end(): Value {
@@ -123,8 +135,7 @@ class NativeTreeState {
   }
   private owner(path: string): string {
     const partition = this.options.model.owner(path)[0];
-    if (partition !== this.options.identity[2])
-      throw new Error('Wrong native-tree partition owner.');
+    if (partition !== this.partition) throw new Error('Wrong native-tree partition owner.');
     return partition;
   }
   accept(input: Value): void {
@@ -184,19 +195,9 @@ class NativeTreeState {
         if (this.unit || !this.tree.emptyDirectory || row[2] !== this.tree.path)
           throw new Error('Invalid native unit boundary.');
         const descriptor = unitSchema.parse(row.slice(1, 4));
-        this.unit = new UnitProjection(
-          this.options.model,
-          descriptor,
-          false,
-          this.options.identity[2],
-        );
+        this.unit = new UnitProjection(this.options.model, descriptor, false, this.partition);
         this.assertion = { counts: row[5], semantic: row[6], comparison: row[7] };
-        this.semantic.update([
-          'unit',
-          ...descriptor,
-          'partition-projection',
-          this.options.identity[2],
-        ]);
+        this.semantic.update(['unit', ...descriptor, 'partition-projection', this.partition]);
         this.requiredUnit = null;
         this.counts[2] = add(this.counts[2]);
         break;
@@ -252,6 +253,25 @@ class NativeTreeState {
   }
   dispose(): void {
     this.tree.dispose();
+  }
+}
+/** Unkeyed semantic summary; never an object/payload admission receipt. */
+export async function summarizeNativeTree(
+  records: AsyncIterable<Value>,
+  options: Omit<NativeTreeOptions, 'identity'> & { partition: string },
+  signal = new AbortController().signal,
+): Promise<TreeSeal> {
+  const state = new NativeTreeState(options);
+  try {
+    for await (const record of abortableValues(records, signal)) {
+      if (Array.isArray(record) && (record[0] === 'tree' || record[0] === 'end'))
+        throw new Error('Caller supplied native framing.');
+      state.accept(record);
+    }
+    state.accept(state.end());
+    return state.finish();
+  } finally {
+    state.dispose();
   }
 }
 /** Metadata-only acceptance; callbacks are provisional until resolution.

@@ -467,3 +467,20 @@ Bytes: `547`. Local event digest: `9cbcf2341bcc66817c6c5da2c0d701c0c17b3e1a8e1ca
 Raw SHA-256 including all three LFs: `7328bade01fda3b1b7036c81dcb8df35ab2f3d7aeee5598cedd5ab198acb11fa`.
 Miss, selected-empty and cold-empty are explicit committed results; there are no
 snapshot-source rows. A complete local binding/owner check is still required.
+
+## Generic local directory insertion
+
+The new local install-unit descriptor uses the existing canonical record encoding;
+this does not change worker archive framing. Its exact UTF-8 bytes are the following
+ASCII JSON followed by one LF (no spaces):
+
+```json
+["install-unit-open", "directory", "repository/new", "subtree"]
+```
+
+SHA-256 of those bytes including LF:
+`6cb4d1c444a391b9be44b31e9f7ff1291742c02f78d3192a53d41b5a9c120a25`.
+The matching close is `["install-unit-close","directory","repository/new"]` plus LF.
+These are record fragments, not a valid empty unit: exactly one matching directory
+insert and its full source evidence are mandatory, as specified in the
+[local install contract](../cache-lifecycle-protocol/#install-batches-and-recovery).

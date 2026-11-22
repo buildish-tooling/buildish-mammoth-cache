@@ -19,6 +19,9 @@ import { encodeRecord, equal, type Value } from './encoding';
 import { sameNative, type NativeIdentity } from './native';
 import { walkNative, type WalkOptions } from './native-walk';
 import type { OwnedStore, Reference } from './owned-store';
+import { ValidatedBaseObject, type BaseObjectOptions } from './base-object';
+import { movedBaseEvidence } from './base-evidence';
+import { tuple } from './encoding';
 import { EvidenceFile } from './evidence-file';
 import type { LocalRow } from './local-stream';
 
@@ -128,6 +131,65 @@ export class VerifiedIncoming {
     readonly evidence: Reference,
     readonly origin: 'worker' | 'trusted-base',
   ) {}
+  /** An own root rename carries an admitted base projection; no fresh file N is adopted.
+   * The installer checks every selected subtree at the actual mutation boundary. */
+  static async fromBase(
+    object: ValidatedBaseObject,
+    options: BaseObjectOptions,
+    onAttempt: (move: {
+      from: string;
+      to: string;
+      before: NativeIdentity;
+      after?: NativeIdentity;
+    }) => void,
+  ): Promise<VerifiedIncoming> {
+    ValidatedBaseObject.assertReceipt(object);
+    const { store } = object,
+      partition = object.reference[1][2],
+      nativeRoot = store.prefix + 'install/' + partition,
+      signal = options.signal ?? new AbortController().signal;
+    signal.throwIfAborted();
+    await object.verifyMetadataStable(options);
+    let original: NativeIdentity | undefined;
+    for await (const row of store.rows(
+      object.evidence,
+      'native-evidence',
+      { ...options, partition },
+      signal,
+    )) {
+      const r = tuple(row.value);
+      if (r[0] === 'local-stream') continue;
+      if (r[0] !== 'directory' || r[1] !== '') throw new Error('Missing base payload root.');
+      original = r[2] as NativeIdentity;
+      break;
+    }
+    if (!original) throw new Error('Missing base payload root.');
+    await store.makeParents(nativeRoot);
+    const move = {
+      from: object.payload,
+      to: nativeRoot,
+      before: original,
+      after: undefined as NativeIdentity | undefined,
+    };
+    onAttempt(move); // caller owns ambiguous rename recovery before the syscall
+    signal.throwIfAborted();
+    move.after = await store.root.renameAbsent(move.from, move.to, original);
+    const evidence = await movedBaseEvidence(
+      store,
+      object.evidence,
+      partition,
+      move.after,
+      options,
+    );
+    signal.throwIfAborted();
+    return new VerifiedIncoming(
+      store,
+      partition,
+      nativeRoot,
+      Object.freeze(evidence) as Reference,
+      'trusted-base',
+    );
+  }
   static async verify(
     store: OwnedStore,
     input: {
@@ -148,8 +210,9 @@ export class VerifiedIncoming {
     const nativeRoot = store.codec.schemas.owned.parse(input.nativeRoot);
     if (nativeRoot !== store.prefix + 'install/' + partition)
       throw new Error('Incoming root is not disposable install staging.');
+    const parsed = store.codec.schemas.ref('native-evidence').parse(input.evidence);
     const evidence = Object.freeze(
-      store.codec.schemas.ref('native-evidence').parse(input.evidence),
+      store.completedStream(input.evidence) ? input.evidence : parsed,
     ) as Reference;
     const origin = input.origin;
     if (origin !== 'worker' && origin !== 'trusted-base')

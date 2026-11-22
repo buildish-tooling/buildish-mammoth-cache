@@ -70,6 +70,7 @@ export async function buildInstallIndex(
   signal = new AbortController().signal,
 ): Promise<number> {
   signal.throwIfAborted();
+  scratch.store.root.work.indexBuilds++;
   const claim = scratch.claim();
   const frames: Frame[] = [];
   let root: number | undefined;
@@ -109,6 +110,16 @@ export async function buildInstallIndex(
         } finally {
           record.release();
         }
+      }
+      // Coarse insertion skips recursive output selection. Preserve its native alias
+      // check while this already-bounded source name page is available.
+      if (partition !== null && (process.platform === 'win32' || process.platform === 'darwin')) {
+        const key = (name: string) =>
+          process.platform === 'darwin' ? name.normalize('NFD').toUpperCase() : name.toUpperCase();
+        entries.sort((a, b) => compareName(key(a.name), key(b.name)));
+        for (let n = 1; n < entries.length; n++)
+          if (key(entries[n - 1].name) === key(entries[n].name))
+            throw new Error('Native case/normalization path alias.');
       }
       entries.sort((a, b) => compareName(a.name, b.name));
       const start = scratch.position;

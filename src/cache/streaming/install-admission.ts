@@ -18,8 +18,8 @@ import { lstat, writeFile, opendir } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { canonical, add, equal, encodeRecord, decodeRecord, type Value } from './encoding';
 import { sameNative, nativeIdentity, missing, type NativeIdentity } from './native';
-import { installCurrentRows } from './install-current';
 import { openVerifiedNativeEvidence } from './install-evidence';
+import { installCurrentRows } from './install-current';
 import { buildInstallIndex, IndexDirectories, indexedEntries, indexedNode } from './install-index';
 import { InstallScratch } from './install-scratch';
 import { isMavenTransientFile } from '../maven-repository';
@@ -27,7 +27,7 @@ import { isCacheMetadataPath } from '../metadata-paths';
 import type { LocalRow } from './local-stream';
 import { retireOwnedDirectory } from './owned-retirement';
 import { EvidenceFile } from './evidence-file';
-import { assertFrozenInstall, type FrozenInstall } from './install-plan';
+import { assertFrozenInstall, takeInstallIndexes, type FrozenInstall } from './install-plan';
 import type { OwnedStore, Reference } from './owned-store';
 import { parentPath, type WorkingBudget } from './tree-state';
 
@@ -133,7 +133,8 @@ export class InstallAdmission {
     );
     try {
       // Re-establish once, co-reading current bytes/native facts into a bounded index.
-      const scratch = await InstallScratch.create(store, budget);
+      const reused = await takeInstallIndexes(store, frozen);
+      const scratch = reused?.scratch ?? (await InstallScratch.create(store, budget));
       result.scratch = scratch;
       const actual = installCurrentRows(store, { budget, signal, maxDirectoryEntries });
       async function* compared(): AsyncGenerator<LocalRow> {
@@ -171,13 +172,18 @@ export class InstallAdmission {
           await actual.return(undefined);
         }
       }
-      const index = await buildInstallIndex(
-        scratch,
-        compared(),
-        store.codec.options.model,
-        null,
-        signal,
-      );
+      let index: number;
+      if (reused) {
+        for await (const row of compared()) void row;
+        index = reused.current;
+      } else
+        index = await buildInstallIndex(
+          scratch,
+          compared(),
+          store.codec.options.model,
+          null,
+          signal,
+        );
       const directories = new IndexDirectories(scratch, index);
       result.directories = directories;
       let lastMaven = '';
@@ -215,16 +221,36 @@ export class InstallAdmission {
       for (const input of frozen.inputs) {
         const p = store.codec.options.model.partitions.findIndex((v) => v[0] === input.partition);
         const start = scratch.position;
-        result.source[p] = await openVerifiedNativeEvidence(
-          store,
-          input.evidence,
-          input.nativeRoot,
-          input.partition,
-          { budget, signal, maxDirectoryEntries },
-          async (row) => {
-            await scratch.append(['checked-source-row', row.value, row.start, row.end, row.record]);
-          },
-        );
+        const observed = reused
+          ? undefined
+          : async (row: LocalRow) => {
+              await scratch.append([
+                'checked-source-row',
+                row.value,
+                row.start,
+                row.end,
+                row.record,
+              ]);
+            };
+        result.source[p] =
+          store.codec.options.model.partitions[p][3] === 'single-writer'
+            ? await openVerifiedNativeEvidence(
+                store,
+                input.evidence,
+                input.nativeRoot,
+                input.partition,
+                { budget, signal, maxDirectoryEntries },
+                observed,
+              )
+            : await EvidenceFile.open(
+                store,
+                input.evidence,
+                input.partition,
+                budget,
+                signal,
+                observed,
+                maxDirectoryEntries,
+              );
         const end = scratch.position;
         async function* sourceRows(): AsyncGenerator<LocalRow> {
           for await (const value of scratch.rows(start, end)) {
@@ -232,13 +258,15 @@ export class InstallAdmission {
             yield { value: r[1], start: Number(r[2]), end: Number(r[3]), record: Number(r[4]) };
           }
         }
-        const sourceIndex = await buildInstallIndex(
-          scratch,
-          sourceRows(),
-          store.codec.options.model,
-          input.partition,
-          signal,
-        );
+        const sourceIndex =
+          reused?.sources.get(p) ??
+          (await buildInstallIndex(
+            scratch,
+            sourceRows(),
+            store.codec.options.model,
+            input.partition,
+            signal,
+          ));
         result.sourceDirectories[p] = new IndexDirectories(scratch, sourceIndex);
       }
       for (let p = 0; p < frozen.preimages.length; p++)
@@ -258,7 +286,10 @@ export class InstallAdmission {
       async function direct(path: string) {
         try {
           store.root.work.stats++;
-          return nativeIdentity(await lstat(store.root.resolve(path), { bigint: true }));
+          const raw = await lstat(store.root.resolve(path), { bigint: true });
+          if (raw.isFile() && raw.nlink !== 1n)
+            throw new Error('Aliased selected install endpoint.');
+          return nativeIdentity(raw);
         } catch (error) {
           if (missing(error)) return null;
           throw error;
@@ -388,6 +419,9 @@ export class InstallAdmission {
                 },
                 signal,
               );
+              const native = await direct(op[3]);
+              if (!native || !rootNative || !sameNative(native, rootNative, true))
+                throw new Error('Selected source root changed.');
             }
             let oldNative: NativeIdentity | null = null;
             if (op[5] !== null) {

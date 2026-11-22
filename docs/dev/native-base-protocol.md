@@ -268,7 +268,14 @@ must establish canonical supported permissions before source-set commit; later n
 changes invalidate that proof. Capture retains the original full native identities
 that bound its computed/reused hashes through metadata publication and final sealing.
 Fresh stats after hashing cannot rebase changed ctime into authority for an old hash.
-Final native guards after evidence-Q publication are metadata-only, not body rehashes.
+Publishing evidence Q is a metadata-only handoff and does not itself require a
+second payload traversal. Original native facts remain binding at the consuming
+boundary. An own guarded payload-root rename may transfer a genuine admitted base
+projection into incoming staging by changing only the root's attributable native
+identity; descendants retain their original facts. The installer still checks each
+selected file/subtree before its live mutation. Cold or untrusted inputs cannot
+obtain this authority from serialized fields. SDK exposure and final source guards
+remain mandatory; these native checks do not imply body rehashes.
 Base restore does not rehash file bytes, preserving the trusted-base policy. Worker
 content verification remains mandatory and is unaffected by this distinction.
 

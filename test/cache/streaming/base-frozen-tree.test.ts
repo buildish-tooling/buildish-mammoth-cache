@@ -16,7 +16,7 @@
 
 import { chmod, writeFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
-import { FrozenBaseTree } from '../../../src/cache/streaming/base-frozen-tree';
+import { FrozenBaseTree, PreparedBaseTree } from '../../../src/cache/streaming/base-frozen-tree';
 import { LiveBaseInputs } from '../../../src/cache/streaming/live-base-inputs';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
 import { executeGc } from '../../../src/cache/streaming/gc-execute';
@@ -82,10 +82,14 @@ it('renders the committed copied snapshot without requiring it at the SDK stage'
   expect(await f.store.root.stat(f.input.partitions[1].nativeRoot + '/state/b')).not.toBeNull();
   expect(reads).not.toHaveBeenCalled();
 });
-it('rejects changed original file evidence during keyed metadata rendering', async () => {
+it('uses captured metadata during rendering and leaves changed payload rejection to consumption', async () => {
   const f = await fixture();
   await writeFile(f.store.root.resolve('data/a'), 'different');
-  await expect(FrozenBaseTree.render(f.input, 'data', f.identity('data'))).rejects.toThrow();
+  const stats = f.store.root.work.stats;
+  await FrozenBaseTree.render(f.input, 'data', f.identity('data'));
+  // Retain original hash/N; a pure metadata transform does not adopt the mutation.
+  expect(f.store.root.work.stats - stats).toBeGreaterThan(0);
+  await expect(f.input.view.assertStable()).rejects.toThrow('retained live source changed');
 });
 it('rejects cold adoption of orphan keyed metadata while allowing original-source same-process reconciliation', async () => {
   const f = await fixture(),
@@ -100,4 +104,20 @@ it('rejects cold adoption of orphan keyed metadata while allowing original-sourc
   );
   expect(reads).not.toHaveBeenCalled();
   expect(f.budget.retained).toBe(0);
+});
+
+it('rejects cancellation during the draft final state read and releases its spools', async () => {
+  const f = await fixture(),
+    controller = new AbortController(),
+    input = await LiveBaseInputs.capture(f.store, { budget: f.budget, signal: controller.signal });
+  inputs.push(input);
+  const before = f.budget.retained,
+    state = f.store.state.bind(f.store);
+  vi.spyOn(f.store, 'state').mockImplementation(async () => {
+    const result = await state();
+    controller.abort(new Error('draft final cancellation'));
+    return result;
+  });
+  await expect(PreparedBaseTree.create(input, 'data')).rejects.toThrow('draft final cancellation');
+  expect(f.budget.retained).toBe(before);
 });

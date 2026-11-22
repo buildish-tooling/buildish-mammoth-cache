@@ -387,8 +387,8 @@ export class RelocationEpoch {
     } else {
       await checkGcProjection(
         this.original,
-        this.original.completed[4],
-        this.original.completed[4],
+        this.original.completed[2],
+        this.original.completed[2],
         undefined,
         undefined,
         {

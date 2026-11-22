@@ -289,7 +289,7 @@ it('reuses canonical scratch bytes for spool digests and rejects altered replay'
     (async () => {
       for await (const r of spool.rows(signal())) void r;
     })(),
-  ).rejects.toThrow('Changed worker spool');
+  ).rejects.toThrow(/Changed (worker spool|scratch)/);
   await spool.dispose();
   expect(f.budget.retained).toBe(0);
 });

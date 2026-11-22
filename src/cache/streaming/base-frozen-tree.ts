@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import { encodeRecord, equal, type Value } from './encoding';
-import { LiveBaseInputs, type LivePartitionSource } from './live-base-inputs';
+import { encodeRecord, equal, tuple, type Value } from './encoding';
+import { LiveBaseInputs } from './live-base-inputs';
 import { BaseSourceTree } from './base-source-tree';
-import { writeNativeTree, readNativeTree } from './native-tree';
+import { writeNativeTree, readNativeTree, summarizeNativeTree, type TreeSeal } from './native-tree';
 import {
   checkIdentity,
   objectKey,
@@ -27,7 +27,6 @@ import {
   type ObjectRef,
 } from './native-records';
 import { baseFileBytes, nativeBaseFile } from './base-layout';
-import { baseEvidence } from './base-evidence';
 import { writeBaseSourceMetadata, settleBaseCleanup, type BaseObjectOptions } from './base-object';
 import { sameNative, type NativeIdentity } from './native';
 import { normalizeMode, parentPath } from './tree-state';
@@ -83,107 +82,69 @@ export class FrozenBaseTree {
     partition: string,
     identity: ObjectIdentity,
   ): Promise<FrozenBaseTree> {
-    LiveBaseInputs.assert(input);
-    const { store, options } = input.view,
-      signal = options.signal ?? new AbortController().signal,
-      source = input.partitions.find((p) => p.partition === partition);
-    if (!source) throw new Error('Missing frozen partition source.');
+    const draft = await PreparedBaseTree.create(input, partition);
+    try {
+      return await draft.render(identity);
+    } finally {
+      await draft.dispose();
+    }
+  }
+  /** Called only by the process-local draft after writer completion. */
+  static async fromDraft(draft: PreparedBaseTree, identity: ObjectIdentity) {
+    PreparedBaseTree.assert(draft);
+    const { input, partition, builder } = draft,
+      { store, options } = input.view,
+      signal = options.signal ?? new AbortController().signal;
     identity = structuredClone(identity);
     checkIdentity(identity, store.codec.options.model, partition);
-    const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-    if (state[4] !== 'gc-complete' || state[8] || state[9])
-      throw new Error('Tree rendering requires a pre-publication source.');
-    equal(state[6], input.view.observations, 'render original observations');
-    equal(state[7], input.postSources, 'render committed post sources');
-    const builder = await BaseSourceTree.create(store, partition, options),
-      stack: { path: string; release: () => void }[] = [];
-    let failure: unknown, result: FrozenBaseTree | undefined;
-    const close = async () => {
-      const f = stack.pop()!;
-      try {
-        await builder.close(f.path, signal);
-      } finally {
-        f.release();
-      }
-    };
-    try {
-      // Original-N/hash evidence stays bound through keyed encoding. NativeReadPhase
-      // checks it without another body read; live mixed parents are projected.
-      for await (const e of baseEvidence(
-        store,
-        source.nativeRoot,
-        source.evidence,
-        partition,
-        options,
-      )) {
-        const parent = e.row[0] === 'directory' && !e.logical ? null : parentPath(e.logical);
-        while (stack.length && stack[stack.length - 1].path !== parent) await close();
-        if (e.row[0] === 'directory') {
-          await builder.open(e.logical, signal);
-          stack.push({
-            path: e.logical,
-            release: options.budget.holdRecord(512 + Buffer.byteLength(e.logical)),
-          });
-        } else {
-          await e.phase.hash(e.path, e.native, String(e.row[3]), signal);
-          await builder.file(
-            e.logical,
-            Number(e.native[5]),
-            normalizeMode(store.codec.options.model.tuple[2], e.logical, e.native[6]),
-            Number(BigInt(e.native[8]) / 1000000n),
-            String(e.row[3]),
-            signal,
-          );
-        }
-      }
-      while (stack.length) await close();
-      builder.seal(signal);
-      const root = store.prefix + 'objects/' + partition;
-      await store.makeParents(root + '/pending');
-      let envelope: Envelope | undefined;
-      await writeBaseSourceMetadata(
+    const state = await draft.checkState(),
+      root = store.prefix + 'objects/' + partition;
+    await store.makeParents(root + '/pending');
+    let envelope: Envelope | undefined;
+    const tree = await writeBaseSourceMetadata(
+      store,
+      root,
+      'tree.ndjson',
+      writeNativeTree(
+        builder.events.rows(signal),
+        { ...options, model: store.codec.options.model, identity },
+        (e) => {
+          envelope = e;
+        },
+        signal,
+      ),
+      signal,
+      options.budget,
+    );
+    if (!envelope) throw new Error('Missing frozen tree envelope.');
+    equal(
+      [envelope[7], envelope[8]],
+      [draft.summary.counts, draft.summary.semantic],
+      'rendered projection',
+    );
+    equal(tree.slice(3), envelope.slice(5, 7), 'written tree bytes');
+    const env = await writeBaseSourceMetadata(
         store,
         root,
-        'tree.ndjson',
-        writeNativeTree(
-          builder.events.rows(signal),
-          { ...options, model: store.codec.options.model, identity },
-          (e) => {
-            envelope = e;
-          },
-          signal,
-        ),
+        'envelope.json',
+        (async function* () {
+          yield encodeRecord(envelope!);
+        })(),
         signal,
-      );
-      if (!envelope) throw new Error('Missing frozen tree envelope.');
-      const env = await writeBaseSourceMetadata(
-          store,
-          root,
-          'envelope.json',
-          (async function* () {
-            yield encodeRecord(envelope!);
-          })(),
-          signal,
-        ),
-        ref: ObjectRef = ['object-ref', identity, objectKey(identity), env[3], env[4]];
-      result = await FrozenBaseTree.read(store, ref, options);
-      await checkSource(source, store, options);
-      equal(await store.state(), state, 'keyed rendering state');
-    } catch (e) {
-      failure = e;
-    }
-    for (const f of stack) f.release();
-    try {
-      await settleBaseCleanup(
-        [() => builder.disposeUnit(), () => builder.events.dispose()],
-        failure,
-      );
-    } catch (e) {
-      failure = e;
-    }
-    if (failure !== undefined) throw failure;
+        options.budget,
+      ),
+      ref: ObjectRef = ['object-ref', identity, objectKey(identity), env[3], env[4]],
+      en = store.completedFile(env),
+      tn = store.completedFile(tree);
+    // No reopen/hash/grammar replay: both exact references retain writer-bound N.
+    const result =
+      en && tn
+        ? new FrozenBaseTree(store, ref, envelope, tree, env, [en, tn])
+        : await FrozenBaseTree.read(store, ref, options);
+    await result.assertStable(options);
+    equal(await store.state(), state, 'keyed rendering state');
     signal.throwIfAborted();
-    return result!;
+    return result;
   }
   /** Checks immutable portable bytes only, including when payload roots are away. */
   static async read(
@@ -216,23 +177,105 @@ export class FrozenBaseTree {
     return result;
   }
 }
-async function checkSource(
-  source: LivePartitionSource,
-  store: OwnedStore,
-  options: BaseObjectOptions,
-) {
-  for await (const _ of baseEvidence(
-    store,
-    source.nativeRoot,
-    source.evidence,
-    source.partition,
-    options,
-  ))
-    if (_.row[0] === 'file')
-      await _.phase.hash(
-        _.path,
-        _.native,
-        String(_.row[3]),
-        options.signal ?? new AbortController().signal,
-      );
+const drafts = new WeakSet<object>();
+/** Bounded metadata spool from already captured N/hash facts, not payload authority. */
+export class PreparedBaseTree {
+  private disposed = false;
+  private constructor(
+    readonly input: LiveBaseInputs,
+    readonly partition: string,
+    readonly builder: BaseSourceTree,
+    readonly summary: TreeSeal,
+  ) {
+    drafts.add(this);
+  }
+  static assert(draft: PreparedBaseTree) {
+    if (!drafts.has(draft) || draft.disposed) throw new Error('Unavailable tree draft.');
+    LiveBaseInputs.assert(draft.input);
+  }
+  async checkState() {
+    PreparedBaseTree.assert(this);
+    const { store } = this.input.view,
+      state = store.codec.schemas.documents['local-state'].parse(await store.state());
+    if (state[4] !== 'gc-complete' || state[8] || state[9])
+      throw new Error('Tree rendering requires a pre-publication source.');
+    equal(state[6], this.input.view.observations, 'render original observations');
+    equal(state[7], this.input.postSources, 'render committed post sources');
+    return state;
+  }
+  static async create(input: LiveBaseInputs, partition: string) {
+    LiveBaseInputs.assert(input);
+    const { store, options } = input.view,
+      signal = options.signal ?? new AbortController().signal,
+      source = input.partitions.find((p) => p.partition === partition);
+    if (!source) throw new Error('Missing frozen partition source.');
+    const builder = await BaseSourceTree.create(store, partition, options),
+      stack: { path: string; release: () => void }[] = [];
+    const close = async () => {
+      const f = stack.pop()!;
+      try {
+        await builder.close(f.path, signal);
+      } finally {
+        f.release();
+      }
+    };
+    try {
+      // Metadata-only transformation. Consuming relocation/stage guards validate
+      // the original native identities; encoding never adopts new native facts.
+      for await (const row of store.rows(
+        source.evidence,
+        'native-evidence',
+        { ...options, partition },
+        signal,
+      )) {
+        const r = tuple(row.value);
+        if (r[0] === 'local-stream' || r[0] === 'local-end') continue;
+        const logical = String(r[1]),
+          native = r[2] as NativeIdentity,
+          parent = r[0] === 'directory' && !logical ? null : parentPath(logical);
+        while (stack.length && stack[stack.length - 1].path !== parent) await close();
+        if (r[0] === 'directory') {
+          await builder.open(logical, signal);
+          stack.push({
+            path: logical,
+            release: options.budget.holdRecord(512 + Buffer.byteLength(logical)),
+          });
+        } else
+          await builder.file(
+            logical,
+            Number(native[5]),
+            normalizeMode(store.codec.options.model.tuple[2], logical, native[6]),
+            Number(BigInt(native[8]) / 1000000n),
+            String(r[3]),
+            signal,
+          );
+      }
+      while (stack.length) await close();
+      await builder.seal(signal);
+      const summary = await summarizeNativeTree(
+          builder.events.rows(signal),
+          { ...options, model: store.codec.options.model, partition },
+          signal,
+        ),
+        draft = new PreparedBaseTree(input, partition, builder, summary);
+      await draft.checkState();
+      signal.throwIfAborted();
+      return draft;
+    } catch (error) {
+      for (const f of stack) f.release();
+      await settleBaseCleanup([() => builder.disposeUnit(), () => builder.events.dispose()], error);
+      throw error;
+    }
+  }
+  render(identity: ObjectIdentity) {
+    return FrozenBaseTree.fromDraft(this, identity);
+  }
+  async dispose() {
+    if (this.disposed) return;
+    await settleBaseCleanup([
+      () => this.builder.disposeUnit(),
+      () => this.builder.events.dispose(),
+    ]);
+    this.disposed = true;
+  }
 }

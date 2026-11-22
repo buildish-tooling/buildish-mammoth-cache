@@ -37,6 +37,7 @@ import * as nativeWalk from '../../../src/cache/streaming/native-walk';
 import { baseFileBytes } from '../../../src/cache/streaming/base-layout';
 import { decodeGeneration } from '../../../src/cache/streaming/native-records';
 import { recoverInstall } from '../../../src/cache/streaming/install-execute';
+import { VerifiedIncoming } from '../../../src/cache/streaming/install-evidence';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 import { tuple } from '../../../src/cache/streaming/encoding';
 import { initializeCompleteFixture } from './worker-complete-fixtures';
@@ -83,8 +84,10 @@ it('installs a real native generation through V4a without storage flushes, norma
   await rm(f.store.root.resolve('flush-probe'));
   const set = await acquire(f, sdk),
     reads = vi.spyOn(NativeReadPhase.prototype, 'read'),
+    walks = vi.spyOn(nativeWalk, 'walkNative'),
     result = await acceptBaseGeneration(f.store, set, { budget: f.budget });
   expect(reads).not.toHaveBeenCalled();
+  expect(walks).not.toHaveBeenCalled();
   expect(result.snapshotCopyBytes).toBe(0);
   expect(result.cold).toEqual([]);
   await installBaseGeneration(f.store, result, { budget: f.budget });
@@ -289,18 +292,27 @@ it('rejects declared group splits when actual direct Maven ownership crosses the
   await expect(acceptBaseGeneration(f.store, set, { budget: f.budget })).rejects.toThrow('crosses');
   expect(await f.store.root.stat(f.store.prefix + 'install')).toBeNull();
 });
-it('rejects a late native change before staging any incoming root', async () => {
-  const f = await baseFixture(),
-    sdk = await nativeCacheBackend(),
-    o = await preparedBase(f, { 'data/a': 'abc' });
-  await NativeObjectSave.save(sdk.backend, o, { budget: f.budget });
-  await seedBaseGeneration(f, sdk, [['object', 'data', o.reference]]);
-  const set = await acquire(f, sdk);
-  await writeFile(f.store.root.resolve(set.downloads[0].object!.payload + '/data/a'), 'xyz');
-  await expect(acceptBaseGeneration(f.store, set, { budget: f.budget })).rejects.toThrow();
-  expect(await f.store.root.stat('data/a')).toBeNull();
-  expect(await f.store.root.stat(f.store.prefix + 'install')).toBeNull();
-});
+it.each(['bytes', 'unknown-child'] as const)(
+  'rejects a late %s change at consumption before any live installation',
+  async (kind) => {
+    const f = await baseFixture(),
+      sdk = await nativeCacheBackend(),
+      o = await preparedBase(f, { 'data/a': 'abc' });
+    await NativeObjectSave.save(sdk.backend, o, { budget: f.budget });
+    await seedBaseGeneration(f, sdk, [['object', 'data', o.reference]]);
+    const set = await acquire(f, sdk);
+    await writeFile(
+      f.store.root.resolve(
+        set.downloads[0].object!.payload + (kind === 'bytes' ? '/data/a' : '/data/late'),
+      ),
+      'xyz',
+    );
+    const accepted = await acceptBaseGeneration(f.store, set, { budget: f.budget });
+    await expect(installBaseGeneration(f.store, accepted, { budget: f.budget })).rejects.toThrow();
+    expect(await f.store.root.stat('data/a')).toBeNull();
+    expect(await f.store.root.stat('data')).toBeNull();
+  },
+);
 it('preserves V4a-owned sources after interrupted install even when SDK download owners retire', async () => {
   const f = await baseFixture(),
     sdk = await nativeCacheBackend(),
@@ -329,7 +341,7 @@ it('blocks provisional-set disposal while a native install acceptance owns its s
   await NativeObjectSave.save(sdk.backend, o, { budget: f.budget });
   await seedBaseGeneration(f, sdk, [['object', 'data', o.reference]]);
   const set = await acquire(f, sdk),
-    enter = NativeReadPhase.prototype.enter;
+    enter = set.downloads[0].object!.verifyMetadataStable.bind(set.downloads[0].object!);
   let entered!: () => void, release!: () => void;
   const ready = new Promise<void>((r) => {
       entered = r;
@@ -337,13 +349,13 @@ it('blocks provisional-set disposal while a native install acceptance owns its s
     gate = new Promise<void>((r) => {
       release = r;
     });
-  vi.spyOn(NativeReadPhase.prototype, 'enter').mockImplementation(async function (
-    this: NativeReadPhase,
-    ...args
-  ) {
+  vi.spyOn(
+    Object.getPrototypeOf(set.downloads[0].object!),
+    'verifyMetadataStable',
+  ).mockImplementation(async (...args) => {
     entered();
     await gate;
-    return enter.apply(this, args);
+    return enter(args[0] as Parameters<typeof enter>[0]);
   });
   const pending = acceptBaseGeneration(f.store, set, { budget: f.budget });
   await ready;
@@ -419,5 +431,40 @@ it.each([false, true])(
     );
     expect(await f.store.root.stat(f.store.prefix + 'install/state')).toBeNull();
     expect(await f.store.root.stat('state')).toBeNull();
+  },
+);
+
+it.each(['parents', 'ledger'] as const)(
+  'starts no base rename after cancellation during %s handoff',
+  async (point) => {
+    const f = await baseFixture(),
+      sdk = await nativeCacheBackend(),
+      o = await preparedBase(f, { 'data/a': 'abc' });
+    await NativeObjectSave.save(sdk.backend, o, { budget: f.budget });
+    await seedBaseGeneration(f, sdk, [['object', 'data', o.reference]]);
+    const set = await acquire(f, sdk),
+      object = set.downloads[0].object!,
+      controller = new AbortController(),
+      rename = vi.spyOn(f.store.root, 'renameAbsent'),
+      parents = f.store.makeParents.bind(f.store);
+    if (point === 'parents')
+      vi.spyOn(f.store, 'makeParents').mockImplementation(async (...args) => {
+        await parents(...args);
+        if (args[0] === f.store.prefix + 'install/data')
+          controller.abort(new Error('cancel base handoff'));
+      });
+    const ledger: unknown[] = [],
+      before = f.budget.retained;
+    await expect(
+      VerifiedIncoming.fromBase(object, { budget: f.budget, signal: controller.signal }, (move) => {
+        ledger.push(move);
+        if (point === 'ledger') controller.abort(new Error('cancel base handoff'));
+      }),
+    ).rejects.toThrow('cancel base handoff');
+    expect(ledger).toHaveLength(1);
+    expect(rename).not.toHaveBeenCalled();
+    expect(await f.store.root.stat(object.payload)).not.toBeNull();
+    expect(await f.store.root.stat(f.store.prefix + 'install/data')).toBeNull();
+    expect(f.budget.retained).toBe(before);
   },
 );

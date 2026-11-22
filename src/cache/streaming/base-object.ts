@@ -190,8 +190,8 @@ export class ValidatedBaseObject {
         !sameNative(treeNative, await nativeBaseFile(store, tree[2]), true)
       )
         throw new Error('Native metadata changed after validation.');
-      // Q publication is an invalidation boundary: recheck native N after sealing metadata.
-      await verifyNativeEvidence(store, evidence, root + '/payload', reference[1][2], options);
+      // Q is a metadata-only handoff. Preserve the captured N/hash; SDK exposure
+      // and selected-source consumption check it, without a publication sweep.
       signal.throwIfAborted();
       completed = new ValidatedBaseObject(
         store,
@@ -230,7 +230,7 @@ export class ValidatedBaseObject {
   assertBound(store = this.store): void {
     ValidatedBaseObject.assertReceipt(this, store);
   }
-  async verifyStable(options: BaseObjectOptions): Promise<void> {
+  async verifyMetadataStable(options: BaseObjectOptions): Promise<void> {
     this.assertBound();
     const signal = options.signal ?? new AbortController().signal;
     signal.throwIfAborted();
@@ -246,6 +246,10 @@ export class ValidatedBaseObject {
         )
       )
         throw new Error('Frozen native metadata changed.');
+    signal.throwIfAborted();
+  }
+  async verifyStable(options: BaseObjectOptions): Promise<void> {
+    await this.verifyMetadataStable(options);
     await verifyNativeEvidence(
       this.store,
       this.evidence,
@@ -341,6 +345,7 @@ export class PreparedBaseSource {
           signal,
         ),
         signal,
+        options.budget,
       );
       if (!envelope) throw new Error('Missing native tree seal.');
       const env = await writeBaseSourceMetadata(
@@ -351,6 +356,7 @@ export class PreparedBaseSource {
             yield encodeRecord(envelope!);
           })(),
           signal,
+          options.budget,
         ),
         reference: ObjectRef = ['object-ref', identity, objectKey(identity), env[3], env[4]],
         self = this;
@@ -486,7 +492,7 @@ export class PreparedBaseSource {
         if (end.done || tuple(end.value.value)[0] !== 'local-end' || !(await proof.next()).done)
           throw new Error('Extra prepared source evidence.');
       }
-      builder.seal(signal);
+      await builder.seal(signal);
       captured.seal(signal);
       const evidence = Object.freeze(
         await store.writeStream(
@@ -574,11 +580,11 @@ async function* canonicalFacts(
   signal: AbortSignal,
 ): AsyncGenerator<Value> {
   const phase = new NativeReadPhase(store.root, payload),
-    stack: { path: string; native: NativeIdentity; release: () => void }[] = [];
+    stack: { path: string; native: NativeIdentity; entered: boolean; release: () => void }[] = [];
   const leave = async () => {
     const top = stack.pop()!;
     try {
-      await phase.leave(top.path, top.native);
+      if (top.entered) await phase.leave(top.path, top.native);
     } finally {
       top.release();
     }
@@ -592,9 +598,8 @@ async function* canonicalFacts(
       const parent = r[0] === 'directory' && logical === '' ? null : parentPath(path);
       while (stack.length && stack[stack.length - 1].path !== parent) await leave();
       if (r[0] === 'directory') {
-        await phase.enter(path, n);
         const release = budget.holdRecord(512 + Buffer.byteLength(path));
-        stack.push({ path, native: n, release });
+        stack.push({ path, native: n, entered: false, release });
         yield value;
       } else {
         let actual = n;
@@ -603,6 +608,13 @@ async function* canonicalFacts(
             throw new Error(
               'Prepared native mode is not canonical; source evidence cannot be rewritten.',
             );
+          // Only actual repairs need a checked native parent phase. Unchanged
+          // rows transfer the original walk's facts without per-file I/O.
+          for (const frame of stack)
+            if (!frame.entered) {
+              await phase.enter(frame.path, frame.native);
+              frame.entered = true;
+            }
           actual = await phase.repairMode(path, n, Number(r[4]), signal);
           if (!canonicalBaseMode(actual[6], Number(r[4])))
             throw new Error('Native mode repair failed.');
@@ -639,9 +651,10 @@ export async function writeBaseSourceMetadata(
   name: 'tree.ndjson' | 'envelope.json',
   bytes: AsyncIterable<Buffer>,
   signal: AbortSignal,
+  budget?: WorkingBudget,
 ): Promise<Reference> {
   if (!(await store.root.stat(root + '/' + name)))
-    return store.writeNativeMetadata(root, name, bytes, signal);
+    return store.writeNativeMetadata(root, name, bytes, signal, budget);
   const hash = createHash('sha256');
   let size = 0;
   for await (const chunk of bytes) {

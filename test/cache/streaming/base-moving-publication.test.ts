@@ -22,6 +22,7 @@ import { RelocationSource } from '../../../src/cache/streaming/relocation-source
 import { RelocationTreeFile } from '../../../src/cache/streaming/relocation-tree-file';
 import { checkMoveMember } from '../../../src/cache/streaming/relocation-member';
 import { RelocationEpoch } from '../../../src/cache/streaming/relocation-epoch';
+import { PartitionSummaries } from '../../../src/cache/streaming/partition-summaries';
 import { FrozenBaseTree } from '../../../src/cache/streaming/base-frozen-tree';
 import { checkMoveSourceBindings } from '../../../src/cache/streaming/move-source';
 import {
@@ -375,10 +376,11 @@ it('requires coverage of a meaningful empty subtree while permitting unmoved str
 });
 it('charges a newly retained tree during freeze and releases earlier catalog holds on admission failure', async () => {
   const f = await fixture(),
-    render = FrozenBaseTree.render.bind(FrozenBaseTree),
-    retain = f.budget.retain.bind(f.budget);
+    render = FrozenBaseTree.fromDraft.bind(FrozenBaseTree),
+    retain = f.budget.retain.bind(f.budget),
+    before = f.budget.retained;
   let newlyRetained = false;
-  vi.spyOn(FrozenBaseTree, 'render').mockImplementation(async (...args) => {
+  vi.spyOn(FrozenBaseTree, 'fromDraft').mockImplementation(async (...args) => {
     const result = await render(...args);
     newlyRetained = true;
     return result;
@@ -394,7 +396,7 @@ it('charges a newly retained tree during freeze and releases earlier catalog hol
     'catalog admission',
   );
   expect(f.store.codec.schemas.documents['local-state'].parse(await f.store.state())[8]).toBeNull();
-  expect(f.budget.retained).toBe(0);
+  expect(f.budget.retained).toBe(before);
 });
 it('validates shared-directory roots in one global frontier across 4 to 16 partitions', async () => {
   const measurements: number[] = [];
@@ -419,6 +421,7 @@ it('validates shared-directory roots in one global frontier across 4 to 16 parti
       indexes.push(index);
       return index;
     });
+    const beforeRows = f.store.root.work.metadataRowsRead;
     try {
       await checkMovePlanMetadata(
         f.store,
@@ -431,7 +434,7 @@ it('validates shared-directory roots in one global frontier across 4 to 16 parti
         { budget: f.budget },
       );
       expect(indexes).toHaveLength(1);
-      measurements.push(indexes[0].work.readBytes);
+      measurements.push(f.store.root.work.metadataRowsRead - beforeRows);
     } finally {
       spy.mockRestore();
     }
@@ -833,4 +836,23 @@ it('does not coarsen across an unselected Maven owner', async () => {
     if (r[0] === 'move') roots.push(r[4]);
   }
   expect(roots).toEqual(['repository/org']);
+});
+
+it('releases warm handoff charges when late summary reporting fails and leaves cold resume valid', async () => {
+  const f = await fixture(),
+    summaries = new PartitionSummaries(f.model, f.budget);
+  vi.spyOn(summaries, 'choice').mockImplementation(() => {
+    throw new Error('late summary failure');
+  });
+  await expect(FrozenMovingPublication.freeze(f.input, 'main', [], summaries)).rejects.toThrow(
+    'late summary failure',
+  );
+  summaries.dispose();
+  await f.input.dispose();
+  inputs.splice(inputs.indexOf(f.input), 1);
+  expect(f.budget.retained).toBe(0);
+  expect(tuple(await f.store.state())[4]).toBe('objects-frozen');
+  const resumed = await FrozenMovingPublication.resume(f.store, { budget: f.budget });
+  publications.push(resumed);
+  summaries.dispose();
 });

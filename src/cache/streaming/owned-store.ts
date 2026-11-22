@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { constants } from 'node:fs';
+import { constants, type BigIntStats } from 'node:fs';
 import { mkdir, open, rename, unlink, opendir } from 'node:fs/promises';
 import { randomUUID, createHash, type Hash } from 'node:crypto';
 import { z } from 'zod';
@@ -33,6 +33,7 @@ import {
   decodeRecords,
   encodeRecord,
   rawSha,
+  equal,
   add,
   Digest,
   type Value,
@@ -40,7 +41,8 @@ import {
 import { shaSchema } from './schema';
 import { WorkingBudget } from './tree-state';
 import { retireOwnedDirectory } from './owned-retirement';
-import { abortableValues } from './abort';
+import { BufferedWriter } from './buffered-writer';
+import { abortableValues, withAbort } from './abort';
 import {
   readLocalStream,
   readLocalRows,
@@ -49,9 +51,20 @@ import {
   writeLocalStream,
   type LocalPurpose,
   type LocalStreamOptions,
+  type LocalStreamSeal,
 } from './local-stream';
 
 export type Reference = ['ref', string, string, number, string];
+export interface WrittenLocalStream {
+  readonly reference: Reference;
+  readonly native: NativeIdentity;
+  readonly purpose: LocalPurpose;
+  readonly partition: string | null;
+  readonly maxDirectoryEntries: number;
+  readonly headerEnd: number;
+  readonly footerStart: number;
+}
+
 export type Prefix = ['prefix', string, string, number, number, string];
 export const locatorSchema = z
   .tuple([z.literal('current'), z.literal(1), shaSchema, z.string()])
@@ -73,6 +86,21 @@ export async function readFixedMetadata(root: NativeRoot, relative: string): Pro
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#durable-replacement-and-cursors
 export class OwnedStore {
+  private readonly writtenReferences = new WeakMap<object, Reference>();
+  private readonly writtenNative = new WeakMap<object, NativeIdentity>();
+  private readonly writtenStreams = new WeakMap<object, WrittenLocalStream>();
+  /** Only the exact reference returned by this writer can transfer its original N. */
+  completedFile(reference: Reference): NativeIdentity | undefined {
+    const original = this.writtenReferences.get(reference);
+    if (original) equal(reference, original, 'completed file reference');
+    return this.writtenNative.get(reference);
+  }
+  completedStream(reference: Value): WrittenLocalStream | undefined {
+    const proof =
+      reference && typeof reference === 'object' ? this.writtenStreams.get(reference) : undefined;
+    if (proof) equal(reference, proof.reference, 'completed stream reference');
+    return proof;
+  }
   readonly prefix: string;
   private constructor(
     readonly root: NativeRoot,
@@ -106,8 +134,9 @@ export class OwnedStore {
     purpose: string,
     source: AsyncIterable<Uint8Array>,
     signal = new AbortController().signal,
+    budget?: WorkingBudget,
   ): Promise<Reference> {
-    return this.writeAt(purpose, this.prefix + 'files/' + randomUUID(), source, signal);
+    return this.writeAt(purpose, this.prefix + 'files/' + randomUUID(), source, signal, budget);
   }
   /** SDK raw upload names artifacts from the file basename; pin it before Q publication. */
   async writeNamedWorkerArchive(
@@ -130,6 +159,7 @@ export class OwnedStore {
     name: 'tree.ndjson' | 'envelope.json' | 'record.json',
     source: AsyncIterable<Uint8Array>,
     signal = new AbortController().signal,
+    budget?: WorkingBudget,
   ): Promise<Reference> {
     this.codec.schemas.owned.parse(root);
     if (!['tree.ndjson', 'envelope.json', 'record.json'].includes(name))
@@ -140,44 +170,103 @@ export class OwnedStore {
       'record.json': 'generation',
     }[name];
     if (!purpose) throw new Error('Unknown native metadata name.');
-    return this.writeAt(purpose, root + '/' + name, source, signal);
+    return this.writeAt(purpose, root + '/' + name, source, signal, budget);
   }
   private async writeAt(
     purpose: string,
     target: string,
     source: AsyncIterable<Uint8Array>,
     signal: AbortSignal,
+    budget?: WorkingBudget,
   ): Promise<Reference> {
     signal.throwIfAborted();
     const candidate = target + '.tmp';
     await this.makeParents(target);
     this.root.work.opens++;
-    const handle = await open(this.root.resolve(candidate), 'wx', 0o600),
-      created = nativeIdentity(await handle.stat({ bigint: true })),
+    const handle = await open(this.root.resolve(candidate), 'wx', 0o600);
+    let createdRaw: BigIntStats;
+    try {
+      createdRaw = await handle.stat({ bigint: true });
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+    const created = nativeIdentity(createdRaw),
       hash = createHash('sha256');
+    let previousNative = created,
+      writer: BufferedWriter | undefined;
+    const checkWritten = async () => {
+      this.root.work.stats++;
+      const raw = await handle.stat({ bigint: true });
+      if (raw.nlink !== 1n || !sameNative(previousNative, nativeIdentity(raw), true))
+        throw new Error('Owned candidate changed outside its writer.');
+    };
+    const wrote = async (length: number) => {
+      this.root.work.stats++;
+      const raw = await handle.stat({ bigint: true }),
+        after = nativeIdentity(raw);
+      if (
+        raw.nlink !== 1n ||
+        Number(raw.size) !== length ||
+        created.some((v, i) => ![5, 7, 8, 9].includes(i) && v !== after[i])
+      )
+        throw new Error('Owned candidate write identity/length changed.');
+      previousNative = after;
+    };
+    if (budget)
+      writer = new BufferedWriter(
+        handle,
+        budget,
+        (n) => {
+          this.root.work.writeBytes = add(this.root.work.writeBytes, n);
+        },
+        0,
+        () => {
+          this.root.work.metadataWriteCalls++;
+        },
+        checkWritten,
+        () => wrote(writer!.written),
+      );
     let bytes = 0;
     let movedIdentity: NativeIdentity | undefined;
     try {
+      if (createdRaw.nlink !== 1n || createdRaw.size !== 0n)
+        throw new Error('Unsafe owned candidate.');
       for await (const chunk of abortableValues(source, signal)) {
         if (!(chunk instanceof Uint8Array) || chunk.byteLength > 256 * 1024)
           throw new Error('Invalid owned stream chunk.');
-        await handle.writeFile(chunk);
-        this.root.work.writeBytes = add(this.root.work.writeBytes, chunk.byteLength);
+        if (writer) await writer.append(chunk);
+        else {
+          await checkWritten();
+          this.root.work.metadataWriteCalls++;
+          await handle.writeFile(chunk);
+          await wrote(bytes + chunk.byteLength);
+          this.root.work.writeBytes = add(this.root.work.writeBytes, chunk.byteLength);
+        }
         hash.update(chunk);
         bytes = add(bytes, chunk.byteLength);
       }
       if (!bytes) throw new Error('Empty referenced bytes.');
       signal.throwIfAborted();
+      await writer?.flush();
+      await checkWritten();
+      const written = previousNative;
       await this.fail('immutable-file-written');
-      const written = nativeIdentity(await handle.stat({ bigint: true }));
+      await checkWritten();
       await handle.close();
       movedIdentity = await this.root.renameAbsent(candidate, target, written);
       await this.fail('immutable-rename');
       await this.fail('immutable-publication-barrier');
+      const published = await this.root.stat(target);
+      if (!published || !sameNative(movedIdentity, published, true))
+        throw new Error('Published owned candidate changed.');
       signal.throwIfAborted();
-      return this.codec.schemas
+      const reference = this.codec.schemas
         .ref(purpose)
         .parse(['ref', purpose, target, bytes, hash.copy().digest('hex')]);
+      this.writtenReferences.set(reference, Object.freeze([...reference]) as Reference);
+      this.writtenNative.set(reference, Object.freeze([...movedIdentity]) as NativeIdentity);
+      return reference;
     } catch (error) {
       await handle.close();
       try {
@@ -208,6 +297,7 @@ export class OwnedStore {
       }
       throw error;
     } finally {
+      writer?.dispose();
       await handle.close();
     }
   }
@@ -239,11 +329,60 @@ export class OwnedStore {
     records: AsyncIterable<Value>,
     signal = new AbortController().signal,
   ): Promise<Reference> {
-    return this.write(
+    const work = this.root.work,
+      profile = { ...options, codec: this.codec };
+    async function* counted() {
+      for await (const row of abortableValues(records, signal)) {
+        work.metadataRowsWritten++;
+        yield row;
+      }
+    }
+    let seal: LocalStreamSeal | undefined;
+    const reference = await this.write(
       purpose,
-      writeLocalStream(records, purpose, { ...options, codec: this.codec }, () => {}, signal),
+      writeLocalStream(
+        counted(),
+        purpose,
+        profile,
+        (s) => {
+          seal = s;
+        },
+        signal,
+      ),
       signal,
+      profile.budget,
     );
+    // Only context-independent stream grammars participate in this producer handoff.
+    if (
+      purpose === 'native-evidence' ||
+      purpose === 'install-current' ||
+      purpose === 'observations'
+    ) {
+      if (!seal || seal.sha !== reference[4] || seal.bytes !== reference[3])
+        throw new Error('Incomplete local writer seal.');
+      const header = [
+        'local-stream',
+        1,
+        purpose,
+        this.codec.options.invocation,
+        this.codec.options.model.id,
+        this.codec.options.model.family,
+        profile.partition,
+      ] as Value;
+      this.writtenStreams.set(
+        reference,
+        Object.freeze({
+          reference: Object.freeze([...reference]) as Reference,
+          native: this.writtenNative.get(reference)!,
+          purpose,
+          partition: profile.partition,
+          maxDirectoryEntries: profile.maxDirectoryEntries ?? 100000,
+          headerEnd: encodeRecord(header).length,
+          footerStart: seal.bytes - encodeRecord(['local-end', seal.records, seal.eventSha]).length,
+        }),
+      );
+    }
+    return reference;
   }
   async *read(reference: Value, purpose: string): AsyncGenerator<Buffer> {
     const ref = this.codec.schemas.ref(purpose).parse(reference),
@@ -283,7 +422,7 @@ export class OwnedStore {
       signal,
     );
   }
-  rows(
+  async *rows(
     reference: Value,
     purpose: LocalPurpose,
     options: Omit<LocalStreamOptions, 'codec'>,
@@ -291,14 +430,58 @@ export class OwnedStore {
     beforeAccept?: (value: Value) => Promise<void>,
   ) {
     const ref = this.codec.schemas.ref(purpose).parse(reference);
-    return readLocalRows(
+    const proof = this.completedStream(reference);
+    if (
+      proof &&
+      options.moveMode === undefined &&
+      options.gcMode === undefined &&
+      options.installKind === undefined &&
+      proof.purpose === purpose &&
+      proof.partition === options.partition &&
+      proof.maxDirectoryEntries === (options.maxDirectoryEntries ?? 100000)
+    ) {
+      let record = 0;
+      for await (const row of decodeRecords(
+        abortableValues(this.root.read(ref[2], proof.native), signal),
+      )) {
+        const release = options.budget.holdRecord(row.raw.length);
+        try {
+          signal.throwIfAborted();
+          const data =
+            Array.isArray(row.value) &&
+            row.value[0] !== 'local-stream' &&
+            row.value[0] !== 'local-end';
+          if (data) {
+            this.root.work.metadataRowsRead++;
+            if (beforeAccept) await withAbort(beforeAccept(row.value), signal);
+          }
+          signal.throwIfAborted();
+          yield { value: row.value, start: row.start, end: row.end, record: record++ };
+        } finally {
+          release();
+        }
+      }
+      signal.throwIfAborted();
+      return;
+    }
+    signal.throwIfAborted();
+    this.root.work.metadataValidations++;
+    for await (const row of readLocalRows(
       this.root.read(ref[2]),
       purpose,
       { ...options, codec: this.codec },
       ref,
       signal,
       beforeAccept,
-    );
+    )) {
+      if (
+        Array.isArray(row.value) &&
+        row.value[0] !== 'local-stream' &&
+        row.value[0] !== 'local-end'
+      )
+        this.root.work.metadataRowsRead++;
+      yield row;
+    }
   }
   async readFixed(relative: string): Promise<Value | null> {
     return readFixedMetadata(this.root, relative);
@@ -704,6 +887,7 @@ export class OwnedStore {
       relative,
       handle,
       grammar,
+      budget,
       createHash('sha256'),
       new Digest('local-' + purpose),
       0,
@@ -836,6 +1020,7 @@ export class OwnedStore {
         prefix[2],
         handle,
         restored.grammar,
+        budget,
         restored.rawHash,
         restored.eventDigest,
         prefix[3],
@@ -850,6 +1035,7 @@ export class OwnedStore {
 }
 // Protocol: docs/dev/cache-lifecycle-protocol.md#immutable-references-and-append-prefixes
 export class OwnedAppend {
+  private readonly writer: BufferedWriter;
   private closed = false;
   private failed = false;
   constructor(
@@ -858,26 +1044,28 @@ export class OwnedAppend {
     readonly path: string,
     private readonly handle: Awaited<ReturnType<typeof open>>,
     private readonly grammar: LocalStreamGrammar,
+    budget: WorkingBudget,
     private readonly hash: Hash,
     private readonly events: Digest,
     private bytes: number,
     private records: number,
-  ) {}
+  ) {
+    this.writer = new BufferedWriter(
+      handle,
+      budget,
+      (n) => {
+        store.root.work.writeBytes = add(store.root.work.writeBytes, n);
+      },
+      bytes,
+      () => {
+        store.root.work.metadataWriteCalls++;
+      },
+    );
+  }
   private async writeEncoded(bytes: Buffer): Promise<void> {
     if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
     try {
-      let offset = 0;
-      while (offset < bytes.length) {
-        const { bytesWritten } = await this.handle.write(
-          bytes,
-          offset,
-          bytes.length - offset,
-          this.bytes + offset,
-        );
-        this.store.root.work.writeBytes = add(this.store.root.work.writeBytes, bytesWritten);
-        if (!bytesWritten) throw new Error('Append made no progress.');
-        offset += bytesWritten;
-      }
+      await this.writer.append(bytes);
       this.hash.update(bytes);
       this.bytes = add(this.bytes, bytes.length);
     } catch (error) {
@@ -907,6 +1095,8 @@ export class OwnedAppend {
   async checkpoint(): Promise<Prefix> {
     if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
     this.grammar.finish();
+    await this.writer.flush();
+    this.writer.releaseBuffer();
     return this.store.codec.schemas
       .appendPrefix(this.purpose)
       .parse([
@@ -922,6 +1112,8 @@ export class OwnedAppend {
     if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
     this.grammar.finish();
     await this.writeEncoded(encodeRecord(['local-end', this.records, this.events.digest()]));
+    await this.writer.flush();
+    this.writer.dispose();
     await this.handle.close();
     this.closed = true;
     this.grammar.dispose();
@@ -931,6 +1123,7 @@ export class OwnedAppend {
   }
   async close(): Promise<void> {
     if (!this.closed) {
+      this.writer.dispose();
       await this.handle.close();
       this.closed = true;
       this.grammar.dispose();

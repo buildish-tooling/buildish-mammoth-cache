@@ -320,7 +320,7 @@ it.skipIf(process.platform === 'win32').each([
     expect(large.listings).toBeLessThan(small.listings * 4);
     expect(large.stats).toBeLessThan(small.stats * 4);
     expect(large.opens).toBeLessThan(small.opens * 4);
-    expect(large.renames - small.renames).toBeGreaterThan(0);
+    expect(large.renames).toBe(small.renames); // complete directories move once as width grows
     for (const field of [
       'nativeDirectoryListings',
       'nativeDirectoryEntries',

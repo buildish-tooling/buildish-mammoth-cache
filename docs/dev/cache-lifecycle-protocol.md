@@ -1143,6 +1143,27 @@ that cross-reference proof. Retain this Q while any dependent plan/intent can ne
 it. The initial cursor is immediately after context (including for an empty plan),
 not after the header. Later cursors remain complete-unit boundaries.
 
+A generic aggregate directory insertion uses
+`["install-unit-open","directory",root,"subtree"]` and
+`["install-unit-close","directory",root]`. It contains exactly one directory
+`insert` operation for that exact nonempty logical root, plus any required structural
+`install-parent` rows. Source evidence spans the whole subtree; destination evidence
+and backup are null. It is distinct from empty-directory presence and snapshot
+replacement. Its complete subtree must have one aggregate owner, no protected or
+excluded members, and contain every semantic unit it touches in full. Structural directory roots need
+not match a file-only include; derive ownership from the complete referenced subtree
+and its aggregate source partition, never a fabricated child-name probe. Directory
+membership/kinds/native identities, ownership and destination absence require actual
+admission and execution checks; tuple validity is not that proof. A root inside a
+larger Gradle workspace cannot be used to split it.
+
+The planner selects maximal nonoverlapping safe absent subtrees; existing/mixed
+aggregate directories retain finer merges. Grouped units close atomically for cursor
+and batching purposes, even above normal target batch size. No later aggregate unit
+may overlap a grouped directory. Restart and ambiguous-rename classification use the
+same full directory spans, exact endpoint guards and committed-prefix projection as
+other directory operations; presence alone never establishes success.
+
 Install plans list aggregate semantic units in canonical hierarchical order first,
 then each authoritative snapshot partition once in model order. Operations within
 each unit follow canonical files-first hierarchy and have no ancestor/descendant
@@ -1155,6 +1176,27 @@ exactly its one matching file record. A directory span starts at its matching
 directory record, contains every contiguous descendant record, and ends immediately
 before a checked outside-subtree record or local-end. Canonical LF boundaries and
 header/end exclusion must be checked; arbitrary tuple-valid offsets are insufficient.
+
+A completed local writer can hand off its exact immutable stream reference,
+post-publication native file identity, framing offsets and fixed grammar profile
+within the same OwnedStore/process. The reference-object identity must resolve to
+that store's private completion proof, and its value/native identity/profile must
+still match. This proof covers metadata bytes and grammar only, never native payload
+ownership. Native-evidence, install-current and observation streams can reuse it;
+context-sensitive install/GC/move grammars still validate on admission. Cloned or
+reloaded references have no such proof and use complete EOF/digest/grammar validation.
+Bounded replay still checks native stability and canonical record boundaries; no
+serialized flag creates completion or source authority.
+
+The genuine frozen install plan can retain its already built current/source disk
+indexes through a closed-handle parked scratch owner. Reopen only under the same
+process-local plan, original full metadata-file identity and readonly handle. This
+is disposable process state, not a new recovery ref/format: cold recovery rebuilds
+indexes from validated authoritative evidence. Ordinary source admission checks
+selected root identities and checked parents, then full selected-subtree/member
+validation occurs at actual installation; authoritative snapshots retain their
+separate complete preflight. Common upstream object/group validation remains before
+live installation. Do not replace actual descendant checks with root identity alone.
 
 Validate/hash each distinct evidence Q once per stable phase and bind shared
 positional readers to that exact Q, purpose/partition and native metadata-file
@@ -1364,7 +1406,15 @@ guards are not a cross-process lock. Native cache directories remain outside thi
 private garbage lifecycle.
 
 Unpublished planning spools and admission/mutation lookup directories are disposable
-process state. Close unpublished container handles before guarded retirement;
+process state. Fixed-size 64-KiB metadata write buffers share the operation's working
+budget; no buffer is allocated per payload file. Logical scratch offsets include
+pending bytes and scratch readers see coherent pending/physical ranges without
+flushing for each lookup. A sealed in-process worker spool may retain charged pending
+bytes until its first reader; that reader checks the backing file, finishes writes
+and releases the write buffer before replay. Such a logical seal is not a published
+Q or restart authority. Authoritative Q/P publication and checkpoint/close handoff
+must finish buffered writes first. Disposable scratch retirement may discard unused
+pending bytes only after its consumers are finished. Close unpublished container handles before guarded retirement;
 unpublished lookups never become restart authority.
 
 A `base/<uuid>` container holds one isolated SDK native-object or generation download.
@@ -1605,6 +1655,23 @@ before postSources/decision. Its live input is not aliased as an owned snapshot.
 Hash reuse requires genuine original-input/destination native proof from that copy,
 not a fabricated worker receipt. Uncommitted candidates may be abandoned without
 moving live originals; committed postSources are not recaptured on retry.
+
+Metadata-only handoffs may retain genuine process-local completion evidence and
+bounded disk-backed indexes under their original native metadata-file identities.
+They must not adopt freshly observed payload identities or recover such authority
+from a serialized flag. Compare unkeyed counts and semantic summaries before
+rendering keyed metadata; unchanged eligible partitions reuse their exact pinned
+references. A warm handoff can retain its completed choices and metadata, while a
+cold retry independently validates the frozen files, plans and cursors.
+
+The final GC projection may also produce source-capture facts and transfer its
+admitted observation index. Captured post-GC parent identities remain binding even
+when no partition changes: a sequential directory frontier suffices without another
+index. Only a genuine pristine captured view can supply initial source evidence;
+changed or recovered epochs must reconcile their adjustments. Keep fresh checks at
+selected-root mutations, SDK exposure and return, and one final common effective-
+source/GC-absence barrier. The final barrier seals the source window against further
+mutation and need not write parent checkpoints for a completed operation.
 
 A frozen transfer publication binds the existing complete publication/choices,
 tree/envelope, original observation or owned-source evidence spans and exact keys

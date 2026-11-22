@@ -50,8 +50,9 @@ async function* records(rows: Value[]): AsyncGenerator<Value> {
 async function* chunks(bytes: Buffer): AsyncGenerator<Buffer> {
   for (let i = 0; i < bytes.length; i += 37) yield bytes.subarray(i, i + 37);
 }
-function fixture(purpose: LocalPurpose) {
+function fixture(purpose: LocalPurpose, model?: ReturnType<typeof resolveModel>) {
   const o = { ...localOptions() };
+  if (model) o.model = model;
   if (purpose === 'worker-sources') o.role = 'distributed-worker';
   const f = localFixtures(o),
     partition = [
@@ -1025,4 +1026,77 @@ it('defers snapshot structural-directory ownership to full-subtree admission but
   f.opts = { ...f.opts, installKind: () => 'file' };
   await expect(write(f, rows)).rejects.toThrow();
   expect(f.opts.budget.retained).toBe(0);
+});
+
+it('admits one complete aggregate directory insert and rejects replacement or escape', async () => {
+  const f = fixture('install-plan');
+  f.opts = { ...f.opts, installKind: () => 'directory' };
+  const rows: Value[] = [
+    ['install-unit-open', 'directory', 'repository/new', 'subtree'],
+    [
+      'install',
+      1,
+      'repository/new',
+      f.prefix + 'install/data/repository/new',
+      f.evidence(),
+      null,
+      'insert',
+      null,
+    ],
+    ['install-unit-close', 'directory', 'repository/new'],
+  ];
+  expect((await write(f, rows)).seal.records).toBe(4);
+  expect(encodeRecord(rows[0]).toString()).toBe(
+    '["install-unit-open","directory","repository/new","subtree"]\n',
+  );
+  expect(rawSha(encodeRecord(rows[0]))).toBe(
+    '6cb4d1c444a391b9be44b31e9f7ff1291742c02f78d3192a53d41b5a9c120a25',
+  );
+
+  for (const operation of ['replace', 'delete']) {
+    const bad = structuredClone(rows);
+    (bad[1] as Value[])[6] = operation;
+    (bad[1] as Value[])[5] = f.evidence();
+    (bad[1] as Value[])[7] = f.prefix + 'backups/1';
+    if (operation === 'delete') {
+      (bad[1] as Value[])[3] = null;
+      (bad[1] as Value[])[4] = null;
+    }
+    await expect(write(f, bad)).rejects.toThrow();
+  }
+  const escaped = structuredClone(rows);
+  (escaped[1] as Value[])[2] = 'repository/new/child';
+  await expect(write(f, escaped)).rejects.toThrow('single directory root');
+  await expect(write(f, [rows[0], rows[2]])).rejects.toThrow('root count');
+  expect(f.opts.budget.retained).toBe(0);
+});
+
+it('allows structurally unowned directory roots and binds aggregate rather than snapshot source paths', async () => {
+  const hard = ['.mammoth/**'];
+  const model = resolveModel(
+    [
+      'model',
+      1,
+      'maven',
+      hard,
+      [
+        ['data', ['data/**/*.bin'], hard, 'aggregate', null, 'default'],
+        ['metadata', ['metadata/**'], hard, 'single-writer', null, 'default'],
+      ],
+    ],
+    'narrow-',
+    1,
+  );
+  expect(() => model.owner('data/.workspace-directory-probe')).toThrow();
+  const f = fixture('install-plan', model);
+  f.opts = { ...f.opts, installKind: () => 'directory' };
+  const rows: Value[] = [
+    ['install-unit-open', 'directory', 'data', 'subtree'],
+    ['install', 1, 'data', f.prefix + 'install/data/data', f.evidence(), null, 'insert', null],
+    ['install-unit-close', 'directory', 'data'],
+  ];
+  await write(f, rows);
+  const snapshot = structuredClone(rows);
+  (snapshot[1] as Value[])[3] = f.prefix + 'install/metadata/data';
+  await expect(write(f, snapshot)).rejects.toThrow('aggregate source');
 });

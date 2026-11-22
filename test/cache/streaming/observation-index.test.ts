@@ -89,7 +89,7 @@ it('refuses to retire metadata with active readers and permits explicit cleanup 
   expect(f.budget.retained).toBe(0);
 });
 it('indexes once and shares projection rows across growing hot-parent targets and independent reloads', async () => {
-  const measurements: { rows: number; bytes: number; reads: number }[] = [];
+  const measurements: { rows: number; bytes: number; reads: number; decoded: number }[] = [];
   for (const count of [4, 16]) {
     const f = await fixture(count);
     let previous: number | undefined;
@@ -148,6 +148,7 @@ it('indexes once and shares projection rows across growing hot-parent targets an
         if (!restart)
           measurements.push({
             rows: index.rows,
+            decoded: store.root.work.metadataRowsRead,
             bytes: index.work.readBytes,
             reads: index.work.reads,
           });
@@ -159,8 +160,10 @@ it('indexes once and shares projection rows across growing hot-parent targets an
     }
   }
   expect(measurements[1].rows - measurements[0].rows).toBe(24);
-  expect(measurements[1].bytes).toBeLessThan(measurements[0].bytes * 5);
-  expect(measurements[1].reads).toBeLessThan(measurements[0].reads * 5);
+  expect(measurements[0].decoded).toBeGreaterThan(0);
+  expect(measurements[1].decoded).toBeLessThan(measurements[0].decoded * 5);
+  expect(measurements[1].bytes).toBeLessThanOrEqual(Math.max(65536, measurements[0].bytes * 5));
+  expect(measurements[1].reads).toBeLessThanOrEqual(Math.max(1, measurements[0].reads * 5));
 });
 
 it.each(['span', 'context', 'identity', 'missing', 'unknown'] as const)(

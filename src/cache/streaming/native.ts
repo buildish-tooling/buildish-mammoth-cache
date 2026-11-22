@@ -28,6 +28,16 @@ export type NativeIdentity = z.infer<typeof nativeIdentitySchema>;
 export type Failpoint = (name: string) => Promise<void>;
 export const noFailpoint: Failpoint = async () => {};
 export interface NativeWork {
+  nativeWalks: number;
+  nativeListings: number;
+  metadataRowsRead: number;
+  metadataRowsWritten: number;
+  metadataValidations: number;
+  metadataWriteCalls: number;
+  indexBuilds: number;
+  scratchReadCalls: number;
+  scratchWriteCalls: number;
+
   stats: number;
   opens: number;
   readBytes: number;
@@ -39,6 +49,16 @@ export interface NativeWork {
   directoryRemovals: number;
 }
 export const nativeWork = (): NativeWork => ({
+  nativeWalks: 0,
+  nativeListings: 0,
+  metadataRowsRead: 0,
+  metadataRowsWritten: 0,
+  metadataValidations: 0,
+  metadataWriteCalls: 0,
+  indexBuilds: 0,
+  scratchReadCalls: 0,
+  scratchWriteCalls: 0,
+
   stats: 0,
   opens: 0,
   readBytes: 0,

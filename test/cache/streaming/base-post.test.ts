@@ -25,6 +25,12 @@ import { resolveModel } from '../../../src/cache/streaming/model';
 import { BaselineMetadata } from '../../../src/cache/streaming/baseline-metadata';
 import { baselineGeneration } from '../../../src/cache/streaming/base-publication';
 import * as nativeTree from '../../../src/cache/streaming/native-tree';
+import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
+import { InstallParentPhase } from '../../../src/cache/streaming/install-parent-phase';
+import { LiveNativeView } from '../../../src/cache/streaming/live-base-inputs';
+import * as gcProjection from '../../../src/cache/streaming/gc-projection';
+import { FrozenBaseTree } from '../../../src/cache/streaming/base-frozen-tree';
+import { FrozenMovingPublication } from '../../../src/cache/streaming/base-moving-publication';
 import { PrepareFacts } from '../../../src/cache/streaming/prepare-state';
 const fixtures: Awaited<ReturnType<typeof composedFixture>>[] = [];
 afterEach(async () => {
@@ -73,8 +79,10 @@ it('runs real prepare/build/base save/return/record completion and cold completi
   await rm(f.store.root.resolve('flush-probe'));
   const ready = await prepareStreaming(f.request);
   await f.files('', { 'data/new': 'build', 'state/local': 'mine' });
+  const projections = vi.spyOn(gcProjection, 'checkGcProjection');
   const result = await post(f, ready.anchor, async () => sdk.backend);
   expect(result.outcome).toBe('published');
+  expect(projections).toHaveBeenCalledTimes(2);
   expect(result.key).toBeTruthy();
   expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('build');
   expect(await readFile(f.store.root.resolve('state/local'), 'utf8')).toBe('mine');
@@ -106,7 +114,20 @@ it('retains baseline metadata without payloads and earns exact no-change on the 
     facts.close();
   }
   const before = sdk.calls.filter((c) => c.kind === 'save').length;
+  const render = vi.spyOn(FrozenBaseTree, 'fromDraft'),
+    resume = vi.spyOn(FrozenMovingPublication, 'resume'),
+    indexes = vi.spyOn(ObservationIndex, 'open'),
+    sweeps = vi.spyOn(LiveNativeView.prototype, 'assertStable'),
+    projections = vi.spyOn(gcProjection, 'checkGcProjection'),
+    checkpoints = vi.spyOn(InstallParentPhase.prototype, 'created');
   const result = await post(f, next.anchor, async () => sdk.backend);
+  expect(render).not.toHaveBeenCalled();
+  expect(resume).not.toHaveBeenCalled();
+  expect(indexes).toHaveBeenCalledTimes(1);
+  expect(checkpoints).not.toHaveBeenCalled();
+  expect(sweeps).not.toHaveBeenCalled();
+  // Post-GC capture supplies initial source facts; final common barrier rechecks them.
+  expect(projections).toHaveBeenCalledTimes(2);
   expect(result).toEqual({ outcome: 'no-change', key: first.key });
   expect(sdk.calls.filter((c) => c.kind === 'save')).toHaveLength(before);
 }, 20000);
@@ -330,3 +351,43 @@ it('does not convert a resumed publication failure into an unavailable skip', as
   expect(await f.store.state()).toEqual(before);
   expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('body');
 }, 20000);
+
+it.each([false, true])(
+  'keeps post-GC parent N on exact reuse without a selected tree (mutated=%s)',
+  async (mutated) => {
+    const sdk = await nativeCacheBackend(),
+      f = await fixture({ cacheBackend: async () => sdk.backend });
+    const ready = await prepareStreaming(f.request);
+    await f.files('', { 'data/recent': 'body' });
+    const first = await post(f, ready.anchor, async () => sdk.backend);
+    await f.files('', { 'data/stale': 'expired' });
+    await utimes(f.store.root.resolve('data/stale'), 1.234, 1.234);
+    const next = await prepareStreaming({
+      ...f.request,
+      nonce: 'd'.repeat(32),
+      now: () => Date.now() + 1000,
+      policy: { ...f.request.policy, gcAgeMs: 3600000 },
+    });
+    const freeze = FrozenMovingPublication.freeze;
+    vi.spyOn(FrozenMovingPublication, 'freeze').mockImplementation(async (...args) => {
+      const result = await freeze(...args);
+      try {
+        expect(await f.store.root.stat('data/stale')).toBeNull();
+        expect(result.choices.map((c) => c.slice(0, 2))).toEqual([
+          ['reuse', 'data'],
+          ['empty', 'state'],
+        ]);
+        if (mutated) await utimes(f.store.root.resolve('data'), 1.234, 1.234);
+        return result;
+      } catch (error) {
+        result.dispose();
+        throw error;
+      }
+    });
+    const pending = post(f, next.anchor, async () => sdk.backend);
+    if (mutated) await expect(pending).rejects.toThrow('context changed');
+    else expect(await pending).toEqual({ outcome: 'no-change', key: first.key });
+    expect(await readFile(f.store.root.resolve('data/recent'), 'utf8')).toBe('body');
+  },
+  20000,
+);

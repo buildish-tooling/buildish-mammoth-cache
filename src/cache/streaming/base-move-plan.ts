@@ -61,10 +61,16 @@ export async function freezeMovePlans(
     if (selected.has(p)) throw new Error('Duplicate move partition.');
     selected.set(p, t);
   }
+  if (!selected.size) return result;
   const scratch = await InstallScratch.create(store, options.budget);
-  let observations: ObservationIndex | undefined, failure: unknown;
+  let observations: ObservationIndex | undefined,
+    lease: ReturnType<LiveBaseInputs['view']['borrowOriginal']>,
+    retainedIndex = false,
+    failure: unknown;
   try {
-    observations = await ObservationIndex.open(store, input.view.observations, options);
+    lease = input.view.borrowOriginal();
+    if (!lease) throw new Error('Unavailable shared observation index.');
+    observations = lease.index;
     for (const p of selected.keys()) spools.set(p, await WorkerSpool.create(store, options.budget));
     async function* liveRows(): AsyncGenerator<LocalRow> {
       let at = 0;
@@ -301,15 +307,16 @@ export async function freezeMovePlans(
       }
     }
     await checkPresences(observations!, presences, options);
-    await input.view.assertStable();
+    await input.view.retainPlanningIndex(scratch, root);
+    retainedIndex = true;
   } catch (e) {
     failure = e;
   }
   try {
     await settleBaseCleanup(
       [
-        () => observations?.dispose(),
-        () => scratch.close(),
+        () => lease?.release(),
+        () => (retainedIndex ? undefined : scratch.close()),
         ...[...spools.values(), ...presences.values()].map((s) => () => s.dispose()),
       ],
       failure,
