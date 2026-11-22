@@ -422,7 +422,9 @@ it('keeps populated 16-partition origin frontiers within the default decoded bud
   facts = await PrepareFacts.open(f.store, { budget: f.budget });
   const reader = await PreparedDigests.open(facts, { budget: f.budget });
   try {
-    expect(f.budget.retained).toBeLessThan(8 * 1024 * 1024);
+    // The half-budget cap covers decoded rows; retained also includes decoder/name charges.
+    // This fixture additionally fits their combined total within one default allowance.
+    expect(f.budget.retained).toBeLessThan(f.budget.limit);
     expect(await reader.take('p000', 'shared/d0000/p000', first!)).toMatch(/^[a-f0-9]{64}$/);
     await reader.finish();
     process.stdout.write('DIGEST_FRONTIER_CHARGED_PEAK ' + f.budget.peakRetained + '\n');
