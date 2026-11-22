@@ -14,4 +14,4 @@
  * limitations under the License.
  */
 
-export function gate(file: string, output: string): Promise<boolean>;
+export function gate(file: string, output: string, route?: string): Promise<boolean>;

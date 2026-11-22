@@ -42,6 +42,9 @@ assert(
 );
 const configuration = JSON.parse(await readFile('.github/q1-campaign.json', 'utf8'));
 assert(configuration.enabled === true && /^[a-z0-9-]+$/u.test(configuration.id));
+assert.equal(configuration.route, process.env.Q1_ROUTE);
+assert(['full', 'remaining'].includes(configuration.route));
+if (configuration.route === 'remaining') assert(['scale', 'diagnostic'].includes(stage));
 const base = path.resolve('build/q1-work'),
   results = path.resolve('build/q1-results');
 await mkdir(base, { recursive: true });
@@ -55,7 +58,9 @@ function inputs(tool, group = 'graph') {
   return {
     'cache-key-prefix': `q1-${configuration.id}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}-${group}-`,
     'cache-partitions': JSON.stringify([
-      ...(tool === 'gradle' ? [{ id: 'dependency-metadata', writer: worker('linux', tool) }] : []),
+      ...(tool === 'gradle'
+        ? [{ id: 'dependency-metadata', writer: worker('linux', tool) }]
+        : [{ id: 'repository', 'conflict-handling': 'choose-worker-directory' }]),
       { id: 'q-proof', includes: ['q-proof/**'] },
       {
         id: 'q-snapshot',
@@ -222,10 +227,29 @@ async function seedCheck(job) {
   assert.equal(await readFile(path.join(job.home, 'q-proof', platform + '.txt'), 'utf8'), platform);
 }
 async function parityReaders() {
+  const source =
+    configuration.route === 'remaining'
+      ? configuration.paritySource
+      : {
+          runId: process.env.GITHUB_RUN_ID,
+          attempt: process.env.GITHUB_RUN_ATTEMPT,
+          revision: process.env.GITHUB_SHA,
+        };
+  assert(
+    /^[0-9]+$/u.test(source.runId) &&
+      /^[1-9][0-9]*$/u.test(source.attempt) &&
+      /^[a-f0-9]{40}$/u.test(source.revision),
+  );
+  records.push({
+    case: 'ordinary-parity-source',
+    ...source,
+    method:
+      'Explicit prior successful normal Action generations; authentic new reader context, no worker artifact reuse',
+  });
   for (const tool of ['gradle', 'maven']) {
     const job = await invocation(base, tool, `q1-parity-reader-${tool}`, {
       'read-only': 'true',
-      'cache-key-prefix': `q1-parity-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}-`,
+      'cache-key-prefix': `q1-parity-${source.runId}-${source.attempt}-`,
       'cache-partitions': JSON.stringify([{ id: 'q-proof', includes: ['q-proof/**'] }]),
     });
     await lifecycle(
@@ -236,6 +260,13 @@ async function parityReaders() {
           await readFile(path.join(job.home, 'q-proof/parity.txt'), 'utf8'),
           'ordinary-' + tool,
         );
+        assert(prepared.outputs['restored-cache-key']);
+        records.push({
+          case: 'ordinary-parity-restored',
+          tool,
+          source,
+          key: prepared.outputs['restored-cache-key'],
+        });
         // Ordinary parity producers resolved the standalone profile, not worker profiles.
         await buildFixture(job, 'parity-reader', (pid) =>
           observer.phase(job.identity + '-build', pid),

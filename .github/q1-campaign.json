@@ -1,8 +1,14 @@
 {
   "enabled": true,
-  "id": "issue18-20261122-metadata",
+  "id": "issue18-20261122-remaining",
   "retainedCounts": [100000, 1000000],
   "reservationMiB": 2048,
-  "maximumQualificationJobs": 15,
-  "maximumAllocatedJobMinutes": 430
+  "maximumQualificationJobs": 4,
+  "maximumAllocatedJobMinutes": 210,
+  "route": "remaining",
+  "paritySource": {
+    "runId": "45020409324",
+    "attempt": "1",
+    "revision": "6b3974fae43a267b188a13c5b885fddfb93ab372"
+  }
 }

@@ -17,10 +17,13 @@
 import assert from 'node:assert/strict';
 import { readFile, appendFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-export async function gate(file, output) {
+export async function gate(file, output, route = process.env.Q1_ROUTE) {
   const config = JSON.parse(await readFile(file, 'utf8'));
   assert(typeof config.enabled === 'boolean');
-  assert(config.maximumQualificationJobs === 15 && config.maximumAllocatedJobMinutes === 430);
+  assert(['full', 'remaining'].includes(config.route));
+  if (route !== undefined) assert.equal(config.route, route, 'Campaign route mismatch');
+  const [jobs, minutes] = config.route === 'remaining' ? [4, 210] : [15, 430];
+  assert(config.maximumQualificationJobs === jobs && config.maximumAllocatedJobMinutes === minutes);
   await appendFile(output, 'enabled=' + String(config.enabled) + '\n');
   return config.enabled;
 }
