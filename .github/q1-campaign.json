@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "id": "issue18-20261122",
   "retainedCounts": [100000, 1000000],
   "reservationMiB": 2048,

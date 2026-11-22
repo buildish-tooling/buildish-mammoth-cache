@@ -22,6 +22,7 @@ export function invocation(
   tool: string,
   identity: string,
   inputs?: Record<string, string>,
+  bundleRoot?: string,
 ): Promise<{
   home: string;
   workspace: string;

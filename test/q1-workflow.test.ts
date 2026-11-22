@@ -29,6 +29,18 @@ it('keeps Q1 execution deliberate and in the real fork push scope with non-cance
   });
   expect(workflow.permissions).toEqual({ contents: 'read' });
   expect(workflow.concurrency['cancel-in-progress']).toBe(false);
+  let jobs = 0,
+    minutes = 0;
+  for (const job of Object.values(workflow.jobs) as {
+    strategy?: { matrix: { include?: unknown[]; tool?: unknown[] } };
+    'timeout-minutes': number;
+  }[]) {
+    const count = job.strategy?.matrix.include?.length ?? job.strategy?.matrix.tool?.length ?? 1;
+    jobs += count;
+    minutes += count * job['timeout-minutes'];
+  }
+  expect(jobs).toBe(15);
+  expect(minutes).toBe(430);
   for (const job of Object.values(workflow.jobs)) {
     const condition = String((job as { if: string }).if);
     expect(condition).toContain("github.repository == 'snazy/buildish-mammoth-cache'");

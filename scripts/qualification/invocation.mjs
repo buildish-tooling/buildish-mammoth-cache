@@ -80,7 +80,13 @@ export function commandEnv(env = process.env) {
     ),
   );
 }
-export async function invocation(base, tool, identity, inputs = {}) {
+export async function invocation(
+  base,
+  tool,
+  identity,
+  inputs = {},
+  bundleRoot = path.join(repository, 'dist'),
+) {
   assert(['gradle', 'maven'].includes(tool));
   assert(/^[a-z0-9-]{1,80}$/u.test(identity));
   const dir = path.join(base, identity),
@@ -138,7 +144,7 @@ export async function invocation(base, tool, identity, inputs = {}) {
     const exported = fileCommands(await readFile(env.GITHUB_ENV, 'utf8'));
     const result = await execute(
       process.execPath,
-      [path.join(repository, 'dist/github', tool, name, 'index.cjs')],
+      [path.join(bundleRoot, 'github', tool, name, 'index.cjs')],
       { cwd: workspace, env: { ...env, ...exported, ...state }, started: observer },
     );
     return { ...result, outputs: await outputs() };
@@ -179,18 +185,20 @@ export async function buildFixture(job, stage, observer) {
     job.tool === 'gradle'
       ? [
           '--console=plain',
-          ...(stage === 'worker' ? ['--no-daemon'] : []),
+          ...(['worker', 'consumer', 'parity-reader'].includes(stage) ? ['--no-daemon'] : []),
           ...(offline ? ['--offline'] : []),
-          ...(stage === 'worker'
-            ? [
-                'resolveWorker' +
-                  ['A', 'B', 'C'][
-                    ['linux', 'windows', 'macos'].findIndex((p) =>
-                      job.identity.includes('-' + p + '-'),
-                    )
-                  ],
-              ]
-            : ['resolveWorkerA', 'resolveWorkerB', 'resolveWorkerC']),
+          ...(stage === 'parity-reader'
+            ? ['resolveStandalone']
+            : stage === 'worker'
+              ? [
+                  'resolveWorker' +
+                    ['A', 'B', 'C'][
+                      ['linux', 'windows', 'macos'].findIndex((p) =>
+                        job.identity.includes('-' + p + '-'),
+                      )
+                    ],
+                ]
+              : ['resolveWorkerA', 'resolveWorkerB', 'resolveWorkerC']),
           'test',
           'portable',
         ]
@@ -199,12 +207,16 @@ export async function buildFixture(job, stage, observer) {
           '-Dmaven.repo.local=' + job.home + '/repository',
           ...(offline ? ['--offline'] : []),
           '-P',
-          stage === 'worker'
-            ? 'worker-' +
-              ['a', 'b', 'c'][
-                ['linux', 'windows', 'macos'].findIndex((p) => job.identity.includes('-' + p + '-'))
-              ]
-            : 'worker-a,worker-b,worker-c',
+          stage === 'parity-reader'
+            ? 'standalone'
+            : stage === 'worker'
+              ? 'worker-' +
+                ['a', 'b', 'c'][
+                  ['linux', 'windows', 'macos'].findIndex((p) =>
+                    job.identity.includes('-' + p + '-'),
+                  )
+                ]
+              : 'worker-a,worker-b,worker-c',
           'dependency:resolve',
         ];
   const command =

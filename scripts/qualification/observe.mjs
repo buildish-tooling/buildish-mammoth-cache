@@ -16,7 +16,7 @@
 
 // Separate OS process sampler: no imports from the product, no raw argv/environment output.
 import { execFile } from 'node:child_process';
-import { readFile, readdir, writeFile, rename } from 'node:fs/promises';
+import { readFile, readdir, writeFile, rename, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -190,6 +190,7 @@ export async function observe(control, output) {
     samples: 0,
     peakRss: 0,
     minAvailable: Number.MAX_SAFE_INTEGER,
+    minDiskFree: Number.MAX_SAFE_INTEGER,
     firstPaging: null,
     lastPaging: null,
     phases: {},
@@ -211,6 +212,14 @@ export async function observe(control, output) {
       const sample = await snapshot(),
         rss = treeRss(sample.rows, state.pid),
         phase = state.phase ?? 'idle';
+      const disk = await statfs(path.dirname(control));
+      result.disk = {
+        allocationUnit: disk.bsize,
+        type: disk.type,
+        total: disk.blocks * disk.bsize,
+        scope: 'sampler/control filesystem; no recursive inventory',
+      };
+      result.minDiskFree = Math.min(result.minDiskFree, disk.bavail * disk.bsize);
       result.total = sample.total;
       result.effectiveLimitKnown =
         (result.effectiveLimitKnown ?? true) && sample.effectiveLimitKnown;
@@ -229,6 +238,14 @@ export async function observe(control, output) {
       result.minAvailable = Math.min(result.minAvailable, sample.available);
       result.firstPaging ??= sample.paging;
       result.lastPaging = sample.paging;
+      result.pagingDelta =
+        result.firstPaging && result.lastPaging
+          ? {
+              input: result.lastPaging.input - result.firstPaging.input,
+              output: result.lastPaging.output - result.firstPaging.output,
+              scope: 'system; attribution not proven',
+            }
+          : null;
       if (Object.keys(result.phases).length >= 128 && !result.phases[phase])
         throw new Error('Phase count bound exceeded');
       const p = (result.phases[phase] ??= {

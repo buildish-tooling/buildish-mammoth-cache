@@ -16,11 +16,21 @@
 
 // CI-only JavaScript Action: runner supplies authentic SDK runtime credentials to this process.
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, stat, writeFile, rm, open } from 'node:fs/promises';
 import path from 'node:path';
-import { invocation, buildFixture, saveResult, repository, lifecycle } from './invocation.mjs';
-import { meter } from './meter.mjs';
+import {
+  invocation,
+  buildFixture,
+  saveResult,
+  repository,
+  lifecycle,
+  execute,
+} from './invocation.mjs';
+import { meter, reservation } from './meter.mjs';
+import { snapshot } from './observe.mjs';
+import { generate, mutate, verify, capacity } from './fixture.mjs';
 const platforms = ['linux', 'windows', 'macos'];
 const stage = process.env.INPUT_STAGE,
   platform = process.env.INPUT_PLATFORM;
@@ -38,6 +48,8 @@ await mkdir(base, { recursive: true });
 await mkdir(results, { recursive: true });
 const observer = await meter(path.join(results, 'observer'));
 const records = [];
+let load;
+const until = Date.now() + (stage === 'diagnostic' ? 25 : 50) * 60 * 1000;
 const worker = (p, t) => `q1-worker-${p}-${t}`;
 function inputs(tool, group = 'graph') {
   return {
@@ -56,11 +68,36 @@ function inputs(tool, group = 'graph') {
   };
 }
 async function phase(job, name) {
-  const result = await job.phase(name, (pid) => observer.phase(job.identity + '-' + name, pid));
-  await observer.phase('between', 0);
-  records.push({ logicalInvocation: job.identity, phase: name, ...result });
+  const errors = [];
+  let result;
+  try {
+    load?.assertCurrent();
+  } catch (e) {
+    if (name !== 'post') throw e;
+    errors.push(e);
+  }
+  try {
+    result = await job.phase(name, (pid) => observer.phase(job.identity + '-' + name, pid));
+  } catch (e) {
+    errors.push(e);
+  }
+  try {
+    await observer.phase('between', 0);
+    load?.assertCurrent();
+  } catch (e) {
+    errors.push(e);
+  }
+  records.push({
+    logicalInvocation: job.identity,
+    phase: name,
+    ...result,
+    status: errors.length ? 'failed' : 'passed',
+  });
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, 'Phase and measurement failed');
   return result;
 }
+
 async function seed(job) {
   const proof = path.join(job.home, 'q-proof');
   await mkdir(path.join(proof, 'empty-' + platform), { recursive: true });
@@ -184,6 +221,345 @@ async function graph() {
 async function seedCheck(job) {
   assert.equal(await readFile(path.join(job.home, 'q-proof', platform + '.txt'), 'utf8'), platform);
 }
+async function parityReaders() {
+  for (const tool of ['gradle', 'maven']) {
+    const job = await invocation(base, tool, `q1-parity-reader-${tool}`, {
+      'read-only': 'true',
+      'cache-key-prefix': `q1-parity-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}-`,
+      'cache-partitions': JSON.stringify([{ id: 'q-proof', includes: ['q-proof/**'] }]),
+    });
+    await lifecycle(
+      job,
+      async (prepared) => {
+        assert.equal(prepared.outputs['base-cache-restore-status'], 'current-lineage-hit');
+        assert.equal(
+          await readFile(path.join(job.home, 'q-proof/parity.txt'), 'utf8'),
+          'ordinary-' + tool,
+        );
+        // Ordinary parity producers resolved the standalone profile, not worker profiles.
+        await buildFixture(job, 'parity-reader', (pid) =>
+          observer.phase(job.identity + '-build', pid),
+        );
+      },
+      (name) => phase(job, name),
+    );
+    records.push({ logicalInvocation: job.identity, ...(await job.completion()) });
+  }
+}
+async function scale() {
+  assert.deepEqual(configuration.retainedCounts, [100000, 1000000]);
+  assert.equal(configuration.reservationMiB, 2048);
+  const memory = await snapshot();
+  try {
+    load = await reservation();
+  } catch (e) {
+    records.push({
+      kind: 'qualification-gap',
+      reason: 'Reservation/effective-headroom preflight refused',
+      error: e.name,
+      available: memory.available,
+    });
+    return;
+  }
+  let primary;
+  try {
+    outer: for (const count of configuration.retainedCounts)
+      for (const tool of ['maven', 'gradle']) {
+        if (Date.now() > until) {
+          records.push({
+            kind: 'qualification-gap',
+            tool,
+            count,
+            reason: 'Reserved cleanup deadline reached',
+          });
+          break outer;
+        }
+        const space = await capacity(base, count);
+        if (space.free < space.estimatedRequired) {
+          records.push({
+            kind: 'qualification-gap',
+            tool,
+            count,
+            reason: 'Physical allocation preflight',
+            ...space,
+          });
+          continue;
+        }
+        const config = {
+          ...inputs(tool, 'scale-' + count),
+          'github-ref-name': `q1-scale-${platform}-${tool}`,
+        };
+        const seed = await invocation(base, tool, `q1-scale-${count}-seed-${tool}`, config);
+        let baseline;
+        await lifecycle(
+          seed,
+          async (prepared) => {
+            assert.equal(prepared.outputs['base-cache-restore-status'], 'miss');
+            const start = Date.now();
+            await observer.phase(`fixture-${count}-${tool}`, process.pid);
+            await generate(seed.home, count);
+            records.push({ tool, count, fixtureGenerationMs: Date.now() - start });
+          },
+          (name) => phase(seed, name),
+        );
+        baseline = await seed.completion();
+        assert.equal(baseline.outcome, 'published');
+        await verify(seed.home, count);
+        await rm(seed.dir, { recursive: true });
+        for (const kind of ['warm', 'change', 'reader']) {
+          if (Date.now() > until) {
+            records.push({
+              kind: 'qualification-gap',
+              tool,
+              count,
+              reason: 'Reserved cleanup deadline reached before ' + kind,
+            });
+            break outer;
+          }
+          const job = await invocation(base, tool, `q1-scale-${count}-${kind}-${tool}`, {
+            ...config,
+            ...(kind === 'reader' ? { 'read-only': 'true' } : {}),
+          });
+          await lifecycle(
+            job,
+            async (prepared) => {
+              assert.equal(prepared.outputs['base-cache-restore-status'], 'current-lineage-hit');
+              await verify(job.home, count, kind === 'reader');
+              if (kind === 'change')
+                records.push({ tool, count, changes: await mutate(job.home, count) });
+            },
+            (name) => phase(job, name),
+          );
+          const done = await job.completion();
+          assert.equal(
+            done.outcome,
+            kind === 'reader' ? 'read-only' : kind === 'warm' ? 'no-change' : 'published',
+          );
+          if (kind === 'warm') assert.equal(done.generation, baseline.generation);
+          if (kind === 'change')
+            for (const entry of baseline.entries)
+              if (entry[1] !== 'q0')
+                assert.deepEqual(
+                  done.entries.find((e) => e[1] === entry[1]),
+                  entry,
+                );
+          await verify(job.home, count, kind !== 'warm');
+          records.push({ tool, count, case: kind, ...done });
+          // Only completed, verified task-owned roots are retired; preserve failure evidence.
+          await rm(job.dir, { recursive: true });
+        }
+        const metrics = JSON.parse(await readFile(observer.output, 'utf8'));
+        const margin = Math.max(1024 ** 3, metrics.total * 0.15);
+        if (
+          metrics.minAvailable < margin ||
+          (metrics.pagingDelta &&
+            (metrics.pagingDelta.input !== 0 || metrics.pagingDelta.output !== 0)) ||
+          !metrics.effectiveLimitKnown ||
+          metrics.missing.length
+        ) {
+          records.push({
+            kind: 'qualification-gap',
+            tool,
+            count,
+            reason: 'Headroom, paging or required observability',
+            scope:
+              'Cumulative job-wide conservative bound including calibration, generation, oracle and previous cases; not isolated cache-phase peak',
+            pagingDelta: metrics.pagingDelta,
+            margin,
+            observed: metrics.minAvailable,
+            missing: metrics.missing,
+          });
+          if (
+            metrics.minAvailable < margin ||
+            !metrics.effectiveLimitKnown ||
+            (metrics.pagingDelta &&
+              (metrics.pagingDelta.input !== 0 || metrics.pagingDelta.output !== 0))
+          )
+            break outer;
+        }
+      }
+  } catch (e) {
+    primary = e;
+  } finally {
+    const active = load;
+    load = undefined;
+    try {
+      await active.close();
+    } catch (e) {
+      primary = primary
+        ? new AggregateError([primary, e], 'Scale case and reservation cleanup failed')
+        : e;
+    }
+  }
+  if (primary) throw primary;
+}
+
+function byteBlock(index) {
+  const block = Buffer.alloc(65536);
+  let state = index + 1;
+  for (let n = 32768; n < 65536; n += 4) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    block.writeUInt32LE(state >>> 0, n);
+  }
+  return block;
+}
+async function byteCase(small) {
+  const job = await invocation(base, 'maven', 'q1-bytes-' + (small ? 'small' : 'large'), {
+    ...inputs('maven', 'bytes-' + small),
+    'github-ref-name': 'q1-bytes',
+  });
+  const directory = path.join(job.home, 'q0');
+  await lifecycle(
+    job,
+    async () => {
+      await mkdir(directory, { recursive: true });
+      if (small)
+        for (let i = 0; i < 8192; i++)
+          await writeFile(path.join(directory, i + '.bin'), byteBlock(i));
+      else {
+        const file = await open(path.join(directory, 'large.bin'), 'wx');
+        try {
+          for (let i = 0; i < 8192; i++) await file.writeFile(byteBlock(i));
+        } finally {
+          await file.close();
+        }
+      }
+    },
+    (name) => phase(job, name),
+  );
+  assert.equal((await job.completion()).outcome, 'published');
+  const reader = await invocation(base, 'maven', 'q1-bytes-reader-' + small, {
+    ...inputs('maven', 'bytes-' + small),
+    'github-ref-name': 'q1-bytes',
+    'read-only': 'true',
+  });
+  await lifecycle(
+    reader,
+    async (prepared) => {
+      assert.equal(prepared.outputs['base-cache-restore-status'], 'current-lineage-hit');
+      if (small)
+        for (let i = 0; i < 8192; i++)
+          assert.deepEqual(await readFile(path.join(reader.home, 'q0', i + '.bin')), byteBlock(i));
+      else {
+        const file = await open(path.join(reader.home, 'q0/large.bin'), 'r');
+        try {
+          const bytes = Buffer.alloc(65536);
+          for (let i = 0; i < 8192; i++) {
+            let got = 0;
+            while (got < bytes.length) {
+              const read = await file.read(bytes, got, bytes.length - got, i * 65536 + got);
+              assert(read.bytesRead > 0);
+              got += read.bytesRead;
+            }
+            assert.deepEqual(bytes, byteBlock(i));
+          }
+          assert.equal((await file.stat()).size, 512 * 1024 ** 2);
+        } finally {
+          await file.close();
+        }
+      }
+    },
+    (name) => phase(reader, name),
+  );
+  records.push({
+    case: 'B',
+    small,
+    logicalBytes: 512 * 1024 ** 2,
+    files: small ? 8192 : 1,
+    outcome: 'restored-verified',
+  });
+  await rm(job.dir, { recursive: true });
+  await rm(reader.dir, { recursive: true });
+}
+async function diagnostics() {
+  await execute(process.execPath, [
+    'node_modules/esbuild/bin/esbuild',
+    'test/qualification/q1-diagnostics.ts',
+    '--bundle',
+    '--platform=node',
+    '--target=node24',
+    '--format=cjs',
+    '--outfile=build/q1-diagnostics.cjs',
+  ]);
+  const tests = [
+    'test/cache/streaming/native-records.test.ts',
+    'test/cache/streaming/relocation-adjustment-counts.test.ts',
+    'test/cache/streaming/relocation-depth.test.ts',
+    'test/cache/streaming/relocation.test.ts',
+    'test/cache/streaming/moving-process.test.ts',
+    'test/cache/streaming/gc-execute.test.ts',
+  ];
+  // Existing source-matched failure coverage is not a new hosted fault matrix.
+  for (const args of [
+    ['width'],
+    ...[2, 4, 16].flatMap((k) => ['disjoint', 'overlap'].map((s) => ['merge', String(k), s])),
+  ]) {
+    if (Date.now() > until) {
+      records.push({ kind: 'qualification-gap', case: args, reason: 'Diagnostic deadline' });
+      return;
+    }
+    await execute(process.execPath, ['build/q1-diagnostics.cjs', ...args], {
+      started: (pid) => observer.phase('diagnostic-' + args.join('-'), pid),
+    });
+  }
+  await execute(
+    process.execPath,
+    ['node_modules/vitest/vitest.mjs', 'run', '--config', 'test/qualification/vitest.config.ts'],
+    { started: (pid) => observer.phase('diagnostic-metadata', pid) },
+  );
+  // Run the actual existing vector/return regressions; skip nonexistent optional paths explicitly, not silently.
+  await execute(
+    process.execPath,
+    ['node_modules/vitest/vitest.mjs', 'run', '--project', 'unit', ...tests],
+    { started: (pid) => observer.phase('diagnostic-regressions', pid) },
+  );
+  for (const small of [false, true]) {
+    if (Date.now() > until) {
+      records.push({ kind: 'qualification-gap', case: 'B', reason: 'Diagnostic deadline' });
+      return;
+    }
+    await byteCase(small);
+  }
+  await legacyComparison();
+}
+
+async function legacyComparison() {
+  const old = path.resolve('build/q1-legacy/dist');
+  const job = await invocation(
+    base,
+    'maven',
+    'q1-old-release-comparison',
+    inputs('maven', 'old-release'),
+    old,
+  );
+  let error;
+  const start = Date.now();
+  try {
+    await lifecycle(
+      job,
+      async () => {
+        await generate(job.home, 100000);
+      },
+      (name) => phase(job, name),
+    );
+  } catch (e) {
+    error = e;
+  }
+  records.push({
+    case: 'old-release-comparison',
+    release: 'v0.2.2',
+    files: 100000,
+    milliseconds: Date.now() - start,
+    completed: !error,
+    limitation: error
+      ? { name: error.name, details: 'See redacted job log; do not derive successful throughput' }
+      : null,
+  });
+  // Legacy failure/recovery namespace is preserved, not adopted by the new lifecycle.
+}
+
 let failure;
 try {
   const hashes = {};
@@ -200,9 +576,19 @@ try {
     repository: process.env.GITHUB_REPOSITORY,
     configuration,
     logicalIdentityIsolation: true,
+    measurementLimits: [
+      'External sampler peaks are sampled bounds including generation/oracle unless a named phase is selected',
+      'Full production CPU and Node heap/external peaks unavailable; diagnostic CPU/heap are separately labeled',
+      'statfs samples filesystem allocation and coexistence, not per-file logical inventory',
+      'System paging is conservative; attribution not proven and Windows paging I/O missing',
+    ],
   });
   if (['worker', 'aggregator', 'consumer'].includes(stage)) await graph();
-  else throw new Error('Unsupported qualification stage: ' + stage);
+  else if (stage === 'scale') await scale();
+  else if (stage === 'diagnostic') {
+    await parityReaders();
+    await diagnostics();
+  } else throw new Error('Unsupported qualification stage: ' + stage);
 } catch (e) {
   failure = e;
   process.exitCode = 1;
@@ -216,7 +602,11 @@ try {
   }
   try {
     await saveResult(results, stage + '-' + platform, {
-      status: failure ? 'failed' : 'passed',
+      status: failure
+        ? 'failed'
+        : records.some((r) => r.kind === 'qualification-gap')
+          ? 'not-qualified'
+          : 'passed',
       error: failure ? { name: failure.name, details: 'See redacted failed-step log' } : null,
       records,
       metrics,
@@ -226,4 +616,5 @@ try {
     process.exitCode = 1;
   }
 }
+if (records.some((r) => r.kind === 'qualification-gap')) process.exitCode = 1;
 if (failure) throw failure;
