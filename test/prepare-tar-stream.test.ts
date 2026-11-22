@@ -40,42 +40,54 @@ it('attributes generated patched sources to their pinned upstream package', asyn
   );
 });
 describe('reproducible isolated patch preparation', () => {
-  it('works without a git checkout, repairs generated output and rejects changed upstream', async () => {
-    await mkdir('build', { recursive: true });
-    const root = await mkdtemp(path.resolve('build/tar-preparation-'));
-    try {
-      await mkdir(path.join(root, 'scripts'));
-      await copyFile(
-        'scripts/prepare-tar-stream.mjs',
-        path.join(root, 'scripts/prepare-tar-stream.mjs'),
-      );
-      await mkdir(path.join(root, 'patches'), { recursive: true });
-      await cp('patches/tar-stream', path.join(root, 'patches/tar-stream'), { recursive: true });
-      await mkdir(path.join(root, 'node_modules'), { recursive: true });
-      await cp('node_modules/tar-stream', path.join(root, 'node_modules/tar-stream'), {
-        recursive: true,
-      });
-      const prepare = () =>
-        execFileSync(process.execPath, ['scripts/prepare-tar-stream.mjs'], {
-          cwd: root,
-          stdio: 'pipe',
+  it.each(['LF', 'CRLF'])(
+    'works without a git checkout using %s, repairs generated output and rejects changed upstream',
+    async (ending) => {
+      await mkdir('build', { recursive: true });
+      const root = await mkdtemp(path.resolve('build/tar-preparation-'));
+      try {
+        await mkdir(path.join(root, 'scripts'));
+        await copyFile(
+          'scripts/prepare-tar-stream.mjs',
+          path.join(root, 'scripts/prepare-tar-stream.mjs'),
+        );
+        await mkdir(path.join(root, 'patches'), { recursive: true });
+        await cp('patches/tar-stream', path.join(root, 'patches/tar-stream'), { recursive: true });
+        for (const name of ['extract.patch', 'mammoth.cjs', 'index.d.ts']) {
+          const file = path.join(root, 'patches/tar-stream', name);
+          const lf = (await readFile(file, 'utf8')).replace(/\r\n/gu, '\n');
+          await writeFile(file, ending === 'CRLF' ? lf.replace(/\n/gu, '\r\n') : lf);
+        }
+        await mkdir(path.join(root, 'node_modules'), { recursive: true });
+        await cp('node_modules/tar-stream', path.join(root, 'node_modules/tar-stream'), {
+          recursive: true,
         });
-      prepare();
-      const generated = path.join(root, patchedTarRoot, 'extract.js');
-      const expected = await readFile(generated, 'utf8');
-      expect(expected).toContain('opts.mammothStrict === true');
-      expect(await readFile(path.join(root, patchedTarRoot, 'LICENSE'))).toEqual(
-        await readFile('node_modules/tar-stream/LICENSE'),
-      );
-      prepare();
-      expect(await readFile(generated, 'utf8')).toBe(expected);
-      await writeFile(generated, 'corrupted generated output');
-      prepare();
-      expect(await readFile(generated, 'utf8')).toBe(expected);
-      await writeFile(path.join(root, 'node_modules/tar-stream/extract.js'), 'wrong upstream');
-      expect(prepare).toThrow('source mismatch');
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        const prepare = () =>
+          execFileSync(process.execPath, ['scripts/prepare-tar-stream.mjs'], {
+            cwd: root,
+            stdio: 'pipe',
+          });
+        prepare();
+        const generated = path.join(root, patchedTarRoot, 'extract.js');
+        const expected = await readFile(generated, 'utf8');
+        expect(expected).toContain('opts.mammothStrict === true');
+        for (const name of ['extract.js', 'mammoth.cjs', 'index.d.ts'])
+          expect(await readFile(path.join(root, patchedTarRoot, name))).toEqual(
+            await readFile(path.join(patchedTarRoot, name)),
+          );
+        expect(await readFile(path.join(root, patchedTarRoot, 'LICENSE'))).toEqual(
+          await readFile('node_modules/tar-stream/LICENSE'),
+        );
+        prepare();
+        expect(await readFile(generated, 'utf8')).toBe(expected);
+        await writeFile(generated, 'corrupted generated output');
+        prepare();
+        expect(await readFile(generated, 'utf8')).toBe(expected);
+        await writeFile(path.join(root, 'node_modules/tar-stream/extract.js'), 'wrong upstream');
+        expect(prepare).toThrow('source mismatch');
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -46,14 +46,11 @@ export function prepareTarStream() {
   }
   const patchDir = path.join(root, 'patches/tar-stream');
   const additions = ['mammoth.cjs', 'index.d.ts'];
-  const patch = fs.readFileSync(path.join(patchDir, 'extract.patch'));
-  const fingerprint = hash(
-    Buffer.concat([
-      patch,
-      ...files.values(),
-      ...additions.map((name) => fs.readFileSync(path.join(patchDir, name))),
-    ]),
-  );
+  // Checkout line endings must not change the reviewed patch or generated sources.
+  const authored = (name) =>
+    Buffer.from(fs.readFileSync(path.join(patchDir, name), 'utf8').replace(/\r\n/gu, '\n'));
+  const patch = authored('extract.patch');
+  const fingerprint = hash(Buffer.concat([patch, ...files.values(), ...additions.map(authored)]));
   const stampPath = path.join(target, '.prepared.json');
   try {
     const stamp = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
@@ -69,13 +66,13 @@ export function prepareTarStream() {
   }
   fs.mkdirSync(target, { recursive: true });
   for (const [name, bytes] of files) fs.writeFileSync(path.join(target, name), bytes);
-  for (const name of additions) fs.copyFileSync(path.join(patchDir, name), path.join(target, name));
+  for (const name of additions) fs.writeFileSync(path.join(target, name), authored(name));
   // A reviewed unified patch, not runtime monkey-patching or source-string replacement.
-  execFileSync(
-    'git',
-    ['apply', '--no-index', `--directory=${patchedTarRoot}`, path.join(patchDir, 'extract.patch')],
-    { cwd: root, stdio: 'pipe' },
-  );
+  execFileSync('git', ['apply', '--no-index', `--directory=${patchedTarRoot}`, '-'], {
+    cwd: root,
+    stdio: 'pipe',
+    input: patch,
+  });
   const outputs = Object.fromEntries(
     [...files.keys(), ...additions].map((name) => [
       name,

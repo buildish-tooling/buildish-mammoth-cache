@@ -348,27 +348,30 @@ it.each(['both', 'missing', 'descendant'] as const)(
     expect(await store.readFixed(store.prefix + 'relocation/data.json')).not.toBeNull();
   },
 );
-it('returns earlier roots after EXDEV and never copies payloads', async () => {
-  const f = await fixture({ 'data/a': 'a', 'data/b': 'b', 'data/keep.lock': 'guard' }),
-    epoch = await RelocationEpoch.open(f.pub, 'data', { operations: 1 });
-  cleanups.push(() => epoch.close());
-  const actual = await vi.importActual<typeof Fs>('node:fs/promises');
-  await vi.mocked(rename).withImplementation(
-    async (from, to) => {
-      if (String(from) === f.store.root.resolve('data/b'))
-        throw Object.assign(new Error('cross device'), { code: 'EXDEV' });
-      return actual.rename(from, to);
-    },
-    async () => {
-      await expect(epoch.evacuate()).rejects.toThrow('cross device');
-    },
-  );
-  await epoch.close();
-  const recovered = await reopen(f);
-  await recovered.epoch.returnSources();
-  expect(await readFile(f.root + '/data/a', 'utf8')).toBe('a');
-  expect(await readFile(f.root + '/data/b', 'utf8')).toBe('b');
-});
+it.each(['EXDEV', 'ENOSPC'])(
+  'returns earlier roots after %s and never copies payloads',
+  async (code) => {
+    const f = await fixture({ 'data/a': 'a', 'data/b': 'b', 'data/keep.lock': 'guard' }),
+      epoch = await RelocationEpoch.open(f.pub, 'data', { operations: 1 });
+    cleanups.push(() => epoch.close());
+    const actual = await vi.importActual<typeof Fs>('node:fs/promises');
+    await vi.mocked(rename).withImplementation(
+      async (from, to) => {
+        if (String(from) === f.store.root.resolve('data/b'))
+          throw Object.assign(new Error(code), { code });
+        return actual.rename(from, to);
+      },
+      async () => {
+        await expect(epoch.evacuate()).rejects.toThrow(code);
+      },
+    );
+    await epoch.close();
+    const recovered = await reopen(f);
+    await recovered.epoch.returnSources();
+    expect(await readFile(f.root + '/data/a', 'utf8')).toBe('a');
+    expect(await readFile(f.root + '/data/b', 'utf8')).toBe('b');
+  },
+);
 
 it.each([
   'relocation-return-rename',
