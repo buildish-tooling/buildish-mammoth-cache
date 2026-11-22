@@ -15,7 +15,7 @@
  */
 
 import { InstallScratch } from './install-scratch';
-import { IndexDirectories, type IndexedNode } from './install-index';
+import { IndexDirectories, indexedNode, indexedEntries, type IndexedNode } from './install-index';
 import { baseName, parentPath, compareName } from './tree-state';
 import { encodeRecord, type Value } from './encoding';
 import { settleBaseCleanup } from './base-object';
@@ -28,10 +28,13 @@ import type { WorkingBudget } from './tree-state';
 export class RelocationRoots {
   private busy = false;
   private closed = false;
+  private readonly pages: IndexDirectories;
   private constructor(
     private readonly scratch: InstallScratch,
-    private readonly pages: IndexDirectories,
-  ) {}
+    private readonly root: number,
+  ) {
+    this.pages = new IndexDirectories(scratch, root);
+  }
   static async create(
     store: OwnedStore,
     budget: WorkingBudget,
@@ -172,7 +175,7 @@ export class RelocationRoots {
       }
       while (frames.length) await close();
       signal.throwIfAborted();
-      return new RelocationRoots(scratch, new IndexDirectories(scratch, root!));
+      return new RelocationRoots(scratch, root!);
     } catch (error) {
       for (const f of frames) {
         f.effectRelease();
@@ -180,6 +183,53 @@ export class RelocationRoots {
       }
       await settleBaseCleanup([() => scratch.close()], error);
       throw error;
+    }
+  }
+  /**
+   * Borrowed claims in files-first membership order; root leaves stay opaque.
+   * The caller supplies their native kind, independent of the paging leaf kind.
+   */
+  async *entries(
+    isDirectory: (claim: Value) => boolean,
+    signal = new AbortController().signal,
+  ): AsyncGenerator<readonly [string, Value]> {
+    if (this.busy || this.closed) throw new Error('Root lookup unavailable/active.');
+    this.busy = true;
+    const visit = async function* (
+      self: RelocationRoots,
+      offset: number,
+    ): AsyncGenerator<readonly [string, Value]> {
+      signal.throwIfAborted();
+      const lease = await indexedNode(self.scratch, offset);
+      try {
+        yield [lease.node[2], lease.node[3]];
+        signal.throwIfAborted();
+        // Two bounded page passes avoid collecting another sibling inventory.
+        for (const directories of [false, true])
+          for await (const [, kind, childOffset] of indexedEntries(self.scratch, lease.node)) {
+            signal.throwIfAborted();
+            if (kind === 'directory') {
+              if (directories) yield* visit(self, childOffset);
+            } else {
+              const child = await indexedNode(self.scratch, childOffset);
+              try {
+                if (isDirectory(child.node[3]) === directories) {
+                  yield [child.node[2], child.node[3]];
+                  signal.throwIfAborted();
+                }
+              } finally {
+                child.release();
+              }
+            }
+          }
+      } finally {
+        lease.release();
+      }
+    };
+    try {
+      yield* visit(this, this.root);
+    } finally {
+      this.busy = false;
     }
   }
   async claim(path: string): Promise<{ value: Value; release(): void } | null> {

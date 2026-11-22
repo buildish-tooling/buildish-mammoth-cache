@@ -1105,47 +1105,57 @@ export class RelocationEpoch {
           signalOf(this.publication),
         )
       : null;
+    let skip = '';
+    const directory = (claim: Value) => {
+      const r = tuple(claim);
+      return r[0] === 'context' || (r[3] as NativeIdentity)[2] === 'directory';
+    };
     const nativeRows = async function* (
       self: RelocationEpoch,
-    ): AsyncGenerator<readonly [string, boolean]> {
+    ): AsyncGenerator<readonly [string, boolean, Value]> {
       if (rows) {
         for await (const item of rows) {
           const r = tuple(item.value);
-          if (r[0] === 'directory' || r[0] === 'file') yield [String(r[1]), r[0] === 'directory'];
+          if (r[0] !== 'directory' && r[0] !== 'file') continue;
+          const path = String(r[1]);
+          if (skip && path.startsWith(skip + '/')) continue;
+          skip = '';
+          const claim = await self.roots.claim(path);
+          try {
+            if (claim) yield [path, r[0] === 'directory', claim.value];
+          } finally {
+            claim?.release();
+          }
         }
-      } else
-        for await (const n of self.original.walk()) yield [n[1], n[0] === 'observed-directory'];
+      } else {
+        // Admission already bound these sparse roots/contexts. Do not enumerate
+        // unrelated original observations or descendants of opaque moved roots.
+        for await (const [path, claim] of self.roots.entries(directory, signalOf(self.publication)))
+          yield [path, directory(claim), claim];
+      }
     };
-    let skip = '';
-    for await (const [path, isDir] of nativeRows(this)) {
-      if (skip && path.startsWith(skip + '/')) continue;
+    for await (const [path, isDir, value] of nativeRows(this)) {
       skip = '';
-      const claim = await this.roots.claim(path);
-      try {
-        if (!claim) continue;
-        const r = tuple(claim.value);
-        if (r[0] === 'root') {
-          const root = r as unknown as RootClaim;
-          if (root[6] !== 1) continue;
-          if (root[4] !== 'original') throw new Error('Adjustment source still staged.');
-          yield ['adjust', path, this.marker![4], root[3], root[1][7], root[1][6]];
-          if (isDir) skip = path;
-        } else if (r[0] === 'context' && r[1] === 1) {
-          const physical = anchor ? anchor + (path ? '/' + path : '') : path,
-            n = await this.store.root.stat(physical);
-          if (!n) throw new Error('Missing adjustment ancestor.');
-          yield [
-            'ancestor-effect',
-            path,
-            n[3],
-            n[4],
-            this.window && !owned
-              ? await this.window.projectionFor(this, path)
-              : await this.projectionSha(physical),
-          ];
-        }
-      } finally {
-        claim?.release();
+      const r = tuple(value);
+      if (r[0] === 'root') {
+        const root = r as unknown as RootClaim;
+        if (root[6] !== 1) continue;
+        if (root[4] !== 'original') throw new Error('Adjustment source still staged.');
+        yield ['adjust', path, this.marker![4], root[3], root[1][7], root[1][6]];
+        if (isDir) skip = path;
+      } else if (r[0] === 'context' && r[1] === 1) {
+        const physical = anchor ? anchor + (path ? '/' + path : '') : path,
+          n = await this.store.root.stat(physical);
+        if (!n) throw new Error('Missing adjustment ancestor.');
+        yield [
+          'ancestor-effect',
+          path,
+          n[3],
+          n[4],
+          this.window && !owned
+            ? await this.window.projectionFor(this, path)
+            : await this.projectionSha(physical),
+        ];
       }
     }
   }

@@ -498,6 +498,72 @@ it('stops a sparse directory page at the first edge after cancellation and relea
   expect(f.budget.retained).toBe(before);
 });
 
+it('orders native directory roots after sibling files and emits no directory descendants', async () => {
+  const f = await fixture({
+      'data/a-directory/child': 'nested',
+      'data/z-file': 'sibling',
+      'data/keep.lock': 'protected',
+    }),
+    window = await MovingWindow.open(f.pub, { operations: 1 });
+  cleanups.push(() => window.close());
+  await window.verify();
+  const epoch = await RelocationEpoch.open(f.pub, 'data', { operations: 1 }, window);
+  cleanups.push(() => epoch.close());
+  await epoch.evacuate();
+  const candidate = await epoch.returnSources(),
+    proof = await window.checkCandidate(epoch, candidate);
+  await proof.close();
+  const values = [];
+  for await (const row of f.store.rows(candidate, 'adjustments', {
+    budget: f.budget,
+    partition: 'data',
+  })) {
+    const r = tuple(row.value);
+    if (r[0] === 'adjust') values.push([r[0], r[1], tuple(r[3])[2]]);
+    else if (r[0] === 'ancestor-effect') values.push([r[0], r[1]]);
+  }
+  expect(values).toEqual([
+    ['ancestor-effect', 'data'],
+    ['adjust', 'data/z-file', 'file'],
+    ['adjust', 'data/a-directory', 'directory'],
+  ]);
+});
+it('releases ordered sparse iterator leases on early return and cancellation', async () => {
+  const f = await fixture(),
+    roots = await RelocationRoots.create(
+      f.store,
+      f.budget,
+      (async function* () {
+        yield ['z-file', ['claim', 'file']] as const;
+        yield ['a-directory', ['claim', 'directory']] as const;
+        yield ['context/member', ['claim', 'file']] as const;
+      })(),
+    ),
+    directory = (value: Value) => tuple(value)[1] === 'directory',
+    before = f.budget.retained;
+  cleanups.push(() => roots.close());
+  const paths = [];
+  for await (const [path] of roots.entries(directory)) paths.push(path);
+  expect(paths).toEqual(['', 'z-file', 'a-directory', 'context', 'context/member']);
+  expect(f.budget.retained).toBe(before);
+  const controller = new AbortController(),
+    stream = roots.entries(directory, controller.signal);
+  expect((await stream.next()).value![0]).toBe('');
+  await expect(roots.close()).rejects.toThrow('active');
+  await expect(roots.claim('z-file')).rejects.toThrow('active');
+  controller.abort(new Error('iteration cancelled'));
+  await expect(stream.next()).rejects.toThrow('iteration cancelled');
+  expect(f.budget.retained).toBe(before);
+  const early = roots.entries(directory);
+  await early.next();
+  await early.next();
+  await early.return(undefined);
+  expect(f.budget.retained).toBe(before);
+  const claim = await roots.claim('z-file');
+  expect(claim!.value).toEqual(['claim', 'file']);
+  claim!.release();
+});
+
 it('rejects a synthetic stage directory clock mutation before native object proof', async () => {
   const f = await fixture({ 'data/a': 'a', 'data/keep.lock': 'guard' }),
     epoch = await RelocationEpoch.open(f.pub, 'data');
