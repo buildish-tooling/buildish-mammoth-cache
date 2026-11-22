@@ -21,6 +21,7 @@ import type { LocalCodec } from './local-schema';
 import type { BaseObjectOptions } from './base-object';
 type Schemas = LocalCodec['schemas'];
 export type PrepareSelection = ReturnType<Schemas['rows']['prepareSelection']['parse']>;
+export type DigestHandoff = ReturnType<Schemas['rows']['digestHandoff']['parse']>;
 export type PrepareSource = ReturnType<Schemas['source']['parse']>;
 export type Producer = ReturnType<Schemas['rows']['producer']['parse']>;
 export type PrepareBindings = ReturnType<Schemas['documents']['bindings']['parse']>;
@@ -43,6 +44,7 @@ export class PrepareFacts {
   private readonly lifecycle = { charge: 0, closed: false };
   selection: PrepareSelection | null = null;
   readonly sources: PrepareSource[] = [];
+  readonly digestHandoffs: DigestHandoff[] = [];
   readonly producers: Producer[] = [];
   private constructor(
     readonly store: OwnedStore,
@@ -83,6 +85,9 @@ export class PrepareFacts {
           if (value[0] === 'prepare-selection') {
             hold(value);
             facts.selection = store.codec.schemas.rows.prepareSelection.parse(value);
+          } else if (value[0] === 'digest-handoff') {
+            hold(value);
+            facts.digestHandoffs.push(store.codec.schemas.rows.digestHandoff.parse(value));
           } else if (value[0] === 'snapshot-source') {
             hold(value);
             facts.sources.push(store.codec.schemas.source.parse(value[1]));
@@ -102,12 +107,21 @@ export class PrepareFacts {
         },
         options.signal,
       );
+      if (
+        facts.digestHandoffs.some(
+          (h) =>
+            !facts.selection ||
+            h[1] >= ['selected', 'base-installed', 'workers-installed'].indexOf(facts.selection[9]),
+        )
+      )
+        throw new Error('Premature digest handoff.');
       options.signal?.throwIfAborted();
       for (const value of [
         facts.state,
         facts.bindings,
         facts.selection,
         facts.sources,
+        facts.digestHandoffs,
         facts.producers,
       ])
         freeze(value);
@@ -128,6 +142,7 @@ export class PrepareFacts {
   async commit(change: {
     selection?: PrepareSelection;
     sources?: readonly PrepareSource[];
+    digestHandoffs?: readonly DigestHandoff[];
     producers?: readonly Producer[];
     baseline?: PrepareBindings[9];
     activity?: Reference;
@@ -141,6 +156,7 @@ export class PrepareFacts {
       const values: Value[] = [
         ...(change.selection ? [change.selection] : []),
         ...(change.sources ?? []),
+        ...(change.digestHandoffs ?? []),
         ...(change.producers ?? []),
         ...(change.baseline ? [change.baseline] : []),
         ...(change.activity ? [change.activity] : []),
@@ -180,15 +196,33 @@ export class PrepareFacts {
     const sources = change.sources ?? this.sources;
     const positions = new Map(this.store.codec.options.model.partitions.map((p, i) => [p[0], i]));
     const ordered = [...sources].sort((a, b) => positions.get(a[0])! - positions.get(b[0])!);
+    const handoffs = change.digestHandoffs ?? this.digestHandoffs;
+    if (handoffs.length > this.store.codec.options.model.partitions.length * 2)
+      throw new Error('Digest handoff frontier exceeded.');
+    equal(
+      handoffs.slice(0, this.digestHandoffs.length),
+      this.digestHandoffs,
+      'immutable digest handoffs',
+    );
+    if (
+      handoffs.some(
+        (h) => h[1] >= ['selected', 'base-installed', 'workers-installed'].indexOf(next[9]),
+      )
+    )
+      throw new Error('Digest handoff precedes completed install stage.');
     const stream = { ...this.options, partition: null };
-    if (change.selection || change.sources)
+    if (change.selection || change.sources || change.digestHandoffs)
       bindings[11] = this.store.codec.schemas
         .ref('prepare-sources')
         .parse(
           await this.store.writeStream(
             'prepare-sources',
             stream,
-            localRecords([next, ...ordered.map((s) => ['snapshot-source', s] as Value)]),
+            localRecords([
+              next,
+              ...ordered.map((s) => ['snapshot-source', s] as Value),
+              ...(change.digestHandoffs ?? this.digestHandoffs),
+            ]),
             this.options.signal,
           ),
         );

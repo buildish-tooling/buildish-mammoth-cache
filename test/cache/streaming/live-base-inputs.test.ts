@@ -49,13 +49,14 @@ async function fixture() {
 it('hashes retained aggregate once and copy/hashes a genuine selected snapshot before committing sources', async () => {
   const f = await fixture(),
     start = f.store.root.work.readBytes - f.store.root.work.scratchReadBytes;
-  const reads = vi.spyOn(NativeReadPhase.prototype, 'read');
+  const reads = vi.spyOn(NativeReadPhase.prototype, 'read'),
+    hashes = vi.spyOn(NativeReadPhase.prototype, 'hash');
   const input = await LiveBaseInputs.capture(f.store, { budget: f.budget });
   try {
     LiveBaseInputs.assert(input);
-    expect(reads.mock.calls.map((call) => call[0]).sort()).toEqual([
+    expect(reads.mock.calls.map((call) => call[0])).toEqual(['state/private']);
+    expect(hashes.mock.calls.filter((call) => call[2] === null).map((call) => call[0])).toEqual([
       'data/retained',
-      'state/private',
     ]);
     expect(input.work).toEqual({ hashBytes: 9, copyBytes: 8 });
     const source = input.partitions.find((p) => p.partition === 'state')!;

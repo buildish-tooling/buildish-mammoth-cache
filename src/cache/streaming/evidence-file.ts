@@ -206,13 +206,12 @@ export class EvidenceFile {
   }
   /** Provisional visits: require full success before mutation. Caller proves per-side
    * nonoverlap and physical native ownership; one reader never establishes these alone. */
-  async member(
+  async *memberRows(
     binding: Value,
     path: string,
     kind: 'file' | 'directory' | null,
-    visit: (row: Value, signal: AbortSignal) => Promise<void>,
     signal = new AbortController().signal,
-  ): Promise<'file' | 'directory'> {
+  ): AsyncGenerator<Value, 'file' | 'directory'> {
     filePathSchema.parse(path);
     if (this.closed || this.busy) throw new Error('Evidence reader unavailable or already active.');
     const evidence = this.store.codec.schemas.memberEvidence.parse(binding);
@@ -245,7 +244,7 @@ export class EvidenceFile {
             throw new Error('Evidence span escapes member.');
           count = add(count);
           signal.throwIfAborted();
-          await withAbort(visit(record.value, signal), signal);
+          yield record.value;
           signal.throwIfAborted();
         } finally {
           release();
@@ -259,6 +258,24 @@ export class EvidenceFile {
       return actualKind;
     } finally {
       this.busy = false;
+    }
+  }
+  async member(
+    binding: Value,
+    path: string,
+    kind: 'file' | 'directory' | null,
+    visit: (row: Value, signal: AbortSignal) => Promise<void>,
+    signal = new AbortController().signal,
+  ): Promise<'file' | 'directory'> {
+    const rows = this.memberRows(binding, path, kind, signal);
+    try {
+      while (true) {
+        const next = await rows.next();
+        if (next.done) return next.value;
+        await withAbort(visit(next.value, signal), signal);
+      }
+    } finally {
+      await rows.return(undefined as never);
     }
   }
   async close(): Promise<void> {

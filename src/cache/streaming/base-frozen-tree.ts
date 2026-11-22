@@ -17,7 +17,7 @@
 import { encodeRecord, equal, tuple, type Value } from './encoding';
 import { LiveBaseInputs } from './live-base-inputs';
 import { BaseSourceTree } from './base-source-tree';
-import { writeNativeTree, readNativeTree, summarizeNativeTree, type TreeSeal } from './native-tree';
+import { writeNativeTree, readNativeTree, type TreeSeal } from './native-tree';
 import {
   checkIdentity,
   objectKey,
@@ -186,6 +186,7 @@ export class PreparedBaseTree {
     readonly partition: string,
     readonly builder: BaseSourceTree,
     readonly summary: TreeSeal,
+    private readonly ownsBuilder = true,
   ) {
     drafts.add(this);
   }
@@ -209,6 +210,13 @@ export class PreparedBaseTree {
       signal = options.signal ?? new AbortController().signal,
       source = input.partitions.find((p) => p.partition === partition);
     if (!source) throw new Error('Missing frozen partition source.');
+    const captured = input.sourceTree(partition);
+    if (captured) {
+      const draft = new PreparedBaseTree(input, partition, captured, captured.summary, false);
+      await draft.checkState();
+      signal.throwIfAborted();
+      return draft;
+    }
     const builder = await BaseSourceTree.create(store, partition, options),
       stack: { path: string; release: () => void }[] = [];
     const close = async () => {
@@ -252,12 +260,7 @@ export class PreparedBaseTree {
       }
       while (stack.length) await close();
       await builder.seal(signal);
-      const summary = await summarizeNativeTree(
-          builder.events.rows(signal),
-          { ...options, model: store.codec.options.model, partition },
-          signal,
-        ),
-        draft = new PreparedBaseTree(input, partition, builder, summary);
+      const draft = new PreparedBaseTree(input, partition, builder, builder.summary);
       await draft.checkState();
       signal.throwIfAborted();
       return draft;
@@ -272,10 +275,11 @@ export class PreparedBaseTree {
   }
   async dispose() {
     if (this.disposed) return;
-    await settleBaseCleanup([
-      () => this.builder.disposeUnit(),
-      () => this.builder.events.dispose(),
-    ]);
+    if (this.ownsBuilder)
+      await settleBaseCleanup([
+        () => this.builder.disposeUnit(),
+        () => this.builder.events.dispose(),
+      ]);
     this.disposed = true;
   }
 }

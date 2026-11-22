@@ -238,3 +238,71 @@ it('keeps complete post metadata work independent of partitions times unrelated 
   expect(growth(16, 'coldScratch')).toBeLessThanOrEqual(growth(4, 'coldScratch') * 1.5 + 65536);
   process.stdout.write('COMPLETE_POST_METADATA_COUNTS ' + JSON.stringify(measured) + '\n');
 }, 45000);
+
+it('keeps shared save capture work linear across 4/16 partitions and 64/256 files', async () => {
+  const measured: {
+    partitions: number;
+    files: number;
+    stats: number;
+    rows: number;
+    scratch: number;
+    hashes: number;
+    streams: number;
+    decoders: number;
+  }[] = [];
+  for (const partitions of [4, 16])
+    for (const files of [64, 256]) {
+      const f = await observationFixture('gradle', { partitionCount: partitions });
+      let input: LiveBaseInputs | undefined, pub: FrozenMovingPublication | undefined;
+      try {
+        await f.files(
+          '',
+          Object.fromEntries(
+            Array.from({ length: files }, (_, i) => [
+              'shared/hot/d' +
+                String(Math.floor(i / partitions)).padStart(3, '0') +
+                '/p' +
+                String(i % partitions).padStart(3, '0'),
+              'body',
+            ]),
+          ),
+        );
+        const before = { ...f.store.root.work },
+          captured = await captureObservations(f.store, { budget: f.budget, retainIndex: true });
+        input = await LiveBaseInputs.capture(
+          f.store,
+          { budget: f.budget },
+          undefined,
+          captured.index,
+        );
+        pub = await FrozenMovingPublication.freeze(input, 'main');
+        const after = f.store.root.work;
+        measured.push({
+          partitions,
+          files,
+          stats: after.stats - before.stats,
+          rows: after.metadataRowsRead - before.metadataRowsRead,
+          scratch: after.scratchReadBytes - before.scratchReadBytes,
+          hashes: after.bodyHashCalls - before.bodyHashCalls,
+          streams: after.bodyHashStreams - before.bodyHashStreams,
+          decoders: after.scratchDecoderAllocations - before.scratchDecoderAllocations,
+        });
+        expect(after.bodyHashCalls - before.bodyHashCalls).toBe(files);
+        expect(after.bodyHashStreams - before.bodyHashStreams).toBe(0);
+      } finally {
+        await pub?.dispose();
+        await input?.dispose();
+        expect(f.budget.retained).toBe(0);
+        await f.close();
+      }
+    }
+  for (const key of ['stats', 'rows', 'scratch'] as const) {
+    const growth = (p: number) =>
+      measured.find((r) => r.partitions === p && r.files === 256)![key] -
+      measured.find((r) => r.partitions === p && r.files === 64)![key];
+    expect(growth(16)).toBeLessThanOrEqual(
+      Math.max(key === 'scratch' ? 65536 : 0, growth(4) * 1.5),
+    );
+  }
+  process.stdout.write('SAVE_WORK_COUNTS ' + JSON.stringify(measured) + '\n');
+}, 30000);

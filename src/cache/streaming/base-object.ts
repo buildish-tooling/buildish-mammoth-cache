@@ -28,7 +28,7 @@ import {
 } from './native-records';
 import { writeNativeTree, readNativeTree } from './native-tree';
 import { walkNative, walkWork } from './native-walk';
-import { NativeReadPhase } from './native-read-phase';
+import { NativeReadPhase, NativeHashBuffer } from './native-read-phase';
 import { sameNative, type NativeIdentity } from './native';
 import { type WorkingBudget, normalizeMode, parentPath, baseName } from './tree-state';
 import { BaseSourceTree } from './base-source-tree';
@@ -73,6 +73,7 @@ export class ValidatedBaseObject {
     mode: 'restore' | 'prepared' | 'moving' = 'restore',
     expectedFacts?: AsyncIterable<Value>,
   ): Promise<ValidatedBaseObject> {
+    using hashes = new NativeHashBuffer(options.budget);
     options = Object.freeze({ ...options });
     reference = structuredClone(reference);
     checkIdentity(reference[1], store.codec.options.model);
@@ -94,7 +95,7 @@ export class ValidatedBaseObject {
           .parse(['ref', 'native-tree', root + '/tree.ndjson', envelope[5], envelope[6]]),
       ) as Reference,
       facts = await WorkerSpool.create(store, options.budget),
-      phase = new NativeReadPhase(store.root, root + '/payload'),
+      phase = new NativeReadPhase(store.root, root + '/payload', hashes),
       walker = walkNative(store.root, root + '/payload', {
         ...options,
         logicalRoot: '',
@@ -404,12 +405,13 @@ export class PreparedBaseSource {
     options: BaseObjectOptions,
     source?: PreparedWorkerSnapshot,
   ): Promise<PreparedBaseSource> {
+    using hashes = new NativeHashBuffer(options.budget);
     options = Object.freeze({ ...options });
     partition = store.codec.schemas.partition.parse(partition);
     const signal = options.signal ?? new AbortController().signal,
       root = store.prefix + 'objects/' + partition,
       payload = root + '/payload',
-      phase = new NativeReadPhase(store.root, payload),
+      phase = new NativeReadPhase(store.root, payload, hashes),
       model = store.codec.options.model;
     if (source) {
       PreparedWorkerSnapshot.assertReceipt(source, store, partition);

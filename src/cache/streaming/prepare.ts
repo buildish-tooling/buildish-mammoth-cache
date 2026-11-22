@@ -28,7 +28,7 @@ import {
   type InvocationAnchor,
 } from './invocation';
 import { reconcileInvocation, admitBootstrapCandidate, type RecoveryOptions } from './recovery';
-import { PrepareFacts, localRecords } from './prepare-state';
+import { PrepareFacts, localRecords, type DigestHandoff } from './prepare-state';
 import { equal, uint, type Value } from './encoding';
 import { clearPrepareInstall } from './owned-retirement';
 import { BaselineMetadata } from './baseline-metadata';
@@ -536,6 +536,7 @@ async function installSelectedPrepare(
   const failures: unknown[] = [];
   try {
     let snapshots: PreparedWorkerSnapshot[];
+    let handoffs: readonly DigestHandoff[] = [];
     if (s[9] === 'selected') {
       if (s[5][0] === 'pinned') {
         pin = await PinnedBaseGeneration.resume(
@@ -614,12 +615,16 @@ async function installSelectedPrepare(
             pruneAggregates: prune,
           });
           await assertLifecycleWindow(store, beforeInstall.bindings, options);
-          await executeInstall(store, plan, options.budget, { signal });
+          handoffs = await executeInstall(store, plan, options.budget, { signal, digestStage: 0 });
         }
         const next = structuredClone(beforeInstall.selection!);
         next[9] = 'base-installed';
         beforeInstall.close();
-        await commit(store, options, { selection: next });
+        await commit(store, options, {
+          selection: next,
+          digestHandoffs: [...beforeInstall.digestHandoffs, ...handoffs],
+        });
+        handoffs = [];
         await store.fail('prepare-base-installed');
       } finally {
         beforeInstall.close();
@@ -647,8 +652,13 @@ async function installSelectedPrepare(
       });
       if (worker.incoming.length) {
         await assertLifecycleWindow(store, facts.bindings, options);
-        await installWorkerMerge(store, worker, options.budget, signal, () =>
-          assertLifecycleWindow(store, facts.bindings, options),
+        handoffs = await installWorkerMerge(
+          store,
+          worker,
+          options.budget,
+          signal,
+          () => assertLifecycleWindow(store, facts.bindings, options),
+          true,
         );
       }
     } else {
@@ -667,7 +677,10 @@ async function installSelectedPrepare(
     try {
       const next = structuredClone(current.selection!);
       next[9] = 'workers-installed';
-      await current.commit({ selection: next });
+      await current.commit({
+        selection: next,
+        digestHandoffs: [...current.digestHandoffs, ...handoffs],
+      });
       await store.fail('prepare-workers-installed');
     } finally {
       current.close();

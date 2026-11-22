@@ -37,6 +37,11 @@ export interface NativeWork {
   indexBuilds: number;
   scratchReadCalls: number;
   scratchWriteCalls: number;
+  scratchDecoderAllocations: number;
+  bodyHashCalls: number;
+  bodyHashBytes: number;
+  bodyHashStreams: number;
+  metadataBatches: number;
 
   stats: number;
   opens: number;
@@ -58,6 +63,11 @@ export const nativeWork = (): NativeWork => ({
   indexBuilds: 0,
   scratchReadCalls: 0,
   scratchWriteCalls: 0,
+  scratchDecoderAllocations: 0,
+  bodyHashCalls: 0,
+  bodyHashBytes: 0,
+  bodyHashStreams: 0,
+  metadataBatches: 0,
 
   stats: 0,
   opens: 0,

@@ -48,6 +48,7 @@ export async function checkInstallMember(
   const phase = new NativeReadPhase(
     store.root,
     actualRoot[2] === 'file' ? parentPath(physical) : physical,
+    readers.hashes,
   );
   if (actualRoot[2] === 'file') {
     store.root.work.stats++;

@@ -19,8 +19,10 @@ import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore, Reference } from './owned-store';
 import { InstallScratch } from './install-scratch';
 import { decodeRecords, Digest, equal, tuple, type Value } from './encoding';
+import { ObservationIndex } from './observation-index';
+import { lstat } from 'node:fs/promises';
 import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-walk';
-import { sameObject, sameNative, type NativeIdentity } from './native';
+import { sameObject, nativeIdentity, sameNative, type NativeIdentity } from './native';
 import { createCacheGlobMatcher } from '../manifest';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
@@ -78,6 +80,8 @@ const markerNames = new Set([
 ]);
 
 export interface ObservationCaptureOptions extends BaseObjectOptions {
+  /** Operation-local index returned only to the base post owner, never serialized. */
+  readonly retainIndex?: boolean;
   /** Genuine pinned metadata retained through prepare; never a caller-supplied hash table. */
   readonly baseline?: readonly BaseMetadata[];
   readonly summaries?: PartitionSummaries;
@@ -93,6 +97,7 @@ export interface ObservationCaptureOptions extends BaseObjectOptions {
   readonly onWarning?: (message: string) => void;
 }
 export interface FrozenObservation {
+  readonly index?: ObservationIndex;
   readonly reference: Reference;
   readonly work: Readonly<WalkWork>;
   readonly purge: {
@@ -242,6 +247,7 @@ export async function captureObservations(
     activityTimes: readonly [string, string];
     unit?: { kind: string; markers: readonly [boolean, string][]; complete: number };
   };
+  let capturedIndex: ObservationIndex | undefined;
   let root: number | undefined,
     pending: Promise<'prune' | void> | undefined,
     failure: unknown,
@@ -522,12 +528,11 @@ export async function captureObservations(
     await activity.finish();
     await bases.finish();
     if (root === undefined) throw new Error('Missing observation root.');
-    const reference = await store.writeStream(
-      'observations',
-      { ...options, partition: null },
-      renderObservations(tree, root, signal),
-      signal,
-    );
+    const rendered = renderObservations(tree, root, signal);
+    if (options.retainIndex) capturedIndex = await ObservationIndex.write(store, rendered, options);
+    const reference =
+      capturedIndex?.reference ??
+      (await store.writeStream('observations', { ...options, partition: null }, rendered, signal));
     await store.fail('observations-candidate');
     const progress = await store.writeDocument([
       'gc-progress',
@@ -555,6 +560,7 @@ export async function captureObservations(
       reference: Object.freeze(reference) as Reference,
       work: Object.freeze({ ...work }),
       purge: Object.freeze({ ...purge }),
+      ...(capturedIndex ? { index: capturedIndex } : {}),
     });
   } catch (e) {
     failure = e;
@@ -568,13 +574,22 @@ export async function captureObservations(
         () => activity.close(),
         () => bases.close(),
         () => tree.close(),
+        () => (failure === undefined ? undefined : capturedIndex?.dispose()),
       ],
       failure,
-    );
+    ).catch(async (error) => {
+      await settleBaseCleanup([() => capturedIndex?.dispose()], error);
+      throw error;
+    });
   }
-  signal.throwIfAborted();
-  if (configured && options.purgeWindow) assertWindow();
-  return completed!;
+  try {
+    signal.throwIfAborted();
+    if (configured && options.purgeWindow) assertWindow();
+    return completed!;
+  } catch (error) {
+    await settleBaseCleanup([() => capturedIndex?.dispose()], error);
+    throw error;
+  }
 }
 
 async function* renderObservations(
@@ -777,16 +792,19 @@ async function assertCaptureStable(
     const r = await tree.record(offset),
       n = r.value as Node;
     try {
-      const before = await store.root.stat(n[1]);
+      if (n[0] === 'file') return;
+      store.root.work.stats++;
+      const before = nativeIdentity(await lstat(store.root.resolve(n[1]), { bigint: true }));
       if (!before || !sameNative(n[2], before, true))
         throw new Error('Observation source changed before pointer commit.');
       if (n[0] === 'directory') {
         for await (const value of tree.rows(n[7], n[8])) {
           signal.throwIfAborted();
           const edge = value as Edge;
-          if (edge[5] !== null) await visit(edge[5]);
+          if (edge[5] !== null && edge[2] === 'directory') await visit(edge[5]);
         }
-        const after = await store.root.stat(n[1]);
+        store.root.work.stats++;
+        const after = nativeIdentity(await lstat(store.root.resolve(n[1]), { bigint: true }));
         if (!after || !sameNative(n[2], after, true))
           throw new Error('Observation directory changed before pointer commit.');
       }

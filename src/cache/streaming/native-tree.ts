@@ -100,7 +100,7 @@ export interface TreeSeal {
   semantic: string;
   events: string;
 }
-class NativeTreeState {
+export class NativeTreeState {
   private readonly tree: TreeState;
   private readonly counts = newCounts();
   private readonly semantic = new Digest('base-tree-semantic');

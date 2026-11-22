@@ -713,6 +713,21 @@ export function localSchemas(options: LocalOptions) {
       return true;
     });
   const rows = {
+    digestHandoff: z.tuple([
+      z.literal('digest-handoff'),
+      z.union([z.literal(0), z.literal(1)]),
+      partition,
+      ref('digest-placements'),
+    ]),
+    digestPlacement: z
+      .tuple([
+        z.literal('digest-placement'),
+        filePathSchema,
+        z.enum(['file', 'directory']),
+        spanSchema.nullable(),
+        nativeIdentitySchema.nullable(),
+      ])
+      .refine((r) => (r[3] === null) === (r[4] === null) && (r[4] === null || r[2] === r[4][2])),
     prepareSelection,
     frame,
     source,

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { LocalRow } from './local-stream';
 import { constants, type BigIntStats } from 'node:fs';
 import { mkdir, open, rename, unlink, opendir } from 'node:fs/promises';
 import { randomUUID, createHash, type Hash } from 'node:crypto';
@@ -46,6 +47,7 @@ import { abortableValues, withAbort } from './abort';
 import {
   readLocalStream,
   readLocalRows,
+  readLocalBatches,
   readLocalPrefix,
   LocalStreamGrammar,
   writeLocalStream,
@@ -328,6 +330,7 @@ export class OwnedStore {
     options: Omit<LocalStreamOptions, 'codec'>,
     records: AsyncIterable<Value>,
     signal = new AbortController().signal,
+    onRow?: (row: LocalRow) => Promise<void>,
   ): Promise<Reference> {
     const work = this.root.work,
       profile = { ...options, codec: this.codec };
@@ -348,6 +351,7 @@ export class OwnedStore {
           seal = s;
         },
         signal,
+        onRow,
       ),
       signal,
       profile.budget,
@@ -421,6 +425,33 @@ export class OwnedStore {
       event,
       signal,
     );
+  }
+  async *rowBatches(
+    reference: Value,
+    purpose: LocalPurpose,
+    options: Omit<LocalStreamOptions, 'codec'>,
+    signal = new AbortController().signal,
+    batchChargeLimit = options.budget.limit,
+  ) {
+    const ref = this.codec.schemas.ref(purpose).parse(reference);
+    this.root.work.metadataValidations++;
+    for await (const batch of readLocalBatches(
+      this.root.read(ref[2]),
+      purpose,
+      { ...options, codec: this.codec },
+      ref,
+      signal,
+      batchChargeLimit,
+    )) {
+      this.root.work.metadataBatches++;
+      for (const row of batch)
+        if (
+          Array.isArray(row.value) &&
+          !['local-stream', 'local-end'].includes(String(row.value[0]))
+        )
+          this.root.work.metadataRowsRead++;
+      yield batch;
+    }
   }
   async *rows(
     reference: Value,

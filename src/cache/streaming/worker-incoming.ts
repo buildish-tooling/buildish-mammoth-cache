@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { DigestHandoff } from './prepare-state';
 import type { OwnedStore, Reference } from './owned-store';
 import type { WorkingBudget } from './tree-state';
 import { add, equal, tuple } from './encoding';
@@ -179,7 +180,8 @@ export async function installWorkerMerge(
   budget: WorkingBudget,
   signal = new AbortController().signal,
   beforeInstall?: () => Promise<void>,
-): Promise<void> {
+  captureDigests = false,
+): Promise<readonly DigestHandoff[]> {
   const binding = accepted.get(result);
   if (!binding || binding.store !== store) throw new Error('Unbound accepted worker merge.');
   const plan = await freezeInstallPlan(store, result.incoming, budget, {
@@ -187,5 +189,8 @@ export async function installWorkerMerge(
     maxDirectoryEntries: binding.max,
   });
   await beforeInstall?.();
-  await executeInstall(store, plan, budget, { signal });
+  return executeInstall(store, plan, budget, {
+    signal,
+    digestStage: captureDigests ? 1 : undefined,
+  });
 }

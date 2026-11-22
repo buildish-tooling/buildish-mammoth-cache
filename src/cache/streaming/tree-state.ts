@@ -27,6 +27,10 @@ import {
   type Unit,
 } from './schema';
 
+export function decodedRecordCharge(bytes: number): number {
+  return add(4096, bytes * 8);
+}
+
 // Protocol: docs/dev/cache-protocol.md#paths-and-order and #resource-accounting
 export class WorkingBudget {
   private names = 0;
@@ -46,7 +50,7 @@ export class WorkingBudget {
     if (this.names < 0) throw new Error('Invalid budget release.');
   }
   holdRecord(bytes: number): () => void {
-    const charge = add(4096, bytes * 8);
+    const charge = decodedRecordCharge(bytes);
     if (this.records + charge > this.limit)
       throw new Error('Active decoded-record working budget exceeded.');
     this.records += charge;

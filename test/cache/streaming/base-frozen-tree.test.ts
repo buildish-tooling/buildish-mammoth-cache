@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { BaseSourceTree } from '../../../src/cache/streaming/base-source-tree';
+import { WorkerSpool } from '../../../src/cache/streaming/worker-spool';
+import { summarizeNativeTree } from '../../../src/cache/streaming/native-tree';
 import { chmod, writeFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { FrozenBaseTree, PreparedBaseTree } from '../../../src/cache/streaming/base-frozen-tree';
@@ -120,4 +123,69 @@ it('rejects cancellation during the draft final state read and releases its spoo
   });
   await expect(PreparedBaseTree.create(input, 'data')).rejects.toThrow('draft final cancellation');
   expect(f.budget.retained).toBe(before);
+});
+
+it('shares the capture summary without reopening evidence or replaying events to plan', async () => {
+  const f = await fixture(),
+    rows = vi.spyOn(f.store, 'rows');
+  const tree = f.input.sourceTree('data')!;
+  const replay = vi.spyOn(tree.events, 'rows');
+  const draft = await PreparedBaseTree.create(f.input, 'data');
+  try {
+    expect(rows.mock.calls.filter((call) => call[1] === 'native-evidence')).toHaveLength(0);
+    expect(replay).not.toHaveBeenCalled();
+    const independent = await summarizeNativeTree(tree.events.rows(new AbortController().signal), {
+      budget: f.budget,
+      model: f.model,
+      partition: 'data',
+    });
+    expect(draft.summary).toEqual(independent);
+    const before = tree.summary;
+    before.counts[0]++;
+    expect(tree.summary).toEqual(independent);
+  } finally {
+    await draft.dispose();
+  }
+  // The input still owns the spool after the borrowed draft retires.
+  expect((await PreparedBaseTree.create(f.input, 'data')).summary).toEqual(tree.summary);
+});
+
+it('rejects invalid source-tree configuration before acquiring scratch files', async () => {
+  const f = await fixture(),
+    create = vi.spyOn(WorkerSpool, 'create');
+  await expect(BaseSourceTree.create(f.store, 'unknown', { budget: f.budget })).rejects.toThrow(
+    'Unknown native projection partition',
+  );
+  await expect(
+    BaseSourceTree.create(f.store, 'data', { budget: f.budget, maxDirectoryEntries: 0 }),
+  ).rejects.toThrow();
+  expect(create).not.toHaveBeenCalled();
+});
+
+it('marks the whole input retiring before awaiting owned-tree cleanup', async () => {
+  const f = await fixture(),
+    tree = f.input.sourceTree('data')!;
+  let entered!: () => void, proceed!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    proceed = resolve;
+  });
+  const dispose = tree.disposeUnit.bind(tree);
+  vi.spyOn(tree, 'disposeUnit').mockImplementation(async () => {
+    entered();
+    await gate;
+    await dispose();
+  });
+  const retiring = f.input.dispose();
+  await ready;
+  try {
+    expect(f.input.view.borrowOriginal()).toBeUndefined();
+    await expect(PreparedBaseTree.create(f.input, 'data')).rejects.toThrow();
+  } finally {
+    proceed();
+    await retiring;
+  }
+  expect(f.budget.retained).toBe(0);
 });

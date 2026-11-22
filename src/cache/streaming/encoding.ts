@@ -37,24 +37,28 @@ export function add(a: number, b = 1): number {
 export function scalar(value: unknown, nonempty = false): string {
   if (typeof value !== 'string' || (nonempty && !value.length))
     throw new Error('Expected scalar string.');
-  for (const character of value) {
-    const cp = character.codePointAt(0)!;
-    if (cp >= 0xd800 && cp <= 0xdfff) throw new Error('Lone UTF-16 surrogate.');
-  }
+  // Most paths/hashes contain no UTF-16 surrogate; avoid a code-point walk there.
+  if (/[\ud800-\udfff]/.test(value))
+    for (const character of value) {
+      const cp = character.codePointAt(0)!;
+      if (cp >= 0xd800 && cp <= 0xdfff) throw new Error('Lone UTF-16 surrogate.');
+    }
   return value;
 }
 function quote(value: string): string {
   scalar(value);
-  let bytes = 2;
-  for (const character of value) {
-    const cp = character.codePointAt(0)!;
-    bytes += cp < 32 ? 6 : cp === 34 || cp === 92 ? 2 : Buffer.byteLength(character);
-    if (bytes > RECORD_BYTES) throw new Error('String exceeds record bound.');
-  }
+  let bytes = 2 + Buffer.byteLength(value);
+  if (bytes > RECORD_BYTES) throw new Error('String exceeds record bound.');
   // eslint-disable-next-line no-control-regex -- canonical JSON escapes all control scalars.
-  const escaped = value.replace(/[\u0000-\u001f"\\]/g, (c) =>
-    c === '"' ? '\\"' : c === '\\' ? '\\\\' : '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
-  );
+  const escaped = value.replace(/[\u0000-\u001f"\\]/g, (c) => {
+    bytes += c === '"' || c === '\\' ? 1 : 5;
+    if (bytes > RECORD_BYTES) throw new Error('String exceeds record bound.');
+    return c === '"'
+      ? '\\"'
+      : c === '\\'
+        ? '\\\\'
+        : '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0');
+  });
   return '"' + escaped + '"';
 }
 /** Iterative tuple walk also rejects objects, booleans and unsafe numbers. */
@@ -119,36 +123,58 @@ export interface RecordFrame {
   readonly end: number;
   readonly index: number;
 }
-export async function* decodeRecords(
-  source: AsyncIterable<Uint8Array>,
-): AsyncGenerator<RecordFrame> {
-  const record = Buffer.allocUnsafe(RECORD_BYTES);
-  let length = 0,
-    offset = 0,
-    index = 0;
-  for await (const chunk of source) {
+/** Synchronous bounded framing shared by sequential and positional readers. */
+export class RecordDecoder {
+  private record?: Buffer;
+  private length = 0;
+  private offset = 0;
+  private index = 0;
+  constructor(private readonly allocated?: () => void) {}
+  reset(): void {
+    this.length = 0;
+    this.offset = 0;
+    this.index = 0;
+  }
+  *push(chunk: Uint8Array): Generator<RecordFrame> {
     if (!(chunk instanceof Uint8Array) || chunk.byteLength > STREAM_CHUNK_BYTES)
       throw new Error('Invalid resident stream chunk.');
-    for (let at = 0; at < chunk.byteLength;) {
-      const bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength),
-        lf = bytes.indexOf(10, at),
+    const bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    for (let at = 0; at < bytes.length;) {
+      const lf = bytes.indexOf(10, at),
         end = lf < 0 ? bytes.length : lf + 1,
         size = end - at;
-      if (length + size > RECORD_BYTES) throw new Error('Record exceeds byte bound.');
-      bytes.copy(record, length, at, end);
-      length += size;
+      if (this.length + size > RECORD_BYTES) throw new Error('Record exceeds byte bound.');
+      let raw: Buffer | undefined;
+      if (this.length === 0 && lf >= 0) raw = Buffer.from(bytes.subarray(at, end));
+      else {
+        if (!this.record) {
+          this.allocated?.();
+          this.record = Buffer.allocUnsafe(RECORD_BYTES);
+        }
+        bytes.copy(this.record, this.length, at, end);
+        this.length += size;
+        if (lf >= 0) raw = Buffer.from(this.record.subarray(0, this.length));
+      }
       at = end;
-      if (lf >= 0) {
-        const raw = Buffer.from(record.subarray(0, length)),
-          start = offset;
-        offset = add(offset, length);
-        index = add(index);
-        length = 0;
-        yield { value: decodeRecord(raw), raw, start, end: offset, index };
+      if (raw) {
+        const start = this.offset;
+        this.offset = add(this.offset, raw.length);
+        this.index = add(this.index);
+        this.length = 0;
+        yield { value: decodeRecord(raw), raw, start, end: this.offset, index: this.index };
       }
     }
   }
-  if (length) throw new Error('Truncated NDJSON record.');
+  finish(): void {
+    if (this.length) throw new Error('Truncated NDJSON record.');
+  }
+}
+export async function* decodeRecords(
+  source: AsyncIterable<Uint8Array>,
+  decoder = new RecordDecoder(),
+): AsyncGenerator<RecordFrame> {
+  for await (const chunk of source) yield* decoder.push(chunk);
+  decoder.finish();
 }
 export async function* encodeRecords(
   records: AsyncIterable<Value> | Iterable<Value>,

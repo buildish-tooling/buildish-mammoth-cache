@@ -16,6 +16,7 @@
 
 import { symlink, utimes, writeFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
+import { executeGc } from '../../../src/cache/streaming/gc-execute';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
 import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
@@ -167,8 +168,15 @@ it.each(['policy', 'phase', 'abort', 'mutation'] as const)(
         if (point === 'observations-candidate')
           await writeFile(f.store.root.resolve('data/a'), 'changed');
       });
-    await expect(captureObservations(f.store, options)).rejects.toThrow();
-    expect(tuple(await f.store.state())[6]).toBeNull();
+    if (what === 'mutation') {
+      await captureObservations(f.store, options);
+      // Observations are expected facts, not mutation authority. The consuming
+      // original/native join rejects the late write before any GC deletion.
+      await expect(executeGc(f.store, options)).rejects.toThrow();
+    } else {
+      await expect(captureObservations(f.store, options)).rejects.toThrow();
+      expect(tuple(await f.store.state())[6]).toBeNull();
+    }
     expect(f.budget.retained).toBe(0);
   },
 );

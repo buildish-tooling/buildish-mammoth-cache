@@ -20,10 +20,12 @@ import { InstallScratch } from './install-scratch';
 import type { InstallAdmission } from './install-admission';
 import type { InstallCursor } from './install-batches';
 import type { OwnedStore, Reference } from './owned-store';
+import { NativeHashBuffer } from './native-read-phase';
 import type { WorkingBudget } from './tree-state';
 
 export type InstallBatch = readonly ['batch', InstallCursor, InstallCursor, number, number];
 export class InstallReaders {
+  readonly hashes: NativeHashBuffer;
   private readonly readers = new Map<string, EvidenceFile>();
   private readonly owned = new Set<EvidenceFile>();
   private readonly preimages = new Map<string, Reference>();
@@ -38,6 +40,7 @@ export class InstallReaders {
     admission?: InstallAdmission,
     readonly allowOld = false,
   ) {
+    this.hashes = new NativeHashBuffer(budget);
     for (const reader of [...(admission?.source ?? []), ...(admission?.old ?? [])])
       if (reader) this.readers.set(reader.reference[2], reader);
   }
@@ -98,6 +101,7 @@ export class InstallReaders {
     this.kind = await reader.member(binding, op[2], null, async () => {}, signal);
   }
   async close() {
+    this.hashes.dispose();
     const results = await Promise.allSettled([...this.owned].map((r) => r.close()));
     this.owned.clear();
     this.readers.clear();

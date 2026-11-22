@@ -113,6 +113,7 @@ class Comparison {
     this.phase = new NativeReadPhase(
       store.root,
       move[5] === 'file' ? parentPath(physical) : physical,
+      tree.hashes,
     );
     this.actual = (
       move[5] === 'directory'

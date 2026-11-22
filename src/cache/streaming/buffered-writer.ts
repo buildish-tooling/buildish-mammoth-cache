@@ -51,7 +51,26 @@ export class BufferedWriter {
       throw new Error('Invalid buffered read.');
     return this.buffer!.subarray(start - this.physical, end - this.physical);
   }
+  /** Memory-only fast path; false leaves the caller's bytes untouched for async flush. */
+  tryAppend(bytes: Uint8Array): boolean {
+    if (this.disposed || this.failed || this.busy) throw new Error('Unavailable buffered writer.');
+    if (bytes.byteLength > BufferedWriter.capacity - this.used) return false;
+    try {
+      if (!this.buffer && bytes.byteLength) {
+        this.budget.retain(BufferedWriter.capacity);
+        this.buffer = Buffer.allocUnsafe(BufferedWriter.capacity);
+      }
+      this.buffer?.set(bytes, this.used);
+      this.used += bytes.byteLength;
+      this.logical = add(this.logical, bytes.byteLength);
+      return true;
+    } catch (error) {
+      this.failed = true;
+      throw error;
+    }
+  }
   async append(bytes: Uint8Array): Promise<void> {
+    if (this.tryAppend(bytes)) return;
     if (this.disposed || this.failed || this.busy) throw new Error('Unavailable buffered writer.');
     this.busy = true;
     try {

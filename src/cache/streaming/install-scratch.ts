@@ -15,9 +15,19 @@
  */
 
 import { constants } from 'node:fs';
+import { setImmediate } from 'node:timers/promises';
 import { open, unlink, rmdir, type FileHandle } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { decodeRecords, encodeRecord, add, type Value } from './encoding';
+import {
+  decodeRecords,
+  decodeRecord,
+  RecordDecoder,
+  RECORD_BYTES,
+  encodeRecord,
+  add,
+  type Value,
+  type RecordFrame,
+} from './encoding';
 import { BufferedWriter } from './buffered-writer';
 import { parentPath } from './tree-state';
 import { nativeIdentity, sameNative, sameObject, type NativeIdentity } from './native';
@@ -43,6 +53,10 @@ export class InstallScratch {
   private physicalReaders = 0;
   private readonly pages: { start: number; end: number; bytes: Buffer }[] = [];
   private failed = false;
+  private lookupDecoder?: RecordDecoder;
+  private lookupDecoderBytes = 0;
+  private lookupBusy = false;
+  private lookups = 0;
   private owner: symbol | null = null;
   private writing = false;
   private constructor(
@@ -117,11 +131,50 @@ export class InstallScratch {
       },
     };
   }
+  /** Synchronous admission/copy when the current block has room. */
+  tryAppend(value: Value, owner?: symbol, encoded?: (bytes: Buffer) => void): number | null {
+    if (
+      this.closed ||
+      this.failed ||
+      this.parked ||
+      this.readOnly ||
+      this.writing ||
+      this.lookups > 0 ||
+      this.physicalReaders > 0 ||
+      (this.owner !== null && this.owner !== owner)
+    )
+      throw new Error('Scratch write is unavailable.');
+    const bytes = encodeRecord(value),
+      release = this.budget.holdRecord(bytes.length),
+      start = this.end;
+    this.writing = true;
+    try {
+      if (!this.writer.tryAppend(bytes)) return null;
+      this.store.root.work.metadataRowsWritten++;
+      this.work.writes++;
+      this.end = this.writer.position;
+      encoded?.(bytes);
+      return start;
+    } catch (error) {
+      this.failed = true;
+      throw error;
+    } finally {
+      this.writing = false;
+      release();
+    }
+  }
   async append(value: Value, owner?: symbol, encoded?: (bytes: Buffer) => void): Promise<number> {
     if (this.closed || this.failed || this.parked || this.readOnly)
       throw new Error('Scratch is closed or failed.');
-    if (this.writing || this.physicalReaders > 0 || (this.owner !== null && this.owner !== owner))
+    if (
+      this.writing ||
+      this.physicalReaders > 0 ||
+      this.lookups > 0 ||
+      (this.owner !== null && this.owner !== owner)
+    )
       throw new Error('Scratch write is already claimed.');
+    const buffered = this.tryAppend(value, owner, encoded);
+    if (buffered !== null) return buffered;
     this.store.root.work.metadataRowsWritten++;
     const bytes = encodeRecord(value),
       release = this.budget.holdRecord(bytes.length),
@@ -141,6 +194,47 @@ export class InstallScratch {
       release();
     }
   }
+  async appendBatch(values: readonly Value[], encoded?: (bytes: Buffer) => void): Promise<void> {
+    if (values.length > 256) throw new Error('Scratch batch exceeds row allowance.');
+    if (
+      this.closed ||
+      this.failed ||
+      this.parked ||
+      this.readOnly ||
+      this.writing ||
+      this.lookups > 0 ||
+      this.physicalReaders > 0 ||
+      this.owner
+    )
+      throw new Error('Scratch batch is unavailable.');
+    this.writing = true;
+    let retained = 0;
+    const rows: Buffer[] = [];
+    try {
+      for (const value of values) {
+        const row = encodeRecord(value);
+        if (retained + row.length > 65536) throw new Error('Scratch batch exceeds byte allowance.');
+        this.budget.retain(row.length);
+        retained += row.length;
+        rows.push(row);
+      }
+      this.store.root.work.metadataBatches++;
+      for (const row of rows) {
+        if (!this.writer.tryAppend(row)) await this.writer.append(row);
+        this.end = this.writer.position;
+        this.work.writes++;
+        this.store.root.work.metadataRowsWritten++;
+        encoded?.(row);
+      }
+      await setImmediate();
+    } catch (error) {
+      this.failed = true;
+      throw error;
+    } finally {
+      this.budget.release(retained);
+      this.writing = false;
+    }
+  }
   async assertStable(): Promise<void> {
     if (this.closed || this.failed || this.parked) throw new Error('Unavailable scratch.');
     this.store.root.work.stats++;
@@ -156,6 +250,7 @@ export class InstallScratch {
       this.parked ||
       this.writing ||
       this.physicalReaders > 0 ||
+      this.lookups > 0 ||
       this.owner
     )
       throw new Error('Scratch is busy/failed.');
@@ -216,9 +311,14 @@ export class InstallScratch {
     }
   }
   releaseReadCache(): void {
-    if (this.reading) throw new Error('Active scratch read.');
+    if (this.reading || this.lookups > 0) throw new Error('Active scratch read.');
     this.budget.release(this.pages.length * 65536);
     this.pages.length = 0;
+    if (!this.lookupBusy) {
+      this.lookupDecoder = undefined;
+      this.budget.release(this.lookupDecoderBytes);
+      this.lookupDecoderBytes = 0;
+    }
   }
   private async diskRead(buffer: Buffer, length: number, at: number): Promise<number> {
     this.store.root.work.scratchReadCalls++;
@@ -273,10 +373,16 @@ export class InstallScratch {
       this.physicalReaders--;
     }
   }
-  private async *bytes(start: number, end: number, initial = 65536): AsyncGenerator<Buffer> {
+  private async *bytes(
+    start: number,
+    end: number,
+    initial = 65536,
+    signal?: AbortSignal,
+  ): AsyncGenerator<Buffer> {
     let at = start,
       size = initial;
     while (at < end) {
+      signal?.throwIfAborted();
       if (this.writing) throw new Error('Cannot read active scratch writer.');
       const buffer = Buffer.allocUnsafe(Math.min(size, end - at));
       let bytesRead: number;
@@ -286,6 +392,7 @@ export class InstallScratch {
       } else {
         bytesRead = await this.readPhysical(buffer, at);
       }
+      signal?.throwIfAborted();
       at += bytesRead;
       yield buffer.subarray(0, bytesRead);
       size = Math.min(size * 2, 65536);
@@ -302,21 +409,56 @@ export class InstallScratch {
       offset >= this.end
     )
       throw new Error('Invalid scratch offset.');
-    for await (const row of decodeRecords(this.bytes(offset, this.end, 256))) {
+    // A resident complete row can be decoded synchronously without input/assembly copies.
+    const page = this.pages.find((p) => offset >= p.start && offset < p.end);
+    const resident =
+      offset >= this.writer.written
+        ? this.writer.pending(offset, this.end)
+        : page?.bytes.subarray(offset - page.start, page.end - page.start);
+    const lf = resident?.indexOf(10) ?? -1;
+    if (resident && lf >= 0) {
+      const bytes = lf + 1,
+        value = decodeRecord(resident.subarray(0, bytes));
       this.store.root.work.metadataRowsRead++;
-      return {
-        value: row.value,
-        release: this.budget.holdRecord(row.raw.length),
-        bytes: row.raw.length,
-      };
+      return { value, release: this.budget.holdRecord(bytes), bytes };
+    }
+    this.lookups++;
+    const concurrent = this.lookupBusy;
+    let transientBytes = 0;
+    const allocate = () => {
+      this.budget.retain(RECORD_BYTES);
+      this.store.root.work.scratchDecoderAllocations++;
+      if (concurrent) transientBytes = RECORD_BYTES;
+      else this.lookupDecoderBytes = RECORD_BYTES;
+    };
+    const decoder = concurrent
+      ? new RecordDecoder(allocate)
+      : (this.lookupDecoder ??= new RecordDecoder(allocate));
+    if (!concurrent) this.lookupBusy = true;
+    decoder.reset();
+    try {
+      for await (const row of decodeRecords(this.bytes(offset, this.end, 256), decoder)) {
+        this.store.root.work.metadataRowsRead++;
+        return {
+          value: row.value,
+          release: this.budget.holdRecord(row.raw.length),
+          bytes: row.raw.length,
+        };
+      }
+    } finally {
+      this.lookups--;
+      if (concurrent) this.budget.release(transientBytes);
+      else this.lookupBusy = false;
     }
     throw new Error('Missing scratch record.');
   }
-  async *rows(
+  /** Borrowed byte/row bounded batches; caller finishes before requesting the next. */
+  async *batches(
     start: number,
     end: number,
-    encoded?: (bytes: Buffer) => void,
-  ): AsyncGenerator<Value> {
+    signal?: AbortSignal,
+  ): AsyncGenerator<readonly RecordFrame[]> {
+    signal?.throwIfAborted();
     if (
       this.closed ||
       this.parked ||
@@ -325,24 +467,71 @@ export class InstallScratch {
       !Number.isSafeInteger(start) ||
       !Number.isSafeInteger(end) ||
       start < 0 ||
-      start > end ||
+      end < start ||
       end > this.end
     )
       throw new Error('Invalid scratch span.');
-    for await (const row of decodeRecords(this.bytes(start, end))) {
-      this.store.root.work.metadataRowsRead++;
-      const release = this.budget.holdRecord(row.raw.length);
-      try {
+    let decoderBytes = 0,
+      batchBytes = 0;
+    let batch: RecordFrame[] = [],
+      releases: (() => void)[] = [],
+      pending: (() => void) | undefined;
+    const decoder = new RecordDecoder(() => {
+      this.budget.retain(RECORD_BYTES);
+      decoderBytes = RECORD_BYTES;
+      this.store.root.work.scratchDecoderAllocations++;
+    });
+    const releaseBatch = () => {
+      for (const release of releases) release();
+      releases = [];
+      batch = [];
+      batchBytes = 0;
+    };
+    try {
+      for await (const bytes of this.bytes(start, end, 65536, signal))
+        for (const row of decoder.push(bytes)) {
+          signal?.throwIfAborted();
+          pending = this.budget.holdRecord(row.raw.length);
+          if (batch.length && (batchBytes + row.raw.length > 65536 || batch.length >= 256)) {
+            this.store.root.work.metadataBatches++;
+            yield batch;
+            releaseBatch();
+            await setImmediate();
+            signal?.throwIfAborted();
+          }
+          this.store.root.work.metadataRowsRead++;
+          batch.push(row);
+          releases.push(pending);
+          pending = undefined;
+          batchBytes += row.raw.length;
+        }
+      decoder.finish();
+      if (batch.length) {
+        this.store.root.work.metadataBatches++;
+        yield batch;
+        await setImmediate();
+        signal?.throwIfAborted();
+      }
+    } finally {
+      pending?.();
+      releaseBatch();
+      this.budget.release(decoderBytes);
+    }
+  }
+  async *rows(
+    start: number,
+    end: number,
+    encoded?: (bytes: Buffer) => void,
+  ): AsyncGenerator<Value> {
+    for await (const batch of this.batches(start, end))
+      for (const row of batch) {
         encoded?.(row.raw);
         yield row.value;
-      } finally {
-        release();
       }
-    }
   }
   async close(): Promise<void> {
     if (this.closed) return;
-    if (this.owner || this.writing || this.physicalReaders > 0)
+    if (this.owner || this.writing || this.physicalReaders > 0 || this.lookups > 0)
       throw new Error('Cannot close active scratch.');
     this.releaseReadCache();
     this.writer.dispose(); // Unpublished scratch has no readers; pending bytes can be discarded.

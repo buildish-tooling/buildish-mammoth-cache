@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { setImmediate as scheduleImmediate, clearImmediate } from 'node:timers';
 import { afterEach, expect, it, vi } from 'vitest';
 import { writeFile, open, rm, type FileHandle } from 'node:fs/promises';
 import { installFixture } from './install-fixture';
@@ -275,4 +276,178 @@ it('shares first-flush readiness between concurrent spool replays and releases p
   expect(a).toHaveLength(128);
   expect(f.budget.retained).toBe(0);
   await spool.dispose();
+});
+
+it('reuses scratch assembly storage across cached/cross-page random lookups', async () => {
+  const f = await fixture(),
+    scratch = await InstallScratch.create(f.store, f.budget);
+  try {
+    const offsets: number[] = [];
+    for (let i = 0; i < 140; i++) offsets.push(await scratch.append(['row', i, 'x'.repeat(900)]));
+    await scratch.flush();
+    for await (const row of scratch.rows(0, scratch.position))
+      expect((row as readonly Value[])[0]).toBe('row');
+    const before = f.store.root.work.scratchDecoderAllocations;
+    for (let round = 0; round < 3; round++)
+      for (let i = 0; i < offsets.length; i++) {
+        const r = await scratch.record(offsets[i]);
+        expect(r.value).toEqual(['row', i, 'x'.repeat(900)]);
+        r.release();
+      }
+    expect(f.store.root.work.scratchDecoderAllocations - before).toBeLessThanOrEqual(1);
+  } finally {
+    await scratch.close();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+it('preserves batched spool bytes/digests and yields to real timers within bounded batches', async () => {
+  const f = await fixture(),
+    spool = await WorkerSpool.create(f.store, f.budget),
+    signal = new AbortController().signal;
+  let timer = false;
+  const scheduled = setTimeout(() => {
+    timer = true;
+  }, 0);
+  try {
+    for (let group = 0; group < 4; group++)
+      await spool.appendBatch(
+        Array.from({ length: 200 }, (_, i) => ['row', group * 200 + i, 'é🙂'.repeat(8)] as Value),
+        signal,
+      );
+    expect(timer).toBe(true);
+    spool.seal(signal);
+    let count = 0;
+    for await (const batch of spool.batches(signal)) {
+      expect(batch.length).toBeLessThanOrEqual(256);
+      for (const row of batch) {
+        expect((row as readonly Value[])[1]).toBe(count++);
+      }
+    }
+    expect(count).toBe(800);
+    expect(f.store.root.work.metadataBatches).toBeLessThan(20);
+  } finally {
+    clearTimeout(scheduled);
+    await spool.dispose();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+it('poisons a canceled batch instead of publishing its partial metadata', async () => {
+  const f = await fixture(),
+    spool = await WorkerSpool.create(f.store, f.budget),
+    abort = new AbortController();
+  const scheduled = scheduleImmediate(() => abort.abort(new Error('batch canceled')));
+  try {
+    await expect(
+      spool.appendBatch(
+        Array.from({ length: 200 }, (_, i) => ['row', i, 'x'.repeat(200)]),
+        abort.signal,
+      ),
+    ).rejects.toThrow('batch canceled');
+    expect(() => spool.seal(new AbortController().signal)).toThrow();
+  } finally {
+    clearImmediate(scheduled);
+    await spool.dispose();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+
+it('rejects an oversized batch before writing any of its records', async () => {
+  const f = await fixture(),
+    scratch = await InstallScratch.create(f.store, f.budget);
+  try {
+    const before = f.store.root.work.writeBytes;
+    await expect(
+      scratch.appendBatch([
+        ['row', 'x'.repeat(40000)],
+        ['row', 'y'.repeat(40000)],
+      ]),
+    ).rejects.toThrow('byte allowance');
+    expect(scratch.position).toBe(0);
+    expect(f.store.root.work.writeBytes).toBe(before);
+  } finally {
+    await scratch.close();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+
+it('keeps the scratch write transaction busy during encoded callbacks', async () => {
+  const f = await fixture(),
+    scratch = await InstallScratch.create(f.store, f.budget);
+  try {
+    let closing: Promise<void> | undefined;
+    expect(
+      scratch.tryAppend(['outer'], undefined, () => {
+        expect(() => scratch.tryAppend(['nested'])).toThrow('unavailable');
+        closing = scratch.close();
+      }),
+    ).toBe(0);
+    await expect(closing).rejects.toThrow('active scratch');
+    expect(scratch.tryAppend(['next'])).not.toBeNull();
+  } finally {
+    await scratch.close();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+it('rejects pre-aborted scratch batches without reading even an empty span', async () => {
+  const f = await fixture(),
+    scratch = await InstallScratch.create(f.store, f.budget),
+    abort = new AbortController();
+  try {
+    await scratch.append(['row']);
+    await scratch.flush();
+    const before = f.store.root.work.scratchReadCalls;
+    abort.abort(new Error('already canceled'));
+    await expect(scratch.batches(0, scratch.position, abort.signal).next()).rejects.toThrow(
+      'already canceled',
+    );
+    await expect(scratch.batches(0, 0, abort.signal).next()).rejects.toThrow('already canceled');
+    expect(f.store.root.work.scratchReadCalls).toBe(before);
+  } finally {
+    await scratch.close();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+it('checks cancellation between legacy rows of one batch', async () => {
+  const f = await fixture(),
+    spool = await WorkerSpool.create(f.store, f.budget),
+    abort = new AbortController();
+  try {
+    await spool.appendBatch([['one'], ['two']], abort.signal);
+    spool.seal(abort.signal);
+    const rows = spool.rows(abort.signal);
+    expect((await rows.next()).value).toEqual(['one']);
+    abort.abort(new Error('row canceled'));
+    await expect(rows.next()).rejects.toThrow('row canceled');
+  } finally {
+    await spool.dispose();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+
+it('consumes strict local streams in charged byte and row bounded batches', async () => {
+  const f = await fixture();
+  async function* values(): AsyncGenerator<Value> {
+    yield ['directory', '', directory];
+    yield ['directory', 'data', directory];
+    for (let i = 0; i < 800; i++) yield ['file', 'data/f' + String(i).padStart(4, '0'), native, h];
+  }
+  const ref = await f.store.writeStream(
+    'native-evidence',
+    { budget: f.budget, partition: 'data' },
+    values(),
+  );
+  let count = 0,
+    batches = 0;
+  for await (const batch of f.store.rowBatches(ref, 'native-evidence', {
+    budget: f.budget,
+    partition: 'data',
+  })) {
+    batches++;
+    expect(batch.length).toBeLessThanOrEqual(256);
+    expect(batch.reduce((sum, row) => sum + row.end - row.start, 0)).toBeLessThanOrEqual(65536);
+    count += batch.length;
+  }
+  expect(count).toBe(804);
+  expect(batches).toBeLessThan(12);
+  expect(f.budget.retained).toBe(0);
 });

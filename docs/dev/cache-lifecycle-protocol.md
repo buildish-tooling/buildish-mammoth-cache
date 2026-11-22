@@ -1740,6 +1740,100 @@ working budget, with explicit truncation; opaque-scope samples have the same sin
 shared bound. No diagnostic reads files, relists directories or adds inventories.
 The orchestration caller owns and disposes the collector, including on failure.
 
+### Save capture evidence lifetime
+
+An uninterrupted base post may build its bounded observation index as the strict
+observation writer emits admitted canonical rows and exact offsets. Only a completed
+writer Q can bind that process-local index; it is not reconstructed from a caller
+flag. Cold readers still validate and build from the original immutable observation
+stream once. The index owner is transferred to the GC/source consumer or closed on
+any early return, cancellation or failed candidate/pointer operation.
+
+Observation capture checks source leaves during traversal and checks directory
+structure again before committing its pointer, under checked parent scopes. Pure
+rendering does not mint fresh native facts. An edit of a leaf during candidate writes
+can therefore be detected at the mandatory post-freeze original/native join rather
+than by another whole-file stability sweep. Frozen observations describe expected
+facts; they do not authorize a deletion, accepted hash result or SDK publication
+without that consuming join. With GC targets, retain the pre-deletion projection.
+Without targets, use the single retained-source projection. The final common
+source/absence barrier after source return remains mandatory.
+
+A projection can list names/kinds first and stat each matched child at its consuming
+boundary; it must not discard a stat only to immediately repeat it. Protected and
+relocated roots still require their exact current kind/device/file-ID checks, managed
+files require full N/nlink validation, and unknown names reject. Current checked
+ancestors authorize scoped child stats; an unchanged directory timestamp alone does
+not validate its descendants. Directory after-checks detect membership changes during
+the join. Content hash reuse follows the separate prepared-digest rules below.
+
+## Prepared digest handoff
+
+The local invocation may retain verified incoming `native-evidence` metadata after
+install staging is retired. This grants digest-comparison evidence only, never a
+sealed live snapshot, installation/return permission or an upload receipt. The
+existing `prepare-sources` stream may additionally contain model-order rows:
+
+```text
+["digest-handoff",stage,partitionId,placementsRef]
+stage = 0 | 1                         # completed base install / worker install
+placementsRef = Q("digest-placements")
+```
+
+Handoffs follow snapshot-source rows and are strictly ordered by stage then model
+partition order. At most one per partition/stage exists. Stage zero may be committed
+with `base-installed` or later; stage one only with `workers-installed`. Previously
+committed handoffs are immutable. The same bindings replacement commits selection
+and handoff references; there is no per-file recovery journal. A missing uncommitted
+candidate is not optimization authority after interruption. Current install recovery
+still resolves native ownership; a cold retry may safely omit optimization coverage.
+
+Purpose `digest-placements` is partition scoped, with ordinary local framing and:
+
+```text
+["digest-source",nativeEvidenceRef]     # exactly first data row
+["digest-placement",logicalRoot,kind,sourceSpan,afterN]
+kind = "file" | "directory"
+sourceSpan = null | span
+```
+
+Placements are nonoverlapping, unique and in files-first hierarchical membership
+order within that partition/stage. `sourceSpan` and `afterN` are both null for an
+invalidation (for example a deletion); otherwise the span binds the exact source
+Q hash and complete selected member. Its original root kind/path and the checked
+post-rename root N must agree. Shared source references occur once per stream.
+A directory's descendants retain their original verified full N and digest across
+that known root rename; a moved root uses its actual checked after N. This does not
+permit relaxing descendant ctime/birth comparisons. Individual file replacements
+can require one placement each; directory insertions use one root placement.
+
+Only the trusted installer can produce a normal handoff, after selected-source
+membership checks and successful guarded rename endpoints. No extra payload scan
+or body read is required. References keep the original immutable source metadata
+reachable, independently of disposable install payloads. The prepare selection,
+invocation/model/root, partition and strict Q validation bind reopening. Native
+source admission supplies the digest provenance; portable baseline metadata alone
+cannot mint it. Local state remains under the documented managed-root trust model.
+
+Post joins the ordered source members with its fresh full-precision file observation.
+Reuse requires matching path/partition/origin, regular-file/nlink-one, safe current
+parents/device and exact leaf N except atime. New or changed files, same-size edits
+with restored mtime, and unproven retained local winners require a fresh guarded hash.
+The later worker stage supersedes all earlier coverage of its selected roots; a
+later invalidation or missing member cannot fall back to an older base digest.
+Activity decisions still use the original observation times independently of hash
+reuse. Parent membership can change during the build; a matching parent timestamp
+is neither required for leaf digest reuse nor sufficient to prove unchanged bytes.
+
+Absent optional handoffs/coverage use ordinary hashing. Missing/unreadable or malformed
+referents of committed Qs reject. Full stream/ref/member boundaries are validated,
+even when current files were deleted or no digest matched. A serialized completion
+flag is not native evidence. After observations or postSources freeze, cold post uses
+those original refs and existing adjustments/recovery; it never recaptures observations
+or adopts today's native identities onto old digests. Ambiguous moves/returns retain
+their expected-byte hashing requirements. These rules amend unreleased local state
+only; worker TAR, native-base objects and generation bytes are unchanged.
+
 ## Retained baseline metadata
 
 Accepted prepare retains each available base object's `envelope.json` and

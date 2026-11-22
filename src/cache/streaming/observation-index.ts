@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { LocalRow } from './local-stream';
 import type { OwnedStore, Reference } from './owned-store';
 import { Digest } from './encoding';
 import { InstallScratch } from './install-scratch';
@@ -135,12 +136,7 @@ export class ObservationIndex {
       throw new Error('Unavailable observation index.');
     index.options.signal?.throwIfAborted();
   }
-  static async open(
-    store: OwnedStore,
-    reference: Reference,
-    input: BaseObjectOptions,
-  ): Promise<ObservationIndex> {
-    reference = store.codec.schemas.ref('observations').parse(reference);
+  private static async builder(store: OwnedStore, input: BaseObjectOptions) {
     const options = Object.freeze({ ...input }),
       signal = options.signal ?? new AbortController().signal;
     signal.throwIfAborted();
@@ -151,7 +147,7 @@ export class ObservationIndex {
       boundary = 0,
       unitActive = false,
       completed: ['cursor', string, number, number, number, null] | undefined,
-      failure: unknown;
+      transferred = false;
     const edge = (frame: Frame, name: string, kind: string): ObservedChild => {
       // Two sorted child categories, retaining only the active parent page.
       let lo = 0,
@@ -168,218 +164,254 @@ export class ObservationIndex {
         throw new Error('Observation fact lacks projected child.');
       return e;
     };
-    try {
-      for await (const item of store.rows(
-        reference,
-        'observations',
-        { ...options, partition: null },
-        signal,
-      )) {
-        signal.throwIfAborted();
-        count++;
-        const r = tuple(item.value),
-          frame = frames[frames.length - 1];
-        if (r[0] === 'local-stream' || r[0] === 'local-end') continue;
-        if (r[0] === 'dir-open') {
-          const charge = 1024 + 4 * encodeRecord(r).length;
-          options.budget.retain(charge);
-          frames.push({
-            path: String(r[1]),
-            native: r[2] as NativeIdentity,
-            start: item.start,
-            projectionEnd: item.end,
-            edges: [],
-            charge,
-            unit: null,
-            allOwners: 0n,
-            retainedFiles: 0n,
-            descendantDirs: 0n,
-            remainingOwners: 0n,
-            originalProtected: 0,
-            remainingProtected: 0,
-            childCleanup: true,
-            deleting: frame?.deleting ?? false,
-            changed: false,
-          });
-        } else if (r[0] === 'child') {
-          const charge =
-            160 + 4 * (Buffer.byteLength(String(r[1])) + String(r[3]).length + String(r[4]).length);
-          options.budget.retain(charge);
-          frame.charge += charge;
-          frame.edges.push([
-            'observed-child',
-            String(r[1]),
-            String(r[2]),
-            String(r[3]),
-            String(r[4]),
-            null,
-            0,
-          ]);
-          frame.projectionEnd = item.end;
-        } else if (r[0] === 'file') {
-          if (!unitActive) boundary = add(boundary);
-          const path = frame.path ? frame.path + '/' + r[1] : String(r[1]),
-            n = r[3] as NativeIdentity;
-          const e = edge(frame, String(r[1]), 'file'),
-            bit =
-              1n << BigInt(store.codec.options.model.partitions.findIndex((p) => p[0] === r[2]));
-          frame.allOwners |= bit;
-          if (r[6] === 'retain') {
-            frame.retainedFiles |= bit;
-            frame.remainingOwners |= bit;
-          } else frame.changed = true;
-          e[6] = r[6] === 'delete' ? 1 : 0;
-          equal([e[3], e[4]], [n[3], n[4]], 'projected file identity');
-          e[5] = await scratch.append([
-            'observed-file',
-            path,
-            n,
-            r[2],
-            r[4],
-            r[5],
-            r[6],
-            item.start,
-            item.end,
-            item.record,
-          ]);
-        } else if (r[0] === 'unit-open') {
-          unitActive = true;
-          if (r[3] === 'subtree' && r[5] === 'delete') frame.deleting = true;
-          const charge = 256 + 4 * encodeRecord(r).length;
-          options.budget.retain(charge);
-          frame.charge += charge;
-          frame.unit = [
-            'observed-unit',
-            String(r[1]),
-            String(r[2]),
-            String(r[3]),
-            String(r[4]),
-            String(r[5]),
-            String(r[6]),
-            item.start,
-            0,
-          ];
-        } else if (r[0] === 'unit-close') {
-          unitActive = false;
-          boundary = add(boundary);
-          if (!frame.unit) throw new Error('Missing observation unit.');
-          frame.unit[8] = item.end;
-        } else if (r[0] === 'dir-close') {
-          frames.pop();
+    const accept = async (item: LocalRow) => {
+      signal.throwIfAborted();
+      count++;
+      const r = tuple(item.value),
+        frame = frames[frames.length - 1];
+      if (r[0] === 'local-stream' || r[0] === 'local-end') return;
+      if (r[0] === 'dir-open') {
+        const charge = 1024 + 4 * (item.end - item.start);
+        options.budget.retain(charge);
+        frames.push({
+          path: String(r[1]),
+          native: [...(r[2] as NativeIdentity)],
+          start: item.start,
+          projectionEnd: item.end,
+          edges: [],
+          charge,
+          unit: null,
+          allOwners: 0n,
+          retainedFiles: 0n,
+          descendantDirs: 0n,
+          remainingOwners: 0n,
+          originalProtected: 0,
+          remainingProtected: 0,
+          childCleanup: true,
+          deleting: frame?.deleting ?? false,
+          changed: false,
+        });
+      } else if (r[0] === 'child') {
+        const charge =
+          160 + 4 * (Buffer.byteLength(String(r[1])) + String(r[3]).length + String(r[4]).length);
+        options.budget.retain(charge);
+        frame.charge += charge;
+        frame.edges.push([
+          'observed-child',
+          String(r[1]),
+          String(r[2]),
+          String(r[3]),
+          String(r[4]),
+          null,
+          0,
+        ]);
+        frame.projectionEnd = item.end;
+      } else if (r[0] === 'file') {
+        if (!unitActive) boundary = add(boundary);
+        const path = frame.path ? frame.path + '/' + r[1] : String(r[1]),
+          n = r[3] as NativeIdentity;
+        const e = edge(frame, String(r[1]), 'file'),
+          bit = 1n << BigInt(store.codec.options.model.partitions.findIndex((p) => p[0] === r[2]));
+        frame.allOwners |= bit;
+        if (r[6] === 'retain') {
+          frame.retainedFiles |= bit;
+          frame.remainingOwners |= bit;
+        } else frame.changed = true;
+        e[6] = r[6] === 'delete' ? 1 : 0;
+        equal([e[3], e[4]], [n[3], n[4]], 'projected file identity');
+        e[5] = await scratch.append([
+          'observed-file',
+          path,
+          n,
+          r[2],
+          r[4],
+          r[5],
+          r[6],
+          item.start,
+          item.end,
+          item.record,
+        ]);
+      } else if (r[0] === 'unit-open') {
+        unitActive = true;
+        if (r[3] === 'subtree' && r[5] === 'delete') frame.deleting = true;
+        const charge = 256 + 4 * encodeRecord(r).length;
+        options.budget.retain(charge);
+        frame.charge += charge;
+        frame.unit = [
+          'observed-unit',
+          String(r[1]),
+          String(r[2]),
+          String(r[3]),
+          String(r[4]),
+          String(r[5]),
+          String(r[6]),
+          item.start,
+          0,
+        ];
+      } else if (r[0] === 'unit-close') {
+        unitActive = false;
+        boundary = add(boundary);
+        if (!frame.unit) throw new Error('Missing observation unit.');
+        frame.unit[8] = item.end;
+      } else if (r[0] === 'dir-close') {
+        frames.pop();
+        try {
+          let declaredOwner = 0n;
           try {
-            let declaredOwner = 0n;
-            try {
-              if (!isWorkspaceScaffolding(store.codec.options.model, frame.path)) {
-                const p = store.codec.options.model.owner(
-                  frame.path + '/.workspace-directory-probe',
-                )[0];
-                declaredOwner =
-                  1n << BigInt(store.codec.options.model.partitions.findIndex((d) => d[0] === p));
-              }
-            } catch {
-              /* unowned directory scaffold */
+            if (!isWorkspaceScaffolding(store.codec.options.model, frame.path)) {
+              const p = store.codec.options.model.owner(
+                frame.path + '/.workspace-directory-probe',
+              )[0];
+              declaredOwner =
+                1n << BigInt(store.codec.options.model.partitions.findIndex((d) => d[0] === p));
             }
-            const protectedHere = frame.edges.filter((e) => e[5] === null).length;
-            frame.originalProtected = add(frame.originalProtected, protectedHere);
-            frame.remainingProtected = add(frame.remainingProtected, protectedHere);
-            if (!frame.allOwners) frame.allOwners = declaredOwner;
-            const removed =
-              frame.deleting &&
-              !isWorkspaceScaffolding(store.codec.options.model, frame.path) &&
-              frame.childCleanup &&
-              !frame.originalProtected &&
-              frame.allOwners !== 0n &&
-              (frame.allOwners & (frame.allOwners - 1n)) === 0n;
-            if (!removed && !frame.remainingOwners && !frame.remainingProtected) {
-              if (declaredOwner) frame.remainingOwners = declaredOwner;
-              else frame.remainingProtected = 1;
-            }
-            // The observation already has two sorted categories. Merge them by
-            // name for the full post-GC projection digest, without a second sort
-            // or retaining another directory-width table.
-            const digest = new Digest('ancestor-children');
-            let split = frame.edges.findIndex((e) => e[2] === 'directory');
-            if (split < 0) split = frame.edges.length;
-            let left = 0,
-              right = split;
-            while (left < split || right < frame.edges.length) {
-              signal.throwIfAborted();
-              const e =
-                right === frame.edges.length ||
-                (left < split && compareName(frame.edges[left][1], frame.edges[right][1]) < 0)
-                  ? frame.edges[left++]
-                  : frame.edges[right++];
-              if (!e[6]) digest.update([e[1], e[2]]);
-            }
-            const summary: ObservedSummary = [
-              'post-gc-summary',
-              frame.retainedFiles.toString(16),
-              frame.descendantDirs.toString(16),
-              frame.remainingOwners.toString(16),
-              frame.remainingProtected,
-              Number(removed),
-              Number(frame.changed),
-              digest.digest(),
-            ];
-            const start = scratch.position;
-            for (const e of frame.edges) await scratch.append(e);
-            const end = scratch.position,
-              offset = await scratch.append([
-                'observed-directory',
-                frame.path,
-                frame.native,
-                frame.start,
-                frame.projectionEnd,
-                frame.start,
-                item.end,
-                start,
-                end,
-                frame.unit,
-                summary,
-              ]);
-            const parent = frames[frames.length - 1];
-            if (parent) {
-              parent.allOwners |= frame.allOwners;
-              parent.originalProtected = add(parent.originalProtected, frame.originalProtected);
-              parent.childCleanup &&= removed;
-              if (removed) parent.changed = true;
-              else {
-                parent.retainedFiles |= frame.retainedFiles;
-                parent.descendantDirs |= frame.descendantDirs | declaredOwner;
-                parent.remainingOwners |= frame.remainingOwners;
-                parent.remainingProtected = add(
-                  parent.remainingProtected,
-                  frame.remainingProtected,
-                );
-              }
-              const e = edge(parent, baseName(frame.path), 'directory');
-              equal(
-                [e[3], e[4]],
-                [frame.native[3], frame.native[4]],
-                'projected directory identity',
-              );
-              e[5] = offset;
-              e[6] = Number(removed);
-            } else {
-              if (root !== undefined) throw new Error('Multiple observation roots.');
-              root = offset;
-              completed = ['cursor', reference[4], item.end, item.record + 1, add(boundary), null];
-            }
-          } finally {
-            options.budget.release(frame.charge);
+          } catch {
+            /* unowned directory scaffold */
           }
+          const protectedHere = frame.edges.filter((e) => e[5] === null).length;
+          frame.originalProtected = add(frame.originalProtected, protectedHere);
+          frame.remainingProtected = add(frame.remainingProtected, protectedHere);
+          if (!frame.allOwners) frame.allOwners = declaredOwner;
+          const removed =
+            frame.deleting &&
+            !isWorkspaceScaffolding(store.codec.options.model, frame.path) &&
+            frame.childCleanup &&
+            !frame.originalProtected &&
+            frame.allOwners !== 0n &&
+            (frame.allOwners & (frame.allOwners - 1n)) === 0n;
+          if (!removed && !frame.remainingOwners && !frame.remainingProtected) {
+            if (declaredOwner) frame.remainingOwners = declaredOwner;
+            else frame.remainingProtected = 1;
+          }
+          // The observation already has two sorted categories. Merge them by
+          // name for the full post-GC projection digest, without a second sort
+          // or retaining another directory-width table.
+          const digest = new Digest('ancestor-children');
+          let split = frame.edges.findIndex((e) => e[2] === 'directory');
+          if (split < 0) split = frame.edges.length;
+          let left = 0,
+            right = split;
+          while (left < split || right < frame.edges.length) {
+            signal.throwIfAborted();
+            const e =
+              right === frame.edges.length ||
+              (left < split && compareName(frame.edges[left][1], frame.edges[right][1]) < 0)
+                ? frame.edges[left++]
+                : frame.edges[right++];
+            if (!e[6]) digest.update([e[1], e[2]]);
+          }
+          const summary: ObservedSummary = [
+            'post-gc-summary',
+            frame.retainedFiles.toString(16),
+            frame.descendantDirs.toString(16),
+            frame.remainingOwners.toString(16),
+            frame.remainingProtected,
+            Number(removed),
+            Number(frame.changed),
+            digest.digest(),
+          ];
+          const start = scratch.position;
+          for (const e of frame.edges) await scratch.append(e);
+          const end = scratch.position,
+            offset = await scratch.append([
+              'observed-directory',
+              frame.path,
+              frame.native,
+              frame.start,
+              frame.projectionEnd,
+              frame.start,
+              item.end,
+              start,
+              end,
+              frame.unit,
+              summary,
+            ]);
+          const parent = frames[frames.length - 1];
+          if (parent) {
+            parent.allOwners |= frame.allOwners;
+            parent.originalProtected = add(parent.originalProtected, frame.originalProtected);
+            parent.childCleanup &&= removed;
+            if (removed) parent.changed = true;
+            else {
+              parent.retainedFiles |= frame.retainedFiles;
+              parent.descendantDirs |= frame.descendantDirs | declaredOwner;
+              parent.remainingOwners |= frame.remainingOwners;
+              parent.remainingProtected = add(parent.remainingProtected, frame.remainingProtected);
+            }
+            const e = edge(parent, baseName(frame.path), 'directory');
+            equal([e[3], e[4]], [frame.native[3], frame.native[4]], 'projected directory identity');
+            e[5] = offset;
+            e[6] = Number(removed);
+          } else {
+            if (root !== undefined) throw new Error('Multiple observation roots.');
+            root = offset;
+            completed = ['cursor', '0'.repeat(64), item.end, item.record + 1, add(boundary), null];
+          }
+        } finally {
+          options.budget.release(frame.charge);
         }
       }
-      if (root === undefined || frames.length || !completed)
-        throw new Error('Incomplete observation index.');
-      signal.throwIfAborted();
-      return new ObservationIndex(store, reference, root, scratch, options, count, completed);
-    } catch (e) {
-      failure = e;
-      throw e;
-    } finally {
-      for (const f of frames) options.budget.release(f.charge);
-      if (failure !== undefined) await settleBaseCleanup([() => scratch.close()], failure);
+    };
+    return {
+      accept,
+      finish(reference: Reference) {
+        if (transferred || root === undefined || frames.length || !completed)
+          throw new Error('Incomplete observation index.');
+        signal.throwIfAborted();
+        completed[1] = reference[4];
+        transferred = true;
+        return new ObservationIndex(store, reference, root, scratch, options, count, completed);
+      },
+      async dispose() {
+        if (transferred) return;
+        for (const frame of frames) options.budget.release(frame.charge);
+        frames.length = 0;
+        await scratch.close();
+      },
+    };
+  }
+  static async open(
+    store: OwnedStore,
+    reference: Reference,
+    input: BaseObjectOptions,
+  ): Promise<ObservationIndex> {
+    reference = store.codec.schemas.ref('observations').parse(reference);
+    const builder = await this.builder(store, input);
+    try {
+      for await (const row of store.rows(
+        reference,
+        'observations',
+        { ...input, partition: null },
+        input.signal,
+      ))
+        await builder.accept(row);
+      return builder.finish(reference);
+    } catch (error) {
+      await settleBaseCleanup([() => builder.dispose()], error);
+      throw error;
+    }
+  }
+  /** Only the actual strict writer can feed this builder and bind its completed Q. */
+  static async write(
+    store: OwnedStore,
+    records: AsyncIterable<Value>,
+    input: BaseObjectOptions,
+  ): Promise<ObservationIndex> {
+    const builder = await this.builder(store, input);
+    try {
+      const reference = await store.writeStream(
+        'observations',
+        { ...input, partition: null },
+        records,
+        input.signal,
+        builder.accept,
+      );
+      if (!store.completedStream(reference))
+        throw new Error('Missing completed observation writer.');
+      return builder.finish(reference);
+    } catch (error) {
+      await settleBaseCleanup([() => builder.dispose()], error);
+      throw error;
     }
   }
   get work() {

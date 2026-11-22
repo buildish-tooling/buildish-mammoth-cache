@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { InstallDigests } from './prepare-digests';
+import type { DigestHandoff } from './prepare-state';
 import { rename, opendir } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { equal, canonical, type Value } from './encoding';
@@ -103,6 +105,7 @@ class Mutations {
   private scratch: InstallScratch | null = null;
   backups!: InstallScratch;
   backupCursor = 0;
+  digests?: InstallDigests;
   private mutablePrefix: string | null = null;
   private mutableNative: NativeIdentity | null = null;
   private ownsBackups = false;
@@ -268,6 +271,10 @@ class Mutations {
       );
       const observed = await this.move(row[2], row[7]!, old, this.live, this.owned, signal);
       await this.backups.append(['backup', row, observed]);
+      if (row[3] === null && this.digests) {
+        const reader = await this.program.readers.reader(row[5]!, signal);
+        await this.digests.record(reader.partition, row[2], old[2], null, null);
+      }
       await this.program.store.fail(
         row[6] === 'delete' ? 'install-delete-backed-up' : 'install-old-backed-up',
       );
@@ -290,7 +297,8 @@ class Mutations {
       },
       signal,
     );
-    await this.move(row[3], row[2], native, source, this.live, signal);
+    const after = await this.move(row[3], row[2], native, source, this.live, signal);
+    await this.digests?.record(reader.partition, row[2], native[2], row[4]!, after);
     await this.program.store.fail('install-source-renamed');
   }
   private async reconciledOld(row: InstallRow) {
@@ -391,12 +399,22 @@ export async function executeInstall(
   store: OwnedStore,
   frozen: FrozenInstall,
   budget: WorkingBudget,
-  options: { signal?: AbortSignal; batchOperations?: number; batchBytes?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    batchOperations?: number;
+    batchBytes?: number;
+    digestStage?: 0 | 1;
+  } = {},
 ) {
   const signal = options.signal ?? signalDefault(),
     admission = await InstallAdmission.create(store, frozen, budget, signal);
   const readers = new InstallReaders(store, budget, frozen.maxDirectoryEntries, admission, true);
   let program: InstallProgram | undefined, mutations: Mutations | undefined;
+  const digests =
+    options.digestStage === undefined
+      ? undefined
+      : InstallDigests.create(store, frozen.inputs, budget, options.digestStage, signal);
+  let handoffs: DigestHandoff[] = [];
   try {
     program = await InstallProgram.create(store, frozen.plan, readers, signal, {
       operations: options.batchOperations ?? 16384,
@@ -405,6 +423,7 @@ export async function executeInstall(
     if (!canonical((await store.state())!).equals(canonical(admission.initialState)))
       throw new Error('Install state changed.');
     mutations = await Mutations.create(program, admission, signal);
+    mutations.digests = digests;
     await progress(store, program.plan, program.initial);
     for await (const value of program.batches.rows(0, program.batches.position)) {
       signal.throwIfAborted();
@@ -430,8 +449,10 @@ export async function executeInstall(
       await store.retireInstallMetadata(ref);
     }
     await finish(store);
+    if (digests) handoffs = await digests.finish();
   } finally {
     await closeInstallResources([
+      digests?.close(),
       mutations?.close(),
       program?.close(),
       readers.close(),
@@ -440,6 +461,7 @@ export async function executeInstall(
   }
   for (const q of [frozen.plan, frozen.current, ...frozen.preimages])
     if (q) await store.retireInstallMetadata(q);
+  return handoffs;
 }
 
 async function verifyBatchEvidence(

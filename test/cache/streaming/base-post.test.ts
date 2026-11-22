@@ -123,7 +123,7 @@ it('retains baseline metadata without payloads and earns exact no-change on the 
   const result = await post(f, next.anchor, async () => sdk.backend);
   expect(render).not.toHaveBeenCalled();
   expect(resume).not.toHaveBeenCalled();
-  expect(indexes).toHaveBeenCalledTimes(1);
+  expect(indexes).not.toHaveBeenCalled();
   expect(checkpoints).not.toHaveBeenCalled();
   expect(sweeps).not.toHaveBeenCalled();
   // Post-GC capture supplies initial source facts; final common barrier rechecks them.

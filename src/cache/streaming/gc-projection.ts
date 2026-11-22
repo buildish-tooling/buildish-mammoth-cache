@@ -17,7 +17,7 @@
 import { isWorkspaceScaffolding } from './tree-state';
 import { lstat, opendir } from 'node:fs/promises';
 import { equal } from './encoding';
-import { nativeIdentity, nativeIds, sameNative, type NativeIdentity } from './native';
+import { nativeIdentity, nativeIds, sameNative, missing, type NativeIdentity } from './native';
 import { sameDirectoryObject } from './install-member';
 import {
   ObservationIndex,
@@ -99,17 +99,23 @@ export async function checkGcProjection(
     }
     const d = lease.node,
       path = d[1];
-    const entries = new Map<string, { type: string; dev: string; id: string }>();
+    const entries = new Map<string, { type: string }>();
     let charge = 0;
     try {
       const u = d[9];
       if (u?.[3] === 'subtree' && u[5] === 'delete') subtreeEnd = u[8];
-      const before = await store.root.stat(path);
+      store.root.work.stats++;
+      const before = await lstat(store.root.resolve(path), { bigint: true })
+        .then(nativeIdentity)
+        .catch((error) => {
+          if (missing(error)) return null;
+          throw error;
+        });
       if (!before) {
         return await absentTree(d, subtreeEnd);
       }
       if (!sameDirectoryObject(d[2], before)) throw new Error('Frozen GC directory replaced.');
-      const directory = await opendir(store.root.resolve(path), { bufferSize: 1 });
+      const directory = await opendir(store.root.resolve(path), { bufferSize: 32 });
       work.directories++;
       try {
         while (true) {
@@ -121,24 +127,17 @@ export async function checkGcProjection(
           const n = 320 + 4 * Buffer.byteLength(entry.name);
           options.budget.retain(n);
           charge += n;
-          store.root.work.stats++;
-          const raw = await lstat(store.root.resolve(path ? path + '/' + entry.name : entry.name), {
-              bigint: true,
-            }),
-            type = raw.isFile()
-              ? 'file'
-              : raw.isDirectory()
-                ? 'directory'
-                : raw.isSymbolicLink()
-                  ? 'symlink'
-                  : 'other',
-            ids = nativeIds(raw);
+          // Identity is read at the consuming child boundary, not once here and
+          // immediately again below. Unknown names reject without another stat.
+          const type = entry.isFile()
+            ? 'file'
+            : entry.isDirectory()
+              ? 'directory'
+              : entry.isSymbolicLink()
+                ? 'symlink'
+                : 'other';
           work.entries++;
-          entries.set(entry.name, {
-            type,
-            dev: ids[0],
-            id: ids[1],
-          });
+          entries.set(entry.name, { type });
         }
       } finally {
         await directory.close();
@@ -157,15 +156,42 @@ export async function checkGcProjection(
         signal?.throwIfAborted();
         const actual = entries.get(e[1]);
         entries.delete(e[1]);
-        if (actual)
-          equal([actual.type, actual.dev, actual.id], e.slice(2, 5), 'original GC child identity');
+        if (actual) equal(actual.type, e[2], 'original GC child kind');
         if (e[5] === null) {
           if (!actual) throw new Error('Missing protected GC child.');
+          store.root.work.stats++;
+          const raw = await lstat(store.root.resolve(path ? path + '/' + e[1] : e[1]), {
+            bigint: true,
+          });
+          const kind = raw.isFile()
+            ? 'file'
+            : raw.isDirectory()
+              ? 'directory'
+              : raw.isSymbolicLink()
+                ? 'symlink'
+                : 'other';
+          equal([kind, ...nativeIds(raw)], e.slice(2, 5), 'original protected GC identity');
           cleanup = false;
           await observer?.protected(path, e);
           continue;
         }
         if (relocation && (await relocation.member(path ? path + '/' + e[1] : e[1], !!actual))) {
+          if (actual) {
+            store.root.work.stats++;
+            const raw = await lstat(store.root.resolve(path ? path + '/' + e[1] : e[1]), {
+              bigint: true,
+            });
+            const kind = raw.isFile()
+              ? 'file'
+              : raw.isDirectory()
+                ? 'directory'
+                : raw.isSymbolicLink()
+                  ? 'symlink'
+                  : 'other';
+            equal([kind, ...nativeIds(raw)], e.slice(2, 5), 'relocated original child identity');
+            if (raw.isFile() && raw.nlink !== 1n)
+              throw new Error('Aliased relocated original child.');
+          }
           affected ||= !actual;
           cleanup = false;
           continue;
@@ -205,7 +231,8 @@ export async function checkGcProjection(
         }
       }
       if (entries.size) throw new Error('Unexpected GC directory child.');
-      const after = await store.root.stat(path);
+      store.root.work.stats++;
+      const after = nativeIdentity(await lstat(store.root.resolve(path), { bigint: true }));
       if (!after || !sameNative(before, after, true))
         throw new Error('GC directory changed during projection check.');
       if (relocation) await relocation.directory(d, before, affected);

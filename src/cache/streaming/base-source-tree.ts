@@ -16,6 +16,7 @@
 
 import { tuple, type Value } from './encoding';
 import { InstallScratch } from './install-scratch';
+import { NativeTreeState, type TreeSeal } from './native-tree';
 import { WorkerSpool } from './worker-spool';
 import {
   UnitProjection,
@@ -35,24 +36,48 @@ import type { BaseObjectOptions } from './base-object';
 export class BaseSourceTree {
   private unit: { descriptor: Unit; start: number; jars: boolean } | null = null;
   private units?: InstallScratch;
+  private completed?: TreeSeal;
+  get summary(): TreeSeal {
+    if (!this.completed) throw new Error('Unsealed source tree summary.');
+    return structuredClone(this.completed);
+  }
   private constructor(
     readonly store: OwnedStore,
     readonly partition: string,
     readonly events: WorkerSpool,
     readonly options: BaseObjectOptions,
+    private readonly projection: NativeTreeState,
   ) {}
   static async create(store: OwnedStore, partition: string, options: BaseObjectOptions) {
-    return new BaseSourceTree(
-      store,
+    const projection = new NativeTreeState({
+      ...options,
+      model: store.codec.options.model,
       partition,
-      await WorkerSpool.create(store, options.budget),
-      options,
-    );
+    });
+    try {
+      return new BaseSourceTree(
+        store,
+        partition,
+        await WorkerSpool.create(store, options.budget),
+        options,
+        projection,
+      );
+    } catch (error) {
+      projection.dispose();
+      throw error;
+    }
+  }
+
+  private emit(row: Value, signal: AbortSignal): void | Promise<void> {
+    signal.throwIfAborted();
+    this.projection.accept(row);
+    if (!this.events.tryAppend(row, signal)) return this.events.append(row, signal);
   }
   private async append(row: Value, signal: AbortSignal) {
     signal.throwIfAborted();
-    if (this.unit) await this.units!.append(row);
-    else await this.events.append(row, signal);
+    if (this.unit) {
+      if (this.units!.tryAppend(row) === null) await this.units!.append(row);
+    } else await this.emit(row, signal);
     signal.throwIfAborted();
   }
   private async begin(descriptor: Unit) {
@@ -71,32 +96,37 @@ export class BaseSourceTree {
     const projection = new UnitProjection(model, u.descriptor, false, this.partition);
     const end = this.units!.position;
     let current = u.descriptor[1];
-    for await (const value of this.units!.rows(u.start, end)) {
-      signal.throwIfAborted();
-      const r = tuple(value);
-      if (r[0] === 'dir-open') {
-        current = String(r[1]);
-        projection.directory(current, 'open');
-      } else if (r[0] === 'dir-close') {
-        projection.directory(current, 'close');
-        current = parentPath(current);
-      } else
-        projection.file(
-          joinPath(current, String(r[1])),
-          this.partition,
-          Number(r[2]),
-          Number(r[3]),
-          Number(r[4]),
-          String(r[5]),
-        );
-    }
+    for await (const batch of this.units!.batches(u.start, end, signal))
+      for (const value of batch) {
+        signal.throwIfAborted();
+        const r = tuple(value.value);
+        if (r[0] === 'dir-open') {
+          current = String(r[1]);
+          projection.directory(current, 'open');
+        } else if (r[0] === 'dir-close') {
+          projection.directory(current, 'close');
+          current = parentPath(current);
+        } else
+          projection.file(
+            joinPath(current, String(r[1])),
+            this.partition,
+            Number(r[2]),
+            Number(r[3]),
+            Number(r[4]),
+            String(r[5]),
+          );
+      }
     const s = projection.finish();
-    await this.events.append(
+    await this.emit(
       ['unit-open', ...u.descriptor, 'partition-projection', s.counts, s.semantic, s.comparison],
       signal,
     );
-    for await (const row of this.units!.rows(u.start, end)) await this.events.append(row, signal);
-    await this.events.append(
+    for await (const batch of this.units!.batches(u.start, end, signal))
+      for (const row of batch) {
+        const write = this.emit(row.value, signal);
+        if (write) await write;
+      }
+    await this.emit(
       ['unit-close', u.descriptor[0], u.descriptor[1], s.counts, s.semantic, s.comparison],
       signal,
     );
@@ -139,10 +169,15 @@ export class BaseSourceTree {
     // Units share one unpublished backing file. Check its original identity once
     // before completed events escape; never create/read a separate file per unit.
     await this.units?.assertStable();
+    await this.units?.close();
+    this.units = undefined;
     signal.throwIfAborted();
+    this.projection.accept(this.projection.end());
+    this.completed = this.projection.finish();
     this.events.seal(signal);
   }
   async disposeUnit() {
+    this.projection.dispose();
     await this.units?.close();
     this.units = undefined;
     this.unit = null;

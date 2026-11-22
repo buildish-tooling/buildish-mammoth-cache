@@ -57,6 +57,7 @@ function fixture(purpose: LocalPurpose, model?: ReturnType<typeof resolveModel>)
   const f = localFixtures(o),
     partition = [
       'native-evidence',
+      'digest-placements',
       'stage-evidence',
       'adjustments',
       'outbound-evidence',
@@ -193,6 +194,12 @@ function fixture(purpose: LocalPurpose, model?: ReturnType<typeof resolveModel>)
       rows.push(['gc-unit-close', 'file', logical, hash('gc-unit', rows)]);
       break;
     }
+    case 'digest-placements':
+      rows = [
+        ['digest-source', f.q('native-evidence')],
+        ['digest-placement', logical, 'file', (f.evidence() as readonly Value[])[2], native],
+      ];
+      break;
     case 'prepare-sources':
     case 'post-sources':
       rows = [

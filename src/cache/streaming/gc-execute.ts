@@ -218,10 +218,13 @@ async function run(
   recovering: boolean,
   observer?: GcProjectionObserver,
   retainIndex = false,
+  suppliedIndex?: ObservationIndex,
 ) {
   const options = Object.freeze({ ...input, signal: input.signal ?? defaultSignal() }),
     { state, saved, intent } = await admission(store, options, recovering),
-    index = await ObservationIndex.open(store, state[6]!, options);
+    index = suppliedIndex ?? (await ObservationIndex.open(store, state[6]!, options));
+  ObservationIndex.assert(index, store);
+  equal(index.reference, state[6], 'shared captured observation index');
   let program: GcProgram | undefined,
     phase: InstallParentPhase | undefined,
     container: string | undefined,
@@ -377,4 +380,5 @@ export const captureGcProjection = (
   store: OwnedStore,
   options: GcOptions,
   observer: GcProjectionObserver,
-) => run(store, options, false, observer, true);
+  index?: ObservationIndex,
+) => run(store, options, false, observer, true, index);

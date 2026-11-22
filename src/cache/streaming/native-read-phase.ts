@@ -19,8 +19,47 @@ import { lstat, open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { abortableValues } from './abort';
 import { nativeIdentity, sameNative, type NativeIdentity, type NativeRoot } from './native';
-import { parentPath } from './tree-state';
+import { parentPath, type WorkingBudget } from './tree-state';
+import type { FileHandle } from 'node:fs/promises';
 import { add } from './encoding';
+/** One lazily charged hash buffer shared by a sequential operation's read phases. */
+export class NativeHashBuffer {
+  private bytes?: Buffer;
+  private busy = false;
+  private closed = false;
+  constructor(private readonly budget: WorkingBudget) {}
+  async hash(handle: FileHandle, signal: AbortSignal, consume: (bytes: Buffer) => void) {
+    signal.throwIfAborted();
+    if (this.closed || this.busy) throw new Error('Native hash buffer is unavailable.');
+    this.busy = true;
+    try {
+      if (!this.bytes) {
+        this.budget.retain(65536);
+        this.bytes = Buffer.allocUnsafe(65536);
+      }
+      for (;;) {
+        signal.throwIfAborted();
+        const { bytesRead } = await handle.read(this.bytes, 0, this.bytes.length, null);
+        signal.throwIfAborted();
+        if (!bytesRead) return;
+        consume(this.bytes.subarray(0, bytesRead));
+      }
+    } finally {
+      this.busy = false;
+    }
+  }
+  dispose() {
+    if (this.busy) throw new Error('Cannot dispose active native hash buffer.');
+    if (this.bytes) {
+      this.budget.release(this.bytes.length);
+      this.bytes = undefined;
+    }
+    this.closed = true;
+  }
+  [Symbol.dispose]() {
+    this.dispose();
+  }
+}
 // Protocol: docs/dev/cache-lifecycle-protocol.md#native-identity-and-evidence.
 // Only an active, checked parent chain authorizes these scoped leaf reads.
 export class NativeReadPhase {
@@ -28,6 +67,7 @@ export class NativeReadPhase {
   constructor(
     private readonly root: NativeRoot,
     private readonly anchor = '',
+    private readonly hashes?: NativeHashBuffer,
   ) {}
   private async stat(path: string): Promise<NativeIdentity> {
     this.root.work.stats++;
@@ -76,10 +116,35 @@ export class NativeReadPhase {
       signal.throwIfAborted();
       return trusted;
     }
+    if (!this.hashes) throw new Error('Missing operation-owned native hash buffer.');
     const hash = createHash('sha256');
-    for await (const chunk of this.read(path, expected, signal)) hash.update(chunk);
-    return hash.digest('hex');
+    this.root.work.bodyHashCalls++;
+    await this.matches(path, expected);
+    this.root.work.opens++;
+    const handle = await open(
+      this.root.resolve(path),
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      this.root.work.stats++;
+      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
+        throw new Error('Preimage changed on open.');
+      await this.hashes.hash(handle, signal, (bytes) => {
+        this.root.work.readBytes = add(this.root.work.readBytes, bytes.length);
+        this.root.work.bodyHashBytes = add(this.root.work.bodyHashBytes, bytes.length);
+        hash.update(bytes);
+      });
+      this.root.work.stats++;
+      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
+        throw new Error('Preimage changed during hash.');
+      await this.matches(path, expected);
+      signal.throwIfAborted();
+      return hash.digest('hex');
+    } finally {
+      await handle.close();
+    }
   }
+
   /** Restore-only portable mode repair under the already checked active parent. */
   async repairMode(
     path: string,
@@ -112,7 +177,12 @@ export class NativeReadPhase {
       await handle.close();
     }
   }
-  async *read(path: string, expected: NativeIdentity, signal: AbortSignal): AsyncGenerator<Buffer> {
+  async *read(
+    path: string,
+    expected: NativeIdentity,
+    signal: AbortSignal,
+    hashing = false,
+  ): AsyncGenerator<Buffer> {
     signal.throwIfAborted();
     if (
       expected[2] !== 'file' ||
@@ -130,10 +200,9 @@ export class NativeReadPhase {
       this.root.work.stats++;
       if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
         throw new Error('Preimage changed on open.');
-      for await (const chunk of abortableValues(
-        handle.createReadStream({ autoClose: false, highWaterMark: 65536 }),
-        signal,
-      )) {
+      const stream = handle.createReadStream({ autoClose: false, highWaterMark: 65536 });
+      if (hashing) this.root.work.bodyHashStreams++;
+      for await (const chunk of abortableValues(stream, signal)) {
         this.root.work.readBytes = add(this.root.work.readBytes, chunk.length);
         yield chunk;
       }

@@ -17,8 +17,8 @@
 import { installFixture } from './install-fixture';
 import { localRecords, type PrepareSelection } from '../../../src/cache/streaming/prepare-state';
 import type { Value } from '../../../src/cache/streaming/encoding';
-export async function prepareStateFixture() {
-  const f = await installFixture('maven'),
+export async function prepareStateFixture(configuration?: Parameters<typeof installFixture>[1]) {
+  const f = await installFixture('maven', configuration),
     stream = { budget: f.budget, partition: null };
   await f.store.makeParents(f.store.prefix + 'install/pending');
   const owner = (await f.store.root.stat(f.store.prefix + 'install'))!;

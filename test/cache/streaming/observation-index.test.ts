@@ -316,3 +316,37 @@ it.each(['dispose', 'lookup'] as const)(
     expect(f.budget.retained).toBe(0);
   },
 );
+
+it('snapshots producer-owned native tuples when building the writer index', async () => {
+  const f = await fixture(1);
+  async function* reused(): AsyncGenerator<Value> {
+    for await (const row of f.store.rows(f.observed.reference, 'observations', {
+      budget: f.budget,
+      partition: null,
+    })) {
+      const value = structuredClone(row.value),
+        r = tuple(value);
+      if (r[0] === 'local-stream' || r[0] === 'local-end') continue;
+      yield value;
+      if (r[0] === 'dir-open') (r[2] as Value[])[4] = '999999';
+    }
+  }
+  const warm = await ObservationIndex.write(f.store, reused(), { budget: f.budget });
+  const cold = await ObservationIndex.open(f.store, warm.reference, { budget: f.budget });
+  try {
+    for (const path of ['', 'data']) {
+      const a = await warm.directory(path),
+        b = await cold.directory(path);
+      try {
+        expect(a.node).toEqual(b.node);
+      } finally {
+        a.release();
+        b.release();
+      }
+    }
+  } finally {
+    await warm.dispose();
+    await cold.dispose();
+  }
+  expect(f.budget.retained).toBe(0);
+});

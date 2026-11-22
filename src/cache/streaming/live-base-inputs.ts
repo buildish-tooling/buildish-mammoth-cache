@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { PreparedDigests } from './prepare-digests';
+import type { PrepareFacts } from './prepare-state';
 import { createHash } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { tuple, equal, add, type Value } from './encoding';
@@ -27,7 +29,8 @@ import { checkGcProjection, type GcProjectionObserver } from './gc-projection';
 import { WorkerSpool } from './worker-spool';
 import { WorkerStage } from './worker-stage';
 import { writeWorkerNativeEvidence } from './worker-native';
-import { NativeReadPhase } from './native-read-phase';
+import { BaseSourceTree } from './base-source-tree';
+import { NativeReadPhase, NativeHashBuffer } from './native-read-phase';
 import { nativeIdentity, nativeIds, sameNative, type NativeIdentity } from './native';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
@@ -102,7 +105,11 @@ export class LiveNativeView {
       throw new Error('Unavailable live source view.');
     view.options.signal?.throwIfAborted();
   }
-  static async capture(store: OwnedStore, input: BaseObjectOptions): Promise<LiveNativeView> {
+  static async capture(
+    store: OwnedStore,
+    input: BaseObjectOptions,
+    suppliedIndex?: ObservationIndex,
+  ): Promise<LiveNativeView> {
     const options = Object.freeze({
       ...input,
       signal: input.signal ?? new AbortController().signal,
@@ -184,7 +191,7 @@ export class LiveNativeView {
         },
       };
       if (state[4] === 'observations-frozen') {
-        const result = await captureGcProjection(store, options, observer);
+        const result = await captureGcProjection(store, options, observer, suppliedIndex);
         index = result.index;
         if (!result.complete || !index) throw new Error('GC capture did not complete.');
         const after = store.codec.schemas.documents['local-state'].parse(await store.state());
@@ -192,7 +199,9 @@ export class LiveNativeView {
         if (after[4] !== 'gc-complete' || !after[10]) throw new Error('GC capture phase changed.');
         state = after;
       } else {
-        index = await ObservationIndex.open(store, state[6], options);
+        index = suppliedIndex ?? (await ObservationIndex.open(store, state[6], options));
+        ObservationIndex.assert(index, store);
+        equal(index.reference, state[6], 'captured observation index');
         program = await GcProgram.create(index, {}, [progress[4]]);
         equal(progress[4], program.final, 'complete original GC source cursor');
         await checkGcProjection(
@@ -311,7 +320,7 @@ export class LiveNativeView {
     }
     this.options.signal?.throwIfAborted();
   }
-  async dispose() {
+  async dispose(owned: (() => unknown)[] = []) {
     if (this.life.disposed) return;
     if (this.life.busy || this.life.leases)
       throw new Error('Live source retirement/borrow active.');
@@ -320,6 +329,7 @@ export class LiveNativeView {
     try {
       this.planning.directories?.close();
       await settleBaseCleanup([
+        ...owned,
         () => this.facts.dispose(),
         () => this.original.dispose(),
         () => this.planning.scratch?.close(),
@@ -494,6 +504,7 @@ export class LiveBaseInputs {
     readonly postSources: Reference,
     readonly partitions: readonly LivePartitionSource[],
     readonly work: Readonly<{ hashBytes: number; copyBytes: number }>,
+    private readonly trees: ReadonlyMap<string, BaseSourceTree>,
   ) {
     immutable(postSources);
     for (const p of partitions) {
@@ -503,16 +514,27 @@ export class LiveBaseInputs {
     inputs.add(this);
     Object.freeze(this);
   }
+  sourceTree(partition: string) {
+    LiveBaseInputs.assert(this);
+    return this.trees.get(partition);
+  }
   static assert(input: LiveBaseInputs, store = input.view.store) {
     if (!inputs.has(input) || input.view.store !== store)
       throw new Error('Unbound live base inputs.');
     LiveNativeView.assert(input.view, store);
   }
-  static async capture(store: OwnedStore, options: BaseObjectOptions): Promise<LiveBaseInputs> {
+  static async capture(
+    store: OwnedStore,
+    options: BaseObjectOptions,
+    prepared?: PrepareFacts,
+    suppliedIndex?: ObservationIndex,
+  ): Promise<LiveBaseInputs> {
+    using hashes = new NativeHashBuffer(options.budget);
     options = Object.freeze({ ...options });
-    const view = await LiveNativeView.capture(store, options),
+    const view = await LiveNativeView.capture(store, options, suppliedIndex),
       signal = view.options.signal ?? new AbortController().signal,
       spools: WorkerSpool[] = [],
+      trees = new Map<string, BaseSourceTree>(),
       partitions: LivePartitionSource[] = [],
       frames: (SourceScope & {
         path: string;
@@ -520,10 +542,15 @@ export class LiveBaseInputs {
         open: Set<number>;
         release: () => void;
       })[] = [];
+    let digests: PreparedDigests | undefined;
     let hashBytes = 0,
       result: LiveBaseInputs | undefined,
       failure: unknown;
     try {
+      if (prepared) {
+        if (prepared.store !== store) throw new Error('Foreign prepared digest source.');
+        digests = await PreparedDigests.open(prepared, options);
+      }
       const initial = store.codec.schemas.documents['local-state'].parse(await store.state()),
         bindings = store.codec.schemas.documents.bindings.parse(
           await store.readDocument(initial[5], 'bindings'),
@@ -544,13 +571,17 @@ export class LiveBaseInputs {
         signal,
       );
       const aggregate = store.codec.options.model.partitions.filter((p) => p[3] === 'aggregate');
-      for (let i = 0; i < aggregate.length; i++)
+      for (let i = 0; i < aggregate.length; i++) {
         spools.push(await WorkerSpool.create(store, options.budget));
-      const phase = new NativeReadPhase(store.root),
+        trees.set(aggregate[i][0], await BaseSourceTree.create(store, aggregate[i][0], options));
+      }
+      const phase = new NativeReadPhase(store.root, '', hashes),
         ensure = async (i: number) => {
           for (const f of frames)
             if (!f.open.has(i)) {
-              await spools[i].append(['directory', f.path, f.native], signal);
+              const row: Value = ['directory', f.path, f.native];
+              if (!spools[i].tryAppend(row, signal)) await spools[i].append(row, signal);
+              await trees.get(aggregate[i][0])!.open(f.path, signal);
               f.open.add(i);
             }
         };
@@ -575,9 +606,21 @@ export class LiveBaseInputs {
           if (i >= 0) {
             const n = r[2] as NativeIdentity;
             await ensure(i);
-            const sha = await phase.hash(path, n, null, signal);
-            hashBytes = add(hashBytes, Number(n[5]));
-            await spools[i].append(['file', path, n, sha], signal);
+            const trusted = await digests?.take(aggregate[i][0], path, n);
+            const sha = trusted ?? (await phase.hash(path, n, null, signal));
+            if (trusted == null) hashBytes = add(hashBytes, Number(n[5]));
+            const row: Value = ['file', path, n, sha];
+            if (!spools[i].tryAppend(row, signal)) await spools[i].append(row, signal);
+            await trees
+              .get(aggregate[i][0])!
+              .file(
+                path,
+                Number(n[5]),
+                normalizeMode(store.codec.options.model.tuple[2], path, n[6]),
+                Number(BigInt(n[8]) / 1000000n),
+                sha,
+                signal,
+              );
           }
         } else if (r[0] === 'dir-close') {
           const scope = frames[frames.length - 1];
@@ -596,6 +639,7 @@ export class LiveBaseInputs {
             if (i >= 0) await ensure(i);
           }
           if (!path) for (let i = 0; i < spools.length; i++) await ensure(i);
+          for (const i of scope.open) await trees.get(aggregate[i][0])!.close(path, signal);
           await phase.leave(path, r[2] as NativeIdentity);
           frames.pop()!.release();
           closeScope(frames[frames.length - 1], scope);
@@ -604,8 +648,10 @@ export class LiveBaseInputs {
           if (!scope.hidden) scope.visible = true;
         }
       }
+      await digests?.finish();
       for (let i = 0; i < aggregate.length; i++) {
         spools[i].seal(signal);
+        await trees.get(aggregate[i][0])!.seal(signal);
         const evidence = await store.writeStream(
           'native-evidence',
           { ...view.options, partition: aggregate[i][0] },
@@ -661,6 +707,7 @@ export class LiveBaseInputs {
           ),
         ),
         Object.freeze({ hashBytes, copyBytes: local.copyBytes }),
+        trees,
       );
     } catch (e) {
       failure = e;
@@ -669,25 +716,39 @@ export class LiveBaseInputs {
     }
     try {
       await settleBaseCleanup(
-        spools.map((s) => () => s.dispose()),
+        [...spools.map((s) => () => s.dispose()), () => digests?.close()],
         failure,
       );
     } catch (e) {
       failure = e;
     }
     if (failure !== undefined) {
-      await settleBaseCleanup([() => view.dispose()], failure);
+      await settleBaseCleanup(
+        [
+          ...[...trees.values()].flatMap((tree) => [
+            () => tree.disposeUnit(),
+            () => tree.events.dispose(),
+          ]),
+          () => view.dispose(),
+        ],
+        failure,
+      );
       throw failure;
     }
     try {
       signal.throwIfAborted();
       return result!;
     } catch (e) {
-      await settleBaseCleanup([() => view.dispose()], e);
+      await settleBaseCleanup([() => result!.dispose()], e);
       throw e;
     }
   }
   async dispose() {
-    await this.view.dispose();
+    await this.view.dispose(
+      [...this.trees.values()].flatMap((tree) => [
+        () => tree.disposeUnit(),
+        () => tree.events.dispose(),
+      ]),
+    );
   }
 }

@@ -14,16 +14,23 @@
  * limitations under the License.
  */
 
+import { setImmediate } from 'node:timers/promises';
 import { createHash, type Hash } from 'node:crypto';
 import { z } from 'zod';
 import { abortableValues, withAbort } from './abort';
-import { decodeRecords, encodeRecord, equal, Digest, add, type Value } from './encoding';
+import { RecordDecoder, encodeRecord, equal, Digest, add, type Value } from './encoding';
 import type { LocalCodec, LocalSchemas } from './local-schema';
 import { shaSchema, uintSchema, unitSchema } from './schema';
 import { ownedReferenceSchema } from './local-schema';
 import { resolveModel, type ResolvedModel } from './model';
 import { tuple } from './encoding';
-import { parentPath, type WorkingBudget, validateUnit } from './tree-state';
+import {
+  decodedRecordCharge,
+  compareMembership,
+  parentPath,
+  type WorkingBudget,
+  validateUnit,
+} from './tree-state';
 import { LocalCurrentState } from './local-current-state';
 import { LocalTreeState } from './local-tree-state';
 import { LocalEvidenceState, type InstallKind } from './local-evidence-state';
@@ -33,6 +40,7 @@ export const localPurposes = [
   'model',
   'producers',
   'prepare-sources',
+  'digest-placements',
   'post-sources',
   'worker-sources',
   'installations',
@@ -79,6 +87,9 @@ export class LocalStreamGrammar {
   private count = 0;
   private index = -1;
   private lastProducer: string | null = null;
+  private digestIndex = -1;
+  private digestSource: string | null = null;
+  private digestPrevious: readonly ['file' | 'directory', string] | null = null;
   private stackPath: string | null = null;
   constructor(
     private readonly purpose: LocalPurpose,
@@ -92,6 +103,7 @@ export class LocalStreamGrammar {
     this.schemas = options.codec.schemas;
     const partitioned = [
       'native-evidence',
+      'digest-placements',
       'stage-evidence',
       'adjustments',
       'outbound-evidence',
@@ -114,7 +126,10 @@ export class LocalStreamGrammar {
         options.budget,
         options.maxDirectoryEntries,
       );
-    else if (partitioned || ['gc-evidence', 'install-plan', 'install-evidence'].includes(purpose))
+    else if (
+      (partitioned && purpose !== 'digest-placements') ||
+      ['gc-evidence', 'install-plan', 'install-evidence'].includes(purpose)
+    )
       this.evidence = new LocalEvidenceState(
         purpose,
         this.schemas,
@@ -164,6 +179,28 @@ export class LocalStreamGrammar {
       m = s.options.model;
     if (!Array.isArray(value)) throw new Error('Invalid local row.');
     switch (this.purpose) {
+      case 'digest-placements': {
+        if (this.count === 0) {
+          const source = z
+            .tuple([z.literal('digest-source'), s.ref('native-evidence')])
+            .parse(value);
+          this.digestSource = source[1][4];
+        } else {
+          const r = s.rows.digestPlacement.parse(value);
+          if (r[3] && r[3][1] !== this.digestSource)
+            throw new Error('Digest span has a foreign source.');
+          const last = this.digestPrevious;
+          if (
+            last &&
+            (last[1] === r[1] ||
+              (last[0] === 'directory' && r[1].startsWith(last[1] + '/')) ||
+              compareMembership(['member', last[0], last[1]], ['member', r[2], r[1]]) >= 0)
+          )
+            throw new Error('Unordered/overlapping digest placements.');
+          this.digestPrevious = [r[2], r[1]];
+        }
+        break;
+      }
       case 'model': {
         const expected =
           this.count === 0
@@ -194,6 +231,17 @@ export class LocalStreamGrammar {
           s.rows.prepareSelection.parse(value);
           break;
         }
+        if (value[0] === 'digest-handoff') {
+          if (this.purpose !== 'prepare-sources')
+            throw new Error('Prepared digests outside prepare.');
+          const row = s.rows.digestHandoff.parse(value),
+            index = row[1] * m.partitions.length + m.partitions.findIndex((p) => p[0] === row[2]);
+          if (index <= this.digestIndex) throw new Error('Duplicate/unordered digest handoff.');
+          this.digestIndex = index;
+          break;
+        }
+        if (this.purpose === 'prepare-sources' && this.digestIndex >= 0)
+          throw new Error('Snapshot source follows digest handoff.');
         const row = z.tuple([z.literal('snapshot-source'), s.source]).parse(value);
         if (this.purpose === 'prepare-sources' && row[1][1] === 'local-writer')
           throw new Error('Post-build source in prepare bindings.');
@@ -253,6 +301,8 @@ export class LocalStreamGrammar {
     this.count = add(this.count);
   }
   finish(): void {
+    if (this.purpose === 'digest-placements' && this.count === 0)
+      throw new Error('Missing digest source.');
     this.tree?.finish();
     this.current?.finish();
     this.evidence?.finish();
@@ -441,6 +491,48 @@ export async function readModelStream(
   return model!;
 }
 async function* readFrames<G extends StreamGrammar>(
+  ...args: Parameters<typeof readFrameBatches<G>>
+) {
+  const batches = readFrameBatches(...args);
+  try {
+    for (;;) {
+      const result = await batches.next();
+      if (result.done) return result.value;
+      for (const row of result.value) {
+        args[7].throwIfAborted();
+        yield row;
+      }
+    }
+  } finally {
+    await batches.return(undefined as never);
+  }
+}
+/** Provisional byte/row bounded batches; verified acceptance requires complete EOF. */
+export async function* readLocalBatches(
+  source: AsyncIterable<Uint8Array>,
+  purpose: LocalPurpose,
+  options: LocalStreamOptions,
+  reference: Value,
+  signal = new AbortController().signal,
+  batchChargeLimit = options.budget.limit,
+) {
+  if (!Number.isSafeInteger(batchChargeLimit) || batchChargeLimit < 1)
+    throw new Error('Invalid local batch charge allowance.');
+  const ref = options.codec.schemas.ref(purpose).parse(reference);
+  return yield* readFrameBatches(
+    source,
+    purpose,
+    options.budget,
+    new LocalStreamGrammar(purpose, options),
+    { bytes: ref[3], sha: ref[4] },
+    false,
+    undefined,
+    signal,
+    undefined,
+    batchChargeLimit,
+  );
+}
+async function* readFrameBatches<G extends StreamGrammar>(
   source: AsyncIterable<Uint8Array>,
   purpose: LocalPurpose,
   budget: WorkingBudget,
@@ -450,6 +542,7 @@ async function* readFrames<G extends StreamGrammar>(
   event: ((value: Value) => Promise<void>) | undefined,
   signal: AbortSignal,
   beforeAccept?: (value: Value) => Promise<void>,
+  batchChargeLimit = budget.limit,
 ) {
   const digest = new Digest('local-' + purpose),
     raw = createHash('sha256');
@@ -459,10 +552,49 @@ async function* readFrames<G extends StreamGrammar>(
     started = false,
     ended = false,
     handedOff = false;
+  let decoderBytes = 0,
+    workRows = 0,
+    workBytes = 0;
+  const decoder = new RecordDecoder(() => {
+    budget.retain(65536);
+    decoderBytes = 65536;
+  });
+  let batch: LocalRow[] = [],
+    batchBytes = 0,
+    batchCharge = 0;
+  const releases: (() => void)[] = [];
+  const clear = () => {
+    for (const release of releases.splice(0)) release();
+    batch = [];
+    batchBytes = 0;
+    batchCharge = 0;
+  };
   try {
-    for await (const frame of decodeRecords(abortableValues(source, signal))) {
-      const release = budget.holdRecord(frame.raw.length);
-      try {
+    for await (const chunk of abortableValues(source, signal))
+      for (const frame of decoder.push(chunk)) {
+        signal.throwIfAborted();
+        if (
+          batch.length &&
+          (batchBytes + frame.raw.length > 65536 ||
+            batch.length >= 256 ||
+            batchCharge + decodedRecordCharge(frame.raw.length) > batchChargeLimit)
+        ) {
+          yield batch;
+          clear();
+          await setImmediate();
+          signal.throwIfAborted();
+        }
+        if ((event || beforeAccept) && (workRows >= 256 || workBytes + frame.raw.length > 65536)) {
+          await setImmediate();
+          signal.throwIfAborted();
+          workRows = 0;
+          workBytes = 0;
+        }
+        workRows++;
+        workBytes += frame.raw.length;
+        releases.push(budget.holdRecord(frame.raw.length));
+        batchBytes += frame.raw.length;
+        batchCharge += decodedRecordCharge(frame.raw.length);
         if (ended) throw new Error('Trailing local stream row.');
         bytes = add(bytes, frame.raw.length);
         if (bytes > expected.bytes) throw new Error('Local reference length exceeded.');
@@ -470,7 +602,7 @@ async function* readFrames<G extends StreamGrammar>(
         if (!started) {
           equal(frame.value, grammar.header(), 'local stream header');
           started = true;
-          digest.update(frame.value);
+          digest.encoded(frame.raw.subarray(0, -1));
         } else if (Array.isArray(frame.value) && frame.value[0] === 'local-end') {
           if (prefix) throw new Error('Sealed stream supplied as live prefix.');
           const end = endSchema.parse(frame.value);
@@ -481,18 +613,26 @@ async function* readFrames<G extends StreamGrammar>(
           if (beforeAccept) await withAbort(beforeAccept(frame.value), signal);
           grammar.accept(frame.value);
           records = add(records);
-          digest.update(frame.value);
+          digest.encoded(frame.raw.subarray(0, -1));
         }
         if (event) await withAbort(event(frame.value), signal);
-        yield {
+        batch.push({
           value: frame.value,
           start: bytes - frame.raw.length,
           end: bytes,
           record: physicalRecord++,
-        };
-      } finally {
-        release();
+        });
+        if (event || beforeAccept) {
+          yield batch;
+          clear();
+        }
       }
+    decoder.finish();
+    if (batch.length) {
+      yield batch;
+      clear();
+      await setImmediate();
+      signal.throwIfAborted();
     }
     if (!started || (!prefix && !ended)) throw new Error('Truncated local stream.');
     if (prefix) grammar.finish();
@@ -506,6 +646,8 @@ async function* readFrames<G extends StreamGrammar>(
       grammar,
     };
   } finally {
+    clear();
+    budget.release(decoderBytes);
     if (!handedOff) grammar.dispose();
   }
 }
@@ -515,6 +657,7 @@ export async function* writeLocalStream(
   options: LocalStreamOptions,
   sealed: (seal: LocalStreamSeal) => void,
   signal = new AbortController().signal,
+  onRow?: (row: LocalRow) => Promise<void>,
 ): AsyncGenerator<Buffer> {
   const grammar = new LocalStreamGrammar(purpose, options),
     digest = new Digest('local-' + purpose),
@@ -530,6 +673,8 @@ export async function* writeLocalStream(
   try {
     const header = encodeRecord(grammar.header());
     digest.encoded(header.subarray(0, -1));
+    if (onRow)
+      await onRow({ value: grammar.header(), start: bytes, end: bytes + header.length, record: 0 });
     yield emit(header);
     for await (const value of abortableValues(records, signal)) {
       const encoded = encodeRecord(value),
@@ -541,10 +686,15 @@ export async function* writeLocalStream(
       } finally {
         release();
       }
+      if (onRow) await onRow({ value, start: bytes, end: bytes + encoded.length, record: count });
       yield emit(encoded);
     }
     grammar.finish();
-    yield emit(encodeRecord(['local-end', count, digest.digest()]));
+    const end: Value = ['local-end', count, digest.digest()],
+      encodedEnd = encodeRecord(end);
+    if (onRow)
+      await onRow({ value: end, start: bytes, end: bytes + encodedEnd.length, record: count + 1 });
+    yield emit(encodedEnd);
     signal.throwIfAborted();
     sealed({ bytes, records: count, sha: raw.digest('hex'), eventSha: digest.digest() });
   } finally {

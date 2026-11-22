@@ -69,12 +69,12 @@ afterEach(async () => {
 });
 it('round trips a real fixed-path SDK object without a base body rehash', async () => {
   const f = await baseFixture(),
-    read = vi.spyOn(NativeReadPhase.prototype, 'read'),
+    before = f.store.root.work.bodyHashCalls,
     object = await preparedBase(f, { 'd/a': 'abc', 'd/資料 🦣': 'x', empty: '' }, 'data', [
       'meaningful-empty',
     ]);
-  expect(read).toHaveBeenCalledTimes(3);
-  read.mockClear();
+  expect(f.store.root.work.bodyHashCalls - before).toBe(3);
+  const hashed = f.store.root.work.bodyHashCalls;
   const sdk = await nativeCacheBackend(),
     save = await NativeObjectSave.save(sdk.backend, object, { budget: f.budget });
   expect(save.serviceId).toBe(1);
@@ -89,7 +89,7 @@ it('round trips a real fixed-path SDK object without a base body rehash', async 
   expect(sdk.calls[1].paths).toEqual(sdk.calls[0].paths);
   expect((await f.store.root.stat(d.object!.payload + '/meaningful-empty'))![2]).toBe('directory');
   expect(object.tree[1]).toBe('native-tree');
-  expect(read).not.toHaveBeenCalled();
+  expect(f.store.root.work.bodyHashCalls).toBe(hashed);
   expect(f.budget.retained).toBe(0);
 });
 it('round trips the single literal generation path at distinct roots', async () => {
@@ -448,18 +448,18 @@ it('captures source evidence before a keyed identity and renders metadata withou
   const f = await baseFixture(),
     payload = await createBasePayload(f.store, 'data');
   await writeFile(f.store.root.resolve(payload + '/a'), 'abc', { mode: 0o644 });
-  const read = vi.spyOn(NativeReadPhase.prototype, 'read'),
+  const before = f.store.root.work.bodyHashCalls,
     source = await PreparedBaseSource.capture(f.store, 'data', { budget: f.budget });
-  expect(read).toHaveBeenCalledTimes(1);
+  expect(f.store.root.work.bodyHashCalls - before).toBe(1);
   expect(source.evidence[1]).toBe('native-evidence');
   expect(await f.store.root.stat(source.root + '/tree.ndjson')).toBeNull();
-  read.mockClear();
+  const hashed = f.store.root.work.bodyHashCalls;
   try {
     const object = await source.render([f.model.family, f.model.id, 'data', h, h, 'b'.repeat(64)], {
       budget: f.budget,
     });
     expect(object.reference[1][5]).toBe('b'.repeat(64));
-    expect(read).not.toHaveBeenCalled();
+    expect(f.store.root.work.bodyHashCalls).toBe(hashed);
   } finally {
     await source.dispose();
   }

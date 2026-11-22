@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { ObservationIndex } from './observation-index';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
 import { reconcileInvocation, type RecoveryOptions } from './recovery';
 import { PrepareFacts, type PrepareBindings } from './prepare-state';
@@ -67,6 +68,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
     request = Object.freeze({ ...caller, maxDirectoryEntries: opened.bindings[8][9] }),
     store = await reconcileInvocation(opened, 'resume', request),
     facts = await PrepareFacts.open(store, request);
+  let capturedIndex: ObservationIndex | undefined;
   let window: ExclusiveWindow | undefined,
     live: LiveBaseInputs | undefined,
     frozen: FrozenMovingPublication | undefined,
@@ -133,12 +135,14 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       if (!facts.state[6]) {
         await request.removeHooks(store);
         await assertLifecycleWindow(store, facts.bindings, options);
-        await captureObservations(store, {
+        const captured = await captureObservations(store, {
+          retainIndex: true,
           ...options,
           baseline: await getBaseline(),
           summaries: request.summaries,
           purgeWindow: facts.selection[4][4] === 'enabled' ? window.purgeWindow : undefined,
         });
+        capturedIndex = captured.index;
       }
       await assertLifecycleWindow(store, facts.bindings, options);
       let state = store.codec.schemas.documents['local-state'].parse(await store.state());
@@ -160,7 +164,8 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       if (!backend.capabilities.supportsExplicitSave)
         throw new Error('Native base backend cannot publish.');
       if (['observations-frozen', 'gc-complete'].includes(state[4])) {
-        live = await LiveBaseInputs.capture(store, options);
+        live = await LiveBaseInputs.capture(store, options, facts, capturedIndex);
+        capturedIndex = undefined;
         await assertLifecycleWindow(store, facts.bindings, options);
         frozen = await FrozenMovingPublication.freeze(
           live,
@@ -196,7 +201,16 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       failure = e;
     }
     const errors: unknown[] = failure === undefined ? [] : [failure];
-    for (const close of [() => publisher?.close(), () => frozen?.dispose(), () => live?.dispose()])
+    for (const close of [
+      () => publisher?.close(),
+      () => frozen?.dispose(),
+      () => live?.dispose(),
+      () => {
+        const held = capturedIndex;
+        capturedIndex = undefined;
+        return held?.dispose();
+      },
+    ])
       try {
         await close();
       } catch (e) {
@@ -206,7 +220,11 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
     if (errors.length) throw new AggregateError(errors, 'Base post cleanup failed.');
     return result!;
   } finally {
-    window?.close();
-    facts.close();
+    try {
+      await capturedIndex?.dispose();
+    } finally {
+      window?.close();
+      facts.close();
+    }
   }
 }

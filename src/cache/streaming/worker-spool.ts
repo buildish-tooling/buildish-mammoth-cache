@@ -40,10 +40,29 @@ export class WorkerSpool {
   get work() {
     return this.scratch.work;
   }
+  tryAppend(value: Value, signal: AbortSignal): boolean {
+    signal.throwIfAborted();
+    if (this.sealed !== null || this.disposed || this.writing || this.failed)
+      throw new Error('Worker spool is unavailable.');
+    try {
+      if (
+        this.scratch.tryAppend(value, undefined, (bytes) =>
+          this.digest.encoded(bytes.subarray(0, -1)),
+        ) === null
+      )
+        return false;
+      this.count++;
+      return true;
+    } catch (error) {
+      this.failed = true;
+      throw error;
+    }
+  }
   async append(value: Value, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     if (this.sealed !== null || this.disposed) throw new Error('Worker spool is sealed/disposed.');
     if (this.writing || this.failed) throw new Error('Worker spool is busy/failed.');
+    if (this.tryAppend(value, signal)) return;
     this.writing = true;
     try {
       await this.scratch.append(value, undefined, (bytes) =>
@@ -65,7 +84,7 @@ export class WorkerSpool {
       throw new Error('Worker spool is unavailable.');
     this.sealed = this.digest.digest();
   }
-  async *rows(signal: AbortSignal): AsyncGenerator<Value> {
+  async *batches(signal: AbortSignal): AsyncGenerator<readonly Value[]> {
     signal.throwIfAborted();
     if (this.disposed || this.sealed === null || this.failed)
       throw new Error('Unsealed worker spool.');
@@ -81,12 +100,15 @@ export class WorkerSpool {
         await this.ready;
       }
       signal.throwIfAborted();
-      for await (const row of this.scratch.rows(0, this.scratch.position, (bytes) =>
-        digest.encoded(bytes.subarray(0, -1)),
-      )) {
+      for await (const batch of this.scratch.batches(0, this.scratch.position, signal)) {
+        const values: Value[] = [];
+        for (const row of batch) {
+          digest.encoded(row.raw.subarray(0, -1));
+          count++;
+          values.push(row.value);
+        }
         signal.throwIfAborted();
-        count++;
-        yield row;
+        yield values;
       }
       signal.throwIfAborted();
       await this.scratch.assertStable();
@@ -95,6 +117,32 @@ export class WorkerSpool {
     } finally {
       this.readers--;
       if (!this.readers) this.scratch.releaseReadCache();
+    }
+  }
+  async *rows(signal: AbortSignal): AsyncGenerator<Value> {
+    for await (const batch of this.batches(signal))
+      for (const row of batch) {
+        signal.throwIfAborted();
+        yield row;
+      }
+  }
+  async appendBatch(values: readonly Value[], signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    if (this.sealed !== null || this.disposed || this.writing || this.failed)
+      throw new Error('Worker spool is unavailable.');
+    this.writing = true;
+    try {
+      await this.scratch.appendBatch(values, (bytes) => {
+        signal.throwIfAborted();
+        this.digest.encoded(bytes.subarray(0, -1));
+        this.count++;
+      });
+      signal.throwIfAborted();
+    } catch (error) {
+      this.failed = true;
+      throw error;
+    } finally {
+      this.writing = false;
     }
   }
   async dispose(): Promise<void> {

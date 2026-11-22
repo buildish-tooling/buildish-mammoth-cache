@@ -30,7 +30,7 @@ import {
   type IndexedNode,
 } from './install-index';
 import { selectionPage, type Selection } from './install-selection';
-import { NativeReadPhase } from './native-read-phase';
+import { NativeReadPhase, NativeHashBuffer } from './native-read-phase';
 import { compareMembership } from './tree-state';
 
 export type CapturedSelection = readonly [...Selection, number, number];
@@ -97,9 +97,10 @@ export async function captureInstallPreimages(
   signal = new AbortController().signal,
   maxDirectoryEntries = 100000,
 ): Promise<{ root: number | null; references: (Reference | null)[]; work: PreimageWork }> {
+  using hashes = new NativeHashBuffer(scratch.budget);
   const claim = scratch.claim(),
     model = store.codec.options.model,
-    phase = new NativeReadPhase(store.root);
+    phase = new NativeReadPhase(store.root, '', hashes);
   const sinks: (InstallScratch | null)[] = model.partitions.map(() => null),
     refs: (Reference | null)[] = model.partitions.map(() => null);
   const trustedReaders: (TrustedCursor | null)[] = model.partitions.map(() => null),

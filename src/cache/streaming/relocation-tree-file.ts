@@ -19,6 +19,7 @@ import { decodeRecords, encodeRecord, tuple, equal, add, type Value } from './en
 import { FrozenBaseTree } from './base-frozen-tree';
 import { readNativeTree } from './native-tree';
 import { nativeIdentity, sameNative, type NativeIdentity } from './native';
+import { NativeHashBuffer } from './native-read-phase';
 import { spanSchema } from './local-schema';
 import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
 
@@ -28,6 +29,7 @@ const readers = new WeakSet<object>();
 // A complete immutable tree validation is tied to this open native file. Member
 // ranges never rescan the full tree; exact plan boundaries are checked separately.
 export class RelocationTreeFile {
+  readonly hashes: NativeHashBuffer;
   readonly work = { validationBytes: 0, rangeBytes: 0, reads: 0 };
   private closed = false;
   private closing = false;
@@ -41,7 +43,9 @@ export class RelocationTreeFile {
     private readonly native: NativeIdentity,
     private readonly options: BaseObjectOptions,
     private readonly release: () => void,
-  ) {}
+  ) {
+    this.hashes = new NativeHashBuffer(options.budget);
+  }
   static async open(tree: FrozenBaseTree, options: BaseObjectOptions): Promise<RelocationTreeFile> {
     FrozenBaseTree.assert(tree);
     options = Object.freeze({ ...options });
@@ -148,6 +152,7 @@ export class RelocationTreeFile {
   async close() {
     if (this.closed) return;
     if (this.busy || this.closing) throw new Error('Active relocation tree range/cleanup.');
+    this.hashes.dispose();
     this.closing = true;
     try {
       await this.handle.close();
