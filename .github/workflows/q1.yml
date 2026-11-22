@@ -30,7 +30,7 @@ env:
   Q1_ROUTE: ${{ contains(github.event.head_commit.message, '[Q1 remaining]') && 'remaining' || 'full' }}
 jobs:
   parity:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
+    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
     strategy:
       fail-fast: false
       matrix:
@@ -93,7 +93,7 @@ jobs:
           mkdir -p "$GRADLE_USER_HOME/q-proof"
           printf 'ordinary-%s' "$TOOL" > "$GRADLE_USER_HOME/q-proof/parity.txt"
   worker:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
+    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
     strategy:
       fail-fast: false
       matrix:
@@ -133,7 +133,7 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
   aggregator:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
+    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
     needs: worker
     strategy:
       fail-fast: false
@@ -174,7 +174,7 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
   consumer:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
+    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
     needs: aggregator
     strategy:
       fail-fast: false
@@ -215,7 +215,7 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
   scale:
-    if: always() && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && ((contains(github.event.head_commit.message, '[Q1 remaining]') && !contains(github.event.head_commit.message, '[Q1 campaign]')) || (contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && needs.consumer.result == 'success'))
+    if: always() && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && ((contains(github.event.head_commit.message, '[Q1 remaining]') && !contains(github.event.head_commit.message, '[Q1 campaign]')) || (contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && needs.consumer.result == 'success'))
     needs: consumer
     strategy:
       fail-fast: false
@@ -256,7 +256,7 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
   diagnostic:
-    if: always() && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && ((contains(github.event.head_commit.message, '[Q1 remaining]') && !contains(github.event.head_commit.message, '[Q1 campaign]')) || (contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && needs.consumer.result == 'success' && needs.parity.result == 'success'))
+    if: always() && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && ((contains(github.event.head_commit.message, '[Q1 remaining]') && !contains(github.event.head_commit.message, '[Q1 campaign]')) || (contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && needs.consumer.result == 'success' && needs.parity.result == 'success'))
     needs: [consumer, parity]
     runs-on: ubuntu-26.04
     timeout-minutes: 30

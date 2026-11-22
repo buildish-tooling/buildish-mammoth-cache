@@ -65,12 +65,18 @@ export async function execute(command, args, options = {}) {
   }
   const code = await finished;
   if (observationError) throw observationError;
-  assert.equal(
-    code,
-    0,
-    'Qualification child failed: ' + path.basename(command) + ' (' + code + ')',
-  );
-  return { milliseconds: performance.now() - start };
+  const milliseconds = performance.now() - start;
+  try {
+    assert.equal(
+      code,
+      0,
+      'Qualification child failed: ' + path.basename(command) + ' (' + code + ')',
+    );
+  } catch (error) {
+    error.qualificationMetrics = { milliseconds };
+    throw error;
+  }
+  return { milliseconds };
 }
 export function commandEnv(env = process.env) {
   // Keep real SDK credentials/event/job/run/revision. Discard only previous invocation switches.
@@ -131,7 +137,9 @@ export async function invocation(
   };
   for (const [k, v] of Object.entries(values)) env['INPUT_' + k.toUpperCase()] = String(v);
   const outputs = async () => fileCommands(await readFile(env.GITHUB_OUTPUT, 'utf8'));
+  let phaseNumber = 0;
   const phase = async (name, observer) => {
+    assert(['main', 'post'].includes(name));
     const state =
       name === 'post'
         ? Object.fromEntries(
@@ -142,12 +150,46 @@ export async function invocation(
           )
         : {};
     const exported = fileCommands(await readFile(env.GITHUB_ENV, 'utf8'));
-    const result = await execute(
-      process.execPath,
-      [path.join(bundleRoot, 'github', tool, name, 'index.cjs')],
-      { cwd: workspace, env: { ...env, ...exported, ...state }, started: observer },
-    );
-    return { ...result, outputs: await outputs() };
+    const telemetry = path.join(dir, name + '-' + ++phaseNumber + '.metrics.json');
+    let result, failure;
+    try {
+      result = await execute(
+        process.execPath,
+        [
+          '--require',
+          path.join(repository, 'scripts/qualification/child-metrics.cjs'),
+          path.join(bundleRoot, 'github', tool, name, 'index.cjs'),
+        ],
+        {
+          cwd: workspace,
+          env: { ...env, ...exported, ...state, Q1_NODE_METRICS: telemetry },
+          started: observer,
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+    let nodeMetrics = null;
+    try {
+      const bytes = await readFile(telemetry);
+      assert(bytes.length <= 16384, 'Oversized child telemetry');
+      nodeMetrics = JSON.parse(bytes.toString('utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        if (!failure) throw error;
+        const combined = new AggregateError(
+          [failure, error],
+          'Qualification child and exit telemetry failed',
+        );
+        combined.qualificationMetrics = { ...failure.qualificationMetrics, nodeMetrics: null };
+        throw combined;
+      }
+    }
+    if (failure) {
+      failure.qualificationMetrics = { ...failure.qualificationMetrics, ...result, nodeMetrics };
+      throw failure;
+    }
+    return { ...result, nodeMetrics, outputs: await outputs() };
   };
   const completion = async () => {
     const locator = JSON.parse(await readFile(path.join(home, '.mammoth/v1/current.json'), 'utf8'));
@@ -248,12 +290,37 @@ export async function saveResult(directory, name, data) {
     platform: process.platform,
     architecture: process.arch,
   };
-  await writeFile(path.join(directory, name + '.json'), JSON.stringify(value, null, 2) + '\n');
+  await atomic(path.join(directory, name + '.json'), value);
   if (process.env.GITHUB_STEP_SUMMARY)
     await appendFile(
       process.env.GITHUB_STEP_SUMMARY,
       `Q1 ${name}: ${data.status ?? data.outcome ?? 'recorded'}; details in qualification artifact.\n`,
     );
+}
+
+// Progress failures must not suppress an already-owned lifecycle's post attempt.
+export async function withPhaseProgress(name, persist, invoke) {
+  const errors = [];
+  try {
+    await persist();
+  } catch (error) {
+    if (name !== 'post') throw error;
+    errors.push(error);
+  }
+  let result;
+  try {
+    result = await invoke();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await persist();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, 'Phase and progress failed');
+  return result;
 }
 
 export async function lifecycle(job, body, phase = (name) => job.phase(name)) {

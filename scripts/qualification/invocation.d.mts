@@ -30,7 +30,11 @@ export function invocation(
   phase(
     name: string,
     observer?: (pid: number) => Promise<void>,
-  ): Promise<{ outputs: Record<string, string> }>;
+  ): Promise<{
+    outputs: Record<string, string>;
+    milliseconds: number;
+    nodeMetrics: Record<string, unknown> | null;
+  }>;
 }>;
 
 export function lifecycle(
@@ -40,3 +44,9 @@ export function lifecycle(
 ): Promise<void>;
 
 export function gradleTasks(stage: string, identity: string): string[];
+
+export function withPhaseProgress<T>(
+  name: string,
+  persist: () => Promise<void>,
+  invoke: () => Promise<T>,
+): Promise<T>;

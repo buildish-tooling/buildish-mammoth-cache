@@ -15,14 +15,15 @@
  */
 
 import assert from 'node:assert/strict';
+import { campaignBudget, scaleProfile } from './campaign.mjs';
 import { readFile, appendFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 export async function gate(file, output, route = process.env.Q1_ROUTE) {
   const config = JSON.parse(await readFile(file, 'utf8'));
   assert(typeof config.enabled === 'boolean');
-  assert(['full', 'remaining'].includes(config.route));
+  const [jobs, minutes] = campaignBudget(config.route);
+  if (config.route === 'resume-scale') scaleProfile(config, 'linux');
   if (route !== undefined) assert.equal(config.route, route, 'Campaign route mismatch');
-  const [jobs, minutes] = config.route === 'remaining' ? [4, 210] : [15, 430];
   assert(config.maximumQualificationJobs === jobs && config.maximumAllocatedJobMinutes === minutes);
   await appendFile(output, 'enabled=' + String(config.enabled) + '\n');
   return config.enabled;

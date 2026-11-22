@@ -20,6 +20,7 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, readFile, stat, writeFile, rm, open } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import {
   invocation,
   buildFixture,
@@ -27,9 +28,12 @@ import {
   repository,
   lifecycle,
   execute,
+  withPhaseProgress,
 } from './invocation.mjs';
 import { meter, reservation } from './meter.mjs';
 import { snapshot } from './observe.mjs';
+import { campaignBudget, scaleProfile, admitWork } from './campaign.mjs';
+import { diagnoseDarwin } from './darwin-diagnostic.mjs';
 import { generate, mutate, verify, capacity } from './fixture.mjs';
 const platforms = ['linux', 'windows', 'macos'];
 const stage = process.env.INPUT_STAGE,
@@ -43,16 +47,48 @@ assert(
 const configuration = JSON.parse(await readFile('.github/q1-campaign.json', 'utf8'));
 assert(configuration.enabled === true && /^[a-z0-9-]+$/u.test(configuration.id));
 assert.equal(configuration.route, process.env.Q1_ROUTE);
-assert(['full', 'remaining'].includes(configuration.route));
+campaignBudget(configuration.route);
+const resuming = configuration.route.startsWith('resume-');
+if (configuration.route === 'resume-scale') assert(stage === 'scale' && platform === 'linux');
+if (configuration.route === 'resume-graph')
+  assert(['worker', 'aggregator', 'consumer'].includes(stage));
 if (configuration.route === 'remaining') assert(['scale', 'diagnostic'].includes(stage));
 const base = path.resolve('build/q1-work'),
   results = path.resolve('build/q1-results');
 await mkdir(base, { recursive: true });
 await mkdir(results, { recursive: true });
-const observer = await meter(path.join(results, 'observer'));
+const exerciseStarted = performance.now(),
+  selection = stage === 'scale' ? scaleProfile(configuration, platform) : null,
+  observer = await meter(path.join(results, 'observer'));
 const records = [];
-let load;
-const until = Date.now() + (stage === 'diagnostic' ? 25 : 50) * 60 * 1000;
+let load,
+  diagnosticDone = false;
+const until =
+  exerciseStarted + (selection?.workloadMs ?? (stage === 'diagnostic' ? 25 : 50) * 60 * 1000);
+async function progress() {
+  if (resuming)
+    await saveResult(results, 'progress-' + stage + '-' + platform, {
+      status: 'in-progress',
+      records,
+    });
+}
+async function measured(label, task) {
+  const start = performance.now(),
+    cpu = process.cpuUsage();
+  await observer.phase(label, process.pid);
+  try {
+    return await task();
+  } finally {
+    records.push({
+      kind: 'harness-work',
+      label,
+      milliseconds: performance.now() - start,
+      cpu: process.cpuUsage(cpu),
+    });
+    await observer.phase('between', 0);
+    await progress();
+  }
+}
 const worker = (p, t) => `q1-worker-${p}-${t}`;
 function inputs(tool, group = 'graph') {
   return {
@@ -73,34 +109,62 @@ function inputs(tool, group = 'graph') {
   };
 }
 async function phase(job, name) {
-  const errors = [];
-  let result;
-  try {
-    load?.assertCurrent();
-  } catch (e) {
-    if (name !== 'post') throw e;
-    errors.push(e);
-  }
-  try {
-    result = await job.phase(name, (pid) => observer.phase(job.identity + '-' + name, pid));
-  } catch (e) {
-    errors.push(e);
-  }
-  try {
-    await observer.phase('between', 0);
-    load?.assertCurrent();
-  } catch (e) {
-    errors.push(e);
-  }
-  records.push({
-    logicalInvocation: job.identity,
-    phase: name,
-    ...result,
-    status: errors.length ? 'failed' : 'passed',
+  if (resuming && name !== 'post') admitWork(until);
+  records.push({ kind: 'phase-start', logicalInvocation: job.identity, name, at: Date.now() });
+  return withPhaseProgress(name, progress, async () => {
+    const errors = [];
+    let result;
+    try {
+      load?.assertCurrent();
+    } catch (e) {
+      if (name !== 'post') throw e;
+      errors.push(e);
+    }
+    try {
+      result = await job.phase(name, (pid) => observer.phase(job.identity + '-' + name, pid));
+    } catch (e) {
+      result = e.qualificationMetrics;
+      errors.push(e);
+      if (
+        resuming &&
+        platform === 'macos' &&
+        job.tool === 'gradle' &&
+        name === 'post' &&
+        !diagnosticDone
+      ) {
+        diagnosticDone = true;
+        try {
+          records.push({ kind: 'later-process-classification', ...(await diagnoseDarwin()) });
+        } catch {
+          records.push({
+            kind: 'later-process-classification',
+            classification: 'diagnostic-unavailable',
+          });
+        }
+      }
+    }
+    try {
+      await observer.phase('between', 0);
+      load?.assertCurrent();
+    } catch (e) {
+      errors.push(e);
+    }
+    records.push({
+      logicalInvocation: job.identity,
+      phase: name,
+      ...result,
+      status: errors.length ? 'failed' : 'passed',
+    });
+    if (resuming && !result?.nodeMetrics)
+      records.push({
+        kind: 'qualification-gap',
+        logicalInvocation: job.identity,
+        reason: 'Node exit telemetry unavailable',
+      });
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, 'Phase and measurement failed');
+    return result;
   });
-  if (errors.length === 1) throw errors[0];
-  if (errors.length) throw new AggregateError(errors, 'Phase and measurement failed');
-  return result;
 }
 
 async function seed(job) {
@@ -278,8 +342,7 @@ async function parityReaders() {
   }
 }
 async function scale() {
-  assert.deepEqual(configuration.retainedCounts, [100000, 1000000]);
-  assert.equal(configuration.reservationMiB, 2048);
+  assert(selection);
   const memory = await snapshot();
   try {
     load = await reservation();
@@ -294,9 +357,9 @@ async function scale() {
   }
   let primary;
   try {
-    outer: for (const count of configuration.retainedCounts)
-      for (const tool of ['maven', 'gradle']) {
-        if (Date.now() > until) {
+    outer: for (const count of selection.counts)
+      for (const tool of selection.tools) {
+        if (performance.now() > until) {
           records.push({
             kind: 'qualification-gap',
             tool,
@@ -326,19 +389,19 @@ async function scale() {
           seed,
           async (prepared) => {
             assert.equal(prepared.outputs['base-cache-restore-status'], 'miss');
-            const start = Date.now();
-            await observer.phase(`fixture-${count}-${tool}`, process.pid);
-            await generate(seed.home, count);
-            records.push({ tool, count, fixtureGenerationMs: Date.now() - start });
+            if (resuming) admitWork(until);
+            await measured(`fixture-${count}-${tool}`, () => generate(seed.home, count));
           },
           (name) => phase(seed, name),
         );
         baseline = await seed.completion();
         assert.equal(baseline.outcome, 'published');
-        await verify(seed.home, count);
-        await rm(seed.dir, { recursive: true });
+        await measured('seed-source-oracle', () => verify(seed.home, count));
+        records.push({ tool, count, case: 'seed', ...baseline, sourceReturn: 'confirmed' });
+        await progress();
+        await measured('seed-retirement', () => rm(seed.dir, { recursive: true }));
         for (const kind of ['warm', 'change', 'reader']) {
-          if (Date.now() > until) {
+          if (performance.now() > until) {
             records.push({
               kind: 'qualification-gap',
               tool,
@@ -355,9 +418,18 @@ async function scale() {
             job,
             async (prepared) => {
               assert.equal(prepared.outputs['base-cache-restore-status'], 'current-lineage-hit');
-              await verify(job.home, count, kind === 'reader');
-              if (kind === 'change')
-                records.push({ tool, count, changes: await mutate(job.home, count) });
+              if (resuming) admitWork(until);
+              await measured(kind + '-restore-oracle', () =>
+                verify(job.home, count, kind === 'reader'),
+              );
+              if (kind === 'change') {
+                if (resuming) admitWork(until);
+                records.push({
+                  tool,
+                  count,
+                  changes: await measured('mutation', () => mutate(job.home, count)),
+                });
+              }
             },
             (name) => phase(job, name),
           );
@@ -374,11 +446,25 @@ async function scale() {
                   done.entries.find((e) => e[1] === entry[1]),
                   entry,
                 );
-          await verify(job.home, count, kind !== 'warm');
-          records.push({ tool, count, case: kind, ...done });
+          await measured(kind + '-source-oracle', () => verify(job.home, count, kind !== 'warm'));
+          records.push({
+            tool,
+            count,
+            case: kind,
+            ...done,
+            sourceReturn: kind === 'reader' ? 'not-applicable' : 'confirmed',
+          });
+          await progress();
           // Only completed, verified task-owned roots are retired; preserve failure evidence.
-          await rm(job.dir, { recursive: true });
+          await measured(kind + '-retirement', () => rm(job.dir, { recursive: true }));
         }
+        if (resuming)
+          assert.deepEqual(
+            records
+              .filter((r) => r.tool === tool && r.count === count && r.case)
+              .map((r) => r.case),
+            ['seed', 'warm', 'change', 'reader'],
+          );
         const metrics = JSON.parse(await readFile(observer.output, 'utf8'));
         const margin = Math.max(1024 ** 3, metrics.total * 0.15);
         if (
@@ -527,7 +613,7 @@ async function diagnostics() {
     ['width'],
     ...[2, 4, 16].flatMap((k) => ['disjoint', 'overlap'].map((s) => ['merge', String(k), s])),
   ]) {
-    if (Date.now() > until) {
+    if (performance.now() > until) {
       records.push({ kind: 'qualification-gap', case: args, reason: 'Diagnostic deadline' });
       return;
     }
@@ -547,7 +633,7 @@ async function diagnostics() {
     { started: (pid) => observer.phase('diagnostic-regressions', pid) },
   );
   for (const small of [false, true]) {
-    if (Date.now() > until) {
+    if (performance.now() > until) {
       records.push({ kind: 'qualification-gap', case: 'B', reason: 'Diagnostic deadline' });
       return;
     }
@@ -566,7 +652,7 @@ async function legacyComparison() {
     old,
   );
   let error;
-  const start = Date.now();
+  const start = performance.now();
   try {
     await lifecycle(
       job,
@@ -582,7 +668,7 @@ async function legacyComparison() {
     case: 'old-release-comparison',
     release: 'v0.2.2',
     files: 100000,
-    milliseconds: Date.now() - start,
+    milliseconds: performance.now() - start,
     completed: !error,
     limitation: error
       ? { name: error.name, details: 'See redacted job log; do not derive successful throughput' }
@@ -609,7 +695,8 @@ try {
     logicalIdentityIsolation: true,
     measurementLimits: [
       'External sampler peaks are sampled bounds including generation/oracle unless a named phase is selected',
-      'Full production CPU and Node heap/external peaks unavailable; diagnostic CPU/heap are separately labeled',
+      'Node child CPU/resourceUsage and memoryUsage-at-exit are process-only; full native-child CPU and Node peak heap/external remain unavailable',
+      '10-minute resumption cutoff admits lifecycles/main/body only; in-flight bundles can start SDK calls; timeout source return is UNKNOWN',
       'statfs samples filesystem allocation and coexistence, not per-file logical inventory',
       'System paging is conservative; attribution not proven and Windows paging I/O missing',
     ],
