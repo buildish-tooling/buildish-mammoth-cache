@@ -23,13 +23,13 @@ import {
   DarwinProcessTable,
   DARWIN_PS_ARGS,
   inspectDarwinDaemons,
-} from '../../../src/cache/streaming/darwin-process-inspection';
+} from '../../../src/build-tool/gradle/darwin-process-inspection';
 import {
   GRADLE_DAEMON_MAIN as main,
   inspectGradleDaemons,
-} from '../../../src/cache/streaming/process-inspection';
+} from '../../../src/build-tool/gradle/process-inspection';
 import { ExclusiveWindow } from '../../../src/cache/streaming/quiescence';
-import { quiescenceFixture } from './quiescence-fixture';
+import { quiescenceFixture, gradleResolver } from './quiescence-fixture';
 const cleanup: (() => Promise<void>)[] = [];
 vi.mock('node:child_process', async (original) => {
   const actual = await original<typeof ChildProcess>();
@@ -246,7 +246,7 @@ it.skipIf(process.platform === 'win32').each(['clean', 'remaining', 'uncertain']
     });
     const gate = await ExclusiveWindow.establish(f.store, f.budget, {
       assertCurrent: (): undefined => {},
-      stop,
+      lifecycle: gradleResolver({ stop }),
       exitGraceMs: 0,
     });
     expect(stop).toHaveBeenCalledTimes(1);
@@ -295,7 +295,7 @@ it.skipIf(process.platform === 'win32')(
           });
         const gate = await ExclusiveWindow.establish(f.store, f.budget, {
           assertCurrent: (): undefined => {},
-          stop,
+          lifecycle: gradleResolver({ stop }),
           exitGraceMs: 0,
         });
         if (gate.status !== 'ready') throw new Error(gate.message);

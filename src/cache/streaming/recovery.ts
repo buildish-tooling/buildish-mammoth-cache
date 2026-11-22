@@ -19,7 +19,8 @@ import { lstat, opendir } from 'node:fs/promises';
 import { OpenedInvocation } from './invocation';
 import { nativeIdentity, sameObject } from './native';
 import { checkPostRootBinding } from './post-admission';
-import { inspectGradleDaemons, type DaemonInspection } from './process-inspection';
+import { resolveLifecycle } from '../../build-tool/lifecycle';
+import type { LifecycleResolver } from '../../build-tool/lifecycle-types';
 import { recoverInstall } from './install-execute';
 import { recoverGc } from './gc-execute';
 import { FrozenMovingPublication } from './base-moving-publication';
@@ -31,7 +32,7 @@ export interface RecoveryOptions extends BaseObjectOptions {
   /** Dedicated-root/completed-consumer lifetime, independent of foreground cancellation. */
   readonly assertCurrent: () => undefined;
   readonly cleanupSignal?: AbortSignal;
-  readonly inspect?: (signal: AbortSignal) => Promise<DaemonInspection>;
+  readonly lifecycle?: LifecycleResolver;
 }
 type Documents = OwnedStore['codec']['schemas']['documents'];
 type Intent =
@@ -111,13 +112,10 @@ export async function reconcileInvocation(
   if (pending) {
     // A captured launcher may itself be evacuated. Recovery gets only permission to
     // reconcile existing work, using fresh absence evidence, never a new save/purge grant.
-    if (
-      store.codec.options.context[7] === 'gradle' &&
-      store.codec.options.role !== 'distributed-worker'
-    ) {
-      const proof = await (options.inspect ?? inspectGradleDaemons)(signal);
-      if (proof.remaining || proof.uncertain)
-        throw new Error(proof.reason ?? 'Recovery requires finished Gradle consumers.');
+    if (store.codec.options.role !== 'distributed-worker') {
+      const lifecycle = await resolveLifecycle(store.codec.options.context[7], options.lifecycle);
+      assert();
+      await lifecycle.verifyRecoveryConsumers(signal);
     }
     await rootCheck();
     equal(await store.state(), initial, 'recovery owner state');

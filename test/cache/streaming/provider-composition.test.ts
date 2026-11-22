@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { resolveLifecycle } from '../../../src/build-tool/lifecycle';
+import { gradleResolver } from './quiescence-fixture';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -181,7 +183,12 @@ it.each(['maven', 'gradle'] as const)(
     await mkdir(f.home + '/data');
     await writeFile(f.home + '/data/file', 'built');
     if (tool === 'gradle')
-      f.post = { ...f.post, inspect: async () => ({ remaining: false, uncertain: false }) };
+      f.post = {
+        ...f.post,
+        lifecycle: gradleResolver({
+          inspect: async () => ({ remaining: false, uncertain: false }),
+        }),
+      };
     f.loadReport.mockImplementation(async () => {
       const a = decodeInvocationAnchor(raw);
       if (a[0] !== 'streaming-lifecycle') throw new Error('anchor');
@@ -293,7 +300,7 @@ it('a denied Gradle window does not load report/sink/backend SDK dependencies', 
     (
       await runStreamingPost({
         ...f.post,
-        inspect: async () => ({ remaining: false, uncertain: true }),
+        lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: true }) }),
       })
     ).outcome,
   ).toBe('skipped-not-quiescent');
@@ -319,7 +326,9 @@ it('guard and GitHub factory modules defer provider SDK/config/build-tool graphs
   expect(
     Object.keys(main.inputs).some(
       (p) =>
-        p.includes('src/config/') || p.includes('src/build-tool/') || p.includes('src/ci/github/'),
+        p.includes('src/config/') ||
+        /src\/build-tool\/(?:gradle|maven)\//.test(p) ||
+        p.includes('src/ci/github/'),
     ),
   ).toBe(false);
   const { readFile } = await import('node:fs/promises');
@@ -377,5 +386,34 @@ it.each([true, false])(
     await runStreamingPrepare(f.deps);
     expect(f.outputs.get('dependent-delta-status')).toBe('not-configured');
     expect(f.outputs.get('dependent-delta-artifact-count')).toBe('0');
+  },
+);
+
+it.each(['base', 'read-only', 'worker', 'disabled'] as const)(
+  'selects Gradle capture only after prepare admission, preserving %s ordinary-hook behavior',
+  async (mode) => {
+    const f = await fixture(
+      'gradle',
+      mode === 'read-only'
+        ? { 'read-only': 'true' }
+        : mode === 'worker'
+          ? { 'job-mode': 'distributed-worker' }
+          : mode === 'disabled'
+            ? { 'cache-enabled': 'false' }
+            : {},
+    );
+    const resolver = vi.fn(resolveLifecycle);
+    await runStreamingPrepare({ ...f.deps, lifecycle: resolver });
+    expect(resolver).toHaveBeenCalledTimes(mode === 'disabled' ? 0 : 1);
+    if (mode !== 'disabled') expect(resolver).toHaveBeenCalledWith('gradle');
+    expect(f.hooks).toHaveBeenCalledTimes(mode === 'base' ? 0 : 1);
+    if (mode === 'base') {
+      const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
+      const owner = await OpenedInvocation.open(anchor as never, f.deps.budget);
+      expect(await owner.store.root.stat(owner.store.prefix + 'registrations')).not.toBeNull();
+      expect(await readFile(f.home + '/init.d/' + INIT_SCRIPT_FILE_NAME, 'utf8')).toContain(
+        owner.store.codec.options.invocation,
+      );
+    }
   },
 );

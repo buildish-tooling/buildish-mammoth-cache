@@ -14,15 +14,17 @@
  * limitations under the License.
  */
 
+import { resolveLifecycle } from '../../../src/build-tool/lifecycle';
+import type { LifecycleResolver } from '../../../src/build-tool/lifecycle-types';
 import { rm, writeFile, readFile, chmod } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
+import { ExclusiveWindow } from '../../../src/cache/streaming/quiescence';
 import {
-  ExclusiveWindow,
   registrationDirectory,
   registrationFailure,
-} from '../../../src/cache/streaming/quiescence';
-import type { GradleInstallation } from '../../../src/cache/streaming/stop-client';
+} from '../../../src/build-tool/gradle/registrations';
+import type { GradleInstallation } from '../../../src/build-tool/gradle/stop-client';
 import {
   H,
   encodeRecord,
@@ -31,7 +33,7 @@ import {
   tuple,
 } from '../../../src/cache/streaming/encoding';
 import { observationFixture } from './observation-fixtures';
-import { quiescenceFixture } from './quiescence-fixture';
+import { quiescenceFixture, gradleResolver } from './quiescence-fixture';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
 import {
   gradleDaemonArguments,
@@ -39,7 +41,7 @@ import {
   windowsArguments,
   linuxStartTime,
   inspectGradleDaemons,
-} from '../../../src/cache/streaming/process-inspection';
+} from '../../../src/build-tool/gradle/process-inspection';
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -53,14 +55,17 @@ async function fixture(options: Parameters<typeof observationFixture>[1] = {}) {
   });
   return f;
 }
-const options = () => ({
-  exitGraceMs: 0,
-  assertCurrent: (): undefined => {},
-  inspect: vi.fn(async () => ({ remaining: false, uncertain: false })),
-  stop: vi.fn(
-    async (_installation: GradleInstallation, _signal: AbortSignal, _timeoutMs: number) => {},
-  ),
-});
+const options = () => {
+  const deps = {
+    exitGraceMs: 0,
+    assertCurrent: (): undefined => {},
+    inspect: vi.fn(async () => ({ remaining: false, uncertain: false })),
+    stop: vi.fn(
+      async (_installation: GradleInstallation, _signal: AbortSignal, _timeoutMs: number) => {},
+    ),
+  };
+  return { ...deps, lifecycle: gradleResolver(deps) };
+};
 it('seals actual registrations once, runs compatible clients sequentially and issues a cheap revocable window', async () => {
   const f = await fixture(),
     a = await f.register('8.5');
@@ -270,15 +275,30 @@ it('keeps payload growth out of process/registration work and streams sixteen in
         Object.fromEntries(Array.from({ length: files }, (_, n) => ['data/file-' + n, 'body'])),
       );
       const opts = options(),
+        resolver = vi.fn(opts.lifecycle),
+        reads = vi.spyOn(f.store.root, 'read'),
+        streams = vi.spyOn(f.store, 'writeStream'),
         before = { ...f.store.root.work },
-        gate = await ExclusiveWindow.establish(f.store, f.budget, opts);
+        gate = await ExclusiveWindow.establish(f.store, f.budget, { ...opts, lifecycle: resolver });
       if (gate.status !== 'ready') throw new Error(gate.message);
       gate.window.close();
       expect(opts.stop).toHaveBeenCalledTimes(installs);
       expect(opts.inspect).toHaveBeenCalledTimes(1);
+      const inventoryIndex = streams.mock.calls.findIndex(
+        ([purpose]) => purpose === 'installations',
+      );
+      const inventory = await streams.mock.results[inventoryIndex].value;
+      const inventoryReads = reads.mock.calls.filter(([file]) => file === inventory[2]).length;
+      const seals = streams.mock.calls.filter(([purpose]) => purpose === 'installations').length;
+      expect(resolver).toHaveBeenCalledExactlyOnceWith('gradle');
+      expect(seals).toBe(1);
+      expect(inventoryReads).toBe(2);
       const w = f.store.root.work;
       costs.push({
         installs,
+        resolutions: resolver.mock.calls.length,
+        seals,
+        inventoryReads,
         stats: w.stats - before.stats,
         opens: w.opens - before.opens,
         syncs: w.fileSyncs + w.directorySyncs - before.fileSyncs - before.directorySyncs,
@@ -409,7 +429,19 @@ it('renews a frozen window without touching a GC-deleted launcher or changing pu
   await rm(registration[3], { recursive: true });
   o.stop.mockClear();
   o.inspect.mockClear();
-  const next = await ExclusiveWindow.establish(f.store, f.budget, o);
+  const resolver = vi.fn(o.lifecycle),
+    streams = vi.spyOn(f.store, 'writeStream'),
+    reads = vi.spyOn(f.store.root, 'read'),
+    q = f.store.codec.schemas.documents.quiescence.parse(
+      await f.store.readDocument(
+        f.store.codec.schemas.documents['local-state'].parse(before)[13]!,
+        'quiescence',
+      ),
+    );
+  const next = await ExclusiveWindow.establish(f.store, f.budget, { ...o, lifecycle: resolver });
+  expect(resolver).toHaveBeenCalledExactlyOnceWith('gradle');
+  expect(streams.mock.calls.filter(([purpose]) => purpose === 'installations')).toHaveLength(0);
+  expect(reads.mock.calls.filter(([file]) => file === q[3][2])).toHaveLength(1);
   expect(next.status).toBe('ready');
   expect(o.stop).not.toHaveBeenCalled();
   expect(o.inspect).toHaveBeenCalledTimes(1);
@@ -419,4 +451,50 @@ it('renews a frozen window without touching a GC-deleted launcher or changing pu
   expect((await ExclusiveWindow.establish(f.store, f.budget, o)).status).toBe(
     'skipped-not-quiescent',
   );
+});
+
+it.each(['missing', 'wrong-purpose', 'replaced-prior'] as const)(
+  'rejects %s tool inventory before shared state/grant commitment',
+  async (kind) => {
+    const f = await fixture();
+    await f.register('8.5');
+    const opts = options();
+    if (kind === 'replaced-prior') {
+      const first = await ExclusiveWindow.establish(f.store, f.budget, opts);
+      if (first.status !== 'ready') throw new Error(first.message);
+      first.window.close();
+    }
+    const before = await f.store.state();
+    const lifecycle: LifecycleResolver = async (tool) => ({
+      ...(await resolveLifecycle(tool)),
+      quiesce: async () => {
+        if (kind === 'missing') return undefined;
+        if (kind === 'wrong-purpose')
+          return f.store.codec.schemas.documents['local-state'].parse(before)[5];
+        return f.store.writeStream(
+          'installations',
+          { budget: f.budget, partition: null },
+          (async function* () {})(),
+        );
+      },
+    });
+    const gate = await ExclusiveWindow.establish(f.store, f.budget, { ...opts, lifecycle });
+    expect(gate.status).toBe('skipped-not-quiescent');
+    expect(await f.store.state()).toEqual(before);
+  },
+);
+it('rejects a Maven inventory result rather than granting an accidental Gradle proof', async () => {
+  const f = await observationFixture('maven');
+  cleanup.push(f.close);
+  const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
+  state[3]++;
+  state[4] = 'build-ready';
+  await f.store.updateState(state);
+  const lifecycle: LifecycleResolver = async (tool) => ({
+    ...(await resolveLifecycle(tool)),
+    quiesce: async () => state[5],
+  });
+  const gate = await ExclusiveWindow.establish(f.store, f.budget, { ...options(), lifecycle });
+  expect(gate.status).toBe('skipped-not-quiescent');
+  expect(await f.store.state()).toEqual(state);
 });

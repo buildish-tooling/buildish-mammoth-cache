@@ -168,7 +168,7 @@ export async function prepareStreaming(
       maxDirectoryEntries: request.maxDirectoryEntries ?? 100000,
       cleanupSignal: cleanup,
       assertCurrent: request.assertCurrent,
-      inspect: request.inspect,
+      lifecycle: request.lifecycle,
       onWorkerWarnings: request.onWorkerWarnings,
     },
     id = invocationId(request.context, request.nonce);

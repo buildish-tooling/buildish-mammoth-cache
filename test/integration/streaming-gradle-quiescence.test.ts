@@ -33,13 +33,15 @@ import { installFixture } from '../cache/streaming/install-fixture';
 import { initializeObservationFixture } from '../cache/streaming/observation-fixtures';
 import { installGradleLifecycleCapture } from '../../src/build-tool/gradle/lifecycle-capture';
 import { toGroovySingleQuotedString } from '../../src/build-tool/gradle/build-result-capture-scripts';
+import { ExclusiveWindow } from '../../src/cache/streaming/quiescence';
 import {
-  ExclusiveWindow,
   registrationDirectory,
   registrationFailure,
-} from '../../src/cache/streaming/quiescence';
-import { inspectGradleDaemons } from '../../src/cache/streaming/process-inspection';
-import { stopGradleInstallation } from '../../src/cache/streaming/stop-client';
+} from '../../src/build-tool/gradle/registrations';
+import { createGradleLifecycle } from '../../src/build-tool/gradle/lifecycle';
+
+import { inspectGradleDaemons } from '../../src/build-tool/gradle/process-inspection';
+import { stopGradleInstallation } from '../../src/build-tool/gradle/stop-client';
 import { sameNative } from '../../src/cache/streaming/native';
 import { H, decodeRecord } from '../../src/cache/streaming/encoding';
 const exec = promisify(execFile);
@@ -190,16 +192,19 @@ it.skipIf(!configured)(
       const before = await f.store.root.stat(registrationDirectory(f.store)),
         gate = await ExclusiveWindow.establish(f.store, f.budget, {
           assertCurrent: (): undefined => {},
-          stop: async (installation, signal, timeout) => {
-            active++;
-            peak = Math.max(peak, active);
-            stopped.push(installation.gradleHome);
-            try {
-              await stopGradleInstallation(installation, signal, timeout);
-            } finally {
-              active--;
-            }
-          },
+          lifecycle: async () =>
+            createGradleLifecycle({
+              stop: async (installation, signal, timeout) => {
+                active++;
+                peak = Math.max(peak, active);
+                stopped.push(installation.gradleHome);
+                try {
+                  await stopGradleInstallation(installation, signal, timeout);
+                } finally {
+                  active--;
+                }
+              },
+            }),
         });
       expect(peak).toBe(1);
       expect(stopped.sort()).toEqual((await Promise.all(homes.map((h) => realpath(h)))).sort());

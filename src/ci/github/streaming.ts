@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { resolveLifecycle } from '../../build-tool/lifecycle';
 import type { StreamingPostDependencies } from '../../phases/streaming/post';
 import type { StreamingPrepareDependencies } from '../../phases/streaming/prepare';
 
@@ -33,10 +34,7 @@ export function gitHubStreamingFactories(
       return createGitHubWorkflowArtifactBackend();
     },
     removeHooks: async (root, tool) => {
-      if (tool !== 'gradle') return [];
-      const { cleanupGradleBuildResultCapture } =
-        await import('../../build-tool/gradle/build-results');
-      return cleanupGradleBuildResultCapture(root);
+      return (await resolveLifecycle(tool)).removeKnownHooks(root);
     },
     loadReport: async (tool, tempDirectory) => {
       if (tool !== 'gradle')

@@ -14,21 +14,15 @@
  * limitations under the License.
  */
 
-import { setTimeout as delay } from 'node:timers/promises';
-import { opendir, lstat } from 'node:fs/promises';
-import path from 'node:path';
+import { lstat } from 'node:fs/promises';
 import type { OwnedStore, Reference } from './owned-store';
-import { H, equal, tuple } from './encoding';
-import { sameNative, nativeIdentity } from './native';
+import { equal } from './encoding';
+import { nativeIdentity } from './native';
 import { checkPostRootBinding } from './post-admission';
 import type { WorkingBudget } from './tree-state';
-import { readLocalStream } from './local-stream';
-import { inspectGradleDaemons, type DaemonInspection } from './process-inspection';
-import { stopGradleInstallation, type GradleInstallation } from './stop-client';
+import { resolveLifecycle } from '../../build-tool/lifecycle';
+import type { LifecycleResolver } from '../../build-tool/lifecycle-types';
 
-export const registrationDirectory = (store: OwnedStore): string => store.prefix + 'registrations';
-export const registrationFailure = (store: OwnedStore): string =>
-  store.prefix + 'registrations.failed.json';
 interface WindowOptions {
   readonly signal?: AbortSignal;
   /** Caller holds the documented dedicated-root/no-consumer lifetime; this must be cheap and synchronous. */
@@ -36,41 +30,7 @@ interface WindowOptions {
   readonly timeoutMs?: number;
   readonly clientTimeoutMs?: number;
   readonly exitGraceMs?: number;
-  readonly inspect?: (signal: AbortSignal) => Promise<DaemonInspection>;
-  readonly stop?: (
-    installation: GradleInstallation,
-    signal: AbortSignal,
-    timeoutMs: number,
-  ) => Promise<void>;
-}
-// Protocol: docs/dev/cache-lifecycle-protocol.md#gradle-installation-registration.
-async function sealInstallations(
-  store: OwnedStore,
-  budget: WorkingBudget,
-  signal: AbortSignal,
-): Promise<Reference> {
-  const dir = registrationDirectory(store),
-    before = await store.root.stat(dir);
-  if (!before || before[2] !== 'directory')
-    throw new Error('Missing operational registration directory.');
-  async function* records() {
-    const entries = await opendir(store.root.resolve(dir));
-    for await (const entry of entries) {
-      signal.throwIfAborted();
-      if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name))
-        throw new Error('Incomplete/invalid operational registration.');
-      const value = store.codec.schemas.documents['gradle-installation'].parse(
-        await store.readFixed(dir + '/' + entry.name),
-      );
-      if (entry.name !== H('gradle-installation', value) + '.json')
-        throw new Error('Operational registration name changed.');
-      yield ['installation', value] as const;
-    }
-    const after = await store.root.stat(dir);
-    if (!after || !sameNative(before!, after, true))
-      throw new Error('Operational inventory changed while sealing.');
-  }
-  return store.writeStream('installations', { budget, partition: null }, records(), signal);
+  readonly lifecycle?: LifecycleResolver;
 }
 export class ExclusiveWindow {
   private readonly lifetime = new AbortController();
@@ -153,76 +113,31 @@ export class ExclusiveWindow {
       limited = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
     let installations: Reference | undefined;
     try {
-      if (store.codec.options.model.tuple[2] === 'gradle') {
-        if (!input.inspect && !['linux', 'win32', 'darwin'].includes(process.platform))
-          throw new Error('Native process inspection unavailable on this platform.');
-        if (initial[6] && !initial[13])
-          throw new Error('Frozen post requires original quiescence.');
-        if (await store.root.stat(registrationFailure(store)))
-          throw new Error('Operational capture failed.');
-        installations = initial[13]
+      const tool = store.codec.options.context[7],
+        prior = initial[13]
           ? store.codec.schemas.documents.quiescence.parse(
               await store.readDocument(initial[13], 'quiescence'),
             )[3]
-          : await sealInstallations(store, budget, limited);
-        const ref = installations,
-          native = await store.root.stat(ref[2]);
-        if (!native) throw new Error('Missing sealed installation inventory.');
-        const streamOptions = { codec: store.codec, budget, partition: null };
-        // Validate EOF before executing any installation. Reuse that exact native file
-        // on the command pass, so a later open cannot adopt replacement metadata.
-        await readLocalStream(
-          store.root.read(ref[2], native),
-          'installations',
-          streamOptions,
-          ref,
-          undefined,
-          limited,
-        );
-        if (!initial[6])
-          await readLocalStream(
-            store.root.read(ref[2], native),
-            'installations',
-            streamOptions,
-            ref,
-            async (value) => {
-              const row = tuple(value);
-              if (row[0] !== 'installation') return;
-              assert();
-              limited.throwIfAborted();
-              const r = store.codec.schemas.rows.registration.parse(row[1]),
-                installation = { gradleHome: r[3], gradleUserHome: r[5], javaHome: r[6] },
-                launcher = path.join(
-                  r[3],
-                  'bin',
-                  process.platform === 'win32' ? 'gradle.bat' : 'gradle',
-                ),
-                raw = await lstat(launcher);
-              if (!raw.isFile() || raw.isSymbolicLink())
-                throw new Error('Captured Gradle launcher unavailable.');
-              const remaining = Math.floor(Math.min(clientTimeout, deadline - performance.now()));
-              if (remaining < 1) throw new Error('Quiescence deadline exceeded.');
-              await (input.stop ?? stopGradleInstallation)(installation, limited, remaining);
-            },
-            new AbortController().signal,
-          );
-        const inspect = input.inspect ?? inspectGradleDaemons,
-          settleBy = Math.min(deadline, performance.now() + exitGrace);
-        let proof = await inspect(limited);
-        while (proof.remaining && !proof.uncertain && performance.now() < settleBy) {
-          await delay(Math.min(250, settleBy - performance.now()), undefined, { signal: limited });
-          proof = await inspect(limited);
-        }
-        if (proof.remaining || proof.uncertain)
-          throw new Error(
-            proof.reason ??
-              (proof.remaining
-                ? 'Relevant Gradle daemons remain after stop.'
-                : 'Process evidence is unavailable.'),
-          );
-        if (await store.root.stat(registrationFailure(store)))
-          throw new Error('Operational capture failed during shutdown.');
-      }
+          : undefined,
+        lifecycle = await resolveLifecycle(tool, input.lifecycle);
+      assert();
+      installations = await lifecycle.quiesce({
+        store,
+        budget,
+        installations: prior,
+        sourcesFrozen: !!initial[6],
+        signal: limited,
+        assertCurrent: assert,
+        deadline,
+        clientTimeout,
+        exitGrace,
+      });
+      // Tool operations cannot omit/replace the owner's required inventory or mint a grant.
+      if (tool === 'gradle')
+        installations = store.codec.schemas.ref('installations').parse(installations);
+      else if (installations !== undefined)
+        throw new Error('Unexpected Maven installation inventory.');
+      if (prior) equal(installations!, prior, 'quiescence installation inventory');
       limited.throwIfAborted();
       assert();
       const current = store.codec.schemas.documents['local-state'].parse(await store.state());

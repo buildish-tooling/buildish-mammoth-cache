@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { prepareStreaming } from '../../../src/cache/streaming/prepare';
+import type { LifecycleResolver } from '../../../src/build-tool/lifecycle-types';
+import { gradleResolver } from './quiescence-fixture';
 import { runStreamingPost } from '../../../src/phases/streaming/post';
 import { postStreamingBase } from '../../../src/cache/streaming/base-post';
 import { STREAMING_INVOCATION_STATE } from '../../../src/phases/streaming/state';
@@ -44,7 +47,7 @@ let temporary: string, moving: string;
 beforeAll(async () => {
   temporary = await mkdtemp(path.resolve('build/recovery-process-'));
   moving = temporary + '/moving.mjs';
-  const bundle = await build({
+  await build({
     entryPoints: ['test/cache/streaming/moving-process-fixture.ts'],
     outfile: moving,
     bundle: true,
@@ -53,9 +56,23 @@ beforeAll(async () => {
     target: 'node24',
     metafile: true,
   });
+  const outputs = await build({
+    entryPoints: ['src/cache/streaming/recovery.ts'],
+    outdir: 'build/unused-recovery-graph',
+    bundle: true,
+    write: false,
+    splitting: true,
+    platform: 'node',
+    format: 'esm',
+    packages: 'external',
+    metafile: true,
+  });
+  const eager = Object.values(outputs.metafile!.outputs).find(
+    (o) => o.entryPoint === 'src/cache/streaming/recovery.ts',
+  )!;
   expect(
-    Object.keys(bundle.metafile!.inputs).filter((p) =>
-      /src\/(?:ci\/github|build-tool|phases\/bootstrap|config\/)/.test(p),
+    Object.keys(eager.inputs).filter((p) =>
+      /src\/(?:ci\/github|build-tool\/(?:gradle|maven)\/|phases\/bootstrap|config\/)/.test(p),
     ),
   ).toEqual([]);
 });
@@ -82,16 +99,18 @@ async function opened(f: Awaited<ReturnType<typeof installFixture>>) {
 }
 it('leaves an idle retry intact and abandons before normal completed-owner retirement', async () => {
   const f = await fixture(),
-    inspect = vi.fn();
+    inspect = vi.fn(),
+    resolver = vi.fn(gradleResolver({ inspect }));
   for (let n = 0; n < 16; n++) await f.files('', { ['data/f' + n]: 'body' });
   const before = await f.store.state();
   await reconcileInvocation(await opened(f), 'resume', {
     budget: f.budget,
     assertCurrent,
-    inspect,
+    lifecycle: resolver,
   });
   expect(await f.store.state()).toEqual(before);
   expect(inspect).not.toHaveBeenCalled();
+  expect(resolver).not.toHaveBeenCalled();
   await reconcileInvocation(await opened(f), 'abandon', { budget: f.budget, assertCurrent });
   expect(((await f.store.state()) as unknown[])[14]).toBe('abandoned');
   await reconcileInvocation(await opened(f), 'abandon', { budget: f.budget, assertCurrent });
@@ -183,7 +202,7 @@ it.each([
     await reconcileInvocation(await opened(f), 'resume', {
       budget: f.budget,
       assertCurrent,
-      inspect,
+      lifecycle: gradleResolver({ inspect }),
     });
     expect(inspect).toHaveBeenCalledTimes(1);
     for (const [name, body] of Object.entries({
@@ -197,7 +216,7 @@ it.each([
     await reconcileInvocation(await opened(f), 'abandon', {
       budget: f.budget,
       assertCurrent,
-      inspect,
+      lifecycle: gradleResolver({ inspect }),
     });
     expect(inspect).toHaveBeenCalledTimes(1);
   },
@@ -329,7 +348,7 @@ it('requires fresh absence evidence before returning sources, without executing 
     reconcileInvocation(invocation, 'abandon', {
       budget: f.budget,
       assertCurrent,
-      inspect: async () => ({ remaining: true, uncertain: false }),
+      lifecycle: gradleResolver({ inspect: async () => ({ remaining: true, uncertain: false }) }),
     }),
   ).rejects.toThrow('finished Gradle consumers');
   expect(await f.store.state()).toEqual(before);
@@ -337,7 +356,7 @@ it('requires fresh absence evidence before returning sources, without executing 
   await reconcileInvocation(await opened(f), 'resume', {
     budget: f.budget,
     assertCurrent,
-    inspect: async () => ({ remaining: false, uncertain: false }),
+    lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
   });
   expect(await readFile(f.store.root.resolve('caches/a'), 'utf8')).toBe('a');
 });
@@ -357,7 +376,7 @@ it('preserves a conflicting return destination and its discoverable relocation m
     reconcileInvocation(await opened(f), 'abandon', {
       budget: f.budget,
       assertCurrent,
-      inspect: async () => ({ remaining: false, uncertain: false }),
+      lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
     }),
   ).rejects.toThrow();
   expect(await readFile(f.store.root.resolve('caches/a'), 'utf8')).toBe('conflicting replacement');
@@ -424,7 +443,7 @@ it('reconciles worker GC without base process shutdown or quiescence authority',
   await reconcileInvocation(await opened(f), 'resume', {
     budget: f.budget,
     assertCurrent,
-    inspect,
+    lifecycle: gradleResolver({ inspect }),
   });
   expect(inspect).not.toHaveBeenCalled();
   expect(((await f.store.state()) as unknown[])[13]).toBeNull();
@@ -495,7 +514,7 @@ it('keeps primary recovery and close failures together and releases the frozen l
   const error = await reconcileInvocation(await opened(f), 'abandon', {
     budget: f.budget,
     assertCurrent,
-    inspect: async () => ({ remaining: false, uncertain: false }),
+    lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
   }).catch((error) => error);
   expect(error).toBeInstanceOf(AggregateError);
   expect(error.errors).toEqual([primary, cleanup]);
@@ -532,7 +551,9 @@ it.each(['provider', 'base-core', 'disabled'] as const)(
         signal: controller.signal,
         cleanupSignal: new AbortController().signal,
         assertCurrent,
-        inspect: async () => ({ remaining: false, uncertain: false }),
+        lifecycle: gradleResolver({
+          inspect: async () => ({ remaining: false, uncertain: false }),
+        }),
       };
     if (kind === 'provider')
       await expect(
@@ -584,4 +605,87 @@ it.each(['provider', 'base-core', 'disabled'] as const)(
     expect(loadReport).not.toHaveBeenCalled();
   },
   20_000,
+);
+
+it.each(['gradle', 'maven'] as const)(
+  'new opposite-tool prepare returns interrupted OLD %s sources with only OLD lifecycle selection',
+  async (oldTool) => {
+    const f = await installFixture(oldTool);
+    fixtures.push(f);
+    let status: unknown;
+    try {
+      execFileSync(
+        process.execPath,
+        [moving, 'start', f.root, 'relocation-outbound-rename', '1', oldTool],
+        { stdio: 'pipe' },
+      );
+    } catch (error) {
+      status = (error as { status: unknown }).status;
+    }
+    expect(status).toBe(73);
+    const nextTool = oldTool === 'gradle' ? 'maven' : 'gradle',
+      next = await installFixture(nextTool, { root: f.root, nonce: 'b'.repeat(32) }),
+      cleanup = new AbortController().signal,
+      foreground = new AbortController(),
+      inspect = vi.fn(async (signal: AbortSignal) => {
+        expect(signal).toBe(cleanup);
+        return { remaining: false, uncertain: false };
+      }),
+      stop = vi.fn(async () => {
+        throw new Error('Recovery must never stop launchers');
+      }),
+      resolver = vi.fn<LifecycleResolver>(async (tool) => {
+        expect(tool).toBe(oldTool);
+        return await gradleResolver({ inspect, stop })(tool);
+      }),
+      backend = vi.fn(async (): Promise<never> => {
+        throw new Error('No backend before cleanup');
+      });
+    foreground.abort(new Error('new foreground cancelled'));
+    await expect(
+      prepareStreaming({
+        root: f.root,
+        model: next.model,
+        context: next.store.codec.options.context,
+        nonce: String(next.bindings[4]),
+        budget: f.budget,
+        policy: {
+          role: 'standalone',
+          access: 'writable',
+          restoreCleanup: 'none',
+          gcAgeMs: null,
+          ordinaryPolicy: 'strict',
+          ordinaryOrder: [],
+        },
+        currentRef: 'refs/heads/main',
+        captureTempDirectory: null,
+        artifactRetentionDays: 7,
+        cleanupEnabled: true,
+        saveAnchor: () => {},
+        cacheBackend: backend,
+        provision: backend,
+        installHooks: backend,
+        assertCurrent,
+        signal: foreground.signal,
+        cleanupSignal: cleanup,
+        lifecycle: resolver,
+      }),
+    ).rejects.toThrow('new foreground cancelled');
+    expect(resolver).toHaveBeenCalledExactlyOnceWith(oldTool);
+    expect(inspect).toHaveBeenCalledTimes(oldTool === 'gradle' ? 1 : 0);
+    expect(stop).not.toHaveBeenCalled();
+    expect(backend).not.toHaveBeenCalled();
+    for (const [name, body] of Object.entries(
+      oldTool === 'gradle'
+        ? { 'caches/a': 'a', 'caches/b': 'b', 'state/b': 'snapshot' }
+        : {
+            'repository/org/a/1/_remote.repositories': 'marker',
+            'repository/org/a/1/a.jar': 'a',
+            'repository/org/b/1/b.jar': 'b',
+          },
+    ))
+      expect(await readFile(f.store.root.resolve(name), 'utf8')).toBe(body);
+    await (await opened(f)).store.assertNoIntents();
+  },
+  20000,
 );

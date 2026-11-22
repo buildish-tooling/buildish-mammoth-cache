@@ -15,7 +15,7 @@
  */
 
 import type { OwnedStore } from '../../cache/streaming/owned-store';
-import { registrationDirectory } from '../../cache/streaming/quiescence';
+import { registrationDirectory } from './registrations';
 import { installGradleBuildResultCapture } from './build-results';
 import type { CiJobContext } from '../../ci/types';
 // Protocol: docs/dev/cache-lifecycle-protocol.md#gradle-installation-registration.

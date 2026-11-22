@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { gradleResolver } from './quiescence-fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import { readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { composedFixture } from './composed-fixture';
@@ -144,7 +145,9 @@ it('does not observe or create a backend when initial Gradle quiescence is unava
     ready = await prepareStreaming(f.request),
     backend = vi.fn(async () => f.backend);
   const result = await post(f, ready.anchor, backend, {
-    inspect: async () => ({ remaining: false, uncertain: true, reason: 'unavailable' }),
+    lifecycle: gradleResolver({
+      inspect: async () => ({ remaining: false, uncertain: true, reason: 'unavailable' }),
+    }),
   });
   expect(result.outcome).toBe('skipped-not-quiescent');
   expect(backend).not.toHaveBeenCalled();

@@ -19,7 +19,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { stopGradleInstallation } from '../../../src/cache/streaming/stop-client';
+import { stopGradleInstallation } from '../../../src/build-tool/gradle/stop-client';
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();

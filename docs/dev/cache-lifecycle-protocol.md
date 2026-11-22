@@ -503,6 +503,23 @@ new concurrent consumer after inspection; the dedicated-root/completed-consumer 
 still applies. Platform implementation and small native proofs do not establish large-cache
 throughput, memory/paging guarantees or qualification of every macOS release/architecture.
 
+## Build-tool lifecycle boundary
+
+The implemented internal composition selects a configuration-free lifecycle from the
+validated owner's Gradle/Maven identity. It delegates capture installation, consumer
+quiescence, recovery consumer verification and known-hook cleanup. Gradle defers each
+operation's dependencies independently; Maven retains ordinary hooks and the caller's
+completed-consumer lifetime without Gradle registration or process inspection.
+
+Shared cache code retains role/access admission, root/state/lifetime checks, quiescence
+record commitment, exclusive-window grants, recovery dispatch and all cache mutations.
+A tool operation returns installation metadata, never a grant. Recovery selects the OLD
+owner's frozen identity and cleanup signal, without constructing the next configured
+adapter or executing captured launchers. No pending destructive work means no recovery
+process inspection. Hook cleanup uses the frozen tool/root independently of reporting.
+These internal routes do not activate the released Action entrypoints or qualify cache
+scale, throughput or memory/paging behavior.
+
 ## Mutable root state and partition cells
 
 The fixed managed-root locator `.mammoth/v1/current.json` is:

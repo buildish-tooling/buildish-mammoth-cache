@@ -14,9 +14,15 @@
  * limitations under the License.
  */
 
+import {
+  createGradleLifecycle,
+  type GradleConsumerDependencies,
+} from '../../../src/build-tool/gradle/lifecycle';
+import { mavenLifecycle } from '../../../src/build-tool/maven/lifecycle';
+import type { LifecycleResolver } from '../../../src/build-tool/lifecycle-types';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { observationFixture } from './observation-fixtures';
-import { registrationDirectory } from '../../../src/cache/streaming/quiescence';
+import { registrationDirectory } from '../../../src/build-tool/gradle/registrations';
 import { H, encodeRecord } from '../../../src/cache/streaming/encoding';
 export async function quiescenceFixture(options: Parameters<typeof observationFixture>[1] = {}) {
   const f = await observationFixture('gradle', options);
@@ -47,4 +53,9 @@ export async function quiescenceFixture(options: Parameters<typeof observationFi
     return row;
   }
   return { ...f, register };
+}
+
+/** Tool-owned dependencies exercise the real Gradle implementation through shared selection. */
+export function gradleResolver(dependencies: GradleConsumerDependencies): LifecycleResolver {
+  return async (tool) => (tool === 'gradle' ? createGradleLifecycle(dependencies) : mavenLifecycle);
 }

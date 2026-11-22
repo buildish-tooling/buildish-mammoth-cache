@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { resolveLifecycle } from '../../build-tool/lifecycle';
 import { randomBytes } from 'node:crypto';
 import { createCachePartitions, validatePartitionConflictHandling } from '../../cache/model';
 import { resolveCacheModel, lineageId } from '../../cache/streaming/model';
@@ -142,11 +143,8 @@ export async function runStreamingPrepare(d: StreamingPrepareDependencies) {
       artifactBackend: d.artifactBackend,
       provision,
       installHooks: async (store) => {
-        if (tool === 'gradle' && !config.readOnly && config.jobMode !== 'distributed-worker') {
-          const { installGradleLifecycleCapture } =
-            await import('../../build-tool/gradle/lifecycle-capture');
-          await installGradleLifecycleCapture(store, ci);
-        } else await adapter.installBuildHooks(ci);
+        const lifecycle = await resolveLifecycle(store.codec.options.context[7], d.lifecycle);
+        await lifecycle.prepareCapture(store, ci, () => adapter.installBuildHooks(ci));
       },
     });
     for (const warning of provisioning?.warnings ?? []) host.warning(warning);
