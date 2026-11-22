@@ -308,7 +308,7 @@ it('a denied Gradle window does not load report/sink/backend SDK dependencies', 
   expect(f.loadReport).not.toHaveBeenCalled();
   expect(f.sink.publishSummary).not.toHaveBeenCalled();
 });
-it('guard and GitHub factory modules defer provider SDK/config/build-tool graphs and released entrypoints stay selected', async () => {
+it('guard and GitHub factory modules defer provider SDK/config/build-tool graphs and streaming entrypoints are selected', async () => {
   const built = await build({
     entryPoints: ['src/phases/streaming/post.ts', 'src/ci/github/streaming.ts'],
     outdir: 'build/unused-streaming-graph',
@@ -334,7 +334,7 @@ it('guard and GitHub factory modules defer provider SDK/config/build-tool graphs
   const { readFile } = await import('node:fs/promises');
   for (const tool of ['gradle', 'maven'])
     for (const phase of ['main', 'post'])
-      expect(await readFile('src/ci/github/' + tool + '/' + phase + '.ts', 'utf8')).not.toContain(
+      expect(await readFile('src/ci/github/' + tool + '/' + phase + '.ts', 'utf8')).toContain(
         'streaming',
       );
 });
@@ -415,5 +415,43 @@ it.each(['base', 'read-only', 'worker', 'disabled'] as const)(
         owner.store.codec.options.invocation,
       );
     }
+  },
+);
+
+it.each([
+  { stage: 'factory', cancel: true },
+  { stage: 'publish', cancel: true },
+  { stage: 'factory', cancel: false },
+  { stage: 'publish', cancel: false },
+])(
+  'rejects summary $stage cancellation/lost lifetime (cancel=$cancel) after preserving owned state',
+  async ({ stage, cancel }) => {
+    const f = await fixture('maven'),
+      controller = new AbortController();
+    let current = true;
+    const revoke = () => {
+      if (cancel) controller.abort(new Error('summary cancelled'));
+      else current = false;
+    };
+    await expect(
+      runStreamingPrepare({
+        ...f.deps,
+        signal: controller.signal,
+        assertCurrent: (): undefined => {
+          if (!current) throw new Error('lifetime revoked');
+        },
+        reportSink: async () => {
+          if (stage === 'factory') revoke();
+          return {
+            ...f.sink,
+            publishSummary: async () => {
+              if (stage === 'publish') revoke();
+            },
+          };
+        },
+      }),
+    ).rejects.toThrow(cancel ? 'summary cancelled' : 'lifetime revoked');
+    expect(f.state.get(JOB_PREPARE_FAILED_STATE)).toBe('true');
+    expect(f.state.get(STREAMING_INVOCATION_STATE)).toBeTruthy();
   },
 );

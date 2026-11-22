@@ -216,6 +216,7 @@ it('uses real native SDK archives for accepted base restore and retains independ
     policy: { ...f.request.policy, restoreCleanup: 'prune-managed' },
   });
   expect(ready.restoredKey).toBe(generation[11]);
+  expect(ready.restoreStatus).toBe('fallback-lineage-hit');
   expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('from-base');
   expect(await readFile(f.store.root.resolve('state/new'), 'utf8')).toBe('snapshot');
   expect(await f.store.root.stat('data/old')).toBeNull();
@@ -712,3 +713,60 @@ it('preserves bounded differing-contribution diagnostics from the real worker me
   );
   expect(await f.store.root.stat('repository/org/example/lib/1/only-B')).toBeNull();
 });
+
+it('reports fresh feature unavailability but reuses a frozen no-base miss without another backend access', async () => {
+  const f = await fixture();
+  const available = vi.spyOn(f.backend, 'isFeatureAvailable').mockReturnValue(false),
+    backend = vi.fn(async () => f.backend),
+    request = { ...f.request, cacheBackend: backend };
+  expect((await prepareStreaming(request)).restoreStatus).toBe('feature-unavailable');
+  expect(available).toHaveBeenCalledTimes(1);
+  backend.mockClear();
+  available.mockClear();
+  expect((await prepareStreaming(request)).restoreStatus).toBe('miss');
+  expect(backend).not.toHaveBeenCalled();
+  expect(available).not.toHaveBeenCalled();
+});
+
+it.each(['cold', 'empty', 'mixed'] as const)(
+  'classifies selected %s base contents without mistaking an all-cold generation for a hit',
+  async (kind) => {
+    const f = await fixture(),
+      source = await baseFixture(f.model),
+      sdk = await nativeCacheBackend();
+    const data = await preparedBase(source, { 'data/a': 'a' }, 'data'),
+      state = await preparedBase(source, { 'state/a': 'a' }, 'state');
+    await NativeObjectSave.save(sdk.backend, data, { budget: source.budget });
+    await NativeObjectSave.save(sdk.backend, state, { budget: source.budget });
+    const generation = await seedBaseGeneration(
+      source,
+      sdk,
+      kind === 'empty'
+        ? [
+            ['empty', 'data'],
+            ['empty', 'state'],
+          ]
+        : [
+            ['object', 'data', data.reference],
+            ['object', 'state', state.reference],
+          ],
+    );
+    if (kind !== 'empty') sdk.objects.delete(data.reference[2]);
+    if (kind === 'cold') sdk.objects.delete(state.reference[2]);
+    const ready = await prepareStreaming({ ...f.request, cacheBackend: async () => sdk.backend });
+    expect(ready.restoreStatus).toBe(
+      kind === 'cold'
+        ? 'miss'
+        : kind === 'mixed'
+          ? 'current-lineage-partial-hit'
+          : 'current-lineage-hit',
+    );
+    expect(ready.restoredKey).toBe(kind === 'cold' ? null : generation[11]);
+    const facts = await PrepareFacts.open(ready.store, { budget: f.budget });
+    try {
+      expect(facts.bindings[9]).not.toBeNull();
+    } finally {
+      facts.close();
+    }
+  },
+);

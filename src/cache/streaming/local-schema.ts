@@ -422,6 +422,7 @@ export function localSchemas(options: LocalOptions) {
           'published',
           'worker-uploaded',
           'skipped-not-quiescent',
+          'feature-unavailable',
           'abandoned',
         ])
         .nullable(),
@@ -433,6 +434,16 @@ export function localSchemas(options: LocalOptions) {
         completed = phase === 'completed',
         outcome = s[14];
       if (completed !== (outcome !== null)) bad('Outcome/phase mismatch.');
+      if (
+        outcome === 'feature-unavailable' &&
+        (options.role !== 'standalone' ||
+          options.access !== 'writable' ||
+          s[7] !== null ||
+          s[8] !== null ||
+          s[9] !== null ||
+          s[12] !== null)
+      )
+        bad('Unavailable outcome requires an optional standalone without publication.');
       const post =
         [
           'observations-frozen',
@@ -448,7 +459,8 @@ export function localSchemas(options: LocalOptions) {
           'package-frozen',
           'worker-uploaded',
         ].includes(phase) ||
-        (completed && ['no-change', 'published', 'worker-uploaded'].includes(outcome!));
+        (completed &&
+          ['no-change', 'published', 'worker-uploaded', 'feature-unavailable'].includes(outcome!));
       if (post && (s[6] === null || s[10] === null)) bad('Missing frozen observation/GC evidence.');
       const base =
         [

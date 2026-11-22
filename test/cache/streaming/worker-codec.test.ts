@@ -909,3 +909,33 @@ it('rejects snapshot upsert overlapping an aggregate usage-only Maven unit', asy
     ),
   ).rejects.toThrow('Mixed Maven publication');
 });
+
+it('rejects unknown Gradle layouts in imported archives rather than applying local discovery filtering', async () => {
+  const options = simple();
+  // Valid framing/hierarchy; the unknown ordinary file must fail before any trailing seal.
+  const trace: Value[][] = [
+    [
+      'identity',
+      [
+        'identity',
+        1,
+        'worker-tar-v1',
+        'gzip',
+        [...options.context],
+        options.model.id,
+        options.model.family,
+        [],
+      ],
+    ],
+    ['control', 1, ['channel-open', 0, 'aggregate', null]],
+  ];
+  for (const [i, path] of ['', 'caches', 'caches/transforms-3'].entries()) {
+    trace.push(['directory', ['header', 0, path, 'directory', 0, 493, 0]]);
+    trace.push(['control', i + 2, ['dir-open', 0, path]]);
+  }
+  trace.push(['file', 0, ['header', 0, 'caches/transforms-3/body', 'file', 0, 420, 0], '']);
+  await expect(read(traceArchive(trace), options)).rejects.toThrow(
+    'Unsupported workspace-surface contribution',
+  );
+  expect(options.budget.retained).toBe(0);
+});

@@ -23,12 +23,11 @@ limitations under the License.
 ## Status and shared types
 
 **Draft version 1; native-base/generation acquisition and publication are
-implemented within the internal streaming lifecycle.** This is the native-base and
+implemented within the streaming lifecycle selected by unreleased Action source delegates.** This is the native-base and
 generation part of the [streaming cache protocol](../cache-protocol/). The internal
 implementation includes native payload membership validation, recovery-group
-admission and rename-only evacuation/return around SDK storage. Released Action
-entrypoints do not select it yet; activation and incompatible release exposure
-remain pending. The parent protocol's integrated review, full-pipeline
+admission and rename-only evacuation/return around SDK storage. Existing release tags retain their published lifecycle; incompatible release
+exposure remains pending. The parent protocol's integrated review, full-pipeline
 resource/platform qualification, release cleanup and final cutover review gates
 still apply. This specification defines serialized fields, not released behavior.
 Serializer, validator, key derivation and restore/publication code comments must

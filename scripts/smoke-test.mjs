@@ -75,7 +75,8 @@ async function createStagingRoot(distributionRoot) {
     }
     if (path.dirname(directory) === directory) break;
   }
-  return await mkdtemp(path.join(temporaryRoot, 'mammoth-distribution-'));
+  // Leave room for GnuPG's Unix socket names in the isolated fixture.
+  return await mkdtemp(path.join(temporaryRoot, 'mammoth-'));
 }
 
 async function runScenario(actionRoot, action, stagedRoot) {
@@ -126,6 +127,7 @@ async function runScenario(actionRoot, action, stagedRoot) {
     GITHUB_JOB: `smoke-${action.name}`,
     GITHUB_RUN_ID: '1',
     GITHUB_RUN_ATTEMPT: '1',
+    GITHUB_SHA: '0123456789abcdef0123456789abcdef01234567',
     GITHUB_WORKSPACE: workspace,
     GITHUB_STEP_SUMMARY: summaryFile,
     GITHUB_STATE: stateFile,

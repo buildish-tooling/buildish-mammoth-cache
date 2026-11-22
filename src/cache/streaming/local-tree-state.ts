@@ -26,6 +26,7 @@ import {
   type Unit,
 } from './schema';
 import {
+  isWorkspaceScaffolding,
   TreeState,
   type WorkingBudget,
   compareName,
@@ -241,8 +242,28 @@ export class LocalTreeState {
       if (this.active?.unit[1] === row[1]) throw new Error('Missing local unit close.');
       if (row[1] && this.tree.leaf) {
         const probe = row[1] + '/.workspace-directory-probe';
-        recognizedRoot(this.schemas.options.model, probe);
-        this.owner(probe);
+        let owned = true;
+        try {
+          this.owner(probe);
+        } catch (error) {
+          if (
+            this.purpose !== 'observations' ||
+            (this.active && (this.active.owner !== null || this.active.decision !== 'retain')) ||
+            !(error instanceof Error) ||
+            error.message !== 'Unowned managed path.'
+          )
+            throw error;
+          // Physical observation scaffolding is evidence, never a managed contribution.
+          owned = false;
+        }
+        if (
+          owned &&
+          !(
+            this.purpose === 'observations' &&
+            isWorkspaceScaffolding(this.schemas.options.model, row[1])
+          )
+        )
+          recognizedRoot(this.schemas.options.model, probe);
       }
       this.tree.close(row[1]);
       this.closeRoot = null;

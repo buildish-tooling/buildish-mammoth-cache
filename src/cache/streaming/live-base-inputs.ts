@@ -28,7 +28,7 @@ import { NativeReadPhase } from './native-read-phase';
 import { nativeIdentity, nativeIds, sameNative, type NativeIdentity } from './native';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
-import { normalizeMode } from './tree-state';
+import { isWorkspaceScaffolding, normalizeMode } from './tree-state';
 import { verifyNativeEvidence } from './install-evidence';
 import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
 import type { OwnedStore, Reference } from './owned-store';
@@ -298,7 +298,11 @@ export class LocalBaseSnapshot {
           scopes.push(sourceScope(scopes[scopes.length - 1], r[3]));
         } else if (r[0] === 'dir-close') {
           const scope = scopes[scopes.length - 1];
-          if (path && contributesEmpty(scope)) {
+          if (
+            path &&
+            contributesEmpty(scope) &&
+            !isWorkspaceScaffolding(store.codec.options.model, path)
+          ) {
             let owner: string | undefined;
             try {
               owner = store.codec.options.model.owner(path + '/.workspace-directory-probe')[0];
@@ -487,7 +491,11 @@ export class LiveBaseInputs {
           }
         } else if (r[0] === 'dir-close') {
           const scope = frames[frames.length - 1];
-          if (path && contributesEmpty(scope)) {
+          if (
+            path &&
+            contributesEmpty(scope) &&
+            !isWorkspaceScaffolding(store.codec.options.model, path)
+          ) {
             let owner: string | undefined;
             try {
               owner = store.codec.options.model.owner(path + '/.workspace-directory-probe')[0];

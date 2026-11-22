@@ -37,9 +37,11 @@ export interface BasePostRequest extends RecoveryOptions {
   readonly removeHooks: (store: OwnedStore) => Promise<void>;
   readonly summaries?: PartitionSummaries;
   readonly required?: boolean;
+  readonly onWarning?: (message: string) => void;
 }
 export interface BasePostResult {
-  readonly outcome: 'published' | 'no-change' | 'skipped-not-quiescent' | 'abandoned';
+  readonly outcome:
+    'published' | 'no-change' | 'skipped-not-quiescent' | 'feature-unavailable' | 'abandoned';
   readonly key: string | null;
   readonly message?: string;
 }
@@ -47,7 +49,7 @@ async function completed(
   store: OwnedStore,
   bindings: PrepareBindings,
   options: RecoveryOptions,
-  outcome: 'published' | 'no-change' | 'skipped-not-quiescent',
+  outcome: 'published' | 'no-change' | 'skipped-not-quiescent' | 'feature-unavailable',
 ) {
   await store.assertNoIntents();
   await assertLifecycleWindow(store, bindings, options);
@@ -79,7 +81,15 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       if (!facts.selection) throw new Error('Missing frozen prepare selection.');
       if (facts.state[4] === 'completed') {
         const outcome = facts.state[14];
-        if (!['published', 'no-change', 'skipped-not-quiescent', 'abandoned'].includes(outcome!))
+        if (
+          ![
+            'published',
+            'no-change',
+            'skipped-not-quiescent',
+            'feature-unavailable',
+            'abandoned',
+          ].includes(outcome!)
+        )
           throw new Error('Invalid base completion.');
         await assertLifecycleWindow(store, facts.bindings, request);
         const publication = facts.state[8]
@@ -135,7 +145,20 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       let state = store.codec.schemas.documents['local-state'].parse(await store.state());
       // No backend or source traversal until a frozen observation has been committed.
       const backend = await request.cacheBackend();
-      if (!backend.capabilities.supportsExplicitSave || !backend.isFeatureAvailable())
+      if (!backend.isFeatureAvailable()) {
+        // Only optional, pre-publication work may finish without a cache receipt.
+        if (
+          role === 'standalone' &&
+          !request.required &&
+          ['observations-frozen', 'gc-complete'].includes(state[4]) &&
+          state[8] === null
+        ) {
+          await completed(store, facts.bindings, options, 'feature-unavailable');
+          return { outcome: 'feature-unavailable', key: null };
+        }
+        throw new Error('Native base backend cannot publish.');
+      }
+      if (!backend.capabilities.supportsExplicitSave)
         throw new Error('Native base backend cannot publish.');
       if (state[4] === 'observations-frozen') {
         await executeGc(store, options);

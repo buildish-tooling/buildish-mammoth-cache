@@ -26,7 +26,13 @@ import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
 import { workspaceKind } from '../immutable-workspaces';
 import { UnitMarkers } from './unit-markers';
-import { baseName, parentPath, compareMembership, isWorkspaceRoot } from './tree-state';
+import {
+  baseName,
+  parentPath,
+  compareMembership,
+  isWorkspaceRoot,
+  isWorkspaceScaffolding,
+} from './tree-state';
 import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
 import { baseFileBytes } from './base-layout';
 import { decodeGeneration } from './native-records';
@@ -84,6 +90,7 @@ export interface ObservationCaptureOptions extends BaseObjectOptions {
   /** Operation-local progress, including completed deletions if capture subsequently fails. No logs per file. */
   readonly onPurge?: (partition: string, outcome: 'deleted' | 'missing' | 'unsupported') => void;
   readonly onOpaqueScope?: (path: string) => void;
+  readonly onWarning?: (message: string) => void;
 }
 export interface FrozenObservation {
   readonly reference: Reference;
@@ -248,6 +255,18 @@ export async function captureObservations(
     }
   };
   let workspace: { root: string; markers: [boolean, string][] } | null = null;
+  const skippedLayouts = new Set<string>();
+  const warnUnknownLayout = (path: string) => {
+    if (!options.onWarning || skippedLayouts.size >= 10) return;
+    const parts = path.split('/'),
+      sample = parts
+        .slice(0, parts[1]?.startsWith('transforms-') ? 3 : 4)
+        .join('/')
+        .slice(0, 256);
+    if (skippedLayouts.has(sample)) return;
+    skippedLayouts.add(sample);
+    options.onWarning('Skipped unrecognized Gradle cache tree: ' + sample);
+  };
   const mark = (path: string, directory: boolean) => {
     if (!workspace) return;
     const relative = path.slice(workspace.root.length + 1);
@@ -279,6 +298,12 @@ export async function captureObservations(
     if (!owner(c.path) || (model.tuple[2] === 'maven' && isMavenTransientFile(c.name)))
       return 'prune';
     if (c.type !== 'file') throw new Error('Unsupported managed observation child.');
+    // Local discovery may omit unknown layouts; imported contribution validators stay strict.
+    // The existing physical child projection still protects these files from whole-tree moves.
+    if (isWorkspaceScaffolding(model, c.path)) {
+      warnUnknownLayout(c.path);
+      return 'prune';
+    }
   };
   const attach = (offset: number) => {
     const parent = frames[frames.length - 1];
@@ -468,32 +493,27 @@ export async function captureObservations(
               entry.id,
               entry.offset,
             ]);
-          const end = tree.position,
-            meaningful =
-              e.path === '' ||
-              files > 0 ||
-              frame.entries.some((x) => x.offset !== null) ||
-              !!owner(e.path + '/.workspace-directory-probe');
-          const offset = meaningful
-            ? await tree.append([
-                'directory',
-                e.path,
-                e.identity,
-                null,
-                null,
-                act,
-                files > 0 && allDelete ? 'delete' : 'retain',
-                start,
-                end,
-                kind,
-                files,
-                complete,
-                direct,
-                directFiles > 0 && directDelete ? 'delete' : 'retain',
-                directFiles,
-              ])
-            : null;
-          if (offset !== null) attach(offset);
+          // Preserve walked scaffolding too: worker replay must co-read the same tree
+          // and detect late children there, without treating an unowned directory as payload.
+          const end = tree.position;
+          const offset = await tree.append([
+            'directory',
+            e.path,
+            e.identity,
+            null,
+            null,
+            act,
+            files > 0 && allDelete ? 'delete' : 'retain',
+            start,
+            end,
+            kind,
+            files,
+            complete,
+            direct,
+            directFiles > 0 && directDelete ? 'delete' : 'retain',
+            directFiles,
+          ]);
+          attach(offset);
         } finally {
           options.budget.release(frame.charge);
         }

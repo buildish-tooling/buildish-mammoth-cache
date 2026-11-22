@@ -217,11 +217,15 @@ export function normalizeMode(buildTool: string, path: string, mode: number): nu
 export function isWorkspaceRoot(model: ResolvedModel, path: string): boolean {
   return model.tuple[2] === 'gradle' && workspaceRoot(path) === path;
 }
+// Namespace directories carry physical evidence, never an empty workspace payload.
+export function isWorkspaceScaffolding(model: ResolvedModel, path: string): boolean {
+  return model.tuple[2] === 'gradle' && isWorkspaceCachePath(path) && workspaceRoot(path) === null;
+}
 export function recognizedRoot(model: ResolvedModel, path: string): string | null {
   if (model.tuple[2] === 'maven') return path.startsWith('repository/') ? parentPath(path) : null;
   const root = workspaceRoot(path);
   if (root === null && isWorkspaceCachePath(path))
-    throw new Error('Unsupported workspace-surface contribution.');
+    throw new Error('Unsupported workspace-surface contribution. Path: ' + path);
   return root;
 }
 export function validateUnit(model: ResolvedModel, unit: Unit): void {

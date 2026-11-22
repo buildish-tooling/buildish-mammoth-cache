@@ -33,6 +33,7 @@ export interface WorkerPostRequest extends RecoveryOptions {
   readonly removeHooks?: () => Promise<void>;
   readonly artifactBackend: () => Promise<WorkflowArtifactBackend>;
   readonly summaries?: PartitionSummaries;
+  readonly onWarning?: (message: string) => void;
 }
 // Protocol: docs/dev/cache-lifecycle-protocol.md#object-and-worker-receipts.
 export async function postStreamingWorker(input: WorkerPostRequest) {

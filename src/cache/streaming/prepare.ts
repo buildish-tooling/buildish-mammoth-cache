@@ -15,8 +15,9 @@
  */
 
 import { mkdir, lstat } from 'node:fs/promises';
+import { lineagePrefix } from './native-records';
 import { LocalCodec, policySchema, type Role, type Access } from './local-schema';
-import { invocationId, type ResolvedModel } from './model';
+import { invocationId, lineageId, type ResolvedModel } from './model';
 import { contextSchema, type Context } from './schema';
 import { NativeRoot, missing, type Failpoint } from './native';
 import { OwnedStore } from './owned-store';
@@ -81,7 +82,15 @@ export interface StreamingPrepareRequest extends RecoveryOptions {
   readonly now?: () => number;
   readonly fail?: Failpoint;
 }
+export type PrepareRestoreStatus =
+  | 'feature-unavailable'
+  | 'miss'
+  | 'current-lineage-hit'
+  | 'fallback-lineage-hit'
+  | 'current-lineage-partial-hit'
+  | 'fallback-lineage-partial-hit';
 export interface StreamingPrepareResult {
+  readonly restoreStatus: PrepareRestoreStatus;
   readonly store: OwnedStore;
   readonly anchor: InvocationAnchor;
   readonly cutoff: number;
@@ -300,6 +309,7 @@ export async function prepareStreaming(
     );
   }
   let cache: BaseCacheBackend | undefined, artifacts: WorkflowArtifactBackend | undefined;
+  let unavailable = false;
   const getCache = async () => (cache ??= await request.cacheBackend());
   const getArtifacts = async () => {
     if (!request.artifactBackend) throw new Error('Required artifact backend is missing.');
@@ -328,15 +338,16 @@ export async function prepareStreaming(
         assertRequest(request, facts);
         const s = structuredClone(facts.selection!);
         if (s[5][0] === 'pending') {
-          const backend = await getCache(),
-            pin = backend.isFeatureAvailable()
-              ? await PinnedBaseGeneration.discover(
-                  store,
-                  backend,
-                  { currentRef: s[2], defaultRef: s[3] ?? undefined },
-                  options,
-                )
-              : null;
+          const backend = await getCache();
+          unavailable = !backend.isFeatureAvailable();
+          const pin = !unavailable
+            ? await PinnedBaseGeneration.discover(
+                store,
+                backend,
+                { currentRef: s[2], defaultRef: s[3] ?? undefined },
+                options,
+              )
+            : null;
           const failures: unknown[] = [];
           try {
             if (pin) {
@@ -446,7 +457,7 @@ export async function prepareStreaming(
     try {
       await assertLifecycleWindow(store, ready.bindings, options);
       assertCurrent();
-      return result(ready, anchor);
+      return result(ready, anchor, unavailable);
     } finally {
       ready.close();
     }
@@ -471,14 +482,41 @@ export async function prepareStreaming(
     throw primary;
   }
 }
-function result(facts: PrepareFacts, anchor: InvocationAnchor): StreamingPrepareResult {
+function result(
+  facts: PrepareFacts,
+  anchor: InvocationAnchor,
+  unavailable = false,
+): StreamingPrepareResult {
   if (facts.state[4] !== 'build-ready' || facts.bindings[8][7] === null)
     throw new Error('Prepare did not finish.');
+  const selection = facts.selection!,
+    allCold = selection[7]?.length === facts.store.codec.options.model.partitions.length,
+    key = allCold ? null : facts.bindings[9]?.[1];
+  let restoreStatus: PrepareRestoreStatus = unavailable ? 'feature-unavailable' : 'miss';
+  if (key) {
+    // The admitted generation key is bound to its validated record/authorized lineage.
+    // Match that protocol prefix, without rereading the generation or guessing a suffix.
+    const family = facts.store.codec.options.model.family,
+      current = key.startsWith(lineagePrefix(family, lineageId(selection[2])));
+    if (
+      !current &&
+      (!selection[3] || !key.startsWith(lineagePrefix(family, lineageId(selection[3]))))
+    )
+      throw new Error('Restored generation is outside frozen lineages.');
+    restoreStatus = selection[7]?.length
+      ? current
+        ? 'current-lineage-partial-hit'
+        : 'fallback-lineage-partial-hit'
+      : current
+        ? 'current-lineage-hit'
+        : 'fallback-lineage-hit';
+  }
   return {
+    restoreStatus,
     store: facts.store,
     anchor,
     cutoff: facts.bindings[8][7],
-    restoredKey: facts.bindings[9]?.[1] ?? null,
+    restoredKey: key ?? null,
     workerCount: facts.producers.length,
   };
 }

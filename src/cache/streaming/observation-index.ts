@@ -18,7 +18,7 @@ import type { OwnedStore, Reference } from './owned-store';
 import { Digest } from './encoding';
 import { InstallScratch } from './install-scratch';
 import { tuple, equal, encodeRecord, add, type Value } from './encoding';
-import { baseName, compareName, parentPath } from './tree-state';
+import { isWorkspaceScaffolding, baseName, compareName, parentPath } from './tree-state';
 import type { NativeIdentity } from './native';
 import type { BaseObjectOptions } from './base-object';
 import { settleBaseCleanup } from './base-object';
@@ -269,11 +269,13 @@ export class ObservationIndex {
           try {
             let declaredOwner = 0n;
             try {
-              const p = store.codec.options.model.owner(
-                frame.path + '/.workspace-directory-probe',
-              )[0];
-              declaredOwner =
-                1n << BigInt(store.codec.options.model.partitions.findIndex((d) => d[0] === p));
+              if (!isWorkspaceScaffolding(store.codec.options.model, frame.path)) {
+                const p = store.codec.options.model.owner(
+                  frame.path + '/.workspace-directory-probe',
+                )[0];
+                declaredOwner =
+                  1n << BigInt(store.codec.options.model.partitions.findIndex((d) => d[0] === p));
+              }
             } catch {
               /* unowned directory scaffold */
             }
@@ -283,6 +285,7 @@ export class ObservationIndex {
             if (!frame.allOwners) frame.allOwners = declaredOwner;
             const removed =
               frame.deleting &&
+              !isWorkspaceScaffolding(store.codec.options.model, frame.path) &&
               frame.childCleanup &&
               !frame.originalProtected &&
               frame.allOwners !== 0n &&

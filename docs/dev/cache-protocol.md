@@ -22,12 +22,13 @@ limitations under the License.
 
 ## Status and ownership
 
-**Draft specification for an incompatible, unreleased format.** Internal streaming
+**Draft specification for an incompatible, unreleased format.** Streaming
 prepare/build/post composition is implemented, including worker processing,
 native-base/generation acquisition, GC, rename-only relocation/return, publication
 and recovery, and Gradle invocation capture/shutdown with provider integration.
-Released Action entrypoints still use the existing lifecycle; activation and
-incompatible release exposure remain separate work.
+The unreleased Gradle/Maven Action source delegates now select this lifecycle.
+Existing release tags retain their published implementation; incompatible release
+exposure remains separate work.
 
 Integrated review, complete-pipeline resource/platform qualification, release
 cleanup and final cutover review remain release gates. Implementation does not

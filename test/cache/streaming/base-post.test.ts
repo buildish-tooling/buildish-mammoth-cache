@@ -277,3 +277,47 @@ it('derives the post directory allowance from frozen bindings rather than a new 
   await f.files('', { 'data/new': 'body' });
   expect((await post(f, ready.anchor, async () => sdk.backend)).outcome).toBe('published');
 }, 20000);
+
+it('records unavailable optional completion before GC and replays without a backend or receipt', async () => {
+  const f = await fixture(),
+    ready = await prepareStreaming(f.request);
+  await f.files('', { 'data/new': 'body' });
+  const unavailable = { ...f.backend, isFeatureAvailable: () => false };
+  expect(await post(f, ready.anchor, async () => unavailable)).toEqual({
+    outcome: 'feature-unavailable',
+    key: null,
+  });
+  const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
+  expect(state[6]).not.toBeNull();
+  expect(state[10]).not.toBeNull();
+  for (const cell of [7, 8, 9, 12] as const) expect(state[cell]).toBeNull();
+  const backend = vi.fn(async () => {
+    throw new Error('Unexpected backend');
+  });
+  expect(await post(f, ready.anchor, backend)).toEqual({
+    outcome: 'feature-unavailable',
+    key: null,
+  });
+  expect(backend).not.toHaveBeenCalled();
+  expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('body');
+});
+it('does not convert a resumed publication failure into an unavailable skip', async () => {
+  const sdk = await nativeCacheBackend(),
+    f = await fixture({ cacheBackend: async () => sdk.backend }),
+    ready = await prepareStreaming(f.request);
+  await f.files('', { 'data/new': 'body' });
+  await expect(
+    post(f, ready.anchor, async () => ({
+      ...sdk.backend,
+      saveCache: async () => {
+        throw new Error('offline');
+      },
+    })),
+  ).rejects.toThrow('Moving object save remains unconfirmed');
+  const before = await f.store.state();
+  await expect(
+    post(f, ready.anchor, async () => ({ ...sdk.backend, isFeatureAvailable: () => false })),
+  ).rejects.toThrow('Native base backend cannot publish');
+  expect(await f.store.state()).toEqual(before);
+  expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('body');
+}, 20000);

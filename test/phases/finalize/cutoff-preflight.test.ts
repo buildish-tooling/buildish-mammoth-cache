@@ -17,9 +17,7 @@
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { build } from 'esbuild';
+import { entrypointBundles, entrypointJob } from '../../support/streaming-entrypoint';
 import { afterEach, it, expect, vi } from 'vitest';
 import { cutoffJob } from '../../support/cutoff-job';
 import { runGuardedCutoffPost } from '../../../src/phases/finalize/preflight';
@@ -81,74 +79,39 @@ it('issues one-use receipts bound to CI state and freezes before callback reads'
   job.state.clear();
   expect(() => consumeCutoffPreflight(real, job.deps.runtimeHost.getState)).toThrow();
 });
+// Actual delegates now consume streaming ownership, not the retained legacy preflight helper.
 it.each([
   { tool: 'gradle', readOnly: false },
   { tool: 'maven', readOnly: false },
   { tool: 'gradle', readOnly: true },
   { tool: 'maven', readOnly: true },
 ])(
-  'built $tool post validates before SDK event reads (readOnly=$readOnly) and skips missing ownership',
+  'built $tool post uses frozen streaming state without config/event reconstruction (readOnly=$readOnly)',
   async ({ tool, readOnly }) => {
-    const r = await root(),
-      job = await cutoffJob(r, { inputs: { 'read-only': String(readOnly) } });
-    await job.prepare();
-    const record = readCutoffLifecycle(job.deps.runtimeHost.getState);
-    if (!record.cacheEnabled) throw new Error('enabled');
-    const out = path.join(r, 'post.cjs'),
-      trace = path.join(r, 'trace.cjs'),
-      event = path.join(job.home, 'data/event.json');
-    await mkdir(path.dirname(event));
-    await writeFile(event, '{}');
-    await build({
-      entryPoints: [`src/ci/github/${tool}/post.ts`],
-      bundle: true,
-      platform: 'node',
-      target: 'node24',
-      format: 'cjs',
-      alias: {
-        '@azure/storage-common': path.resolve(
-          'node_modules/@azure/storage-common/dist/commonjs/index.js',
-        ),
-      },
-      outfile: out,
-      logLevel: 'silent',
+    const r = await root();
+    await entrypointBundles(r);
+    const job = await entrypointJob(r, tool, 'post', {
+      'read-only': String(readOnly),
+      'cache-partitions': JSON.stringify([{ id: 'data', includes: ['data/**'] }]),
     });
-    const journal = path.join(
-      job.home,
-      '.mammoth/cutoff-state-v2',
-      `journal-${record.invocation}.json`,
-    );
-    await writeFile(
-      trace,
-      String.raw`
-    const fs=require('node:fs'); const original=fs.readFileSync;
-    fs.readFileSync=function(p,...args){
-      if(String(p)===process.env.GITHUB_EVENT_PATH){
-        const j=JSON.parse(original(process.env.TEST_JOURNAL,'utf8'));
-        if(j.phase!==process.env.TEST_EXPECT_PHASE) throw new Error('EARLY_EVENT_READ');
-        process.stdout.write('EVENT_AFTER_FREEZE\n'); throw new Error('STOP_AFTER_EVENT');
-      }
-      return original.call(this,p,...args);
-    };
-  `,
-    );
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GITHUB_EVENT_PATH: event,
-      TEST_JOURNAL: journal,
-      TEST_EXPECT_PHASE: readOnly ? 'build-ready' : 'observations-frozen',
-    };
-    for (const [key, value] of job.state) env[`STATE_${key}`] = value;
-    env[`STATE_${JOB_SINGLE_RUN_OWNER_TOKEN_STATE}`] = 'owner';
-    const result = await promisify(execFile)(process.execPath, ['--require', trace, out], {
-      env,
-    }).catch((e) => e);
-    expect(result.stdout + result.stderr).toContain('EVENT_AFTER_FREEZE');
-    expect(result.stdout + result.stderr).not.toContain('EARLY_EVENT_READ');
-    delete env[`STATE_${JOB_SINGLE_RUN_OWNER_TOKEN_STATE}`];
-    const skip = await promisify(execFile)(process.execPath, ['--require', trace, out], { env });
+    await job.run('main');
+    await job.write('data/a', 'body');
+    await job.run('post', {
+      GITHUB_EVENT_PATH: '/missing/poison-event',
+      'INPUT_CONFIG-FILE': '/missing/poison-config',
+    });
+    const locator = JSON.parse(await readFile(job.home + '/.mammoth/v1/current.json', 'utf8'));
+    const state = JSON.parse(await readFile(job.home + '/' + locator[3], 'utf8'));
+    expect(state[4]).toBe('completed');
+    expect(state[14]).toBe(readOnly ? 'read-only' : 'published');
+    expect((await job.trace()).some(([name]) => name === 'cache-save')).toBe(!readOnly);
+    await job.clearTrace();
+    const skip = await job.run('post', {
+      ['STATE_' + JOB_SINGLE_RUN_OWNER_TOKEN_STATE]: '',
+      GITHUB_EVENT_PATH: '/missing/poison',
+    });
     expect(skip.stdout).toContain('Skipping finalize');
-    expect(skip.stdout).not.toContain('EVENT_AFTER_FREEZE');
+    expect(await job.trace()).toEqual([]);
   },
   30000,
 );

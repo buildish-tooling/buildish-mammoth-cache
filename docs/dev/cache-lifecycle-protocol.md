@@ -22,14 +22,15 @@ limitations under the License.
 
 ## Status and reference rules
 
-**Draft version 1; the internal streaming prepare/build/post lifecycle is
+**Draft version 1; the streaming prepare/build/post lifecycle is
 implemented.** This is the local part of the [streaming cache protocol](../cache-protocol/),
 paired with the [native-base and generation schemas](../native-base-protocol/).
 It includes acquisition/install/recovery, observation and GC, native save
 relocation/return, Gradle invocation capture/shutdown and provider composition.
 These are local records, never worker payload members or cached generation data.
-Released Action entrypoints do not use this lifecycle yet; activation and
-incompatible release exposure remain pending. The parent protocol's integrated
+The unreleased Gradle/Maven Action source delegates now select this lifecycle.
+Existing release tags retain their published implementation; incompatible release
+exposure remains pending. The parent protocol's integrated
 review, full-pipeline resource/platform qualification, release cleanup and final
 cutover review gates still apply. Implementation comments cite this file and its
 relevant heading. No serialized flag restores a process-local verification proof.
@@ -517,8 +518,8 @@ A tool operation returns installation metadata, never a grant. Recovery selects 
 owner's frozen identity and cleanup signal, without constructing the next configured
 adapter or executing captured launchers. No pending destructive work means no recovery
 process inspection. Hook cleanup uses the frozen tool/root independently of reporting.
-These internal routes do not activate the released Action entrypoints or qualify cache
-scale, throughput or memory/paging behavior.
+Selecting these routes in unreleased Action source delegates does not change existing
+release tags or qualify cache scale, throughput or memory/paging behavior.
 
 ## Mutable root state and partition cells
 
@@ -550,7 +551,12 @@ Revision starts at zero and advances on each atomic replacement. References are
 `[archiveRef,artifactName,transportSha,receipt]`; receipt is `null` or
 `["artifact-receipt",artifactId,artifactName,transportSha]`. Outcome is `null` before
 completion, otherwise `read-only`, `no-change`, `published`, `worker-uploaded`,
-`skipped-not-quiescent` or `abandoned`. Required worker completion rules still apply;
+`skipped-not-quiescent`, `feature-unavailable` or `abandoned`. `feature-unavailable`
+is terminal only for an optional writable standalone before publication starts:
+observation/GC references remain required, with no post sources, publication,
+partition state or receipt. Replay reports the same skip without a backend lookup;
+required aggregation and resumed publication still fail if the backend is unavailable.
+Required worker completion rules still apply;
 a failed required producer cannot report a successful empty artifact.
 
 `partitionStateRef` is a `Q` of purpose `partition-state`, containing at most P rows:
@@ -632,6 +638,27 @@ following them; unsupported managed members still fail admission. Type is `file`
 Reuse these frozen rows for GC parent projections; do not invent a fresh post-unlink
 child list as the original projection. The additional metadata calls for excluded
 child IDs are part of the one preflight inventory and must be counted.
+
+Retain every actually traversed directory's native evidence and child projection,
+including unowned scaffolding such as an empty hook directory. Hard-pruned opaque
+scopes remain physical children of their parent and are not traversed. Observation
+scaffolding is evidence, not owned empty payload presence: it grants no GC/deletion
+or upload authority. This includes empty Gradle workspace namespace directories
+outside a recognized complete-unit root, even when a broad partition glob matches;
+local discovery omits regular files outside recognized workspace roots with at most
+ten bounded warnings, while retaining their physical child evidence. Imported files
+still require a supported workspace layout. Namespace directories do
+not gain cleanup authority when GC removes their last supported unit. Activity, native-evidence and transport contributions retain
+their managed ownership requirements. An evidence-only retained workspace may emit
+no channels; an unowned workspace revealing managed file or owned-empty presence
+must reject rather than discard that contribution.
+
+Worker replay co-reads this same tree. It checks frozen physical child identities,
+uses the same immutable hard-prune policy, and skips physical files absent from the
+semantic stream. A new/replaced child or unexplained directory change still rejects;
+IDs alone do not justify skipping a traversed directory and hiding late descendants.
+These records reuse the existing walk; retaining scaffolding adds linear sequential
+metadata work without another capture listing or a global inventory.
 
 Activity is `none`, `used` or `upsert`; decision is `retain` or `delete`.
 Ordinary file activity/GC eligibility follows frozen native timestamps/cutoff and
@@ -1708,7 +1735,7 @@ reconciles any discoverable prior owner before provisioning and creates no cache
 
 ## Provider composition and activation boundary
 
-The internal `src/phases/streaming/prepare.ts` and `post.ts` compose the same shared
+The selected `src/phases/streaming/prepare.ts` and `post.ts` compose the same shared
 services used by integration tests. Prepare claims the existing per-job guard,
 resolves existing partition configuration/presets once, recovers prior ownership
 before provisioning and freezes the CI anchor. Post checks that guard before opening
@@ -1729,9 +1756,10 @@ configuration; emitting them performs no filesystem operations.
 `src/ci/github/streaming.ts` supplies deferred existing GitHub adapters and pure report
 composition. Its cache factory receives the anchored root (or the known prepare root)
 so the SDK's existing path limitations remain visible before cache operations.
-Released `src/ci/github/{gradle,maven}/{main,post}.ts` still select the prior lifecycle.
-The final entrypoint switch, public schema/version exposure and legacy removal belong
-to R1 after independent H1/Q1 qualification. There is no user-facing feature flag or
+The unreleased `src/ci/github/{gradle,maven}/{main,post}.ts` source delegates select
+this composition. Existing release tags retain their published lifecycle. Public
+schema/version exposure and legacy removal remain release work after independent
+integrated and resource/platform qualification. There is no user-facing feature flag or
 permanent parallel format compatibility mode.
 
 Disabled anchors freeze only the known build-hook root and report temp location in

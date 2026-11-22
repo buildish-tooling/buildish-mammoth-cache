@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { isWorkspaceScaffolding } from './tree-state';
 import { lstat, opendir } from 'node:fs/promises';
 import { equal } from './encoding';
 import { nativeIdentity, nativeIds, sameNative, type NativeIdentity } from './native';
@@ -146,7 +147,7 @@ export async function checkGcProjection(
       if (phase) await phase.created(path, before);
       await observer?.open(d, before);
       let affected = false,
-        cleanup = true,
+        cleanup = !isWorkspaceScaffolding(store.codec.options.model, path),
         owner: string | null = null;
       const combine = (childOwner: string | null) => {
         if (childOwner === null || (owner !== null && owner !== childOwner)) cleanup = false;

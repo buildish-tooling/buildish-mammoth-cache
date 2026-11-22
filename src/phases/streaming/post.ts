@@ -128,6 +128,7 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
               anchor,
               artifactBackend: d.artifactBackend,
               summaries,
+              onWarning: (message) => warnings.push(message),
               removeHooks,
             })
           : await postStreamingBase({
@@ -135,12 +136,15 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
               anchor,
               cacheBackend: () => d.cacheBackend(opened.store.root.path),
               summaries,
+              onWarning: (message) => warnings.push(message),
               removeHooks,
             });
     if (result.outcome === 'skipped-not-quiescent') {
-      host.warning(result.message ?? 'Cache save skipped: consumers remain.');
+      host.warning('Cache save skipped: ' + (result.message ?? 'consumers remain.'));
       return result;
     }
+    if (result.outcome === 'feature-unavailable')
+      warnings.push('Cache save skipped: cache backend is unavailable.');
     if (result.outcome === 'read-only') await removeHooks();
     if (opened.store.codec.options.role === 'distributed-aggregator')
       for (const p of opened.store.codec.options.model.partitions)
@@ -170,7 +174,12 @@ async function emit(
   for (const line of report.logLines) host.info(line);
   host.info('Mammoth cache outcome: ' + outcome + '.');
   const sink = await d.reportSink?.();
-  if (sink) await sink.publishSummary(report.summaryLines);
+  if (sink)
+    await sink.publishSummary([
+      '## Mammoth cache post',
+      `Outcome: ${outcome}.`,
+      ...report.summaryLines,
+    ]);
   assertCurrent(d);
   return sink;
 }

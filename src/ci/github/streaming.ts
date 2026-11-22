@@ -19,7 +19,7 @@ import type { StreamingPostDependencies } from '../../phases/streaming/post';
 import type { StreamingPrepareDependencies } from '../../phases/streaming/prepare';
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#provider-composition-and-activation-boundary.
-/** Deferred real adapters for the internal R1 composition. No SDK loads at module import. */
+/** Deferred real adapters for the streaming Action composition. No SDK loads at module import. */
 export function gitHubStreamingFactories(
   root?: string,
 ): Pick<StreamingPrepareDependencies, 'cacheBackend' | 'artifactBackend'> &

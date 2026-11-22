@@ -21,11 +21,18 @@ import type { OwnedStore, Reference } from './owned-store';
 import { missing, nativeIdentity, sameNative, sameObject, type NativeIdentity } from './native';
 import { NativeReadPhase } from './native-read-phase';
 import { walkNative, walkWork, type WalkEvent } from './native-walk';
-import { compareName, joinPath, normalizeMode, type WorkingBudget } from './tree-state';
+import {
+  isWorkspaceScaffolding,
+  compareName,
+  joinPath,
+  normalizeMode,
+  type WorkingBudget,
+} from './tree-state';
 import { unitSchema, type Unit } from './schema';
 import { InstallScratch } from './install-scratch';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
+import { createCacheGlobMatcher } from '../manifest';
 import { WorkerSpool } from './worker-spool';
 import type { WorkerEvent } from './worker-codec';
 
@@ -134,13 +141,16 @@ export class WorkerSources {
     );
     const projections = await InstallScratch.create(this.store, this.budget);
     const frames: Frame[] = [],
-      model = this.store.codec.options.model;
+      model = this.store.codec.options.model,
+      hard = createCacheGlobMatcher(model.tuple[3]);
     let unit: {
       descriptor: Unit;
       activity: string;
       decision: string;
       channels: Set<number>;
+      unowned?: boolean;
     } | null = null;
+    let expectedFile: string | null = null;
     let removed = false,
       finalEnd = 0,
       finalRecord = 0;
@@ -185,8 +195,11 @@ export class WorkerSources {
           [child.name, child.type, child.device, child.fileId],
           'frozen physical child',
         );
+        // Omitted semantic files remain protected physical children. Their frozen
+        // kind/identity was checked above; do not surface them as managed events.
+        const protectedFile = child.type !== 'directory' && child.path !== expectedFile;
         if (
-          child.pruned &&
+          (child.pruned || protectedFile) &&
           child.type !== 'directory' &&
           model.tuple[2] === 'maven' &&
           f.maven !== null &&
@@ -196,6 +209,7 @@ export class WorkerSources {
           f.maven!.protectedArtifact = true;
           if (f.maven!.payload) throw new Error('Incomplete Maven direct-file contribution.');
         }
+        if (protectedFile) return 'prune';
         return;
       }
     };
@@ -207,7 +221,8 @@ export class WorkerSources {
         signal,
         maxDirectoryEntries,
         metadata: 'exclude',
-        prune: view.prune,
+        prune: (path) =>
+          hard(path) || hard(path + '/.workspace-directory-probe') || !!view.prune?.(path),
         inspectChild: inspect,
       },
       this.work,
@@ -258,6 +273,7 @@ export class WorkerSources {
             continue;
           }
           if (tag === 'dir-open') {
+            expectedFile = null;
             const path = String(r[1]),
               before = r[2] as NativeIdentity,
               parent = frames[frames.length - 1];
@@ -276,7 +292,8 @@ export class WorkerSources {
                   throw new Error('Frozen directory replaced.');
                 if (parent) parent.hasMembers = true;
               } else {
-                if (!(await absent(path))) throw new Error('Frozen directory changed shape.');
+                if (!(await absent(path)))
+                  throw new Error('Frozen directory changed shape: ' + path);
                 if (parent) {
                   parent.planned++;
                   parent.affected = true;
@@ -316,14 +333,22 @@ export class WorkerSources {
             if (!f.actual && (unit.decision !== 'delete' || unit.descriptor[2] !== 'subtree'))
               throw new Error('Missing retained unit root.');
             if (unit.decision !== 'delete' && unit.descriptor[2] === 'subtree') {
-              const partition = model.owner(unit.descriptor[1] + '/.workspace-directory-probe')[0];
-              for (const c of routes(partition, unit.activity)) {
+              let partition: string | undefined;
+              try {
+                partition = model.owner(unit.descriptor[1] + '/.workspace-directory-probe')[0];
+              } catch (error) {
+                if (!(error instanceof Error) || error.message !== 'Unowned managed path.')
+                  throw error;
+                unit.unowned = true;
+              }
+              for (const c of partition === undefined ? [] : routes(partition, unit.activity)) {
                 await ensure(c);
                 await append(c, [c === 1 ? 'used-unit-open' : 'unit-open', unit.descriptor]);
                 unit.channels.add(c);
               }
             }
           } else if (tag === 'file') {
+            if (unit?.unowned) throw new Error('Unowned workspace contains managed members.');
             const f = frames[frames.length - 1],
               path = joinPath(f.path, String(r[1]));
             if (r[6] === 'delete') {
@@ -337,6 +362,7 @@ export class WorkerSources {
               continue;
             }
             if (!f.actual) throw new Error('Retained file under removed directory.');
+            expectedFile = path;
             const event = await next('file', path);
             if (
               event.tag !== 'file' ||
@@ -369,6 +395,7 @@ export class WorkerSources {
             frames[frames.length - 1].hasMembers = true;
             unit = null;
           } else if (tag === 'dir-close') {
+            expectedFile = null;
             const f = frames[frames.length - 1];
             if (f.actual) {
               await next('directory-close', f.path);
@@ -377,13 +404,20 @@ export class WorkerSources {
               if (!f.affected && !sameNative(f.before, f.actual, true))
                 throw new Error('Unexplained directory change.');
               await this.guards.append(['directory', f.path, f.actual], signal);
-              if (f.path && !f.hasMembers && !unit) {
+              if (
+                f.path &&
+                !f.hasMembers &&
+                (!unit || unit.unowned) &&
+                !isWorkspaceScaffolding(model, f.path)
+              ) {
                 let partition: string | undefined;
                 try {
                   partition = model.owner(f.path + '/.workspace-directory-probe')[0];
                 } catch {
                   /* Unowned scaffolding. */
                 }
+                if (partition !== undefined && unit?.unowned)
+                  throw new Error('Unowned workspace contains managed members.');
                 if (partition !== undefined)
                   for (const c of routes(partition, 'upsert')) await ensure(c);
               }

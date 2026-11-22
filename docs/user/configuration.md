@@ -402,6 +402,12 @@ Both actions expose the same cache lifecycle outputs after prepare:
 | `dependent-delta-status`         | `not-configured`, `applied`, or `skipped-read-only`                                                                                            |
 | `dependent-delta-artifact-count` | Number of worker artifacts applied during prepare                                                                                              |
 
+On a cold retry, a reused frozen `miss` means no base was selected; it does not imply
+another service lookup. Historical backend unavailability is not stored solely for
+reporting. Freshly observed unavailability reports `feature-unavailable`. A generation
+whose partitions are all missing is also a miss with no restored key; an explicitly
+empty partition counts as a successful restore.
+
 Generation keys are finalize outcomes and are intentionally not planned prepare outputs. The job
 summary and finalize log report the exact key only after a successful publication.
 

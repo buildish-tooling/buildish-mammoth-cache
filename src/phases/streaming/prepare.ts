@@ -32,7 +32,7 @@ import type { RecoveryOptions } from '../../cache/streaming/recovery';
 import type { BuildToolAdapter, BuildToolProvisioning } from '../../build-tool/types';
 import type { CiPlatformAdapter } from '../../ci';
 import type { NormalizedActionConfig } from '../../config/types';
-import type { HostStateStore, HostOutputSink, HostReporter } from '../../host/types';
+import type { HostStateStore, HostOutputSink, HostReporter, ReportSink } from '../../host/types';
 import type { BaseCacheBackend } from '../../cache/backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
@@ -48,9 +48,10 @@ export interface StreamingPrepareDependencies extends Omit<RecoveryOptions, 'bud
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   readonly artifactBackend: () => Promise<WorkflowArtifactBackend>;
   readonly nonce?: string;
+  readonly reportSink?: () => Promise<ReportSink>;
 }
 // Protocol: docs/dev/cache-lifecycle-protocol.md#provider-composition-and-activation-boundary.
-// Internal R1 switch target. Never calls legacy bootstrap, snapshots or cutoff inventory.
+// Action prepare composition. Never calls legacy bootstrap, snapshots or cutoff inventory.
 export async function runStreamingPrepare(d: StreamingPrepareDependencies) {
   const host = d.runtimeHost,
     ci = d.ciProvider.context,
@@ -93,6 +94,7 @@ export async function runStreamingPrepare(d: StreamingPrepareDependencies) {
       for (const [key, value] of Object.entries(provisioning!.additionalOutputs))
         host.setOutput(key, value);
       outputs(host, config, null, null, 0, '', false);
+      await prepareSummary(d, 'disabled');
       return { outcome: 'disabled' as const };
     }
     const hard = adapter.getHardCacheExcludeGlobs(),
@@ -161,7 +163,9 @@ export async function runStreamingPrepare(d: StreamingPrepareDependencies) {
         model.partitions.some(
           (p) => p[3] === 'single-writer' && p[4] !== null && p[4] !== context[4],
         ),
+      result.restoreStatus,
     );
+    await prepareSummary(d, result.restoreStatus);
     return result;
   } catch (e) {
     host.saveState(JOB_PREPARE_FAILED_STATE, 'true');
@@ -176,11 +180,12 @@ function outputs(
   workers: number,
   lineage = '',
   requests = false,
+  restoreStatus = '',
 ) {
   const values = {
     'cache-family-key': family ?? '',
     'cache-lineage-prefix': lineage,
-    'base-cache-restore-status': family ? (key ? 'hit' : 'miss') : '',
+    'base-cache-restore-status': restoreStatus,
     'restored-cache-key': key ?? '',
     'job-mode': config.jobMode,
     'read-only': String(config.readOnly),
@@ -193,4 +198,21 @@ function outputs(
     'dependent-delta-artifact-count': String(workers),
   };
   for (const [name, value] of Object.entries(values)) host.setOutput(name, value);
+}
+
+async function prepareSummary(d: StreamingPrepareDependencies, outcome: string) {
+  const assert = () => {
+    d.signal?.throwIfAborted();
+    if (d.assertCurrent() !== undefined)
+      throw new Error('Lifecycle assertion must be synchronous.');
+  };
+  assert();
+  const sink = await d.reportSink?.();
+  assert();
+  await sink?.publishSummary([
+    '## Mammoth cache prepare',
+    `Mode: ${d.config.jobMode}; read-only: ${d.config.readOnly}.`,
+    `Base cache: ${outcome}.`,
+  ]);
+  assert();
 }

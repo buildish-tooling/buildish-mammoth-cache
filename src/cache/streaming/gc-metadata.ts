@@ -19,7 +19,7 @@ import type { Reference } from './owned-store';
 import { equal, tuple, type Value } from './encoding';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
-import { parentPath } from './tree-state';
+import { isWorkspaceScaffolding, parentPath } from './tree-state';
 
 interface Member {
   row: Value;
@@ -151,7 +151,7 @@ export async function* originalGcMembers(
       d = lease.node;
     try {
       yield* parent(d[1]);
-      let cleanup = !direct,
+      let cleanup = !direct && !isWorkspaceScaffolding(store.codec.options.model, path),
         owner: string | null = null;
       for await (const e of index.children(d)) {
         if (e[5] === null) {

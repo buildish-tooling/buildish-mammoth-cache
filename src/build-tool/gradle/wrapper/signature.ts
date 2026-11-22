@@ -397,11 +397,13 @@ export async function verifyDetachedOpenPgpSignature(
       writeFile(signaturePath, `${armoredSignature.trim()}\n`, { encoding: 'utf8', flag: 'wx' }),
     ]);
 
+    // Public-key import/verification needs no agent (including on Git for Windows).
     const importResult = await runCommand(resolvedCommand, [
       '--homedir',
       normalizePathForGpgCommand(gpgHome, resolvedCommand),
       '--batch',
       '--no-options',
+      '--no-autostart',
       '--import',
       normalizePathForGpgCommand(trustedKeysPath, resolvedCommand),
     ]);
@@ -416,6 +418,7 @@ export async function verifyDetachedOpenPgpSignature(
       normalizePathForGpgCommand(gpgHome, resolvedCommand),
       '--batch',
       '--no-options',
+      '--no-autostart',
       '--no-auto-key-retrieve',
       '--status-fd',
       '1',
