@@ -17,14 +17,20 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { decodeRecord, encodeRecord, H, rawSha, type Value } from './encoding';
-import { decisionId, decisionSchema, invocationId, type ResolvedModel } from './model';
+import { decisionId, decisionSchema, invocationId, lineageId, type ResolvedModel } from './model';
 import {
   identitySchema,
   objectKey,
   objectRefSchema,
   keySchema,
   checkIdentity,
+  lineagePrefix,
 } from './native-records';
+import {
+  workerArtifactAttempt,
+  workerArtifactPrefix,
+  workerSnapshotAuthorization,
+} from './worker-artifact-identity';
 import {
   componentSchema,
   contextSchema,
@@ -143,6 +149,30 @@ function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
 }
 
+/** Shared reference boundary for cold metadata bootstrap and the full codec. */
+export function ownedPathSchema(invocation: string) {
+  shaSchema.parse(invocation);
+  const prefix = '.mammoth/v1/' + invocation + '/';
+  return relativePathSchema.refine(
+    (p) =>
+      p.startsWith(prefix) &&
+      p.length > prefix.length &&
+      p
+        .slice(prefix.length)
+        .split('/')[0]
+        .replace(/[ .]+$/u, '')
+        .toUpperCase() !== 'RETIRED',
+  ); // Detached garbage cannot be a live reference/source.
+}
+export const ownedReferenceSchema = <T extends string>(invocation: string, purpose: T) =>
+  z.tuple([
+    z.literal('ref'),
+    z.literal(purpose),
+    ownedPathSchema(invocation),
+    positiveSchema,
+    shaSchema,
+  ]);
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#immutable-references-and-append-prefixes
 /** Build schemas once per independently bound invocation, never once per file. */
 export function localSchemas(options: LocalOptions) {
@@ -153,19 +183,9 @@ export function localSchemas(options: LocalOptions) {
   assert(options.context[7] === options.model.tuple[2], 'Local context build tool mismatch.');
   const invocation = z.literal(options.invocation),
     prefix = '.mammoth/v1/' + options.invocation + '/';
-  const owned = relativePathSchema.refine(
-    (p) =>
-      p.startsWith(prefix) &&
-      p.length > prefix.length &&
-      p
-        .slice(prefix.length)
-        .split('/')[0]
-        .replace(/[ .]+$/u, '')
-        .toUpperCase() !== 'RETIRED',
-  ); // Detached garbage cannot be a live reference/source.
+  const owned = ownedPathSchema(options.invocation);
   const partition = partitionSchema.refine((p) => options.model.partitions.some((d) => d[0] === p));
-  const ref = <T extends string>(purpose: T) =>
-    z.tuple([z.literal('ref'), z.literal(purpose), owned, positiveSchema, shaSchema]);
+  const ref = <T extends string>(purpose: T) => ownedReferenceSchema(options.invocation, purpose);
   const appendPrefix = <T extends string>(purpose: T) =>
     z.tuple([
       z.literal('prefix'),
@@ -587,7 +607,101 @@ export function localSchemas(options: LocalOptions) {
     componentSchema.nullable(),
     unitSchema.nullable(),
   ]);
+  // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-prepare-selection.
+  const selectedArtifact = z
+    .tuple([
+      positiveSchema,
+      nameSchema,
+      uintSchema,
+      z
+        .string()
+        .regex(/^sha256:[a-f0-9]{64}$/)
+        .nullable(),
+      contextSchema,
+      z.array(partition).max(64).refine(unique),
+    ])
+    .refine((row) => {
+      try {
+        const c = row[4];
+        for (const i of [0, 1, 2, 3, 6, 7] as const) if (c[i] !== options.context[i]) return false;
+        if (c[5] > options.context[5] || c[4] === options.context[4]) return false;
+        if (workerArtifactAttempt(row[1], workerArtifactPrefix(options.model, c)) !== c[5])
+          return false;
+        workerSnapshotAuthorization(options.model, c[4], row[5]);
+        let previous = -1;
+        for (const id of row[5]) {
+          const index = options.model.partitions.findIndex((p) => p[0] === id);
+          if (index <= previous) return false;
+          previous = index;
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  const prepareSelection = z
+    .tuple([
+      z.literal('prepare-selection'),
+      z.literal(1),
+      nameSchema,
+      nameSchema.nullable(),
+      z.tuple([
+        z.literal('execution'),
+        z.literal(1),
+        nativePathSchema.nullable(),
+        positiveSchema,
+        z.enum(['enabled', 'disabled']),
+        positiveSchema.nullable(),
+      ]),
+      z.union([
+        z.tuple([z.literal('pending')]),
+        z.tuple([z.literal('miss')]),
+        z.tuple([z.literal('pinned'), keySchema, ref('generation')]),
+      ]),
+      z.union([
+        z.tuple([z.literal('pending')]),
+        z.tuple([z.literal('selected'), z.array(selectedArtifact).max(16)]),
+      ]),
+      z.array(partition).max(64).refine(unique).nullable(),
+      nativeIdentitySchema.refine((n) => n[2] === 'directory'),
+      z.enum(['selected', 'base-installed', 'workers-installed']),
+    ])
+    .refine((row) => {
+      if (row[3] === row[2]) return false;
+      if (row[5][0] === 'pending' && row[7] !== null) return false;
+      if (row[5][0] === 'miss' && row[7]?.length) return false;
+      if (
+        row[9] !== 'selected' &&
+        (row[5][0] === 'pending' || row[6][0] === 'pending' || row[7] === null)
+      )
+        return false;
+      if (
+        row[5][0] === 'pinned' &&
+        ![row[2], ...(row[3] === null ? [] : [row[3]])].some((r) =>
+          row[5][1]!.startsWith(lineagePrefix(options.model.family, lineageId(r))),
+        )
+      )
+        return false;
+      if (row[6][0] === 'selected') {
+        const workers = row[6][1];
+        if (
+          (options.access === 'read-only' || options.role !== 'distributed-aggregator') &&
+          workers.length
+        )
+          return false;
+        if (!unique(workers.map((w) => String(w[0]))) || !unique(workers.map((w) => w[4][4])))
+          return false;
+      }
+      let previous = -1;
+      for (const id of row[7] ?? []) {
+        const index = options.model.partitions.findIndex((p) => p[0] === id);
+        if (index <= previous) return false;
+        previous = index;
+      }
+      return true;
+    });
   const rows = {
+    prepareSelection,
     frame,
     source,
     producer,
@@ -704,6 +818,11 @@ export function localSchemas(options: LocalOptions) {
         ),
       'local-state': state,
       quiescence,
+      'gradle-capture-failed': z.tuple([
+        z.literal('gradle-capture-failed'),
+        z.literal(1),
+        invocation,
+      ]),
       'gradle-installation': registration,
       'gc-progress': progress('gc'),
       'gc-intent': intent('gc'),

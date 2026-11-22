@@ -60,8 +60,11 @@ export async function initializeObservationFixture(
   await f.store.initialize(b);
   const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
   state[3]++;
-  state[4] = 'quiescent';
-  if (tool === 'gradle') {
+  const base =
+    f.store.codec.options.role !== 'distributed-worker' &&
+    f.store.codec.options.access === 'writable';
+  state[4] = base ? 'quiescent' : 'build-ready';
+  if (tool === 'gradle' && base) {
     const installations = await f.store.writeStream('installations', spec, rows([]));
     state[13] = f.store.codec.schemas
       .ref('quiescence')

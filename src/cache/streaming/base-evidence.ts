@@ -19,7 +19,7 @@ import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import type { OwnedStore, Reference } from './owned-store';
 import { NativeReadPhase } from './native-read-phase';
-import { nativeIdentity, sameNative, type NativeIdentity } from './native';
+import { nativeIdentity, sameNative, portableMtimeSeconds, type NativeIdentity } from './native';
 import { tuple, add } from './encoding';
 import { parentPath } from './tree-state';
 import { walkNative } from './native-walk';
@@ -221,7 +221,7 @@ export async function copyBaseSnapshot(
         }
         if (size !== Number(e.native[5])) throw new Error('Native snapshot copy length changed.');
         await output.chmod(e.native[6] & 0o777);
-        const time = Number(BigInt(e.native[8]) / 1000000n) / 1000;
+        const time = portableMtimeSeconds(Number(BigInt(e.native[8]) / 1000000n));
         await output.utimes(time, time);
         await output.sync();
         store.root.work.fileSyncs++;

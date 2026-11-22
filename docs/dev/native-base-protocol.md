@@ -448,3 +448,22 @@ than copying this bounded generation structure together with extra local refs.
 Exercise these schemas through actual SDK archives, cross-partition
 Maven groups, disappearance-only changes and record-last failures. Exact field
 definition is not evidence that native-platform or runner-memory tests have passed.
+
+## Native timestamp materialization
+
+Portable file mtimes are integer milliseconds. The actual copied/staged file MUST
+normalize to that same millisecond using integer nanosecond division; its native
+sub-millisecond fraction is not a portable assertion. Directly passing `mtimeMs/1000`
+to native utimes can round below the boundary (for example1795305600001ms), producing
+one millisecond less after normalization. Materializers choose an interior point of
+the requested millisecond for fractional seconds, retaining exact whole seconds,
+then verify the actual fstat nanoseconds before sealing evidence. Verification reuses
+the existing post-write stat; it adds no traversal, file read or extra filesystem call.
+Record the actual new native identity after repair. Original activity evidence stays
+separate and unchanged.
+
+This does not promise that every safe-integer wire timestamp is writable on every
+filesystem: floating-point seconds lose precision at extreme dates, and filesystems
+can clamp or coarsen timestamps. An unrepresentable requested bucket MUST reject
+materialization before granting a staged/copy receipt. Multiplying floating-point
+seconds back to milliseconds is not sufficient proof of the native result.

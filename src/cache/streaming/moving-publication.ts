@@ -26,7 +26,8 @@ import {
   retireReturnedPrefixes,
   movingMarker,
 } from './moving-catalog';
-import { equal, type Value } from './encoding';
+import { baselineGeneration } from './base-publication';
+import { equal, canonical, type Value } from './encoding';
 import type { Reference } from './owned-store';
 import type { BatchTargets } from './install-batches';
 
@@ -279,6 +280,31 @@ export class MovingBasePublication {
         await this.recoverAfterFailure(error);
         throw error;
       }
+    });
+  }
+  /** Exact reuse still needs the complete source-return and final live barrier. */
+  async verifyUnchanged(): Promise<boolean> {
+    return this.operation(async () => {
+      const pub = this.frozen,
+        state = await pub.state();
+      if (state[4] !== 'sources-returned') return false;
+      const b = pub.store.codec.schemas.documents.bindings.parse(
+          await pub.store.readDocument(state[5], 'bindings'),
+        ),
+        prior = await baselineGeneration(pub.store, b);
+      if (
+        !prior ||
+        pub.choices.some((c) => c[0] === 'new') ||
+        !canonical([prior[5], prior[8], prior[9]]).equals(
+          canonical([pub.generation[5], pub.generation[8], pub.generation[9]]),
+        )
+      )
+        return false;
+      if (await movingMarker(pub)) throw new Error('Unchanged publication still owns sources.');
+      await (await this.sourceWindow()).verify();
+      equal(await pub.state(), state, 'unchanged final source barrier');
+      pub.options.signal?.throwIfAborted();
+      return true;
     });
   }
   async publish(backend: BaseCacheBackend) {

@@ -189,6 +189,38 @@ skip the active intent. Replacement stacks are owned by current/candidate pointe
 no per-boundary stack history is retained. A destructive batch cursor advances only
 at a complete semantic unit boundary, never midway through a workspace.
 
+## CI invocation anchor and cold reopening
+
+The per-action CI state handoff is one canonical record (terminal LF included):
+
+```text
+["streaming-lifecycle",1,canonicalManagedRoot,rootN,context,nonce]
+["streaming-disabled",1,context,hookRoot,captureTempDirectoryOrNull]
+```
+
+These are alternative enabled/disabled shapes, never a copied model or per-file
+catalogue. Root N is a directory; compare its stable object identity and mode, not
+activity timestamps. Invocation ID derives from the existing context/nonce hash.
+Save the enabled anchor before failure-prone owned initialization. It names the
+issued invocation namespace, not successful prepare; only validated build-ready
+bindings/cutoff allow post. An incomplete or unpublished namespace cannot be treated
+as build-ready. A disabled handoff authorizes no managed-payload or cache-publication authority (known provider-owned build-hook cleanup is permitted).
+
+Cold reopening first validates canonical, bounded anchor/current-locator/state and
+bindings bytes with existing no-follow native reads. Extract model Q, family projection,
+context/nonce and policy only provisionally. The same canonical stream framing, raw Q
+hash, final seal and bounded decoder then read at most 64 model partition rows;
+reconstruct and check the existing model/family projection. Validate complete state
+and bindings with the normal LocalCodec before issuing a reopened handle. No alternate
+permissive record parser or flag recreates native source receipts. Recheck current state
+and root identity before acceptance; a changed owner/context or reference fails.
+
+State is mutable across legitimate progress, so the anchor does not pin a stale state
+hash. It also does not grant concurrency exclusion or recovery permission. Current-owner
+recovery uses that owner's frozen bindings, never current configuration/defaults.
+Metadata bootstrap can inspect owned records before config, build-report and provider
+SDK imports; it reads no managed payload. Examples are in vector A0.
+
 ## Invocation bindings and operational capture
 
 The immutable bindings document is:
@@ -205,12 +237,13 @@ Context/nonce/model/family and all identities follow the base specification.
 `recordRef` is a `Q` of the pinned generation bytes, not a historical-chain pointer.
 ModelRef is a complete purpose `model` stream containing one
 `["model-header",buildTool,hardExcludes]` and model-order
-`["partition",id,includes,excludes,publication,writer,conflict]` rows. These reconstruct
+`["partition",id,includes,ordinaryExcludes,publication,writer,conflict,purgeableGlobs?]` rows. These reconstruct
 the native-base model hash projection; it is not one potentially oversized model JSON
 record. ProducerSetRef binds purpose `producers` with `["producer",producer]` rows,
 sorted by the parent's job-name ordering, unique, with nonempty service IDs and
 immutable downloaded archive refs; admission bounds their count. PrepareSourcesRef
-binds purpose `prepare-sources` with `["snapshot-source",snapshotSource]` rows.
+binds purpose `prepare-sources` with an optional first `prepare-selection` control
+row followed by `["snapshot-source",snapshotSource]` rows.
 These sets are streamed by bounded records rather than embedding up to 64 repeated
 native paths/refs in one 64-KiB bindings tuple.
 Prepare snapshot sources are in model order and include only already sealed
@@ -221,7 +254,12 @@ in prepare bindings. The shared snapshotSource tuple's source kind is `baseline`
 `worker-writer`; identity is `[kind,originId]`, where originId is its pinned object
 key, this invocation ID or the selected artifact ID respectively. For a baseline
 explicit-empty generation entry, originId is instead the selected generation's exact
-recordKey; the outer partition ID disambiguates its empty source. It still has a sealed
+recordKey; the outer partition ID disambiguates its empty source. For a committed
+restore miss, a deliberately empty prepared view uses `miss:<invocationId>`; for an
+unavailable/cold partition it uses `cold:<selectedRecordKey>`. These are derived
+empty-view identities, not object keys or upload receipts. Only current validated
+miss/cold selection plus a verified empty owned native tree can issue that prepared
+view; never infer it from stale live contents. It still has a sealed
 empty native tree and no fabricated object reference/upload. Metadata ref
 binds the exact source's validated tree/activity and nativeRoot is an owned native
 staging path under the same managed root. Retained snapshot nativeRoot rejects the
@@ -284,6 +322,99 @@ the immutable archive plus workerRef is retry authority; do not reread live byte
 refreeze the snapshot. Base publication consumes only the native `post-sources`
 variant, never this worker-only source selector.
 
+### Frozen prepare selection
+
+The integrated prepare service MUST commit this optional first `prepare-sources`
+control row in initial bindings before owner publication, before acquiring selected
+payloads. Both choices are pending and availability is null at initialization; this
+atomically binds effective GC age/configuration with the initial absolute GC cutoff. Lower-level
+source-only streams may omit it; post-sources MUST reject it. It is never allowed after
+a snapshot row, repeated, or with extra/unknown fields. No compatibility fallback is
+implied. Its bytes use the same 64KiB per-record bound and normal stream seal.
+
+```text
+["prepare-selection",1,currentRef,defaultRefOrNull,
+ ["execution",1,captureTempDirectoryOrNull,artifactRetentionDays,"enabled"|"disabled",gcAgeMsOrNull],
+ baseChoice,workerChoice,coldPartitionsOrNull,installParentN,stage]
+baseChoice = ["pending"] | ["miss"] | ["pinned",recordKey,generationQ]
+workerChoice = ["pending"] | ["selected",[artifact,...]]
+artifact = [serviceId,name,size,"sha256:<lowercase-hex>"|null,context,authorizedSnapshots]
+stage = "selected" | "base-installed" | "workers-installed"
+```
+
+Execution freezes cleanup-enabled and the effective positive GC age in milliseconds
+(or null for off); the absolute GC cutoff is derived only once in initial bindings.
+This permits configuration-drift checks on a retry without recomputing that cutoff.
+Retention is positive and the capture
+temp directory is a canonical absolute native path or null. Do not serialize tokens.
+DefaultRef is null when absent/equal to currentRef. Base key must belong to the frozen
+family/current-or-default lineage; the existing pinned-generation reader validates the
+exact generation bytes and key. `pending` means no result committed, while `miss`
+means a committed no-generation result. Worker selected with an empty list is a
+committed empty selection, distinct from pending. Service IDs and jobs are unique,
+with at most16 descriptors in frozen request order. Each descriptor's context matches
+repository/workflow/run/revision/tool/provider, has attempt at most this execution,
+uses its expected artifact name, and belongs to a requested producer other than the
+current job. Snapshot IDs are unique, in model order, and authorized for that producer.
+Read-only and non-aggregator invocations have no selected worker inputs.
+
+Before acquisition, commit each resolved lookup by replacing prepare-sources and
+bindings Qs through the existing root-state pointer. A remote result lost before that
+pointer is uncommitted; retry may repeat that lookup. Once committed, retry MUST use
+its exact key/Q/descriptors and MUST NOT rediscover newer candidates or reinterpret
+miss/empty selection. Commit immutable downloaded worker Qs in the existing producer
+stream before merging. No second archive parser, file catalogue or retry journal.
+
+ColdPartitions is null before base acceptance. Before the first live install, freeze
+the exact accepted cold partition list in model order, including complete recovery-
+group unions. On miss it is empty; pending base cannot have an availability outcome.
+An installed stage requires resolved base/workers and nonnull availability. When a
+retry must reacquire a not-yet-completely-installed base, it must reproduce the frozen
+availability outcome or reject before more installation. It cannot silently turn a
+previously cold group into an available one or lose a previously accepted group.
+
+Validate all selected worker bodies/final seals before the first live installation.
+Their temporary merge staging may coexist with accepted base staging; publish worker
+install roots only after base install releases the fixed per-partition roots. Retain
+independent snapshot authorities before consuming install copies. Every header rewrite
+preserves matching snapshot rows. The bindings/state replacement that advances to
+base-installed MUST include the matching accepted baseline and retained source refs;
+workers-installed MUST also include matching selected activity. Commit those source
+refs before the corresponding install can consume its copies. Progress advances only
+after installation finishes. Interrupted active batches reconcile first; retry may
+rematerialize only those same committed inputs. Final cutoff/activity and build-ready
+bindings still commit last, after hooks and all prepare operations succeed.
+
+InstallParentN is the stable native DIRECTORY identity of the derived
+`.mammoth/v1/<invocationId>/install` container, sealed with initial bindings before
+publishing any incoming install root. It is not an arbitrary pathname. Require the
+same kind/device/file ID/native birth identity and exact mode, on the managed root's
+device; ignore parent clocks/size changes caused by own child publication/removal.
+This specifically permits disposal of unclaimed or consumed incoming staging under
+that proven container; it supersedes pathname-only orphan rejection for no other
+namespace. No per-child/per-file catalogue or new journal is required.
+
+After reconciling any discoverable install intent/progress, and with no active source
+reader/consumer, an idle prepare may discard only known model partition directory
+children of this same container. Reject unknown children, links, replaced parents,
+mode/device drift and cross-device descendants. Never touch retained snapshots,
+immutable Qs, backups or live cache roots. Directory facts must come from fully
+validated current bindings and a process-local reader receipt, not a caller-created
+object or path. A partially interrupted disposal remains safe to repeat under the
+same stable parent binding; missing disposable members need no install receipt.
+Disposal does not mint VerifiedIncoming or advance install progress. Rematerialize
+and revalidate only the same frozen selections afterward. Commit retained snapshot
+and stage authority before discarding consumed incoming copies. A pre-locator
+bootstrap candidate's bound install parent MUST still be empty.
+
+For a true generation hit with effective prune-managed, the existing installer treats
+ALL eligible managed partitions as authoritative, including unavailable/cold ones,
+while preserving excluded/protected entries. It uses its existing indexed inventory,
+not a separate pruning pass or restore-clear-restore. Do not apply this aggregate
+prune rule on miss or during worker application. Snapshot partitions retain their
+separate complete-replacement rule and start empty on a miss. Vector P0 fixes a
+complete empty-selection stream.
+
 ### Gradle installation registration
 
 Each real build initialization writes an owned atomic registration document:
@@ -299,12 +430,33 @@ builds using the same tuple can share a filename equal to
 name. Registration is not performed by Mammoth's own stop commands. No summary
 result array or version-only record substitutes for this location/runtime inventory.
 
+Registrations live in the invocation's `registrations/` directory. They are atomic,
+canonical UTF-8 records with terminal LF, and use the existing framed digest filename.
+A registration failure cannot safely update the coordinator's mutable root state from
+a Gradle process, and a filtered summary is not operational failure evidence. The one
+sticky deny-only record `registrations.failed.json` is therefore:
+
+```text
+["gradle-capture-failed",1,invocationId]
+```
+
+The first failure writes/syncs it without replacing existing evidence; later successful
+registrations never clear it. Its presence, incomplete registration candidates or any
+invalid inventory reject quiescence. If the hook cannot record failure, it fails that
+initialization instead of reporting successful operational capture. This is one bounded
+failure witness, not another policy, progress journal or installation catalogue.
+
 Enumerate registrations incrementally without retaining/sorting a global installation
 list. Seal the encountered validated tuples in purpose `installations` as
 `["installation",registrationTuple]` records. It need not be cross-run sorted;
-its frozen order/ref is retained for this attempt. Stop clients run with bounded
-concurrency and deadlines through those existing compatible installations, with
-explicit Gradle user home and Java runtime. Keep wrapper/dists and needed runtimes
+its frozen order/ref is retained for this attempt. Stop clients run one at a time with deadlines through those existing compatible installations, with
+explicit Gradle user home and captured Java runtime. Do not inherit build JVM heaps/agents
+into the stop client. An owned client is settled before cancellation returns; timeout
+cleanup targets only that launched client pipeline, never enumerated daemon PIDs. A stop
+acknowledgment may precede native daemon exit: allow at most a five-second bounded
+settlement interval (also within the overall deadline), then fail closed if necessary.
+Real process inspection occurs only at this window boundary, not per file/partition.
+Keep wrapper/dists and needed runtimes
 accessible until every stop client exits and native process verification succeeds.
 A quiescence document is:
 
@@ -315,7 +467,11 @@ A quiescence document is:
 This records the completed gate, not a reusable lock. Missing/failed capture,
 unknown relevant daemons, inaccessible process details or a timeout yields
 `skipped-not-quiescent` before relocation. No launcher sweep/download/OS-kill fallback.
-On a later process/retry, re-establish the exclusive window before new mutations;
+Java launcher `@argfile` input before the visible main is uncertain; do not read it
+across the post payload barrier to guess a main class. Check frozen root identity/mode
+on entry and after awaited stop/inspection before committing the new window; these
+are fixed phase costs, not per-file checks. Duration arithmetic uses a monotonic clock;
+checkedAtMs alone uses wall time. On a later process/retry, re-establish the exclusive window before new mutations;
 never trust checkedAtMs as proof that no daemon restarted. Read-only does not stop
 processes. This does not authorize stopping unrelated shared-machine processes.
 
@@ -401,6 +557,13 @@ quiescent only after its own cache consumers have finished. Read-only completion
 performs no post-build tree/hash traversal. No-change requires validated observation/
 GC/publication decisions, not a fabricated hit. Any actual failure returns sources
 under outstanding intents first or leaves recoverable state blocking prepare.
+
+Writable base capture requires quiescent state (and Gradle quiescence evidence).
+Distributed-worker capture instead starts at build-ready and commits the same
+observation/GC grammar without a base quiescent phase or ref. Shared GC admits these
+worker observations; worker capture never accepts the base purge-window capability.
+Read-only remains prohibited from either capture/GC path. This role admission does
+not turn a serialized quiescence record into a live exclusive-window grant.
 
 ## Frozen observation and GC schemas
 
@@ -1075,6 +1238,57 @@ claim the abandoned invocation was build-ready. Already installed complete units
 are ordinary live cache state for the new prepare's own guarded restore/preflight;
 there is no promise to restore a byte-identical pre-prepare cache after abandonment.
 
+## Recovery and abandonment dispatch
+
+The integrated lifecycle MUST reopen the current owner with its frozen model,
+context, bindings and policy before provisioning, backend construction, restore,
+snapshot cleanup or supersession. Inspect the fixed install/GC intent names and
+stream the current relocation marker directory, as well as state progress hints.
+Unknown or cross-owner destructive intents, simultaneous markers and unsupported
+formats block; neither pathname age nor a newer configuration grants ownership.
+
+Reconcile an install when its marker or install-progress Q remains, including a
+committed prefix whose marker has already retired. Reconcile GC's discoverable
+active batch, without executing its unowned future suffix. Return relocation sources
+when a marker exists even if the state phase pointer predates that marker. Return
+uses existing frozen plans, adjustment evidence and return cursors, without a remote
+backend. A frozen publication with no marker does not by itself require rebuilding
+the moving window or traversing live contents during dispatch; intent publication
+precedes every physical outbound move. Normal publication resumes its own source
+checks later. Missing required marker/progress ownership is an obstruction.
+
+Recovery MUST re-establish its dedicated-root/completed-consumer lifetime independently
+of foreground cancellation. For Gradle base recovery, require fresh native daemon
+absence/available process evidence before reconciling live mutations. Do not invoke
+captured launchers: wrapper distributions or installations may already be evacuated.
+This recovery-only permission cannot grant a new purge, GC suffix or publication.
+A subsequent base save still acquires its normal shutdown window. Worker recovery
+retains worker admission and cannot borrow a base quiescence record. Maven retains
+its caller-asserted completed-consumer contract. Check the frozen root path, object,
+mode and owner before recovery; recheck after awaited inspection and before final
+acceptance. Persisted quiescence timestamps are never permission.
+
+Ordinary cancellation does not cancel necessary intent reconciliation or physical
+return; an independent interruptible cleanup signal does. Failed/ambiguous cleanup
+leaves its markers discoverable and blocks abandonment/prepare. Preserve both the
+original recovery failure and subsequent cleanup failures. Recheck the cleanup/caller
+lifetime after the final state commit; durable abandonment alone cannot turn a
+concurrent cancellation into a successful return. After reconciliation,
+prove no destructive intents remain, close readers, drain recorded retirements, then
+choose resume or mark completed with the existing `abandoned` outcome. Do not invent
+a publication/worker receipt. Normal completed-owner retirement performs supersession.
+
+For a crash before locator publication, an exact invocation's fully sealed revision-zero
+`prepare-pending` candidate may be reused only after validating its bindings, frozen
+model, root, empty producer stream and no snapshot-source rows. Its optional
+prepare-selection row must have both choices pending, null availability, selected
+stage and GC-age/off agreement; it carries configuration only, never selected inputs. It must have no post/install progress,
+cutoff, baseline, activity or selected inputs, and no destructive intent anywhere in
+the root. Preserve its unreferenced private files for eventual ordinary namespace
+retirement; do not sweep them before publication. A partial namespace without that
+proof is preserved and blocks retry for explicit reconciliation. No new bootstrap
+journal or reference collector is introduced.
+
 ## Owned metadata retirement
 
 One lifecycle owner exclusively controls the dedicated managed root. Old consumers
@@ -1183,9 +1397,9 @@ complete until this retirement finishes.
 
 A crash **before locator publication** can leave an unpublished initialization
 namespace/record. It cannot have new live mutations and matching-current replay
-intentionally ignores it. This isolated engine does not claim to collect all such
-bootstrap orphans; broader abandoned-bootstrap housekeeping remains an integration
-responsibility. Published invocation retirement and ordinary attempt cleanup above
+intentionally ignores it. The integrated dispatcher admits only the fully sealed revision-zero candidate
+described above; it preserves and blocks on partial/unproven bootstrap namespaces.
+It does not collect arbitrary bootstrap orphans. Published invocation retirement and ordinary attempt cleanup above
 are implemented; native I/O or ownership failures remain explicit, never copy fallback.
 
 ## Recovery location matrix and worked examples
@@ -1391,3 +1605,108 @@ are limited to eight paths and 4 KiB of UTF-8 paths per partition, charged to th
 working budget, with explicit truncation; opaque-scope samples have the same single
 shared bound. No diagnostic reads files, relists directories or adds inventories.
 The orchestration caller owns and disposes the collector, including on failure.
+
+## Retained baseline metadata
+
+Accepted prepare retains each available base object's `envelope.json` and
+`tree.ndjson` under the invocation's derived `baseline/<partition>/` directory,
+before disposing downloaded payloads or committing an installed stage. The frozen
+generation binds the envelope bytes; the envelope binds the complete tree bytes,
+grammar and semantic digests. No separate inventory, binding slot or journal is
+introduced. Frozen cold partitions have no retained metadata requirement.
+
+These files grant metadata comparison authority only. They cannot authorize payload
+installation, source return or reuse of unvalidated native contents. Post reopens
+and validates them against the exact frozen generation before observation capture
+and publication planning; it never fetches a newer remote baseline or adopts live
+contents to replace missing metadata. For example, a missing or truncated retained
+tree rejects post before purge/capture. During an interrupted prepare retry, the
+original accepted immutable input may fill an absent file; an existing file must
+match its original complete bytes. Divergence blocks the retry.
+
+After observations freeze, a new process renews exclusivity by validating the
+original quiescence/inventory and checking fresh native daemon absence. It does
+not execute captured launchers, which GC may legitimately have deleted, and does
+not replace publication-bound quiescence references. Remaining or uncertain daemon
+evidence blocks the retry. This renewal never authorizes recapturing or re-purging
+frozen observations. Initial post still runs the captured stop clients.
+
+An aggregator partition with no configured writer inherits its prepared complete
+snapshot; local changes do not become a writer implicitly. A standalone invocation
+may capture its own snapshot. Exact no-change completion requires no new object
+choices, equal baseline lineage/partition references/recovery groups, completed
+source returns and a successful final effective-source barrier. It does not create
+an upload receipt or save a new generation record.
+
+## Cold worker package reopening
+
+A package-frozen retry reads its exact current `workerRef` and derives the expected
+artifact name from frozen observations and worker-sources, model and context.
+The native basename must match. It verifies current regular-file identity/link count,
+Q length/hash, the existing complete worker TAR profile and seals, exact context and
+selected snapshot scope, then rechecks identity and state. This grants only an immutable
+archive upload capability. For example, removing live payload files after package
+commit does not prevent retry; renaming, replacing or altering the archive, substituting
+another producer's archive, or changing its authorized scope rejects retry. No live
+source view, native shadow, duplicate serialized summary or second parser is used.
+The one validation/decompression read on cold reopen is additional retry I/O.
+
+Worker post captures observations before checking raw backend capability, then GC,
+selected worker-sources, immutable package, receipt and completed state in that order.
+Only explicitly configured snapshot writers contribute complete snapshots. Empty
+contributions still upload a valid completion artifact. Capability failure preserves
+the frozen observations and performs no GC/source/package traversal. A failed upload
+retains the committed package for exact-byte retry; a lost acknowledgement needs the
+existing exact service readback. Read-only post only advances owned completion metadata;
+it never observes cache content, stops daemons, purges, GCs or uploads. Disabled prepare
+reconciles any discoverable prior owner before provisioning and creates no cache owner.
+
+## Provider composition and activation boundary
+
+The internal `src/phases/streaming/prepare.ts` and `post.ts` compose the same shared
+services used by integration tests. Prepare claims the existing per-job guard,
+resolves existing partition configuration/presets once, recovers prior ownership
+before provisioning and freezes the CI anchor. Post checks that guard before opening
+an anchor or importing provider/configuration/build-tool implementations. An owning
+failed prepare reconciles and abandons its recorded mutations; it never publishes
+an artifact or claims successful aggregation. Duplicate and missing prepare do no
+cache work. Frozen owner policy, including directory allowance, governs old recovery
+and post; a later configuration cannot replace it.
+
+Post uses frozen execution configuration and does not reread a repository config
+file. Backend factories load only at the core service's admitted boundary. Build
+reports and summary sinks load after post's observation/source-return/receipt work;
+a skipped-not-quiescent save does not read those contents. Known Gradle hook removal
+is a separate pre-capture step, so report collection cannot invalidate captured parent
+identities. Bounded partition diagnostics consume existing events and frozen model
+configuration; emitting them performs no filesystem operations.
+
+`src/ci/github/streaming.ts` supplies deferred existing GitHub adapters and pure report
+composition. Its cache factory receives the anchored root (or the known prepare root)
+so the SDK's existing path limitations remain visible before cache operations.
+Released `src/ci/github/{gradle,maven}/{main,post}.ts` still select the prior lifecycle.
+The final entrypoint switch, public schema/version exposure and legacy removal belong
+to R1 after independent H1/Q1 qualification. There is no user-facing feature flag or
+permanent parallel format compatibility mode.
+
+Disabled anchors freeze only the known build-hook root and report temp location in
+addition to execution context. They grant no managed cache authority or root owner.
+This is necessary to clean the exact installed Gradle summary hooks without rereading
+configuration, including read-only/disabled mode and failed prepare after abandonment.
+Read-only hooks are removed after owned completion; no managed observation/GC/upload
+is performed. Disabled mode creates no cache owner or cache metadata directory.
+Effective timestamp-GC age is rounded **up** once from configured days to whole
+milliseconds, retaining rather than deleting at a fractional boundary, then checked
+against the existing safe-integer admission and frozen unchanged for retries.
+
+Frozen owner reopening and destructive-intent reconciliation use an independent
+cleanup signal, including when the foreground is already cancelled at post entry.
+Only after returning sources and closing active recovery does the caller propagate
+foreground cancellation and refuse further facts/configuration/backend/report work.
+An explicitly cancelled cleanup signal or expired dedicated-root assertion still
+blocks cleanup; foreground cancellation never grants new cleanup authority.
+
+Prepare forwards the existing worker merge's bounded differing-contribution warning
+count and samples to the host after complete archive verification. Equivalent inputs
+produce no host warning. Diagnostics may repeat if an uncommitted merge is retried;
+they add no persisted state, content reread, inventory or change to winner policy.

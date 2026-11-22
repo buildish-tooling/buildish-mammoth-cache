@@ -178,6 +178,7 @@ export async function installWorkerMerge(
   result: AcceptedWorkerMerge,
   budget: WorkingBudget,
   signal = new AbortController().signal,
+  beforeInstall?: () => Promise<void>,
 ): Promise<void> {
   const binding = accepted.get(result);
   if (!binding || binding.store !== store) throw new Error('Unbound accepted worker merge.');
@@ -185,5 +186,6 @@ export async function installWorkerMerge(
     signal,
     maxDirectoryEntries: binding.max,
   });
+  await beforeInstall?.();
   await executeInstall(store, plan, budget, { signal });
 }

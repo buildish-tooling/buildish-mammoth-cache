@@ -15,7 +15,7 @@
  */
 
 import { mkdir, writeFile, readFile, link, rm, chmod } from 'node:fs/promises';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   baseFixture,
   preparedBase,
@@ -23,6 +23,7 @@ import {
   cleanupBaseFixtures,
 } from './base-fixtures';
 import * as nativeWalker from '../../../src/cache/streaming/native-walk';
+import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import { WorkerSpool } from '../../../src/cache/streaming/worker-spool';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 import {
@@ -41,10 +42,30 @@ import { h } from './local-fixtures';
 import { createHash } from 'node:crypto';
 import { baseRecordPaths } from '../../../src/cache/streaming/base-layout';
 const downloads: NativeObjectDownload[] = [];
+const scratchHandles = new Set<InstallScratch>();
+beforeEach(() => {
+  const create = InstallScratch.create,
+    close = InstallScratch.prototype.close;
+  vi.spyOn(InstallScratch, 'create').mockImplementation(async (...args) => {
+    const scratch = await create(...args);
+    scratchHandles.add(scratch);
+    return scratch;
+  });
+  vi.spyOn(InstallScratch.prototype, 'close').mockImplementation(async function (
+    this: InstallScratch,
+  ) {
+    await close.call(this);
+    scratchHandles.delete(this);
+  });
+});
 afterEach(async () => {
+  const remaining = [...scratchHandles].map((s) => s.path);
+  for (const scratch of scratchHandles) await scratch.close();
+  scratchHandles.clear();
   vi.restoreAllMocks();
   for (const d of downloads.splice(0)) await d.dispose();
   await cleanupBaseFixtures();
+  expect(remaining).toEqual([]);
 });
 it('round trips a real fixed-path SDK object without a base body rehash', async () => {
   const f = await baseFixture(),
@@ -343,8 +364,8 @@ it('retires independent event spools when a unit iterator cleanup fails', async 
   const f = await baseFixture(),
     payload = await createBasePayload(f.store, 'data');
   await writeFile(f.store.root.resolve(payload + '/a'), 'abc', { mode: 0o644 });
-  const dispose = vi.spyOn(WorkerSpool.prototype, 'dispose'),
-    original = dispose.getMockImplementation()!;
+  const original = WorkerSpool.prototype.dispose,
+    dispose = vi.spyOn(WorkerSpool.prototype, 'dispose');
   let first = true;
   dispose.mockImplementation(async function (this: WorkerSpool) {
     await original.call(this);
@@ -356,6 +377,7 @@ it('retires independent event spools when a unit iterator cleanup fails', async 
   await expect(
     captureBaseObject(f.store, [f.model.family, f.model.id, 'data', h, h, h], { budget: f.budget }),
   ).rejects.toThrow('cleanup');
+  expect(first).toBe(false);
   expect(dispose.mock.calls.length).toBeGreaterThanOrEqual(2);
   expect(f.budget.retained).toBe(0);
 });

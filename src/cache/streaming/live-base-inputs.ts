@@ -149,7 +149,9 @@ export class LiveNativeView {
           const frame = coordinates[coordinates.length - 1],
             p = store.codec.options.model.partitions.find((p) => p[0] === f[3])!;
           frame.contributes ||=
-            p[3] === 'aggregate' || p[4] === null || p[4] === store.codec.options.context[4];
+            p[3] === 'aggregate' ||
+            (p[4] === null && store.codec.options.role === 'standalone') ||
+            p[4] === store.codec.options.context[4];
           if (frame.maven && frame.contributes && frame.protectedArtifact)
             throw new Error('Incomplete Maven retained source coordinate.');
           await append(['file', f[1], n, f[3]]);
@@ -274,7 +276,9 @@ export class LocalBaseSnapshot {
       signal = options.signal ?? new AbortController().signal,
       selected = store.codec.options.model.partitions.filter(
         (p) =>
-          p[3] === 'single-writer' && (p[4] === null || p[4] === store.codec.options.context[4]),
+          p[3] === 'single-writer' &&
+          ((p[4] === null && store.codec.options.role === 'standalone') ||
+            p[4] === store.codec.options.context[4]),
       );
     if (!selected.length) return { snapshots: [], copyBytes: 0 };
     const stage = await WorkerStage.create(store, options.budget),

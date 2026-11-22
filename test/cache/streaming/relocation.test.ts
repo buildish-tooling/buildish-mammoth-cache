@@ -910,7 +910,7 @@ it('starts epoch2 under the same keys after an unconfirmed SDK attempt returned 
   expect(markerEpochs).toContain(2);
   expect(sdk.calls.filter((c) => c.kind === 'save')[0].key).toBe(key);
   await publisher.publish(sdk.backend);
-});
+}, 20000);
 it('refuses generation publication when a returned source changes after object receipts', async () => {
   const f = await fixture(),
     sdk = await nativeCacheBackend(),

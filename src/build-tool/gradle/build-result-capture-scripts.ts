@@ -80,8 +80,120 @@ export function toGroovySingleQuotedString(value: string): string {
   return `'${escaped}'`;
 }
 
+/** Internal lifecycle target; summary eligibility never controls registration. */
+export interface GradleOperationalCapture {
+  readonly invocation: string;
+  readonly directory: string;
+}
+function operationalRegistration(options?: GradleOperationalCapture): string {
+  if (!options) return '';
+  if (!/^[a-f0-9]{64}$/.test(options.invocation))
+    throw new Error('Invalid operational invocation.');
+  validateCaptureRootPath(options.directory);
+  const directory = toGroovySingleQuotedString(options.directory),
+    id = toGroovySingleQuotedString(options.invocation);
+  // Protocol: docs/dev/cache-lifecycle-protocol.md#gradle-installation-registration.
+  return `// Operational registration runs before every summary/service eligibility filter.
+def operationalDirectory = new File(${directory}).toPath()
+def operationalFailure = operationalDirectory.resolveSibling("registrations.failed.json")
+try {
+    def row = ["gradle-installation", 1, ${id},
+        gradle.gradleHomeDir.canonicalPath, GradleVersion.current().version,
+        gradle.gradleUserHomeDir.canonicalPath, new File(System.getProperty("java.home")).canonicalPath]
+    // Fixed tuple canonical encoding uses only core APIs available before the
+    // summary BuildService version gate. All controls use lower-case u00xx.
+    def quote = { String value ->
+        def out = new StringBuilder().append((char) 34)
+        for (int n = 0; n < value.length(); n++) {
+            int c = (int) value.charAt(n)
+            if (Character.isHighSurrogate((char) c)) {
+                if (n + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(n + 1)))
+                    throw new IOException("Unpaired operational path surrogate")
+                out.append((char) c).append(value.charAt(++n))
+            } else if (Character.isLowSurrogate((char) c)) throw new IOException("Unpaired operational path surrogate")
+            else if (c < 32) {
+                out.append((char) 92).append('u')
+                for (int shift = 12; shift >= 0; shift -= 4) out.append('0123456789abcdef'.charAt((c >> shift) & 15))
+            } else {
+                if (c == 34 || c == 92) out.append((char) 92)
+                out.append((char) c)
+            }
+        }
+        out.append((char) 34).toString()
+    }
+    byte[] json = ('[' + row.collect { v -> v instanceof Number ? v.toString() : quote(v.toString()) }.join(',') + ']').getBytes("UTF-8")
+    if (json.length + 1 > 65536) throw new IOException("Operational registration exceeds record bound")
+    def digest = java.security.MessageDigest.getInstance("SHA-256")
+    digest.update("mammoth:gradle-installation:1".getBytes("UTF-8"))
+    digest.update((byte) 0)
+    digest.update(java.nio.ByteBuffer.allocate(8).putLong(json.length).array())
+    digest.update(json)
+    def name = digest.digest().encodeHex().toString() + ".json"
+    java.nio.file.Files.createDirectories(operationalDirectory)
+    if (operationalDirectory.toRealPath() != operationalDirectory.toAbsolutePath().normalize())
+        throw new IOException("Operational registration traverses a link")
+    def target = operationalDirectory.resolve(name)
+    byte[] bytes = java.util.Arrays.copyOf(json, json.length + 1)
+    bytes[json.length] = (byte) 10
+    def check = { file ->
+        if (java.nio.file.Files.isSymbolicLink(file) || java.nio.file.Files.size(file) > 65536 ||
+            !java.util.Arrays.equals(java.nio.file.Files.readAllBytes(file), bytes))
+            throw new IOException("Operational registration collision")
+    }
+    if (java.nio.file.Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) check(target)
+    else {
+        def temp = java.nio.file.Files.createTempFile(operationalDirectory, ".registration-", ".candidate")
+        try {
+            def channel = java.nio.channels.FileChannel.open(temp, java.nio.file.StandardOpenOption.WRITE)
+            try {
+                def buffer = java.nio.ByteBuffer.wrap(bytes)
+                while (buffer.hasRemaining()) channel.write(buffer)
+                channel.force(true)
+            } finally { channel.close() }
+            try {
+                java.nio.file.Files.move(temp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            } catch (java.nio.file.FileAlreadyExistsException concurrent) {
+                // Another identical registration may have won; compare all bytes below.
+            }
+            check(target)
+            if (!System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
+                def parent = java.nio.channels.FileChannel.open(operationalDirectory, java.nio.file.StandardOpenOption.READ)
+                try { parent.force(true) } finally { parent.close() }
+            }
+        } finally { java.nio.file.Files.deleteIfExists(temp) }
+    }
+} catch (Exception failure) {
+    // A single sticky failure witness prevents another successful build from hiding this failure.
+    boolean recorded = false
+    try {
+        byte[] json = ('["gradle-capture-failed",1,"' + ${id} + '"]').getBytes("UTF-8")
+        byte[] bytes = java.util.Arrays.copyOf(json, json.length + 1)
+        bytes[json.length] = (byte) 10
+        def channel = java.nio.channels.FileChannel.open(operationalFailure,
+            java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE)
+        try {
+            def buffer = java.nio.ByteBuffer.wrap(bytes)
+            while (buffer.hasRemaining()) channel.write(buffer)
+            channel.force(true)
+        } finally { channel.close() }
+        if (!System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
+            def parent = java.nio.channels.FileChannel.open(operationalFailure.parent, java.nio.file.StandardOpenOption.READ)
+            try { parent.force(true) } finally { parent.close() }
+        }
+        recorded = true
+    } catch (java.nio.file.FileAlreadyExistsException known) { recorded = true }
+    catch (Exception ignored) { }
+    if (!recorded) throw new org.gradle.api.GradleException("Mammoth operational registration failed without durable failure evidence", failure)
+    logger.warn("Mammoth operational registration failed; relocating cache save will be skipped", failure)
+}
+`;
+}
+
 /** Generates the Gradle init script after validating and safely encoding its capture root. */
-export function createInitScriptContents(captureRoot: string | null): string {
+export function createInitScriptContents(
+  captureRoot: string | null,
+  operational?: GradleOperationalCapture,
+): string {
   // Use a single-quoted Groovy string (not a GString) so that ${…} sequences in the path
   // cannot be interpreted as Groovy expression interpolation.
   if (captureRoot) {
@@ -98,6 +210,7 @@ export function createInitScriptContents(captureRoot: string | null): string {
 import org.gradle.util.GradleVersion
 import org.slf4j.LoggerFactory
 
+${operationalRegistration(operational)}
 // Plugin / extension identifiers for the supported build-scan ecosystems
 def DEVELOCITY_EXT    = "develocity"
 def DEVELOCITY_PLUGIN = "com.gradle.develocity"

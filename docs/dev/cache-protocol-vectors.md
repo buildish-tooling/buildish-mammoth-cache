@@ -406,3 +406,64 @@ Canonical model (no LF in the framed model digest):
 Model ID: `bd2038f6837e6be40ec90eab8a8b0f7ba8e509cbfb98b0aded28621d79716475`. The final nonempty purge list is part of the existing model
 identity; omission represents no purging. Preserve-only exclusions remain distinct,
 even when the upload exclusion union would be identical. No separate policy Q exists.
+
+## A0: CI invocation anchor
+
+Each code line below has one terminal LF. The hash covers those exact UTF-8 bytes,
+including LF; it is a raw SHA-256, not a new framed protocol digest.
+
+### enabled
+
+```text
+["streaming-lifecycle",1,"/cache",["native",1,"directory","1","3","0",16877,"-1","0","1",null],["github","example/repo","ci","42","A",1,"rev-1","maven"],"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+```
+
+Raw SHA-256: `71b4a91ebd2bc25b9402db6a20261c0836733763a5f5c3bd2e57bbe0e155fd47`.
+
+### disabled
+
+```text
+["streaming-disabled",1,["github","example/repo","ci","42","A",1,"rev-1","maven"],"/cache","/temp"]
+```
+
+Raw SHA-256: `26bce7753dbeb3164291194e24c642c72f839690788f179bc18776dcd904b5a0`.
+
+## G0: operational Gradle records
+
+Canonical records include terminal LF; raw digests include it. Registration filenames
+use the existing framed `H("gradle-installation",record)` over J without LF. The tab in
+the registration path must use `\u0009`, never the JSON short escape `\t`.
+
+### registration
+
+```text
+["gradle-installation",1,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","/tools/Gradle é\u0009control","9.9.2","/cache home","/tools/jdk"]
+```
+
+Raw SHA-256: `fbf883852ee898196dceb36357600f5c247e8875d6f191a339b00b524dcd614b`.
+Filename: `645b0dc68cf6e7ef04073bb864fd688d2245aacdeecbcf71fb1d492dcba9cc0c.json`.
+
+### failure
+
+```text
+["gradle-capture-failed",1,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+```
+
+Raw SHA-256: `449e1a83deaf1cb2cf57051f9a81aa2fa9a6b08ce0356fc85dda5a32fa1c45b8`.
+
+## P0 — frozen empty prepare selection
+
+The shared Maven model/context/invocation applies. The fictional install parent
+identity is a directory on device1/inode3; no filesystem authority follows from a
+standalone vector. Exact bytes are three LF-terminated records:
+
+```text
+["local-stream",1,"prepare-sources","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef",null]
+["prepare-selection",1,"refs/heads/main",null,["execution",1,"/tmp/mammoth",7,"enabled",null],["miss"],["selected",[]],[],["native",1,"directory","1","3","0",16877,"-1","0","1",null],"workers-installed"]
+["local-end",1,"9cbcf2341bcc66817c6c5da2c0d701c0c17b3e1a8e1ca55f88ef3b6bd258955c"]
+```
+
+Bytes: `547`. Local event digest: `9cbcf2341bcc66817c6c5da2c0d701c0c17b3e1a8e1ca55f88ef3b6bd258955c`.
+Raw SHA-256 including all three LFs: `7328bade01fda3b1b7036c81dcb8df35ab2f3d7aeee5598cedd5ab198acb11fa`.
+Miss, selected-empty and cold-empty are explicit committed results; there are no
+snapshot-source rows. A complete local binding/owner check is still required.

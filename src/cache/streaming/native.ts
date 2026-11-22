@@ -53,6 +53,14 @@ export const nativeWork = (): NativeWork => ({
   unlinks: 0,
   directoryRemovals: 0,
 });
+// Protocol: docs/dev/native-base-protocol.md#native-timestamp-materialization.
+// Fractional seconds can round below an exact ms boundary. Choose its interior;
+// callers must verify the actual fstat bucket (not a floating-point multiply-back).
+export function portableMtimeSeconds(ms: number): number {
+  if (!Number.isSafeInteger(ms) || ms < 0) throw new Error('Invalid portable file timestamp.');
+  const fractional = ms % 1000;
+  return (ms - fractional) / 1000 + (fractional === 0 ? 0 : (fractional + 0.5) / 1000);
+}
 export function nativeIds(stat: Pick<BigIntStats, 'dev' | 'ino'>): readonly [string, string] {
   if (stat.ino === 0n) throw new Error('Unsupported native object identity/type.');
   return [String(stat.dev), String(stat.ino)];

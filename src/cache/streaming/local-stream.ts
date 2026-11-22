@@ -20,6 +20,9 @@ import { abortableValues, withAbort } from './abort';
 import { decodeRecords, encodeRecord, equal, Digest, add, type Value } from './encoding';
 import type { LocalCodec, LocalSchemas } from './local-schema';
 import { shaSchema, uintSchema, unitSchema } from './schema';
+import { ownedReferenceSchema } from './local-schema';
+import { resolveModel, type ResolvedModel } from './model';
+import { tuple } from './encoding';
 import { parentPath, type WorkingBudget, validateUnit } from './tree-state';
 import { LocalCurrentState } from './local-current-state';
 import { LocalTreeState } from './local-tree-state';
@@ -185,6 +188,12 @@ export class LocalStreamGrammar {
       }
       case 'prepare-sources':
       case 'post-sources': {
+        if (value[0] === 'prepare-selection') {
+          if (this.purpose !== 'prepare-sources' || this.count !== 0)
+            throw new Error('Prepare selection must be the first prepare-source row.');
+          s.rows.prepareSelection.parse(value);
+          break;
+        }
         const row = z.tuple([z.literal('snapshot-source'), s.source]).parse(value);
         if (this.purpose === 'prepare-sources' && row[1][1] === 'local-writer')
           throw new Error('Post-build source in prepare bindings.');
@@ -340,7 +349,7 @@ export async function readLocalPrefix(
   }
   return result;
 }
-async function* read(
+function read(
   source: AsyncIterable<Uint8Array>,
   purpose: LocalPurpose,
   options: LocalStreamOptions,
@@ -350,8 +359,99 @@ async function* read(
   signal: AbortSignal,
   beforeAccept?: (value: Value) => Promise<void>,
 ) {
-  const grammar = new LocalStreamGrammar(purpose, options),
-    digest = new Digest('local-' + purpose),
+  return readFrames(
+    source,
+    purpose,
+    options.budget,
+    new LocalStreamGrammar(purpose, options),
+    expected,
+    prefix,
+    event,
+    signal,
+    beforeAccept,
+  );
+}
+interface StreamGrammar {
+  header(): Value;
+  accept(value: Value): void;
+  finish(): void;
+  dispose(): void;
+}
+export async function readModelStream(
+  source: AsyncIterable<Uint8Array>,
+  reference: Value,
+  identity: { invocation: string; model: string; family: string; prefix: string; version: number },
+  budget: WorkingBudget,
+  signal = new AbortController().signal,
+) {
+  const ref = ownedReferenceSchema(identity.invocation, 'model').parse(reference),
+    partitions: Value[] = [],
+    releases: (() => void)[] = [];
+  let head: readonly Value[] | undefined, model: ResolvedModel | undefined;
+  const grammar: StreamGrammar = {
+    header: () => [
+      'local-stream',
+      1,
+      'model',
+      identity.invocation,
+      identity.model,
+      identity.family,
+      null,
+    ],
+    accept(value) {
+      const row = tuple(value);
+      if (!head) {
+        head = tuple(value, 'model-header', 3);
+      } else {
+        if (partitions.length === 64 || row[0] !== 'partition')
+          throw new Error('Invalid bootstrap model row.');
+        partitions.push(row.slice(1));
+      }
+      releases.push(budget.holdRecord(encodeRecord(value).length));
+    },
+    finish() {
+      if (!head) throw new Error('Missing model header.');
+      model = resolveModel(
+        ['model', 1, head[1], head[2], partitions],
+        identity.prefix,
+        identity.version,
+      );
+      equal(
+        [model.id, model.family],
+        [identity.model, identity.family],
+        'bootstrap model identity',
+      );
+    },
+    dispose() {
+      for (const release of releases) release();
+    },
+  };
+  await drain(
+    readFrames(
+      source,
+      'model',
+      budget,
+      grammar,
+      { bytes: ref[3], sha: ref[4] },
+      false,
+      undefined,
+      signal,
+    ),
+  );
+  return model!;
+}
+async function* readFrames<G extends StreamGrammar>(
+  source: AsyncIterable<Uint8Array>,
+  purpose: LocalPurpose,
+  budget: WorkingBudget,
+  grammar: G,
+  expected: { bytes: number; sha: string },
+  prefix: boolean,
+  event: ((value: Value) => Promise<void>) | undefined,
+  signal: AbortSignal,
+  beforeAccept?: (value: Value) => Promise<void>,
+) {
+  const digest = new Digest('local-' + purpose),
     raw = createHash('sha256');
   let bytes = 0,
     records = 0,
@@ -361,7 +461,7 @@ async function* read(
     handedOff = false;
   try {
     for await (const frame of decodeRecords(abortableValues(source, signal))) {
-      const release = options.budget.holdRecord(frame.raw.length);
+      const release = budget.holdRecord(frame.raw.length);
       try {
         if (ended) throw new Error('Trailing local stream row.');
         bytes = add(bytes, frame.raw.length);

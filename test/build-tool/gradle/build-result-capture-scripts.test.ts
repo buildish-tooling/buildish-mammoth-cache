@@ -58,3 +58,26 @@ describe('Gradle build-result capture script boundary', () => {
     expect(createServicePluginContents(null)).toContain('def captureRootDir = null');
   });
 });
+
+it('registers operational locations before summary/Test/parent/version filters without enabling legacy capture', () => {
+  const script = createInitScriptContents('/reports', {
+      invocation: 'a'.repeat(64),
+      directory: '/cache/.mammoth/v1/' + 'a'.repeat(64) + '/registrations',
+    }),
+    start = script.indexOf('def operationalDirectory');
+  for (const filter of [
+    'def skipEnvKey',
+    'GradleVersion.current().baseVersion',
+    'TestBuildResultCapture.suppress',
+    'gradle.getParent()',
+  ])
+    expect(script.indexOf(filter)).toBeGreaterThan(start);
+  expect(script).not.toContain('JsonGenerator');
+  expect(script).toContain('gradle.gradleHomeDir.canonicalPath');
+  expect(script).toContain('gradle.gradleUserHomeDir.canonicalPath');
+  expect(script).toContain('System.getProperty("java.home")');
+  expect(createInitScriptContents('/reports')).not.toContain('def operationalDirectory');
+  expect(() => createInitScriptContents(null, { invocation: 'bad', directory: '/cache' })).toThrow(
+    'invocation',
+  );
+});

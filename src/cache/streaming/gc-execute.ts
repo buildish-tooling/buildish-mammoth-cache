@@ -45,7 +45,6 @@ async function admission(store: OwnedStore, options: GcOptions, recovering: bool
   await requirePostBindings(store, state, bindings, options);
   if (
     store.codec.options.access !== 'writable' ||
-    store.codec.options.role === 'distributed-worker' ||
     !['observations-frozen', 'gc-complete'].includes(state[4]) ||
     !state[6] ||
     !state[10]

@@ -15,7 +15,10 @@
  */
 
 import { lstat, opendir, unlink, rmdir } from 'node:fs/promises';
-import { nativeIdentity, sameNative, type NativeIdentity } from './native';
+import { checkPostRootBinding } from './post-admission';
+import { equal } from './encoding';
+import { PrepareFacts } from './prepare-state';
+import { nativeIdentity, sameNative, sameObject, type NativeIdentity } from './native';
 import { sameDirectoryObject } from './install-member';
 import type { OwnedStore } from './owned-store';
 import { relativePathSchema } from './schema';
@@ -48,8 +51,20 @@ export async function retireOwnedDirectory(
     parts[1] !== store.codec.options.invocation;
   if (!disposable && !parentLedger && !retired)
     throw new Error('Not a reserved disposable container.');
+  return retireTree(store, relative, expected, budget, event);
+}
+async function retireTree(
+  store: OwnedStore,
+  relative: string,
+  expected: NativeIdentity,
+  budget: WorkingBudget,
+  event: string,
+  check: () => void = () => {},
+) {
+  check();
   await store.root.parents(relative);
   async function stat(path: string) {
+    check();
     store.root.work.stats++;
     const raw = await lstat(store.root.resolve(path), { bigint: true });
     if (!raw.isFile() && !raw.isDirectory())
@@ -65,9 +80,11 @@ export async function retireOwnedDirectory(
       let current = await stat(path);
       if (!sameDirectoryObject(identity, current))
         throw new Error('Disposable directory was replaced.');
+      check();
       const directory = await opendir(store.root.resolve(path), { bufferSize: 1 });
       try {
         while (true) {
+          check();
           const entry = await directory.read();
           if (!entry) break;
           const before = await stat(path);
@@ -78,6 +95,7 @@ export async function retireOwnedDirectory(
           else {
             const now = await stat(child);
             if (!sameNative(native, now, true)) throw new Error('Disposable file changed.');
+            check();
             await unlink(store.root.resolve(child));
             store.root.work.unlinks++;
             await store.fail(event);
@@ -93,7 +111,9 @@ export async function retireOwnedDirectory(
       const after = await stat(path);
       if (!sameNative(current, after, true))
         throw new Error('Disposable directory changed before retirement.');
+      check();
       await store.root.syncDirectory(path);
+      check();
       await rmdir(store.root.resolve(path));
       store.root.work.directoryRemovals++;
       await store.fail(event);
@@ -102,5 +122,73 @@ export async function retireOwnedDirectory(
     }
   }
   await visit(relative, expected, 0);
+  check();
   await store.root.syncDirectory(parentPath(relative));
+}
+
+// Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-prepare-selection.
+// Only this private, derived container can be reset without a per-child catalogue.
+// It never grants install/source authority: immutable selected inputs must be revalidated.
+export async function clearPrepareInstall(
+  facts: PrepareFacts,
+  assertCurrent: () => undefined = () => {},
+) {
+  PrepareFacts.assert(facts);
+  const { store, options, state, selection } = facts;
+  if (state[4] !== 'prepare-pending' || state[11] !== null || !selection)
+    throw new Error('Install staging disposal requires idle prepare ownership.');
+  const check = () => {
+    options.signal?.throwIfAborted();
+    if (assertCurrent() !== undefined)
+      throw new Error('Install staging lifetime must be synchronous.');
+  };
+  const checkRoot = async () => {
+    check();
+    store.root.work.stats++;
+    checkPostRootBinding(
+      store,
+      facts.bindings,
+      nativeIdentity(await lstat(store.root.path, { bigint: true })),
+    );
+    check();
+  };
+  await checkRoot();
+  equal(await store.state(), state, 'staging disposal owner');
+  await store.assertNoIntents();
+  const parent = store.prefix + 'install',
+    expected = selection[8];
+  const checkParent = async () => {
+    check();
+    const current = await store.root.stat(parent);
+    if (
+      !current ||
+      !sameObject(current, expected) ||
+      current[6] !== expected[6] ||
+      current[3] !== store.root.binding[3]
+    )
+      throw new Error('Frozen install container replaced or changed mode/device.');
+    check();
+  };
+  await checkParent();
+  const allowed = new Set(store.codec.options.model.partitions.map((p) => p[0]));
+  for await (const entry of await opendir(store.root.resolve(parent))) {
+    check();
+    if (!allowed.has(entry.name) || !entry.isDirectory() || entry.isSymbolicLink())
+      throw new Error('Unknown install staging child; preserved.');
+    await checkParent();
+    const child = parent + '/' + entry.name,
+      native = await store.root.stat(child);
+    if (!native || native[2] !== 'directory' || native[3] !== store.root.binding[3])
+      throw new Error('Install staging child replaced.');
+    await retireTree(store, child, native, options.budget, 'prepare-install-member-retired', check);
+  }
+  await checkParent();
+  const directory = await opendir(store.root.resolve(parent));
+  try {
+    if (await directory.read()) throw new Error('Install staging disposal incomplete.');
+  } finally {
+    await directory.close();
+  }
+  await checkRoot();
+  check();
 }

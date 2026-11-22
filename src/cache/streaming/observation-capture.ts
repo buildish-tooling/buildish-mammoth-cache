@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { assertBaseMetadata, type BaseMetadata } from './baseline-metadata';
 import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore, Reference } from './owned-store';
 import { InstallScratch } from './install-scratch';
@@ -26,7 +27,7 @@ import { isMavenTransientFile } from '../maven-repository';
 import { workspaceKind } from '../immutable-workspaces';
 import { UnitMarkers } from './unit-markers';
 import { baseName, parentPath, compareMembership, isWorkspaceRoot } from './tree-state';
-import { ValidatedBaseObject, settleBaseCleanup, type BaseObjectOptions } from './base-object';
+import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
 import { baseFileBytes } from './base-layout';
 import { decodeGeneration } from './native-records';
 import type { Unit } from './schema';
@@ -72,7 +73,7 @@ const markerNames = new Set([
 
 export interface ObservationCaptureOptions extends BaseObjectOptions {
   /** Genuine pinned metadata retained through prepare; never a caller-supplied hash table. */
-  readonly baseline?: readonly ValidatedBaseObject[];
+  readonly baseline?: readonly BaseMetadata[];
   readonly summaries?: PartitionSummaries;
   /** Verified by the trusted lifecycle caller, not by persisted quiescence. Synchronous lifetime assertions only. */
   readonly purgeWindow?: {
@@ -109,6 +110,8 @@ export async function captureObservations(
     codec = store.codec,
     model = codec.options.model;
   options.summaries?.assert(model);
+  const worker = codec.options.role === 'distributed-worker';
+  if (worker && options.purgeWindow) throw new Error('Worker capture cannot purge.');
   const configured = model.partitions.some((p) => p[6]?.length),
     purge = {
       status: !configured
@@ -147,11 +150,12 @@ export async function captureObservations(
     throw new Error('Observation root binding changed.');
   if (
     codec.options.access !== 'writable' ||
-    codec.options.role === 'distributed-worker' ||
-    initial[4] !== 'quiescent' ||
+    initial[4] !== (worker ? 'build-ready' : 'quiescent') ||
     initial[6] !== null
   )
-    throw new Error('Observation capture requires writable quiescent base state.');
+    throw new Error(
+      'Observation capture requires writable quiescent base or build-ready worker state.',
+    );
   if ((options.maxDirectoryEntries ?? 100000) !== bindings[8][9])
     throw new Error('Observation allowance differs from frozen policy.');
   await store.readStream(bindings[6], 'model', { ...options, partition: null }, undefined, signal);
@@ -193,7 +197,7 @@ export async function captureObservations(
     : null;
   const seen = new Set<string>();
   for (const object of options.baseline) {
-    ValidatedBaseObject.assertReceipt(object, store);
+    assertBaseMetadata(object, store);
     const p = object.reference[1][2],
       old = baseline?.[8].find((e) => e[1] === p);
     if (seen.has(p) || old?.[0] !== 'object')
@@ -688,11 +692,11 @@ class BaselineCursor {
   ) {}
   static async open(
     store: OwnedStore,
-    objects: readonly ValidatedBaseObject[],
+    objects: readonly BaseMetadata[],
     options: BaseObjectOptions,
   ): Promise<BaselineCursor> {
     const cursors: BaselineCursor['cursors'] = [];
-    async function* files(object: ValidatedBaseObject): AsyncGenerator<readonly [string, Value]> {
+    async function* files(object: BaseMetadata): AsyncGenerator<readonly [string, Value]> {
       let path = '';
       for await (const row of decodeRecords(store.read(object.tree, 'native-tree'))) {
         options.signal?.throwIfAborted();

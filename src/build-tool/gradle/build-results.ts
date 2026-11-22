@@ -16,6 +16,7 @@
 
 import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { GradleOperationalCapture } from './build-result-capture-scripts';
 
 import { z } from 'zod';
 
@@ -130,13 +131,14 @@ type CapturedBuildScanFile = z.infer<typeof capturedBuildScanFileSchema>;
 export async function installGradleBuildResultCapture(
   gradleUserHome: string,
   context: BuildCaptureContext = { tempDirectory: null },
+  operational?: GradleOperationalCapture,
 ): Promise<void> {
   const initDirectory = path.join(gradleUserHome, 'init.d');
   const captureRoot = resolveCaptureRoot(context);
   await mkdir(initDirectory, { recursive: true });
   await writeFile(
     path.join(initDirectory, INIT_SCRIPT_FILE_NAME),
-    createInitScriptContents(captureRoot),
+    createInitScriptContents(captureRoot, operational),
     {
       encoding: 'utf8',
     },

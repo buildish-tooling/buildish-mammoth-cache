@@ -50,6 +50,8 @@ export async function freezeInstallPlan(
   budget: WorkingBudget,
   options: {
     trustedOld?: readonly VerifiedIncoming[];
+    /** True-hit base restore only; complete incoming contexts include empty cold partitions. */
+    pruneAggregates?: boolean;
     signal?: AbortSignal;
     maxDirectoryEntries?: number;
   } = {},
@@ -68,6 +70,20 @@ export async function freezeInstallPlan(
   for (const input of inputs)
     input.assertBound(store, input.partition, input.evidence, input.nativeRoot);
   await store.assertNoIntents();
+  if (options.pruneAggregates) {
+    const state = store.codec.schemas.documents['local-state'].parse(await store.state());
+    const bindings = store.codec.schemas.documents.bindings.parse(
+      await store.readDocument(state[5], 'bindings'),
+    );
+    if (
+      state[4] !== 'prepare-pending' ||
+      bindings[8][4] !== 'prune-managed' ||
+      bindings[9] === null ||
+      inputs.length !== model.partitions.length ||
+      inputs.some((i) => i.origin !== 'trusted-base')
+    )
+      throw new Error('Aggregate pruning requires a bound base hit and every partition context.');
+  }
   const current = await captureInstallCurrent(store, { budget, signal, maxDirectoryEntries });
   const owned: InstallScratch[] = [];
   async function spool() {
@@ -118,6 +134,7 @@ export async function freezeInstallPlan(
         desired,
         signal,
         maxDirectoryEntries,
+        options.pruneAggregates ?? false,
       ),
       captured = await captureInstallPreimages(
         store,

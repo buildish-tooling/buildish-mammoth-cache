@@ -18,7 +18,8 @@ import { LiveBaseInputs } from './live-base-inputs';
 import { FrozenBaseTree } from './base-frozen-tree';
 import type { PartitionSummaries } from './partition-summaries';
 import { freezeMovePlans, checkMovePlanMetadata } from './base-move-plan';
-import { ValidatedBaseObject, type BaseObjectOptions } from './base-object';
+import { assertBaseMetadata, type BaseMetadata } from './baseline-metadata';
+import { type BaseObjectOptions } from './base-object';
 import { baselineGeneration, freezeRecord, checkInheritedChoice } from './base-publication';
 import { deriveBaseGroups } from './base-incoming';
 import { verifyNativeEvidence } from './install-evidence';
@@ -90,7 +91,7 @@ export class FrozenMovingPublication {
   static async freeze(
     input: LiveBaseInputs,
     ref: string,
-    baseline: readonly ValidatedBaseObject[] = [],
+    baseline: readonly BaseMetadata[] = [],
     summaries?: PartitionSummaries,
   ): Promise<FrozenMovingPublication> {
     LiveBaseInputs.assert(input);
@@ -146,7 +147,7 @@ export class FrozenMovingPublication {
       await input.view.assertStable();
       const seen = new Set<string>();
       for (const old of baseline) {
-        ValidatedBaseObject.assertReceipt(old, store);
+        assertBaseMetadata(old, store);
         hold([old.reference, old.envelope, old.tree], 8192);
         const p = old.reference[1][2],
           i = model.partitions.findIndex((d) => d[0] === p),

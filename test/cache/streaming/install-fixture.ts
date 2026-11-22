@@ -37,6 +37,7 @@ export async function installFixture(
     repositorySplit?: 'aggregate' | 'single-writer';
     purgeGlobs?: readonly string[];
     model?: ResolvedModel;
+    role?: 'standalone' | 'distributed-worker' | 'distributed-aggregator';
     access?: 'writable' | 'read-only';
     root?: string;
     nonce?: string;
@@ -105,6 +106,7 @@ export async function installFixture(
       context,
       invocation: invocationId(context, configuration.nonce ?? nonce),
       access: configuration.access ?? ('writable' as const),
+      role: configuration.role ?? ('standalone' as const),
     },
     codec = new LocalCodec(options),
     store = await OwnedStore.bind(root, codec, configuration.fail),

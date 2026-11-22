@@ -260,7 +260,7 @@ export class GradleBuildToolAdapter implements BuildToolAdapter {
   }
 }
 
-function buildReportFromGradleReport(
+export function buildReportFromGradleReport(
   report: GradleBuildReport,
   cleanupWarnings: readonly string[],
 ): BuildReport {

@@ -18,7 +18,14 @@ import { mkdir, open, lstat, chmod, utimes } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { add, encodeRecord, tuple } from './encoding';
-import { nativeIdentity, sameNative, sameObject, sameRename, type NativeIdentity } from './native';
+import {
+  nativeIdentity,
+  sameNative,
+  sameObject,
+  sameRename,
+  portableMtimeSeconds,
+  type NativeIdentity,
+} from './native';
 import type { OwnedStore } from './owned-store';
 import { retireOwnedDirectory } from './owned-retirement';
 import { joinPath, parentPath, type WorkingBudget } from './tree-state';
@@ -168,12 +175,15 @@ export class WorkerStage {
           )
             throw new Error('Staged body changed before metadata repair.');
           await handle.chmod(mode);
-          await handle.utimes(mtimeMs / 1000, mtimeMs / 1000);
+          const time = portableMtimeSeconds(mtimeMs);
+          await handle.utimes(time, time);
           this.work.metadataRepairs++;
           await handle.sync();
           this.store.root.work.fileSyncs++;
           this.store.root.work.stats++;
           const native = nativeIdentity(await handle.stat({ bigint: true }));
+          if (BigInt(native[8]) / 1000000n !== BigInt(mtimeMs))
+            throw new Error('Staged portable timestamp cannot be represented.');
           if (!sameNative(native, await this.stat(name), true))
             throw new Error('Staged body changed during metadata repair.');
           await close();

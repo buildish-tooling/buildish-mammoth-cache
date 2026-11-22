@@ -198,7 +198,9 @@ describe('Gradle build reporting', () => {
     expect(initScript).not.toContain('captureUsingBuildFinished');
     // The path must be embedded as a single-quoted Groovy string (not a GString) so that
     // ${…} sequences in the value are never evaluated as Groovy expressions.
-    const expectedCaptureRootLiteral = `'${path.join(runnerTemp, '.buildish-mammoth-cache')}'`;
+    const expectedCaptureRootLiteral = toGroovySingleQuotedString(
+      path.join(runnerTemp, '.buildish-mammoth-cache'),
+    );
     expect(initScript).toContain(`def captureRootDir = ${expectedCaptureRootLiteral}`);
     expect(servicePlugin).toContain(`def captureRootDir = ${expectedCaptureRootLiteral}`);
     expect(servicePlugin).toContain('def captureInvocationNamespace = "buildish-mammoth-cache"');

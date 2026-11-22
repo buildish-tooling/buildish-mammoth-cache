@@ -93,6 +93,7 @@ export async function selectInstall(
   desired: readonly DesiredIndex[],
   signal = new AbortController().signal,
   maxDirectoryEntries = 100000,
+  pruneAggregates = false,
 ): Promise<number | null> {
   if (
     desired.length > model.partitions.length ||
@@ -108,9 +109,9 @@ export async function selectInstall(
   if (!Number.isSafeInteger(maxDirectoryEntries) || maxDirectoryEntries < 1)
     throw new Error('Invalid output directory allowance.');
   const claim = scratch.claim();
-  const snapshotMask = desired.reduce(
+  const replacementMask = desired.reduce(
     (mask, d) =>
-      model.partitions[d.partition][3] === 'single-writer'
+      pruneAggregates || model.partitions[d.partition][3] === 'single-writer'
         ? mask | partitionBit(model, model.partitions[d.partition][0])
         : mask,
     0n,
@@ -153,7 +154,13 @@ export async function selectInstall(
         held.push(lease);
         sources.push({ ...source, node: lease.node });
       }
-      if (!sources.length && old && !workspace && !direct && (nodeMask(old) & snapshotMask) === 0n)
+      if (
+        !sources.length &&
+        old &&
+        !workspace &&
+        !direct &&
+        (nodeMask(old) & replacementMask) === 0n
+      )
         return null;
       const files = sources.filter((s) => s.node[1] === 'file'),
         dirs = sources.filter((s) => s.node[1] === 'directory');
@@ -166,13 +173,17 @@ export async function selectInstall(
       let scope = workspace;
       if (
         path &&
-        dirs.some((s) => model.partitions[s.partition][3] === 'aggregate') &&
+        (dirs.some((s) => model.partitions[s.partition][3] === 'aggregate') ||
+          (pruneAggregates && old?.[1] === 'directory')) &&
         model.tuple[2] === 'gradle' &&
         workspaceRoot(path) === path
       ) {
         let jar = false;
-        for (const source of dirs)
-          for await (const child of indexedEntries(scratch, source.node))
+        for (const node of [
+          ...dirs.map((s) => s.node),
+          ...(pruneAggregates && old?.[1] === 'directory' ? [old] : []),
+        ])
+          for await (const child of indexedEntries(scratch, node))
             if (child[1] === 'file' && (child[0] === 'classes.jar' || child[0] === 'sources.jar'))
               jar = true;
         scope = [workspaceKind(path, jar ? [path + '/classes.jar'] : []), path, 'subtree'];
@@ -186,6 +197,19 @@ export async function selectInstall(
                 directHere = ['maven-directory', path, 'direct'];
                 break;
               }
+      }
+      if (
+        pruneAggregates &&
+        old?.[1] === 'directory' &&
+        model.tuple[2] === 'maven' &&
+        (path === 'repository' || path.startsWith('repository/')) &&
+        directHere === null
+      ) {
+        for await (const child of indexedEntries(scratch, old))
+          if (child[1] === 'file') {
+            directHere = ['maven-directory', path, 'direct'];
+            break;
+          }
       }
       const appendOp = async (
         p: number,
@@ -224,24 +248,31 @@ export async function selectInstall(
           source.node[7] === source.node[8] &&
           model.partitions[p][3] === 'aggregate'
         ) {
-          if (old?.[1] === 'directory') return null;
-          if (old && !physicalOld(p))
-            throw new Error('Empty directory presence cannot replace protected preimage.');
-          return appendOp(p, source.offset, oldOffset, 'directory', [
-            'empty-directory',
-            path,
-            'subtree',
-          ]);
+          if (old?.[1] === 'directory' && !pruneAggregates) return null;
+          if (old?.[1] !== 'directory') {
+            if (old && !physicalOld(p))
+              throw new Error('Empty directory presence cannot replace protected preimage.');
+            return appendOp(p, source.offset, oldOffset, 'directory', [
+              'empty-directory',
+              path,
+              'subtree',
+            ]);
+          }
         }
       }
       if (!sources.length && old) {
         const p = partition(nodeMask(old));
         const authoritative =
           p >= 0 &&
-          ((snapshotMask & (1n << BigInt(p))) !== 0n ||
+          ((replacementMask & (1n << BigInt(p))) !== 0n ||
             (model.partitions[p][3] === 'aggregate' &&
               (scope !== null || (old[1] === 'file' && direct !== null))));
-        if (path && authoritative && physicalOld(p))
+        if (
+          path &&
+          authoritative &&
+          physicalOld(p) &&
+          (old[1] === 'file' || model.partitions[p][3] === 'single-writer' || scope !== null)
+        )
           return appendOp(
             p,
             null,

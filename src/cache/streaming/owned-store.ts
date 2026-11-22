@@ -54,10 +54,24 @@ import {
 
 export type Reference = ['ref', string, string, number, string];
 export type Prefix = ['prefix', string, string, number, number, string];
-const locatorSchema = z
+export const locatorSchema = z
   .tuple([z.literal('current'), z.literal(1), shaSchema, z.string()])
   .refine((r) => r[3] === `.mammoth/v1/${r[2]}/state.json`);
 const fixedIntents = ['install-intent.json', 'gc-intent.json'];
+export async function readFixedMetadata(root: NativeRoot, relative: string): Promise<Value | null> {
+  const current = await root.stat(relative);
+  if (!current) return null;
+  if (BigInt(current[5]) > 65536n) throw new Error('Fixed document exceeds record bound.');
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of root.read(relative, current)) {
+    size = add(size, chunk.length);
+    if (size > 65536) throw new Error('Fixed document grew.');
+    chunks.push(chunk);
+  }
+  return decodeRecord(Buffer.concat(chunks));
+}
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#durable-replacement-and-cursors
 export class OwnedStore {
   readonly prefix: string;
@@ -295,17 +309,7 @@ export class OwnedStore {
     );
   }
   async readFixed(relative: string): Promise<Value | null> {
-    const current = await this.root.stat(relative);
-    if (!current) return null;
-    if (BigInt(current[5]) > 65536n) throw new Error('Fixed document exceeds record bound.');
-    const chunks: Buffer[] = [];
-    let size = 0;
-    for await (const chunk of this.root.read(relative, current)) {
-      size = add(size, chunk.length);
-      if (size > 65536) throw new Error('Fixed document grew.');
-      chunks.push(chunk);
-    }
-    return decodeRecord(Buffer.concat(chunks));
+    return readFixedMetadata(this.root, relative);
   }
   private async fixed(relative: string, value: Value): Promise<void> {
     const bytes = this.codec.encode(value),
@@ -629,7 +633,8 @@ export class OwnedStore {
     let ownedName: string | undefined;
     if (ownedIntent !== undefined) {
       const value = this.codec.validate(ownedIntent) as readonly Value[];
-      if (value[0] === 'gc-intent') ownedName = this.prefix + 'gc-intent.json';
+      if (value[0] === 'install-intent') ownedName = this.prefix + 'install-intent.json';
+      else if (value[0] === 'gc-intent') ownedName = this.prefix + 'gc-intent.json';
       else if (value[0] === 'relocation')
         ownedName = this.prefix + 'relocation/' + value[3] + '.json';
       else throw new Error('Unsupported recovery intent.');
@@ -637,65 +642,9 @@ export class OwnedStore {
       if (actual === null || !encodeRecord(actual).equals(encodeRecord(ownedIntent)))
         throw new Error('Recovery intent changed.');
     }
-    // Known old destructive formats never become executable new-format inputs.
-    for (const name of [
-      'restore-move-v1.json',
-      'groovy-apply-v1/intent.json',
-      'workspace-apply-v2/intent.json',
-      'workspace-apply-v3/intent.json',
-    ])
-      if (await this.root.stat('.mammoth/' + name))
-        throw new Error('Incompatible legacy destructive intent.');
-    const legacy = '.mammoth/cutoff-state-v2/current.json';
-    const legacyPointer = await this.root.stat(legacy);
-    if (legacyPointer) {
-      if (BigInt(legacyPointer[5]) > 4096n)
-        throw new Error('Unrecognized legacy lifecycle pointer.');
-      const chunks: Buffer[] = [];
-      for await (const chunk of this.root.read(legacy, legacyPointer)) chunks.push(chunk);
-      const pointer = z
-        .object({
-          schemaVersion: z.literal(1),
-          journal: z.string().regex(/^journal-[a-f0-9-]{36}\.json$/),
-        })
-        .strict()
-        .parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-      const file = '.mammoth/cutoff-state-v2/' + pointer.journal,
-        { handle, identity } = await this.root.openRead(file);
-      try {
-        const bytes = Buffer.alloc(256);
-        const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-        const id = pointer.journal.slice(8, -5),
-          prefix = `{"schemaVersion":6,"invocation":"${id}","phase":"completed",`;
-        if (!bytes.subarray(0, bytesRead).toString('utf8').startsWith(prefix))
-          throw new Error('Incompatible unfinished legacy lifecycle.');
-        const current = await this.root.stat(file);
-        if (!current || !sameNative(identity, current, true))
-          throw new Error('Legacy lifecycle changed.');
-      } finally {
-        await handle.close();
-      }
-    }
-    const base = '.mammoth/v1';
-    if (!(await this.root.stat(base))) return;
-    for await (const entry of await opendir(this.root.resolve(base))) {
-      if (entry.name === 'current.json') continue;
-      if (!/^[a-f0-9]{64}$/.test(entry.name)) continue;
-      if (!entry.isDirectory() || entry.isSymbolicLink())
-        throw new Error('Unsafe invocation discovery directory.');
-      for (const file of fixedIntents) {
-        const relative = base + '/' + entry.name + '/' + file;
-        if (relative === ownedName) continue;
-        if (await this.root.stat(relative))
-          throw new Error('Pending root-local destructive intent.');
-      }
-      const relocation = base + '/' + entry.name + '/relocation';
-      if (await this.root.stat(relocation))
-        for await (const marker of await opendir(this.root.resolve(relocation)))
-          if (marker.name.endsWith('.json') && relocation + '/' + marker.name !== ownedName)
-            throw new Error('Pending root-local relocation.');
-    }
+    await checkRootIntents(this.root, ownedName);
   }
+
   /** These Q purposes are referenced only by root-state cells, never arbitrary streams. */
   async retireReplacedDocument(reference: Value): Promise<void> {
     if (
@@ -1018,5 +967,68 @@ export class OwnedAppend {
       this.closed = true;
       this.grammar.dispose();
     }
+  }
+}
+
+/** Disabled/no-owner admission shares the exact existing conservative discovery. */
+export async function assertNoRootIntents(root: NativeRoot) {
+  await checkRootIntents(root);
+}
+async function checkRootIntents(root: NativeRoot, ownedName?: string) {
+  // Known old destructive formats never become executable new-format inputs.
+  for (const name of [
+    'restore-move-v1.json',
+    'groovy-apply-v1/intent.json',
+    'workspace-apply-v2/intent.json',
+    'workspace-apply-v3/intent.json',
+  ])
+    if (await root.stat('.mammoth/' + name))
+      throw new Error('Incompatible legacy destructive intent.');
+  const legacy = '.mammoth/cutoff-state-v2/current.json';
+  const legacyPointer = await root.stat(legacy);
+  if (legacyPointer) {
+    if (BigInt(legacyPointer[5]) > 4096n) throw new Error('Unrecognized legacy lifecycle pointer.');
+    const chunks: Buffer[] = [];
+    for await (const chunk of root.read(legacy, legacyPointer)) chunks.push(chunk);
+    const pointer = z
+      .object({
+        schemaVersion: z.literal(1),
+        journal: z.string().regex(/^journal-[a-f0-9-]{36}\.json$/),
+      })
+      .strict()
+      .parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    const file = '.mammoth/cutoff-state-v2/' + pointer.journal,
+      { handle, identity } = await root.openRead(file);
+    try {
+      const bytes = Buffer.alloc(256);
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+      const id = pointer.journal.slice(8, -5),
+        prefix = `{"schemaVersion":6,"invocation":"${id}","phase":"completed",`;
+      if (!bytes.subarray(0, bytesRead).toString('utf8').startsWith(prefix))
+        throw new Error('Incompatible unfinished legacy lifecycle.');
+      const current = await root.stat(file);
+      if (!current || !sameNative(identity, current, true))
+        throw new Error('Legacy lifecycle changed.');
+    } finally {
+      await handle.close();
+    }
+  }
+  const base = '.mammoth/v1';
+  if (!(await root.stat(base))) return;
+  for await (const entry of await opendir(root.resolve(base))) {
+    if (entry.name === 'current.json') continue;
+    if (!/^[a-f0-9]{64}$/.test(entry.name)) continue;
+    if (!entry.isDirectory() || entry.isSymbolicLink())
+      throw new Error('Unsafe invocation discovery directory.');
+    for (const file of fixedIntents) {
+      const relative = base + '/' + entry.name + '/' + file;
+      if (relative === ownedName) continue;
+      if (await root.stat(relative)) throw new Error('Pending root-local destructive intent.');
+    }
+    const relocation = base + '/' + entry.name + '/relocation';
+    if (await root.stat(relocation))
+      for await (const marker of await opendir(root.resolve(relocation)))
+        if (marker.name.endsWith('.json') && relocation + '/' + marker.name !== ownedName)
+          throw new Error('Pending root-local relocation.');
   }
 }
