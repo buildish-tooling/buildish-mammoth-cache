@@ -31,3 +31,9 @@ export function invocation(
     observer?: (pid: number) => Promise<void>,
   ): Promise<{ outputs: Record<string, string> }>;
 }>;
+
+export function lifecycle(
+  job: { phase(name: string): Promise<unknown> },
+  body: (prepared: unknown) => Promise<void>,
+  phase?: (name: string) => Promise<unknown>,
+): Promise<void>;

@@ -126,24 +126,31 @@ export async function snapshot() {
       try {
         const text = await readFile('/proc/' + name + '/stat', 'utf8'),
           fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
-        const status = numbers(await readFile('/proc/' + name + '/status', 'utf8'));
+        const statusText = await readFile('/proc/' + name + '/status', 'utf8');
+        const status = numbers(statusText);
         rows.push({
           pid: Number(name),
           parent: Number(fields[1]),
           rss: (status.VmRSS ?? 0) * 1024,
+          java: /^Name:\s+javaw?$/mu.test(statusText),
         });
       } catch (e) {
         if (!['ENOENT', 'ESRCH', 'EACCES'].includes(e.code)) throw e;
       }
     }
   } else if (process.platform === 'darwin') {
-    const text = await command('/bin/ps', ['-axo', 'pid=,ppid=,rss=']);
+    const text = await command('/bin/ps', ['-axo', 'pid=,ppid=,rss=,comm=']);
     rows = text
       .trim()
       .split('\n')
       .map((line) => {
-        const [pid, parent, rss] = line.trim().split(/\s+/u).map(Number);
-        return { pid, parent, rss: rss * 1024 };
+        const [pid, parent, rss, ...image] = line.trim().split(/\s+/u);
+        return {
+          pid: Number(pid),
+          parent: Number(parent),
+          rss: Number(rss) * 1024,
+          java: /^javaw?$/u.test(path.posix.basename(image.join(' '))),
+        };
       });
     const vm = await command('/usr/bin/vm_stat', []),
       pageSize = Number(/page size of ([0-9]+)/u.exec(vm)?.[1]);
@@ -155,7 +162,7 @@ export async function snapshot() {
   } else if (process.platform === 'win32') {
     // No command lines or credentials in the query/output. Page faults are deliberately NOT called swap I/O.
     const script =
-      '$p=Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize; $m=Get-CimInstance Win32_OperatingSystem; @{rows=@($p);available=([long]$m.FreePhysicalMemory*1024)} | ConvertTo-Json -Compress -Depth 3';
+      '$p=Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize,Name; $m=Get-CimInstance Win32_OperatingSystem; @{rows=@($p);available=([long]$m.FreePhysicalMemory*1024)} | ConvertTo-Json -Compress -Depth 3';
     const data = JSON.parse(
       await command('powershell.exe', [
         '-NoLogo',
@@ -171,6 +178,7 @@ export async function snapshot() {
       pid: r.ProcessId,
       parent: r.ParentProcessId,
       rss: Number(r.WorkingSetSize),
+      java: /^javaw?(?:\.exe)?$/iu.test(r.Name),
     }));
   } else throw new Error('Unsupported qualification OS');
   if (!Number.isFinite(available)) throw new Error('Unavailable memory reading');
@@ -188,6 +196,8 @@ export async function observe(control, output) {
     missing: [],
     platform: process.platform,
     architecture: process.arch,
+    processCoverage:
+      'Owned ancestry RSS; additional all-Java RSS is a conservative unowned-peer-inclusive bound. Other detached processes and sub-sample peaks may be missed.',
     node: process.version,
     started: new Date().toISOString(),
   };
@@ -209,6 +219,13 @@ export async function observe(control, output) {
       result.memoryQuality = sample.memoryQuality;
       result.samples++;
       result.peakRss = Math.max(result.peakRss, rss);
+      // Detached Gradle daemons may leave the ancestry tree. This is a conservative
+      // additional all-Java upper bound, NOT an ownership claim or sum of peaks.
+      const withJava = treeRss(
+        sample.rows.map((r) => (r.java ? { ...r, parent: state.pid } : r)),
+        state.pid,
+      );
+      result.peakTreePlusAllJavaRss = Math.max(result.peakTreePlusAllJavaRss ?? 0, withJava);
       result.minAvailable = Math.min(result.minAvailable, sample.available);
       result.firstPaging ??= sample.paging;
       result.lastPaging = sample.paging;

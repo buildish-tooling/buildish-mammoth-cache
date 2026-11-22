@@ -18,7 +18,12 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { generate, mutate, verify, capacity } from '../scripts/qualification/fixture.mjs';
-import { fileCommands, commandEnv, invocation } from '../scripts/qualification/invocation.mjs';
+import {
+  fileCommands,
+  commandEnv,
+  invocation,
+  lifecycle,
+} from '../scripts/qualification/invocation.mjs';
 import { setTimeout } from 'node:timers/promises';
 import { meter, reservation } from '../scripts/qualification/meter.mjs';
 import {
@@ -147,4 +152,35 @@ it('accepts absent root controls but never hides missing nested limits', async (
   await expect(cgroupLimits(['/sys/fs/cgroup/unknown', '/sys/fs/cgroup'], read)).rejects.toThrow(
     'missing',
   );
+});
+
+it('attempts post after failed main/build and preserves both primary and cleanup failure', async () => {
+  const calls: string[] = [];
+  const job = {
+    phase: async (name: string) => {
+      calls.push(name);
+      if (name === 'main') throw new Error('prepare');
+    },
+  };
+  await expect(
+    lifecycle(job, async () => {
+      throw new Error('must not build');
+    }),
+  ).rejects.toThrow('prepare');
+  expect(calls).toEqual(['main', 'post']);
+  const cleanup = {
+    phase: async (name: string) => {
+      if (name === 'post') throw new Error('post');
+    },
+  };
+  await expect(
+    lifecycle(cleanup, async () => {
+      throw new Error('build');
+    }),
+  ).rejects.toMatchObject({
+    errors: [
+      expect.objectContaining({ message: 'build' }),
+      expect.objectContaining({ message: 'post' }),
+    ],
+  });
 });

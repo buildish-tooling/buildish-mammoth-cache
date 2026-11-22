@@ -151,13 +151,21 @@ export async function invocation(base, tool, identity, inputs = {}) {
       ['published', 'no-change', 'worker-uploaded', 'read-only'].includes(state[14]),
       'Required lifecycle did not succeed: ' + state[14],
     );
-    let generation = null;
+    let generation = null,
+      entries = [];
     if (state[8]) {
       const pub = JSON.parse(await readFile(path.join(home, state[8][2]), 'utf8'));
       generation = pub[8];
+      const record = JSON.parse(await readFile(path.join(home, pub[7][2]), 'utf8'));
+      entries = record[8];
+      if (state[14] === 'no-change') {
+        const bindings = JSON.parse(await readFile(path.join(home, state[5][2]), 'utf8'));
+        generation = bindings[9][1];
+      }
     }
     return {
       outcome: state[14],
+      entries,
       generation,
       quiescence: state[13] !== null,
       workerReceipt: state[12]?.[3] != null,
@@ -173,9 +181,16 @@ export async function buildFixture(job, stage, observer) {
           '--console=plain',
           ...(stage === 'worker' ? ['--no-daemon'] : []),
           ...(offline ? ['--offline'] : []),
-          'resolveWorkerA',
-          'resolveWorkerB',
-          'resolveWorkerC',
+          ...(stage === 'worker'
+            ? [
+                'resolveWorker' +
+                  ['A', 'B', 'C'][
+                    ['linux', 'windows', 'macos'].findIndex((p) =>
+                      job.identity.includes('-' + p + '-'),
+                    )
+                  ],
+              ]
+            : ['resolveWorkerA', 'resolveWorkerB', 'resolveWorkerC']),
           'test',
           'portable',
         ]
@@ -184,7 +199,12 @@ export async function buildFixture(job, stage, observer) {
           '-Dmaven.repo.local=' + job.home + '/repository',
           ...(offline ? ['--offline'] : []),
           '-P',
-          'worker-a,worker-b,worker-c',
+          stage === 'worker'
+            ? 'worker-' +
+              ['a', 'b', 'c'][
+                ['linux', 'windows', 'macos'].findIndex((p) => job.identity.includes('-' + p + '-'))
+              ]
+            : 'worker-a,worker-b,worker-c',
           'dependency:resolve',
         ];
   const command =
@@ -223,4 +243,23 @@ export async function saveResult(directory, name, data) {
       process.env.GITHUB_STEP_SUMMARY,
       `Q1 ${name}: ${data.status ?? data.outcome ?? 'recorded'}; details in qualification artifact.\n`,
     );
+}
+
+export async function lifecycle(job, body, phase = (name) => job.phase(name)) {
+  const errors = [];
+  try {
+    const prepared = await phase('main');
+    await body(prepared);
+  } catch (e) {
+    errors.push(e);
+  }
+  // Ordinary JavaScript Actions still finalize after failed prepare/build/verification.
+  // The product's state/owner guard decides whether any cleanup is authorized.
+  try {
+    await phase('post');
+  } catch (e) {
+    errors.push(e);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, 'Qualification lifecycle and post failed');
 }
