@@ -258,7 +258,10 @@ export async function inspectGradleDaemons(
   signal.throwIfAborted();
   if (process.platform === 'linux') return linuxInspection(signal);
   if (process.platform === 'win32') return inspectWindows(signal);
-  // No unqualified process parser can establish exclusivity. macOS native evidence
-  // remains a supported-platform gate; this internal path fails closed meanwhile.
+  if (process.platform === 'darwin') {
+    const { inspectDarwinDaemons } = await import('./darwin-process-inspection');
+    return inspectDarwinDaemons(signal);
+  }
+  // Unknown platforms cannot establish exclusivity.
   return { remaining: false, uncertain: true };
 }

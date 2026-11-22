@@ -478,6 +478,31 @@ checkedAtMs alone uses wall time. On a later process/retry, re-establish the exc
 never trust checkedAtMs as proof that no daemon restarted. Read-only does not stop
 processes. This does not authorize stopping unrelated shared-machine processes.
 
+#### Native macOS process evidence
+
+The macOS inspector reads `/bin/ps` with fixed full-width numeric effective-UID,
+PID, accounting-name and argument-display columns, under a fixed locale. The
+accounting name and displayed Java image must agree. Display text is not an exact
+argument vector: check the complete Java record for the Gradle bootstrap marker
+before interpreting any apparent argument boundaries. Marker text in a property
+or application argument can conservatively deny a window. A narrow ordinary direct
+Java launch with no marker can be unrelated; unsupported syntax, indirect jar/module
+or `@argfile` input, unavailable arguments and escaped/quoted ambiguity remain uncertain.
+No argument file or environment is read to resolve uncertainty.
+
+Consume records incrementally with a 64 KiB per-record bound, strict UTF-8, complete
+line/EOF framing and a successful child exit. Require the current observer PID and
+effective UID in the table; empty or wrongly selected output is not absence evidence.
+Keep no process catalogue or raw argument diagnostics. Cancellation, malformed output
+or the inspection deadline terminates only the owned inspector child, awaits settlement
+and denies the window. Never signal a discovered process PID.
+
+This evidence assumes standard captured Java launchers and Gradle bootstrap processes,
+not adversarial same-user processes concealing their arguments. It does not prevent a
+new concurrent consumer after inspection; the dedicated-root/completed-consumer lifetime
+still applies. Platform implementation and small native proofs do not establish large-cache
+throughput, memory/paging guarantees or qualification of every macOS release/architecture.
+
 ## Mutable root state and partition cells
 
 The fixed managed-root locator `.mammoth/v1/current.json` is:

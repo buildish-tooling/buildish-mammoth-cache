@@ -154,7 +154,7 @@ export class ExclusiveWindow {
     let installations: Reference | undefined;
     try {
       if (store.codec.options.model.tuple[2] === 'gradle') {
-        if (!input.inspect && !['linux', 'win32'].includes(process.platform))
+        if (!input.inspect && !['linux', 'win32', 'darwin'].includes(process.platform))
           throw new Error('Native process inspection unavailable on this platform.');
         if (initial[6] && !initial[13])
           throw new Error('Frozen post requires original quiescence.');

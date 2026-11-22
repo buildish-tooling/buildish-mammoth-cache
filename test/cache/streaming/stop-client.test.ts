@@ -17,6 +17,8 @@
 import { mkdir, mkdtemp, writeFile, readFile, rm, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { stopGradleInstallation } from '../../../src/cache/streaming/stop-client';
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
@@ -32,7 +34,10 @@ async function fixture(hang: boolean | 'tree' = false) {
   await mkdir(home + '/bin', { recursive: true });
   const leaf = root + '/leaf.cjs';
   if (hang === 'tree')
-    await writeFile(leaf, "process.on('SIGTERM',()=>{});setTimeout(()=>process.exit(0),10000);");
+    await writeFile(
+      leaf,
+      "process.on('SIGTERM',()=>{});require('fs').writeFileSync(process.env.MAMMOTH_TEST_LOG+'.resistant','ready');setTimeout(()=>process.exit(0),10000);",
+    );
   await writeFile(
     script,
     `require('fs').writeFileSync(process.env.MAMMOTH_TEST_LOG,JSON.stringify({pid:process.pid,args:process.argv.slice(2),java:process.env.JAVA_HOME,opts:process.env.JAVA_OPTS,gradle:process.env.GRADLE_OPTS}));${hang === 'tree' ? `const child=require('child_process').spawn(process.execPath,[${JSON.stringify(leaf)}],{stdio:'ignore'});require('fs').writeFileSync(process.env.MAMMOTH_TEST_LOG+'.child',String(child.pid));setInterval(()=>{},1000);` : hang ? 'setTimeout(()=>{},60000);' : ''}`,
@@ -78,7 +83,7 @@ it('settles a timed-out owned client and its native pipeline without signalling 
   expect(() => process.kill(result.pid, 0)).toThrow();
 }, 30000);
 
-it.skipIf(process.platform !== 'linux')(
+it.skipIf(!['linux', 'darwin'].includes(process.platform))(
   'keeps the owned group supervisor alive until a TERM-resistant descendant is killed',
   async () => {
     const f = await fixture('tree');
@@ -86,21 +91,57 @@ it.skipIf(process.platform !== 'linux')(
       stopGradleInstallation(f.installation, new AbortController().signal, 1000),
     ).rejects.toThrow('deadline');
     const pid = Number(await readFile(f.log + '.child', 'utf8'));
-    // Group SIGKILL is delivered before every descendant is necessarily scheduled to exit.
+    expect(await readFile(f.log + '.resistant', 'utf8')).toBe('ready');
+    // A killed orphan can briefly remain a zombie; it cannot retain live cache handles.
+    await expect.poll(() => ended(pid), { timeout: 3000, interval: 20 }).toBe(true);
+  },
+  15000,
+);
+
+async function ended(pid: number): Promise<boolean> {
+  if (process.platform === 'darwin') {
+    try {
+      const result = await promisify(execFile)('/bin/ps', ['-p', String(pid), '-o', 'stat=']);
+      return /^Z/.test(result.stdout.trim());
+    } catch (error) {
+      if ((error as { code: unknown }).code === 1) return true;
+      throw error;
+    }
+  }
+  try {
+    const stat = await readFile('/proc/' + pid + '/stat', 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] === 'Z';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return true;
+  }
+}
+it.skipIf(!['linux', 'darwin'].includes(process.platform))(
+  'settles its owned POSIX client before propagating cancellation',
+  async () => {
+    const f = await fixture(true),
+      controller = new AbortController(),
+      result = stopGradleInstallation(f.installation, controller.signal, 15000),
+      rejected = expect(result).rejects.toThrow('owned cancellation');
     await expect
       .poll(
         async () => {
           try {
-            const stat = await readFile('/proc/' + pid + '/stat', 'utf8');
-            return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] === 'Z';
+            await readFile(f.log);
+            return true;
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-            return true;
+            return false;
           }
         },
-        { timeout: 1000, interval: 20 },
+        { timeout: 5000, interval: 20 },
       )
       .toBe(true);
+    const { pid } = JSON.parse(await readFile(f.log, 'utf8'));
+    expect(await ended(pid)).toBe(false);
+    controller.abort(new Error('owned cancellation'));
+    await rejected;
+    await expect.poll(() => ended(pid), { timeout: 3000, interval: 20 }).toBe(true);
   },
-  15000,
+  30000,
 );

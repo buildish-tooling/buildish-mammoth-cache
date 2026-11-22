@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { rm, mkdir, writeFile, readFile, chmod } from 'node:fs/promises';
+import { rm, writeFile, readFile, chmod } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
@@ -31,6 +31,7 @@ import {
   tuple,
 } from '../../../src/cache/streaming/encoding';
 import { observationFixture } from './observation-fixtures';
+import { quiescenceFixture } from './quiescence-fixture';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
 import {
   gradleDaemonArguments,
@@ -45,38 +46,12 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 async function fixture(options: Parameters<typeof observationFixture>[1] = {}) {
-  const f = await observationFixture('gradle', options);
+  const f = await quiescenceFixture(options);
   cleanup.push(async () => {
     expect(f.budget.retained).toBe(0);
     await f.close();
   });
-  const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
-  state[3]++;
-  state[4] = 'build-ready';
-  state[13] = null;
-  await f.store.updateState(state);
-  await f.store.makeParents(registrationDirectory(f.store) + '/placeholder');
-  async function register(version: string) {
-    const home = f.root + '/Gradle ' + version;
-    await mkdir(home + '/bin', { recursive: true });
-    await writeFile(
-      home + '/bin/' + (process.platform === 'win32' ? 'gradle.bat' : 'gradle'),
-      'fixture',
-    );
-    const row = f.store.codec.schemas.documents['gradle-installation'].parse([
-      'gradle-installation',
-      1,
-      f.store.codec.options.invocation,
-      home,
-      version,
-      f.root,
-      f.root + '/java home',
-    ]);
-    const file = registrationDirectory(f.store) + '/' + H('gradle-installation', row) + '.json';
-    await writeFile(f.store.root.resolve(file), encodeRecord(row));
-    return row;
-  }
-  return { ...f, register };
+  return f;
 }
 const options = () => ({
   exitGraceMs: 0,

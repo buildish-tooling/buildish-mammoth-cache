@@ -44,11 +44,15 @@ import { sameNative } from '../../src/cache/streaming/native';
 import { H, decodeRecord } from '../../src/cache/streaming/encoding';
 const exec = promisify(execFile);
 const configured = process.env.MAMMOTH_TEST_GRADLE_HOMES && process.env.MAMMOTH_TEST_JAVA_HOME;
+const required = process.env.MAMMOTH_REQUIRE_NATIVE_QUIESCENCE === '1';
+if (required && !configured) throw new Error('Required native proof is missing its installations.');
 it.skipIf(!configured)(
   'captures real suppressed/Test/config-cache/failed builds and stops two isolated installed versions',
   async (test) => {
     const baseline = await inspectGradleDaemons();
     if (baseline.uncertain || baseline.remaining) {
+      if (required)
+        throw new Error('Required native proof has unrelated/uncertain initial consumers.');
       test.skip('Host already has unowned/opaque daemons; no unrelated stop is authorized.');
       return;
     }
@@ -134,6 +138,9 @@ it.skipIf(!configured)(
       expect(hit).toContain('Reusing configuration cache');
       const output = await run(homes[0], ['childFromTest'], false, true);
       expect(output).toContain('intentional Test fixture finish');
+      const running = await inspectGradleDaemons();
+      expect(running).toEqual({ remaining: true, uncertain: false });
+      process.stdout.write('V6_NATIVE_RUNNING ' + JSON.stringify(running) + '\n');
       const dir = f.store.root.resolve(registrationDirectory(f.store));
       let files = await readdir(dir);
       expect(files).toHaveLength(2);
@@ -155,10 +162,47 @@ it.skipIf(!configured)(
       files = await readdir(dir);
       expect(files).toHaveLength(2);
       expect(await f.store.root.stat(registrationFailure(f.store))).toBeNull();
+      // Withhold only the second fixture-owned registration: its live daemon must
+      // deny the gate after the first captured installation has stopped.
+      let withheld = '';
+      for (const name of files) {
+        const row = f.store.codec.schemas.documents['gradle-installation'].parse(
+          decodeRecord(await readFile(dir + '/' + name)),
+        );
+        if (row[3] === (await realpath(homes[1]))) withheld = name;
+      }
+      expect(withheld).not.toBe('');
+      await rename(dir + '/' + withheld, root + '/withheld-registration.json');
+      try {
+        const denied = await ExclusiveWindow.establish(f.store, f.budget, {
+          assertCurrent: (): undefined => {},
+          exitGraceMs: 0,
+        });
+        if (denied.status === 'ready') denied.window.close();
+        expect(denied.status).toBe('skipped-not-quiescent');
+        expect((await inspectGradleDaemons()).remaining).toBe(true);
+      } finally {
+        await rename(root + '/withheld-registration.json', dir + '/' + withheld);
+      }
+      const stopped: string[] = [];
+      let active = 0,
+        peak = 0;
       const before = await f.store.root.stat(registrationDirectory(f.store)),
         gate = await ExclusiveWindow.establish(f.store, f.budget, {
           assertCurrent: (): undefined => {},
+          stop: async (installation, signal, timeout) => {
+            active++;
+            peak = Math.max(peak, active);
+            stopped.push(installation.gradleHome);
+            try {
+              await stopGradleInstallation(installation, signal, timeout);
+            } finally {
+              active--;
+            }
+          },
         });
+      expect(peak).toBe(1);
+      expect(stopped.sort()).toEqual((await Promise.all(homes.map((h) => realpath(h)))).sort());
       if (gate.status !== 'ready') throw new Error(gate.message);
       gate.window.close();
       expect((await inspectGradleDaemons()).remaining).toBe(false);
@@ -189,6 +233,9 @@ it.skipIf(!configured)(
             testSuppression: true,
             settingsFailure: true,
             quiescent: true,
+            missingRegistrationBlocked: true,
+            stopClients: stopped.length,
+            peakStopClients: peak,
             failedCaptureBlocked: true,
           }) +
           '\n',
