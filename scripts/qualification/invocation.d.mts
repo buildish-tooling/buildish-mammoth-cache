@@ -38,3 +38,5 @@ export function lifecycle(
   body: (prepared: unknown) => Promise<void>,
   phase?: (name: string) => Promise<unknown>,
 ): Promise<void>;
+
+export function gradleTasks(stage: string, identity: string): string[];

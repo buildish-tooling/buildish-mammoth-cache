@@ -19,6 +19,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { generate, mutate, verify, capacity } from '../scripts/qualification/fixture.mjs';
 import {
+  gradleTasks,
   fileCommands,
   commandEnv,
   invocation,
@@ -183,4 +184,14 @@ it('attempts post after failed main/build and preserves both primary and cleanup
       expect.objectContaining({ message: 'post' }),
     ],
   });
+});
+
+it('authors complete Gradle metadata at the designated writer while retaining other worker dependency sets', () => {
+  const all = ['resolveWorkerA', 'resolveWorkerB', 'resolveWorkerC'];
+  expect(gradleTasks('worker', 'q1-worker-linux-gradle')).toEqual(all);
+  expect(gradleTasks('worker', 'q1-worker-windows-gradle')).toEqual(['resolveWorkerB']);
+  expect(gradleTasks('worker', 'q1-worker-macos-gradle')).toEqual(['resolveWorkerC']);
+  expect(gradleTasks('aggregator', 'q1-aggregator-linux-gradle')).toEqual(all);
+  expect(gradleTasks('consumer', 'q1-consumer-linux-gradle')).toEqual(all);
+  expect(gradleTasks('parity-reader', 'q1-parity-reader-gradle')).toEqual(['resolveStandalone']);
 });

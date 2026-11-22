@@ -179,6 +179,16 @@ export async function invocation(
   };
   return { tool, identity, dir, home, workspace, env, phase, outputs, completion };
 }
+export function gradleTasks(stage, identity) {
+  if (stage === 'parity-reader') return ['resolveStandalone'];
+  // This campaign's designated metadata writer must know every dependency set
+  // before its complete snapshot can support the aggregator's offline build.
+  if (stage !== 'worker' || identity.includes('-linux-'))
+    return ['resolveWorkerA', 'resolveWorkerB', 'resolveWorkerC'];
+  const platform = ['windows', 'macos'].findIndex((p) => identity.includes('-' + p + '-'));
+  assert(platform >= 0, 'Unknown qualification worker');
+  return ['resolveWorker' + ['B', 'C'][platform]];
+}
 export async function buildFixture(job, stage, observer) {
   const offline = stage !== 'worker' && stage !== 'parity';
   const args =
@@ -187,18 +197,7 @@ export async function buildFixture(job, stage, observer) {
           '--console=plain',
           ...(['worker', 'consumer', 'parity-reader'].includes(stage) ? ['--no-daemon'] : []),
           ...(offline ? ['--offline'] : []),
-          ...(stage === 'parity-reader'
-            ? ['resolveStandalone']
-            : stage === 'worker'
-              ? [
-                  'resolveWorker' +
-                    ['A', 'B', 'C'][
-                      ['linux', 'windows', 'macos'].findIndex((p) =>
-                        job.identity.includes('-' + p + '-'),
-                      )
-                    ],
-                ]
-              : ['resolveWorkerA', 'resolveWorkerB', 'resolveWorkerC']),
+          ...gradleTasks(stage, job.identity),
           'test',
           'portable',
         ]

@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "id": "issue18-20261122-crlf",
+  "id": "issue18-20261122-metadata",
   "retainedCounts": [100000, 1000000],
   "reservationMiB": 2048,
   "maximumQualificationJobs": 15,
