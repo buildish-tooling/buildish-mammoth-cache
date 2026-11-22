@@ -22,12 +22,18 @@ limitations under the License.
 
 ## Status and shared types
 
-**Draft version 1, pure codecs implemented in isolation.** This is the native-base and generation part of
-the [streaming cache protocol](../cache-protocol/). It defines serialized fields,
-not released behavior. Tree/envelope/generation/key/group codecs do not establish
-native payload membership, SDK or persistence/platform qualification. Serializer, validator, key derivation and restore/
-publication code comments must cite this file and its relevant heading. Schema
-changes require an explicit compatibility decision and corresponding documentation.
+**Draft version 1; native-base/generation acquisition and publication are
+implemented within the internal streaming lifecycle.** This is the native-base and
+generation part of the [streaming cache protocol](../cache-protocol/). The internal
+implementation includes native payload membership validation, recovery-group
+admission and rename-only evacuation/return around SDK storage. Released Action
+entrypoints do not select it yet; activation and incompatible release exposure
+remain pending. The parent protocol's integrated review, full-pipeline
+resource/platform qualification, release cleanup and final cutover review gates
+still apply. This specification defines serialized fields, not released behavior.
+Serializer, validator, key derivation and restore/publication code comments must
+cite this file and its relevant heading. Schema changes require an explicit
+compatibility decision and corresponding documentation.
 
 Use the parent specification's canonical UTF-8 JSON tuple encoding `J`, `uint`,
 `positive`, `sha`, partition IDs, paths, portable file modes/timestamps and framed

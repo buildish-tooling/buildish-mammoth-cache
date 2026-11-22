@@ -22,14 +22,17 @@ limitations under the License.
 
 ## Status and reference rules
 
-**Draft version 1; codecs and an isolated native persistence/install/recovery engine
-are implemented.** This is the local part of the [streaming cache protocol](../cache-protocol/),
+**Draft version 1; the internal streaming prepare/build/post lifecycle is
+implemented.** This is the local part of the [streaming cache protocol](../cache-protocol/),
 paired with the [native-base and generation schemas](../native-base-protocol/).
+It includes acquisition/install/recovery, observation and GC, native save
+relocation/return, Gradle invocation capture/shutdown and provider composition.
 These are local records, never worker payload members or cached generation data.
-The released Action lifecycle does not use this engine yet. Producer integration,
-Gradle shutdown, native save relocation, full scale/runner memory qualification and
-activation remain later work. Implementation comments cite this file and its relevant
-heading. No serialized flag restores a process-local verification proof.
+Released Action entrypoints do not use this lifecycle yet; activation and
+incompatible release exposure remain pending. The parent protocol's integrated
+review, full-pipeline resource/platform qualification, release cleanup and final
+cutover review gates still apply. Implementation comments cite this file and its
+relevant heading. No serialized flag restores a process-local verification proof.
 
 Use the parent's canonical `J`, framed `A(domain)`/`H(domain,tuple)`, scalar types,
 paths and portable metadata. Each JSON tuple/NDJSON record is bounded to 64 KiB;

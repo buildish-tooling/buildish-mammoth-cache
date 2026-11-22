@@ -22,14 +22,21 @@ limitations under the License.
 
 ## Status and ownership
 
-**Draft specification for an incompatible format under implementation.** The raw worker
-transport, canonical/model/reduction and worker application codecs, guarded source
-traversal, multi-input merge and native install lifecycle are implemented in isolation.
-Native-base/generation acquisition, GC/evacuation/return, phase/daemon orchestration,
-broad scale/paging qualification and released Action integration remain pending. This page does not describe the released worker format or announce availability. The `v1` profile
-names below identify the proposed protocol, independently of the Mammoth release
-number. Mixed old/new workers are unsupported; old base caches start cold under a
-new cache family. All cooperating jobs must upgrade together.
+**Draft specification for an incompatible, unreleased format.** Internal streaming
+prepare/build/post composition is implemented, including worker processing,
+native-base/generation acquisition, GC, rename-only relocation/return, publication
+and recovery, and Gradle invocation capture/shutdown with provider integration.
+Released Action entrypoints still use the existing lifecycle; activation and
+incompatible release exposure remain separate work.
+
+Integrated review, complete-pipeline resource/platform qualification, release
+cleanup and final cutover review remain release gates. Implementation does not
+establish large-cache scale, throughput or RSS/paging qualification, or additional
+platform support. This page does not describe the released worker format or
+announce availability. The `v1` profile names below identify the proposed protocol,
+independently of the Mammoth release number. Mixed old/new workers are unsupported;
+old base caches start cold under a new cache family. All cooperating jobs must
+upgrade together.
 
 This file, `docs/dev/cache-protocol.md`, is the canonical developer reference for
 the streaming wire and protocol contract. Keep it in the versioned site docs and
@@ -47,8 +54,8 @@ relevant heading anchor**. For example:
 ```
 
 Use the repository-relative source path in code comments, not a moving development
-site URL. Update these references when sections move. These references keep the inactive codecs and later integration tied to the same
-contract.
+site URL. Update these references when sections move. These references keep the internal implementation and its entrypoint activation tied
+to the same contract.
 
 This page and the linked [native-base/generation](../native-base-protocol/) and
 [local lifecycle](../cache-lifecycle-protocol/) specifications define the reviewable
