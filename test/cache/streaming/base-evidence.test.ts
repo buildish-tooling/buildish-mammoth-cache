@@ -15,7 +15,7 @@
  */
 
 import { afterEach, expect, it, vi } from 'vitest';
-import { baseEvidence, syncBasePayload } from '../../../src/cache/streaming/base-evidence';
+import { baseEvidence } from '../../../src/cache/streaming/base-evidence';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 import { baseFixture, preparedBase, cleanupBaseFixtures } from './base-fixtures';
 
@@ -24,74 +24,64 @@ afterEach(async () => {
   await cleanupBaseFixtures();
 });
 
-it.each([false, true])(
-  'rejects already-aborted directory evidence before native work; syncing=%s',
-  async (syncing) => {
-    const f = await baseFixture(),
-      object = await preparedBase(f, {}, 'data', ['empty']),
-      abort = new AbortController(),
-      reason = new Error('already cancelled'),
-      rows = vi.spyOn(f.store, 'rows'),
-      enter = vi.spyOn(NativeReadPhase.prototype, 'enter'),
-      sync = vi.spyOn(f.store.root, 'syncDirectory');
-    abort.abort(reason);
-    const work = async () => {
-      const options = { budget: f.budget, signal: abort.signal };
-      if (syncing) await syncBasePayload(f.store, object.payload, object.evidence, 'data', options);
-      else
-        for await (const row of baseEvidence(
-          f.store,
-          object.payload,
-          object.evidence,
-          'data',
-          options,
-        )) {
-          expect(row).toBeUndefined();
-        }
-    };
-    await expect(work()).rejects.toBe(reason);
-    expect(rows).not.toHaveBeenCalled();
-    expect(enter).not.toHaveBeenCalled();
-    expect(sync).not.toHaveBeenCalled();
-    expect(f.budget.retained).toBe(0);
-  },
-);
+it('rejects already-aborted directory evidence before native work', async () => {
+  const f = await baseFixture(),
+    object = await preparedBase(f, {}, 'data', ['empty']),
+    abort = new AbortController(),
+    reason = new Error('already cancelled'),
+    rows = vi.spyOn(f.store, 'rows'),
+    enter = vi.spyOn(NativeReadPhase.prototype, 'enter');
+  abort.abort(reason);
+  const work = async () => {
+    for await (const row of baseEvidence(f.store, object.payload, object.evidence, 'data', {
+      budget: f.budget,
+      signal: abort.signal,
+    }))
+      expect(row).toBeUndefined();
+  };
+  await expect(work()).rejects.toBe(reason);
+  expect(rows).not.toHaveBeenCalled();
+  expect(enter).not.toHaveBeenCalled();
+  expect(f.budget.retained).toBe(0);
+});
 
-it('stops a directory-only payload after the in-flight sync settles and releases its evidence state', async () => {
+it('stops directory evidence after in-flight validation and releases its state for retry', async () => {
   const f = await baseFixture(),
     directories = Array.from({ length: 32 }, (_, n) => 'd' + String(n).padStart(2, '0')),
     object = await preparedBase(f, {}, 'data', directories),
     abort = new AbortController(),
-    reason = new Error('cancel after first sync'),
-    original = f.store.root.syncDirectory.bind(f.store.root),
-    sync = vi.spyOn(f.store.root, 'syncDirectory');
-  sync.mockImplementation(async (...args) => {
-    const result = await original(...args);
+    reason = new Error('cancel after first directory close'),
+    original = NativeReadPhase.prototype.leave,
+    leave = vi.spyOn(NativeReadPhase.prototype, 'leave');
+  leave.mockImplementation(async function (this: NativeReadPhase, ...args) {
+    await original.apply(this, args);
     abort.abort(reason);
-    return result;
   });
-  await expect(
-    syncBasePayload(f.store, object.payload, object.evidence, 'data', {
+  const collect = async (signal?: AbortSignal) => {
+    let count = 0;
+    for await (const row of baseEvidence(f.store, object.payload, object.evidence, 'data', {
       budget: f.budget,
-      signal: abort.signal,
-    }),
-  ).rejects.toBe(reason);
-  expect(sync).toHaveBeenCalledTimes(1);
+      signal,
+    })) {
+      expect(row.native[2]).toBe('directory');
+      count++;
+    }
+    return count;
+  };
+  await expect(collect(abort.signal)).rejects.toBe(reason);
+  expect(leave).toHaveBeenCalledTimes(1);
   expect(f.budget.retained).toBe(0);
-  sync.mockRestore();
-  const retry = vi.spyOn(f.store.root, 'syncDirectory');
-  await syncBasePayload(f.store, object.payload, object.evidence, 'data', { budget: f.budget });
-  expect(retry).toHaveBeenCalledTimes(33);
+  leave.mockRestore();
+  expect(await collect()).toBe(33);
   expect(f.budget.retained).toBe(0);
 });
 
-it('stops before yielding further directories when cancellation arrives during native validation', async () => {
+it('stops before yielding directories when cancellation arrives during native validation', async () => {
   const f = await baseFixture(),
     object = await preparedBase(f, {}, 'data', ['a/b', 'c']),
     abort = new AbortController(),
     reason = new Error('cancel during enter'),
-    enter = NativeReadPhase.prototype.enter,
-    sync = vi.spyOn(f.store.root, 'syncDirectory');
+    enter = NativeReadPhase.prototype.enter;
   vi.spyOn(NativeReadPhase.prototype, 'enter').mockImplementation(async function (
     this: NativeReadPhase,
     ...args
@@ -101,18 +91,13 @@ it('stops before yielding further directories when cancellation arrives during n
   });
   const yielded: string[] = [];
   const work = async () => {
-    for await (const row of baseEvidence(
-      f.store,
-      object.payload,
-      object.evidence,
-      'data',
-      { budget: f.budget, signal: abort.signal },
-      true,
-    ))
+    for await (const row of baseEvidence(f.store, object.payload, object.evidence, 'data', {
+      budget: f.budget,
+      signal: abort.signal,
+    }))
       yielded.push(row.logical);
   };
   await expect(work()).rejects.toBe(reason);
   expect(yielded).toEqual([]);
-  expect(sync).not.toHaveBeenCalled();
   expect(f.budget.retained).toBe(0);
 });

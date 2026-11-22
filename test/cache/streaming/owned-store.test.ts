@@ -101,7 +101,7 @@ it('hashes guarded bytes and refuses overwrite in native rename', async () => {
   expect(sameRename(n, after)).toBe(true);
   expect(await readFile(path.join(f.root, 'to'), 'utf8')).toBe('body');
 });
-it('publishes exact immutable bytes after file sync and native rename', async () => {
+it('publishes exact immutable bytes after completed writes and native rename', async () => {
   const events: string[] = [],
     f = await fixture(async (event) => {
       events.push(event);
@@ -113,12 +113,8 @@ it('publishes exact immutable bytes after file sync and native rename', async ()
       yield bytes;
     })(),
   );
-  expect(f.store.root.durability).toBe(
-    process.platform === 'win32' ? 'file-sync-native-replace' : 'file-and-directory-sync',
-  );
-  expect(f.store.root.work.directorySyncs > 0).toBe(process.platform !== 'win32');
   expect(events).toEqual([
-    'immutable-file-sync',
+    'immutable-file-written',
     'immutable-rename',
     'immutable-publication-barrier',
   ]);
@@ -172,7 +168,7 @@ it('publishes state before locator and discovers fixed intents even when unrefer
   await f.store.clearIntent(intent);
   await again.assertNoIntents();
 });
-it.each(['fixed-file-sync', 'fixed-rename', 'fixed-publication-barrier'])(
+it.each(['fixed-file-written', 'fixed-rename', 'fixed-publication-barrier'])(
   'keeps authoritative pointer coherent after %s failure',
   async (point) => {
     let armed = false;
@@ -186,8 +182,8 @@ it.each(['fixed-file-sync', 'fixed-rename', 'fixed-publication-barrier'])(
     await expect(f.store.updateState(next)).rejects.toThrow(point);
     const reload = await OwnedStore.bind(f.root, f.codec),
       actual = (await reload.state()) as Value[];
-    expect(actual[3]).toBe(point === 'fixed-file-sync' ? 0 : 1);
-    if (point === 'fixed-file-sync') await reload.updateState(next);
+    expect(actual[3]).toBe(point === 'fixed-file-written' ? 0 : 1);
+    if (point === 'fixed-file-written') await reload.updateState(next);
     expect(((await reload.state()) as Value[])[3]).toBe(1);
   },
 );

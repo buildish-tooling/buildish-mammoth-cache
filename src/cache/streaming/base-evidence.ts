@@ -28,14 +28,13 @@ import { retireOwnedDirectory } from './owned-retirement';
 import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#native-identity-and-evidence.
-// Checked preorder evidence: scoped parents remain live while a caller reads/syncs one file.
+// Checked preorder evidence: scoped parents remain live while a caller reads one file.
 export async function* baseEvidence(
   store: OwnedStore,
   root: string,
   evidence: Reference,
   partition: string,
   options: BaseObjectOptions,
-  syncDirectories = false,
 ) {
   const signal = options.signal ?? new AbortController().signal,
     phase = new NativeReadPhase(store.root, root),
@@ -44,10 +43,6 @@ export async function* baseEvidence(
     signal.throwIfAborted();
     const frame = stack.pop()!;
     try {
-      if (syncDirectories) {
-        await store.root.syncDirectory(frame.path);
-        signal.throwIfAborted();
-      }
       await phase.leave(frame.path, frame.native);
       signal.throwIfAborted();
     } finally {
@@ -83,24 +78,6 @@ export async function* baseEvidence(
   } finally {
     for (const frame of stack) frame.release();
   }
-}
-/** Native SDK extraction does not fsync payloads; sync files/dirs without reading their bodies. */
-export async function syncBasePayload(
-  store: OwnedStore,
-  root: string,
-  evidence: Reference,
-  partition: string,
-  options: BaseObjectOptions,
-): Promise<NativeIdentity> {
-  let first: NativeIdentity | undefined;
-  const signal = options.signal ?? new AbortController().signal;
-  for await (const e of baseEvidence(store, root, evidence, partition, options, true)) {
-    first ??= e.native;
-    if (e.row[0] === 'file') await e.phase.sync(e.path, e.native, signal);
-  }
-  if (!first) throw new Error('Missing native root evidence.');
-  signal.throwIfAborted();
-  return first;
 }
 export async function movedBaseEvidence(
   store: OwnedStore,
@@ -161,7 +138,6 @@ export async function copyBaseSnapshot(
   const finish = async () => {
     const frame = frames.pop()!;
     try {
-      await store.root.syncDirectory(frame.path);
       if (!sameNative(frame.native, await stat(frame.path), true))
         throw new Error('Created snapshot directory changed.');
       await dirs!.append(['directory', frame.logical, frame.native], signal);
@@ -223,8 +199,6 @@ export async function copyBaseSnapshot(
         await output.chmod(e.native[6] & 0o777);
         const time = portableMtimeSeconds(Number(BigInt(e.native[8]) / 1000000n));
         await output.utimes(time, time);
-        await output.sync();
-        store.root.work.fileSyncs++;
         store.root.work.stats++;
         const written = nativeIdentity(await output.stat({ bigint: true }));
         if (

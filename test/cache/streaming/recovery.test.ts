@@ -395,7 +395,7 @@ it('keeps idle dispatch filesystem work independent of managed directory width',
     await reconcileInvocation(invocation, 'resume', { budget: f.budget, assertCurrent });
     counts.push(
       Object.fromEntries(
-        ['stats', 'opens', 'renames', 'unlinks', 'fileSyncs', 'directorySyncs'].map((k) => {
+        ['stats', 'opens', 'renames', 'unlinks'].map((k) => {
           const key = k as keyof typeof work;
           return [key, work[key] - before[key]];
         }),

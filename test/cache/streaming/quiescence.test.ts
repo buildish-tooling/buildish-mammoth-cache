@@ -301,7 +301,6 @@ it('keeps payload growth out of process/registration work and streams sixteen in
         inventoryReads,
         stats: w.stats - before.stats,
         opens: w.opens - before.opens,
-        syncs: w.fileSyncs + w.directorySyncs - before.fileSyncs - before.directorySyncs,
       });
     }
   expect(costs[0]).toEqual(costs[1]);

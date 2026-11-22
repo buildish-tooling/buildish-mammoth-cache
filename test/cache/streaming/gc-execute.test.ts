@@ -22,6 +22,7 @@ import { build } from 'esbuild';
 import { executeGc, recoverGc } from '../../../src/cache/streaming/gc-execute';
 import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
 import { Digest } from '../../../src/cache/streaming/encoding';
+import { InstallParentPhase } from '../../../src/cache/streaming/install-parent-phase';
 import { GcProgram } from '../../../src/cache/streaming/gc-program';
 import { checkGcProjection } from '../../../src/cache/streaming/gc-projection';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
@@ -312,7 +313,7 @@ it.each([
   },
 );
 
-it('syncs an already-absent last-deletion parent before the recovered progress pointer', async () => {
+it('checks an already-absent last deletion before the recovered progress pointer', async () => {
   let targets = 0;
   const f = await fixture(2, async (name) => {
     if (name === 'gc-target-deleted' && ++targets === 2) throw new Error('last unlink crash');
@@ -320,18 +321,16 @@ it('syncs an already-absent last-deletion parent before the recovered progress p
   await expect(executeGc(f.store, { budget: f.budget, batchOperations: 2 })).rejects.toThrow(
     'last unlink crash',
   );
-  const events: string[] = [];
+  let committed = false;
   const reopened = await OwnedStore.bind(f.root, f.store.codec, async (name) => {
-    if (name === 'gc-progress-pointer') events.push('pointer');
-  });
-  const sync = reopened.root.syncDirectory.bind(reopened.root);
-  vi.spyOn(reopened.root, 'syncDirectory').mockImplementation(async (path) => {
-    if (path === 'data') events.push('sync');
-    return sync(path);
+    if (name === 'gc-progress-pointer') {
+      expect(await f.store.root.stat('data/f0')).toBeNull();
+      expect(await f.store.root.stat('data/f1')).toBeNull();
+      committed = true;
+    }
   });
   await recoverGc(reopened, { budget: f.budget });
-  expect(events.filter((e) => e === 'sync')).toHaveLength(1);
-  expect(events.indexOf('sync')).toBeLessThan(events.indexOf('pointer'));
+  expect(committed).toBe(true);
   expect(f.budget.retained).toBe(0);
 });
 
@@ -358,11 +357,7 @@ it('rejects cancellation during final metadata cleanup despite durable GC comple
   let finishing = false;
   const store = await OwnedStore.bind(f.root, f.store.codec, async (name) => {
     if (name === 'gc-progress-pointer') finishing = true;
-  });
-  const sync = store.root.syncDirectory.bind(store.root);
-  vi.spyOn(store.root, 'syncDirectory').mockImplementation(async (path) => {
-    if (finishing && path.startsWith(store.prefix + 'mutation/')) controller.abort();
-    return sync(path);
+    if (finishing && name === 'disposable-member-retired') controller.abort();
   });
   await expect(executeGc(store, { budget: f.budget, signal: controller.signal })).rejects.toThrow();
   expect(controller.signal.aborted).toBe(true);
@@ -373,7 +368,7 @@ it('rejects cancellation during final metadata cleanup despite durable GC comple
   expect(f.budget.retained).toBe(0);
 });
 
-it('starts no further live parent sync after cancellation in a nested dirty chain', async () => {
+it('starts no further parent checkpoint after cancellation in a nested dirty chain', async () => {
   const f = await observationFixture('gradle');
   fixtures.push(f);
   const root = 'caches/transforms-4/' + 'a'.repeat(32),
@@ -383,20 +378,27 @@ it('starts no further live parent sync after cancellation in a nested dirty chai
     await utimes(f.store.root.resolve(root + '/' + name), 1.234, 1.234);
   }
   await captureObservations(f.store, { budget: f.budget });
-  let liveSyncs = 0;
-  const sync = f.store.root.syncDirectory.bind(f.store.root);
-  vi.spyOn(f.store.root, 'syncDirectory').mockImplementation(async (path) => {
-    const result = await sync(path);
-    if (path.startsWith('caches/')) {
-      liveSyncs++;
+  let liveCheckpoints = 0,
+    deleting = false;
+  vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+    if (name === 'gc-target-deleted') deleting = true;
+  });
+  const created = InstallParentPhase.prototype.created;
+  vi.spyOn(InstallParentPhase.prototype, 'created').mockImplementation(async function (
+    this: InstallParentPhase,
+    ...args
+  ) {
+    await created.apply(this, args);
+    if (deleting && args[0].startsWith('caches/')) {
+      liveCheckpoints++;
       controller.abort();
     }
-    return result;
   });
   await expect(
     executeGc(f.store, { budget: f.budget, signal: controller.signal }),
   ).rejects.toThrow();
-  expect(liveSyncs).toBe(1);
+  expect(liveCheckpoints).toBe(1);
+  vi.restoreAllMocks();
   expect(await f.store.readFixed(f.store.prefix + 'gc-intent.json')).not.toBeNull();
   const reopened = await OwnedStore.bind(f.root, f.store.codec);
   await recoverGc(reopened, { budget: f.budget });

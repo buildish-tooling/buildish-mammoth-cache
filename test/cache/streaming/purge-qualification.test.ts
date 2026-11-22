@@ -126,7 +126,6 @@ it.each([4, 16])(
             opens: w.opens - initial.opens,
             hashes: hash.mock.calls.length,
             renames: w.renames - initial.renames,
-            syncs: w.fileSyncs + w.directorySyncs - initial.fileSyncs - initial.directorySyncs,
           },
         });
         hash.mockRestore();

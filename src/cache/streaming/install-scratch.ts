@@ -196,6 +196,5 @@ export class InstallScratch {
       throw new Error('Scratch directory changed.');
     await rmdir(this.store.root.resolve(directory));
     this.store.root.work.directoryRemovals++;
-    await this.store.root.syncDirectory(parentPath(directory));
   }
 }

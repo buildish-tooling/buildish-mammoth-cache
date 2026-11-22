@@ -667,7 +667,6 @@ export class RelocationEpoch {
       await this.stagePhase.created(path, (await this.store.root.stat(path))!);
     }
     await this.stagePhase.barrier();
-    await this.store.root.syncDirectory(parentPath(this.payload));
   }
   private async operation<T>(work: () => Promise<T>): Promise<T> {
     if (this.closed || this.busy) throw new Error('Relocation epoch unavailable/active.');
@@ -1196,7 +1195,6 @@ export class RelocationEpoch {
           this.store.root.work.directoryRemovals++;
           await this.store.fail('relocation-stage-directory-removed');
           if (path !== this.payload) await this.stagePhase.changed(path);
-          else await this.store.root.syncDirectory(parentPath(path));
         }
         await this.stagePhase.barrier();
       } finally {

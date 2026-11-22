@@ -17,7 +17,6 @@
 import { constants } from 'node:fs';
 import { mkdir, open, rename, unlink, opendir } from 'node:fs/promises';
 import { randomUUID, createHash, type Hash } from 'node:crypto';
-import path from 'node:path';
 import { z } from 'zod';
 import {
   NativeRoot,
@@ -101,9 +100,6 @@ export class OwnedStore {
         continue;
       }
       await mkdir(this.root.resolve(current));
-      await this.root.syncDirectory(
-        path.posix.dirname(current) === '.' ? '' : path.posix.dirname(current),
-      );
     }
   }
   async write(
@@ -172,14 +168,11 @@ export class OwnedStore {
       }
       if (!bytes) throw new Error('Empty referenced bytes.');
       signal.throwIfAborted();
-      await handle.sync();
-      this.root.work.fileSyncs++;
-      await this.fail('immutable-file-sync');
+      await this.fail('immutable-file-written');
       const written = nativeIdentity(await handle.stat({ bigint: true }));
       await handle.close();
       movedIdentity = await this.root.renameAbsent(candidate, target, written);
       await this.fail('immutable-rename');
-      await this.root.syncDirectory(path.posix.dirname(target));
       await this.fail('immutable-publication-barrier');
       signal.throwIfAborted();
       return this.codec.schemas
@@ -205,7 +198,6 @@ export class OwnedStore {
           )
             throw new Error('Unpublished candidate bytes changed.', { cause: error });
           await unlink(this.root.resolve(name));
-          await this.root.syncDirectory(path.posix.dirname(name));
         }
       } catch (cleanup) {
         throw new AggregateError(
@@ -319,25 +311,21 @@ export class OwnedStore {
     if (existing) {
       if (existing[2] !== 'file') throw new Error('Unsafe fixed-document candidate.');
       await unlink(this.root.resolve(candidate));
-      await this.root.syncDirectory(path.posix.dirname(candidate));
     }
     this.root.work.opens++;
     const handle = await open(this.root.resolve(candidate), 'wx', 0o600);
     try {
       await handle.writeFile(bytes);
       this.root.work.writeBytes = add(this.root.work.writeBytes, bytes.length);
-      await handle.sync();
-      this.root.work.fileSyncs++;
     } finally {
       await handle.close();
     }
-    await this.fail('fixed-file-sync');
+    await this.fail('fixed-file-written');
     const target = await this.root.stat(relative);
     if (target && target[2] !== 'file') throw new Error('Unsafe fixed target.');
     await rename(this.root.resolve(candidate), this.root.resolve(relative));
     this.root.work.renames++;
     await this.fail('fixed-rename');
-    await this.root.syncDirectory(path.posix.dirname(relative));
     await this.fail('fixed-publication-barrier');
   }
   async locator(): Promise<z.infer<typeof locatorSchema> | null> {
@@ -521,7 +509,6 @@ export class OwnedStore {
           await this.root.parents(parent);
           try {
             await mkdir(this.root.resolve(parent));
-            await this.root.syncDirectory(this.prefix.slice(0, -1));
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
           }
@@ -545,22 +532,15 @@ export class OwnedStore {
             (process.platform !== 'win32' && to[10] !== expected[10])
           )
             throw new Error('Detached retirement container replaced.');
-          await this.root.syncDirectory('.mammoth/v1');
-          await this.root.syncDirectory(parent);
           await this.fail('retired-container-detached');
           await retireOwnedDirectory(this, target, to, budget, 'retired-member-retired');
           await this.fail('retired-container-retired');
-        } else {
-          // Neither location remains: resume the deletion namespace barrier before dropping authority.
-          await this.root.syncDirectory('.mammoth/v1');
-          if (await this.root.stat(parent)) await this.root.syncDirectory(parent);
         }
         const actual = await this.readFixed(name);
         if (actual === null || !encodeRecord(actual).equals(encodeRecord(record)))
           throw new Error('Retirement record changed.');
         await unlink(this.root.resolve(name));
         this.root.work.unlinks++;
-        await this.root.syncDirectory(records);
         await this.fail('retirement-record-retired');
       }
     } finally {
@@ -625,7 +605,6 @@ export class OwnedStore {
     if (rawSha(encodeRecord(actual)) !== rawSha(encodeRecord(valid)))
       throw new Error('Intent changed before retirement.');
     await unlink(this.root.resolve(relative));
-    await this.root.syncDirectory(path.posix.dirname(relative));
     await this.fail('intent-retired');
   }
   async assertNoIntents(ownedIntent?: Value): Promise<void> {
@@ -663,7 +642,6 @@ export class OwnedStore {
     for await (const chunk of this.read(ref, ref[1])) void chunk;
     await unlink(this.root.resolve(ref[2]));
     this.root.work.unlinks++;
-    await this.root.syncDirectory(path.posix.dirname(ref[2]));
   }
   /** Purpose-exclusive install metadata, detached by its owning installer. */
   async retireInstallMetadata(reference: Value): Promise<void> {
@@ -684,7 +662,6 @@ export class OwnedStore {
     for await (const bytes of this.read(ref, ref[1])) void bytes;
     await unlink(this.root.resolve(ref[2]));
     this.root.work.unlinks++;
-    await this.root.syncDirectory(path.posix.dirname(ref[2]));
   }
   /** GC-only detached evidence/stack, after progress replacement and intent retirement. */
   async retireGcMetadata(reference: Reference): Promise<void> {
@@ -710,7 +687,6 @@ export class OwnedStore {
     for await (const bytes of this.read(ref, ref[1])) void bytes;
     await unlink(this.root.resolve(ref[2]));
     this.root.work.unlinks++;
-    await this.root.syncDirectory(path.posix.dirname(ref[2]));
   }
   async append(
     purpose: 'adjustments' | 'outbound-evidence' | 'return-evidence',
@@ -854,8 +830,6 @@ export class OwnedStore {
       this.root.work.stats++;
       if (!sameNative(after, opened, true)) throw new Error('Prefix changed while opening.');
       await handle.truncate(prefix[3]);
-      await handle.sync();
-      this.root.work.fileSyncs++;
       return new OwnedAppend(
         this,
         purpose,
@@ -933,9 +907,6 @@ export class OwnedAppend {
   async checkpoint(): Promise<Prefix> {
     if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
     this.grammar.finish();
-    await this.handle.sync();
-    this.store.root.work.fileSyncs++;
-    await this.store.root.syncDirectory(path.posix.dirname(this.path));
     return this.store.codec.schemas
       .appendPrefix(this.purpose)
       .parse([
@@ -951,12 +922,9 @@ export class OwnedAppend {
     if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
     this.grammar.finish();
     await this.writeEncoded(encodeRecord(['local-end', this.records, this.events.digest()]));
-    await this.handle.sync();
-    this.store.root.work.fileSyncs++;
     await this.handle.close();
     this.closed = true;
     this.grammar.dispose();
-    await this.store.root.syncDirectory(path.posix.dirname(this.path));
     return this.store.codec.schemas
       .ref(this.purpose)
       .parse(['ref', this.purpose, this.path, this.bytes, this.hash.digest('hex')]);

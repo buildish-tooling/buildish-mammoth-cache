@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, open, rm } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   baseFixture,
@@ -66,12 +66,21 @@ async function acquire(
   sets.push(set);
   return set;
 }
-it('installs a real native generation through V4a with sync but no normal base body hash or copy', async () => {
+it('installs a real native generation through V4a without storage flushes, normal base body hashing or copy', async () => {
   const f = await baseFixture(),
     sdk = await nativeCacheBackend(),
     o = await preparedBase(f, { 'data/a': 'abc' });
   await NativeObjectSave.save(sdk.backend, o, { budget: f.budget });
   await seedBaseGeneration(f, sdk, [['object', 'data', o.reference]]);
+  const probe = await open(f.store.root.resolve('flush-probe'), 'wx');
+  vi.spyOn(Object.getPrototypeOf(probe), 'sync').mockRejectedValue(
+    new Error('Unexpected storage flush'),
+  );
+  vi.spyOn(Object.getPrototypeOf(probe), 'datasync').mockRejectedValue(
+    new Error('Unexpected storage flush'),
+  );
+  await probe.close();
+  await rm(f.store.root.resolve('flush-probe'));
   const set = await acquire(f, sdk),
     reads = vi.spyOn(NativeReadPhase.prototype, 'read'),
     result = await acceptBaseGeneration(f.store, set, { budget: f.budget });
@@ -254,7 +263,6 @@ it('keeps source writes, stats, spools and syncs linear across shared native par
       before = { ...f.store.root.work },
       result = await acceptBaseGeneration(f.store, set, { budget: f.budget });
     counts.push({
-      syncs: f.store.root.work.fileSyncs - before.fileSyncs,
       stats: f.store.root.work.stats - before.stats,
       scratch: f.store.root.work.scratchWriteBytes - before.scratchWriteBytes,
       writes: f.store.root.work.writeBytes - before.writeBytes,
@@ -263,7 +271,6 @@ it('keeps source writes, stats, spools and syncs linear across shared native par
     expect(result.snapshotCopyBytes).toBe(0);
     await installBaseGeneration(f.store, result, { budget: f.budget });
   }
-  expect(counts[1].syncs - counts[0].syncs).toBe(12);
   expect(counts[1].stats).toBeLessThan(counts[0].stats * 4);
   expect(counts[1].scratch).toBeLessThanOrEqual(counts[0].scratch * 5);
   expect(counts[1].writes).toBeLessThan(counts[0].writes * 5);
@@ -322,7 +329,7 @@ it('blocks provisional-set disposal while a native install acceptance owns its s
   await NativeObjectSave.save(sdk.backend, o, { budget: f.budget });
   await seedBaseGeneration(f, sdk, [['object', 'data', o.reference]]);
   const set = await acquire(f, sdk),
-    sync = NativeReadPhase.prototype.sync;
+    enter = NativeReadPhase.prototype.enter;
   let entered!: () => void, release!: () => void;
   const ready = new Promise<void>((r) => {
       entered = r;
@@ -330,13 +337,13 @@ it('blocks provisional-set disposal while a native install acceptance owns its s
     gate = new Promise<void>((r) => {
       release = r;
     });
-  vi.spyOn(NativeReadPhase.prototype, 'sync').mockImplementation(async function (
+  vi.spyOn(NativeReadPhase.prototype, 'enter').mockImplementation(async function (
     this: NativeReadPhase,
     ...args
   ) {
     entered();
     await gate;
-    return sync.apply(this, args);
+    return enter.apply(this, args);
   });
   const pending = acceptBaseGeneration(f.store, set, { budget: f.budget });
   await ready;

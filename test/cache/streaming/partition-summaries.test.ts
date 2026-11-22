@@ -236,7 +236,6 @@ it.each([4, 16])(
         listings: counts.listings,
         opens: w.opens - initial.opens,
         renames: w.renames - initial.renames,
-        syncs: w.fileSyncs + w.directorySyncs - initial.fileSyncs - initial.directorySyncs,
         unlinks: w.unlinks - initial.unlinks,
         hashes: hash.mock.calls.length,
       });

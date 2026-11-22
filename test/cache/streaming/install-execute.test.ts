@@ -358,7 +358,6 @@ it('amortizes shared-parent traversal and durable cycles across ordinary units',
     return {
       stats: f.store.root.work.stats - before.stats,
       reads: f.store.root.work.readBytes - before.readBytes,
-      syncs: f.store.root.work.directorySyncs - before.directorySyncs,
     };
   }
   const a = await measure(4, 0),
@@ -370,11 +369,9 @@ it('amortizes shared-parent traversal and durable cycles across ordinary units',
   expect(d.stats - c.stats).toBe(b.stats - a.stats);
   expect(b.reads).toBeLessThan(a.reads * 4);
   expect(d.reads).toBeLessThan(c.reads * 4);
-  expect(b.syncs).toBe(a.syncs);
-  expect(d.syncs).toBe(c.syncs);
 });
 
-it('syncs completed active rename parents before committing the recovered cursor', async () => {
+it('reconciles completed active rename parents before committing the recovered cursor', async () => {
   const f = await fixture();
   const input = await f.incoming('data', { 'data/a': 'a', 'data/b': 'b' });
   const plan = await freezeInstallPlan(f.store, [input], f.budget);
@@ -384,21 +381,15 @@ it('syncs completed active rename parents before committing the recovered cursor
   });
   await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
   crash.mockRestore();
-  const synced: string[] = [];
   const reopened = await OwnedStore.bind(f.root, f.store.codec, async (name) => {
     if (name === 'install-progress-pointer') {
-      expect(synced).toContain('data');
-      expect(synced).toContain(input.nativeRoot + '/data');
+      expect(await f.store.root.stat('data/a')).not.toBeNull();
+      expect(await f.store.root.stat('data/b')).not.toBeNull();
+      expect(await f.store.root.stat(input.nativeRoot + '/data/a')).toBeNull();
+      expect(await f.store.root.stat(input.nativeRoot + '/data/b')).toBeNull();
     }
   });
-  const sync = reopened.root.syncDirectory.bind(reopened.root);
-  vi.spyOn(reopened.root, 'syncDirectory').mockImplementation(async (relative) => {
-    synced.push(relative);
-    return sync(relative);
-  });
   await recoverInstall(reopened, f.budget);
-  expect(synced.filter((p) => p === 'data')).toHaveLength(1);
-  expect(synced.filter((p) => p === input.nativeRoot + '/data')).toHaveLength(1);
   await reopened.assertNoIntents();
   expect(f.budget.retained).toBe(0);
 });
@@ -578,7 +569,6 @@ it.each(['file-backups', 'directory-backup'] as const)(
         scratch: scratch.mock.calls.length,
         stats: f.store.root.work.stats - before.stats,
         reads: f.store.root.work.readBytes - before.readBytes,
-        syncs: f.store.root.work.directorySyncs - before.directorySyncs,
         unlinks: f.store.root.work.unlinks - before.unlinks,
       };
       scratch.mockRestore();
@@ -590,7 +580,6 @@ it.each(['file-backups', 'directory-backup'] as const)(
     const a = await measure(4),
       b = await measure(16);
     expect(b.scratch).toBe(a.scratch);
-    expect(b.syncs).toBe(a.syncs);
     expect(b.stats).toBeLessThan(a.stats * 4);
     expect(b.reads).toBeLessThan(a.reads * 4);
     expect(b.unlinks - a.unlinks).toBe(12);

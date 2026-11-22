@@ -178,8 +178,6 @@ export class WorkerStage {
           const time = portableMtimeSeconds(mtimeMs);
           await handle.utimes(time, time);
           this.work.metadataRepairs++;
-          await handle.sync();
-          this.store.root.work.fileSyncs++;
           this.store.root.work.stats++;
           const native = nativeIdentity(await handle.stat({ bigint: true }));
           if (BigInt(native[8]) / 1000000n !== BigInt(mtimeMs))
@@ -212,7 +210,6 @@ export class WorkerStage {
         throw new Error('Worker stage directory changed.');
       await chmod(this.store.root.resolve(name), 0o755);
       await utimes(this.store.root.resolve(name), 0, 0);
-      await this.store.root.syncDirectory(name);
       const final = await this.stat(name);
       if (!sameObject(expected, final))
         throw new Error('Worker directory replaced during metadata repair.');
@@ -265,8 +262,6 @@ export class WorkerStage {
       await this.store.makeParents(target);
       this.moves.set(partition, { source: part.nativeRoot, target, expected });
       await this.store.root.renameAbsent(part.nativeRoot, target, expected);
-      await this.store.root.syncDirectory(this.path);
-      await this.store.root.syncDirectory(target.slice(0, target.lastIndexOf('/')));
       this.partitions.set(partition, Object.freeze({ ...part, nativeRoot: target }));
     }
     signal.throwIfAborted();
@@ -297,8 +292,6 @@ export class WorkerStage {
         await this.store.root.renameAbsent(move.target, move.source, target);
       } else if (!source || !sameRename(move.expected, source))
         throw new Error('Worker source publication lost.');
-      await this.store.root.syncDirectory(this.path);
-      await this.store.root.syncDirectory(move.target.slice(0, move.target.lastIndexOf('/')));
       const part = this.partitions.get(partition)!;
       this.partitions.set(partition, Object.freeze({ ...part, nativeRoot: move.source }));
       this.moves.delete(partition);

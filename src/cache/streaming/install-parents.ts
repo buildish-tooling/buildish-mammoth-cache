@@ -64,7 +64,6 @@ export class InstallParents {
       return null;
     }
     await mkdir(this.store.root.resolve(source), { mode: 0o755 });
-    await this.store.root.syncDirectory(source);
     const native = (await this.store.root.stat(source))!;
     const bytes = encodeRecord(['parent', logical, source, native, 1]);
     await writeFile(this.store.root.resolve(recordPath), bytes, { flag: 'wx', mode: 0o600 });
@@ -72,7 +71,6 @@ export class InstallParents {
     return [source, native];
   }
   async seal(budget: WorkingBudget): Promise<void> {
-    await this.store.root.syncDirectory(this.prefix + 'objects');
     await retireOwnedDirectory(this.store, this.prefix + 'ledger', this.ledgerNative, budget);
   }
 }

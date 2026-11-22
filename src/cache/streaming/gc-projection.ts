@@ -222,7 +222,7 @@ export async function checkGcProjection(
       if (subtreeEnd && subtreeEnd <= completed && cleanup && owner !== null)
         throw new Error('Completed GC directory recreated.');
       if (phase && affected) {
-        // An unlink/rmdir can survive a process exit before its parent's sync.
+        // An unlink/rmdir can complete before its parent's checkpoint is published.
         // Attribute each surviving parent once, including all-absent active units.
         signal?.throwIfAborted();
         await phase.parents(path + (path ? '/' : '') + 'pending');

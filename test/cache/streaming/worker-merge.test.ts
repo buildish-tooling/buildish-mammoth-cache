@@ -241,7 +241,6 @@ it('has linear aggregate selected writes, stats, spooling and checkpoints across
       count,
       stats: f.store.root.work.stats - before.stats,
       spool: f.store.root.work.scratchWriteBytes - before.scratchWriteBytes,
-      sync: f.store.root.work.fileSyncs - before.fileSyncs,
     });
     expect(result.stage.work.bodyBytes).toBe(count * 3);
     expect(result.readers.reduce((n, r) => n + r.work.bodyBytes, 0)).toBe(count * 6);
@@ -250,7 +249,6 @@ it('has linear aggregate selected writes, stats, spooling and checkpoints across
   }
   expect(observed[1].stats).toBeLessThanOrEqual(observed[0].stats + 12 * 20);
   expect(observed[1].spool).toBeLessThan(observed[0].spool * 5);
-  expect(observed[1].sync - observed[0].sync).toBe(12);
 });
 
 it('retires a partially acquired partition spool after the next acquisition fails', async () => {

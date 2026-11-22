@@ -244,7 +244,7 @@ async function run(store: OwnedStore, input: GcOptions, recovering: boolean) {
     const committed = intent && canonical(saved[4]).equals(canonical(intent[5]));
     await checkGcProjection(index, saved[4][2], intent ? intent[5][2] : saved[4][2], phase, work);
     options.signal.throwIfAborted();
-    await phase.barrier(); // Replay namespace barriers precede any recovered cursor/cleanup.
+    await phase.barrier(); // Parent checkpoints precede any recovered cursor/cleanup.
     options.signal.throwIfAborted();
     let cursor: GcCursor = saved[4];
     if (intent) {

@@ -145,7 +145,7 @@ export class DownloadedWorkerArchive {
       store.root.work.opens++;
       const handle = await open(
           store.root.resolve(file),
-          constants.O_RDWR | (constants.O_NOFOLLOW ?? 0),
+          constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
         ),
         hash = createHash('sha256');
       let bytes = 0,
@@ -163,8 +163,6 @@ export class DownloadedWorkerArchive {
           bytes = add(bytes, chunk.length);
           store.root.work.readBytes = add(store.root.work.readBytes, chunk.length);
         }
-        await handle.sync();
-        store.root.work.fileSyncs++;
         store.root.work.stats++;
         const after = await handle.stat({ bigint: true });
         identity = nativeIdentity(after);
@@ -180,7 +178,6 @@ export class DownloadedWorkerArchive {
       const named = await store.root.stat(file);
       if (!named || !sameNative(identity!, named, true))
         throw new Error('Raw worker file name changed.');
-      await store.root.syncDirectory(directory);
       signal.throwIfAborted();
       const reference = Object.freeze(
         store.codec.schemas

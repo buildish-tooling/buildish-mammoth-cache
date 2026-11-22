@@ -35,8 +35,6 @@ export interface NativeWork {
   scratchReadBytes: number;
   scratchWriteBytes: number;
   renames: number;
-  fileSyncs: number;
-  directorySyncs: number;
   unlinks: number;
   directoryRemovals: number;
 }
@@ -48,8 +46,6 @@ export const nativeWork = (): NativeWork => ({
   scratchReadBytes: 0,
   scratchWriteBytes: 0,
   renames: 0,
-  fileSyncs: 0,
-  directorySyncs: 0,
   unlinks: 0,
   directoryRemovals: 0,
 });
@@ -126,8 +122,6 @@ function nativeRelative(relative: string): string {
   return relative;
 }
 export class NativeRoot {
-  readonly durability =
-    process.platform === 'win32' ? 'file-sync-native-replace' : 'file-and-directory-sync';
   private constructor(
     readonly path: string,
     readonly binding: NativeIdentity,
@@ -224,20 +218,6 @@ export class NativeRoot {
     const hash = createHash('sha256');
     for await (const chunk of this.read(relative, expected)) hash.update(chunk);
     return hash.digest('hex');
-  }
-  // Protocol: docs/dev/cache-lifecycle-protocol.md#durable-replacement-and-cursors
-  async syncDirectory(relative: string): Promise<boolean> {
-    await this.parents(relative ? relative + '/placeholder' : 'placeholder');
-    if (process.platform === 'win32') return false; // Explicit documented process-crash profile.
-    this.work.opens++;
-    const handle = await open(this.resolve(relative), constants.O_RDONLY);
-    try {
-      await handle.sync();
-      this.work.directorySyncs++;
-      return true;
-    } finally {
-      await handle.close();
-    }
   }
   async renameAbsent(
     source: string,

@@ -308,7 +308,6 @@ it.skipIf(process.platform === 'win32')(
           installs,
           stats: w.stats - before.stats,
           opens: w.opens - before.opens,
-          syncs: w.fileSyncs + w.directorySyncs - before.fileSyncs - before.directorySyncs,
         });
       }
     expect(spawn).toHaveBeenCalledTimes(4);

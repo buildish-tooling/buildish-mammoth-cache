@@ -191,8 +191,8 @@ Raw capability is explicit and defaults false. A supporting backend honors both
 raw flags or throws; do not fall back to ZIP wrapping/extraction. Reported digests
 accept bare64 hex or `sha256:` plus64 hex and normalize to lower-case SHA-256;
 unknown algorithms or mismatches reject receipts. Raw download forwards the
-qualified expected hash, verifies the actual compressed bytes/native identity and
-syncs the single owned file before exposing Q. This transport binding checksum pass
+qualified expected hash and verifies the actual compressed bytes/native identity
+before exposing Q under the [filesystem recovery contract](../portability/filesystem/). This transport binding checksum pass
 is separate from the one subsequent TAR/gzip parse; the SDK's computed actual hash
 is not exposed by its download result.
 

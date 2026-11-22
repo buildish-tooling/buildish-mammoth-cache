@@ -112,7 +112,6 @@ export class InstallParentPhase {
       await this.check(f);
       this.signal?.throwIfAborted();
       if (f.dirty) {
-        await this.store.root.syncDirectory(f.path);
         this.signal?.throwIfAborted();
         await this.created(f.path, f.native, f.projection);
       }

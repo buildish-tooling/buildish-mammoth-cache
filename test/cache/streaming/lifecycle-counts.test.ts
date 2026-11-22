@@ -330,8 +330,6 @@ it.skipIf(process.platform === 'win32').each([
       'opens',
       'renames',
       'unlinks',
-      'fileSyncs',
-      'directorySyncs',
     ] as const) {
       const base = rows.baseline;
       if (base) {

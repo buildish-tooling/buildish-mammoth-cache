@@ -19,7 +19,6 @@ import type { FrozenMovingPublication } from './base-moving-publication';
 import { type MovingCell } from './base-moving-publication';
 import { equal, type Value } from './encoding';
 import { sameNative } from './native';
-import { parentPath } from './tree-state';
 import { relocationLog } from './relocation-log';
 import type { Reference } from './owned-store';
 
@@ -95,7 +94,6 @@ export async function retireMovingMetadata(
   equal(await pub.state(), state, 'retirement root pointer');
   await unlink(pub.store.root.resolve(ref[2]));
   pub.store.root.work.unlinks++;
-  await pub.store.root.syncDirectory(parentPath(ref[2]));
 }
 export async function retireReturnedPrefixes(pub: FrozenMovingPublication, value: Value) {
   const marker = pub.store.codec.schemas.documents.relocation.parse(value),
@@ -123,7 +121,6 @@ export async function retireReturnedPrefixes(pub: FrozenMovingPublication, value
       if (!after || !sameNative(native, after, true)) throw new Error('Retired prefix changed.');
       await unlink(pub.store.root.resolve(prefix[2]));
       pub.store.root.work.unlinks++;
-      await pub.store.root.syncDirectory(parentPath(prefix[2]));
     }
 }
 export async function movingMarker(pub: FrozenMovingPublication) {

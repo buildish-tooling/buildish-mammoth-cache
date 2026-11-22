@@ -187,7 +187,7 @@ it('adds no managed-root traversal as live payload width grows4/16', async () =>
     }
     counts.push(
       Object.fromEntries(
-        ['stats', 'opens', 'unlinks', 'directorySyncs'].map((k) => {
+        ['stats', 'opens', 'unlinks'].map((k) => {
           const key = k as keyof typeof before;
           return [key, f.store.root.work[key] - before[key]];
         }),

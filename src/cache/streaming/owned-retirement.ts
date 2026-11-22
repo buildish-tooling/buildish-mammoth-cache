@@ -22,7 +22,7 @@ import { nativeIdentity, sameNative, sameObject, type NativeIdentity } from './n
 import { sameDirectoryObject } from './install-member';
 import type { OwnedStore } from './owned-store';
 import { relativePathSchema } from './schema';
-import { WorkingBudget, parentPath } from './tree-state';
+import { WorkingBudget } from './tree-state';
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#owned-metadata-retirement.
 /** Reserved disposable containers only; never a live managed payload/backup root. */
@@ -112,8 +112,6 @@ async function retireTree(
       if (!sameNative(current, after, true))
         throw new Error('Disposable directory changed before retirement.');
       check();
-      await store.root.syncDirectory(path);
-      check();
       await rmdir(store.root.resolve(path));
       store.root.work.directoryRemovals++;
       await store.fail(event);
@@ -123,7 +121,6 @@ async function retireTree(
   }
   await visit(relative, expected, 0);
   check();
-  await store.root.syncDirectory(parentPath(relative));
 }
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-prepare-selection.

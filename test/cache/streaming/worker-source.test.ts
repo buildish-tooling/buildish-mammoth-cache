@@ -347,11 +347,11 @@ it('honors cancellation during terminal source cleanup and stability barriers', 
       seal.call(this, s);
       sealed = true;
     });
-  const sync = f.store.root.syncDirectory.bind(f.store.root),
-    syncSpy = vi.spyOn(f.store.root, 'syncDirectory').mockImplementation(async (p) => {
-      const synced = await sync(p);
+  const stat = f.store.root.stat.bind(f.store.root),
+    cleanupSpy = vi.spyOn(f.store.root, 'stat').mockImplementation(async (p) => {
+      const result = await stat(p);
       if (sealed) controller.abort(new Error('terminal abort'));
-      return synced;
+      return result;
     });
   try {
     await expect(WorkerSources.create(f.store, view, f.budget, controller.signal)).rejects.toThrow(
@@ -359,7 +359,7 @@ it('honors cancellation during terminal source cleanup and stability barriers', 
     );
   } finally {
     sealSpy.mockRestore();
-    syncSpy.mockRestore();
+    cleanupSpy.mockRestore();
   }
   const sources = await WorkerSources.create(f.store, view, f.budget),
     final = new AbortController(),

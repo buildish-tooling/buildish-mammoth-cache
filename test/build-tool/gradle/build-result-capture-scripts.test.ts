@@ -73,6 +73,9 @@ it('registers operational locations before summary/Test/parent/version filters w
   ])
     expect(script.indexOf(filter)).toBeGreaterThan(start);
   expect(script).not.toContain('JsonGenerator');
+  expect(script).not.toContain('.force(');
+  expect(script).toContain('while (buffer.hasRemaining()) channel.write(buffer)');
+  expect(script).toContain('finally { channel.close() }');
   expect(script).toContain('gradle.gradleHomeDir.canonicalPath');
   expect(script).toContain('gradle.gradleUserHomeDir.canonicalPath');
   expect(script).toContain('System.getProperty("java.home")');

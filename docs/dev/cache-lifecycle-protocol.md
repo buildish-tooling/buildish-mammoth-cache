@@ -147,25 +147,20 @@ Empty complete streams still have header/end. No closed stream is mutated later.
 
 ### Durable replacement and cursors
 
-Write an owned candidate, sync its complete bytes, atomically rename it into place,
-then sync the containing directory under the platform's supported durability
-contract. Publish a reference/pointer only after its evidence is durable. Do not
-promise power-loss survival beyond the platform's actual sync/rename guarantees;
-if required durable ownership cannot be established, do not begin destructive work.
-The POSIX implementation syncs both file bytes and the containing directory; any
-required sync failure is fatal. The Windows Node/libuv implementation syncs file
-bytes with FlushFileBuffers and completes the same-filesystem native replacement.
-It provides process-termination/restart recovery while Windows and the filesystem
-remain running. It makes no directory-namespace persistence promise across an OS
-crash, reboot or power loss; directory sync is not silently treated as successful.
-This explicit Windows profile leaves evidence/intent/mutation/progress/pointer/
-retirement ordering unchanged. Actual process-restart tests qualify those code
-paths, not power-loss survival. See the
-[libuv Windows implementation](https://github.com/libuv/libuv/blob/v1.x/src/win/fs.c).
+Write an owned candidate completely, close it, then atomically rename it into place.
+Publish a reference/pointer only after its complete evidence is available. Do not
+begin destructive work before the corresponding ownership and intent publication.
+The [filesystem and recovery requirements](../portability/filesystem/) apply on
+every platform: recovery covers process termination/restart while the operating
+system and filesystem remain running. Mammoth issues no explicit file or directory
+storage flushes and does not promise recovery across OS crash, reboot or power loss.
+In this document, durable or committed state means completed publication under that
+process-restart contract. Evidence/intent/mutation/progress/pointer/retirement ordering
+remains mandatory. Process-restart tests do not qualify host-crash persistence.
 
 Keep at most current plus one candidate for a replaced checkpoint, not retry history.
 For every replaced **Q-referenced** record/stream, write to a new unique immutable
-owned pathname, sync it, atomically commit the root state's new Q pointer, and only
+owned pathname, finish its writes, atomically commit the root state's new Q pointer, and only
 then retire the old Q file. Never overwrite bytes at a still-referenced Q.path and
 leave its old hash live, even temporarily. Fixed mutable state/intent/locator files
 replace at reserved paths under their distinct mutable-record rules. A P may append
@@ -444,7 +439,7 @@ sticky deny-only record `registrations.failed.json` is therefore:
 ["gradle-capture-failed",1,invocationId]
 ```
 
-The first failure writes/syncs it without replacing existing evidence; later successful
+The first failure finishes writing it without replacing existing evidence; later successful
 registrations never clear it. Its presence, incomplete registration candidates or any
 invalid inventory reject quiescence. If the hook cannot record failure, it fails that
 initialization instead of reporting successful operational capture. This is one bounded
@@ -1042,7 +1037,7 @@ join the same frozen source plan with current effective adjustments, not origina
 pre-first-rename ctime. Produce one new canonical candidate merging prior still-valid
 adjustments with this epoch's changes. No append-only retry history.
 
-After every planned source is verified back, finish/sync adjustment candidate, then
+After every planned source is verified back, finish the adjustment candidate, then
 atomically replace the partition-state catalog/root pointer to reference it. Keep
 old current plus candidate until that pointer commits. Mark sources-returned and
 retire marker/evidence only after this binding is durable. Crash between pointer
@@ -1284,14 +1279,14 @@ in I/O accounting. Normal uninterrupted prepare still reuses verified incoming h
 Even when an intent was already retired, a noninitial install progress cursor retains
 its frozen prefix projection until prepare clears that progress; validate created and
 existing parents and reject unknown children before discarding it. For active moves
-observed complete on reload, sync their source and destination containing directories
-before advancing the cursor: endpoint completion alone does not prove that the lost
-process completed its namespace barrier.
+observed complete on reload, reconcile their exact source/destination and affected
+parent projections before advancing the cursor; endpoint existence alone does not
+establish ownership or complete membership.
 
 Group consecutive complete ordinary units into batches by the same candidate
 16,384 operation/8 MiB evidence thresholds as GC, not one durable cycle per one-file
 unit. Close only at a complete unit boundary; a larger workspace/snapshot may occupy
-one streamed batch. Count actual evidence/intent/progress/pointer/fsync work explicitly.
+one streamed batch. Count actual evidence/intent/progress/pointer and native work explicitly.
 
 After the batch is reconciled, persist a new progress Q **and its root-state pointer**
 with completedCursor, then retire old backups under
@@ -1303,7 +1298,7 @@ changes structurally; reject replacements/recreated targets or unknown children.
 Do not require an already partially retired backup to equal its original complete
 tree. Keep marker/evidence until this cleanup finishes, without per-file checkpoints.
 A crash after cursor commit still requires marker/backup cleanup; cursor alone cannot discard ownership.
-Only one install batch is active. No per-file fsync cycle is required; evidence and
+Only one install batch is active. Evidence and
 cursor commits occur per complete-unit batch. On fresh prepare, resolve any active
 batch first or block. It need not complete all future old-plan batches, but cannot
 claim the abandoned invocation was build-ready. Already installed complete units

@@ -16,7 +16,7 @@
 
 import { gradleResolver } from './quiescence-fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import { readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { readFile, rm, utimes, writeFile, open } from 'node:fs/promises';
 import { composedFixture } from './composed-fixture';
 import { prepareStreaming } from '../../../src/cache/streaming/prepare';
 import { postStreamingBase, type BasePostRequest } from '../../../src/cache/streaming/base-post';
@@ -58,11 +58,20 @@ function post(
     ...options,
   });
 }
-// Native/SDK cases include durable syncs and external TAR round trips on Linux and Windows.
+// Native/SDK cases include external TAR round trips and process-restart ordering.
 it('runs real prepare/build/base save/return/record completion and cold completion retry', async () => {
   const sdk = await nativeCacheBackend(),
-    f = await fixture({ cacheBackend: async () => sdk.backend }),
-    ready = await prepareStreaming(f.request);
+    f = await fixture({ cacheBackend: async () => sdk.backend });
+  const probe = await open(f.store.root.resolve('flush-probe'), 'wx');
+  vi.spyOn(Object.getPrototypeOf(probe), 'sync').mockRejectedValue(
+    new Error('Unexpected storage flush'),
+  );
+  vi.spyOn(Object.getPrototypeOf(probe), 'datasync').mockRejectedValue(
+    new Error('Unexpected storage flush'),
+  );
+  await probe.close();
+  await rm(f.store.root.resolve('flush-probe'));
+  const ready = await prepareStreaming(f.request);
   await f.files('', { 'data/new': 'build', 'state/local': 'mine' });
   const result = await post(f, ready.anchor, async () => sdk.backend);
   expect(result.outcome).toBe('published');

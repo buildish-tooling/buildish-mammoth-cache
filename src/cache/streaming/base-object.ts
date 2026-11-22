@@ -556,7 +556,6 @@ export async function createBasePayload(store: OwnedStore, partition: string): P
   const payload = store.prefix + 'objects/' + partition + '/payload';
   await store.makeParents(payload);
   await mkdir(store.root.resolve(payload));
-  await store.root.syncDirectory(parentPath(payload));
   return payload;
 }
 

@@ -21,14 +21,9 @@ import { ProvisionalBaseSet } from './base-generation';
 import { ValidatedBaseObject, settleBaseCleanup, type BaseObjectOptions } from './base-object';
 import { FrozenBaseTree } from './base-frozen-tree';
 import { RecoveryGroups } from './native-records';
-import { compareMembership, parentPath } from './tree-state';
+import { compareMembership } from './tree-state';
 import { sameNative, sameRename, type NativeIdentity } from './native';
-import {
-  copyBaseSnapshot,
-  syncBasePayload,
-  movedBaseEvidence,
-  type BaseCopy,
-} from './base-evidence';
+import { baseEvidence, copyBaseSnapshot, movedBaseEvidence, type BaseCopy } from './base-evidence';
 import { PreparedWorkerSnapshot } from './worker-snapshot';
 import { VerifiedIncoming } from './install-evidence';
 import { recoverInstall, executeInstall } from './install-execute';
@@ -178,8 +173,6 @@ export async function acceptBaseGeneration(
       moves.push(attempt);
       const after = await store.root.renameAbsent(from, to, native);
       attempt.after = after;
-      await store.root.syncDirectory(parentPath(from));
-      await store.root.syncDirectory(parentPath(to));
       return after;
     };
     const incomingFacts: { partition: string; root: string; evidence: Reference }[] = [],
@@ -219,14 +212,20 @@ export async function acceptBaseGeneration(
           provenance: stage.provenance,
         });
       }
-      const source = await syncBasePayload(
-          store,
-          stage.root,
-          stage.evidence,
-          stage.partition,
-          options,
-        ),
-        root = store.prefix + 'install/' + stage.partition,
+      // Keep the sealed root identity; a fresh stat cannot rebase a changed source.
+      let source: NativeIdentity | undefined;
+      for await (const row of baseEvidence(
+        store,
+        stage.root,
+        stage.evidence,
+        stage.partition,
+        options,
+      )) {
+        source = row.native;
+        break;
+      }
+      if (!source) throw new Error('Missing native payload root evidence.');
+      const root = store.prefix + 'install/' + stage.partition,
         native = await move(stage.root, root, source),
         evidence = await movedBaseEvidence(store, stage.evidence, stage.partition, native, options);
       incomingFacts.push({ partition: stage.partition, root, evidence });
@@ -318,8 +317,6 @@ export async function acceptBaseGeneration(
             )
               throw new Error('Base incoming rollback endpoints ambiguous.');
             await store.root.renameAbsent(m.to, m.from, target);
-            await store.root.syncDirectory(parentPath(m.from));
-            await store.root.syncDirectory(parentPath(m.to));
           }
         };
         await settleBaseCleanup([rollback], failure);

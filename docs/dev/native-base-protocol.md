@@ -275,10 +275,12 @@ content verification remains mandatory and is unaffected by this distinction.
 Use operation-local guarded evidence; validate all available objects/groups before
 first live installation. Whole-workspace and authoritative snapshot replacement
 obligations still apply. The [local lifecycle specification](../cache-lifecycle-protocol/) defines install
-batches and recovery. Before durable install receipts, sync extracted file data and
-directories under their checked native identities; SDK extraction alone is not that
-persistence barrier. This phase reads no payload bytes. Independent selected snapshot
-copies sync their new bytes and retain their own full native evidence. Ordinary
+batches and recovery. Await completed extraction and close payload writers before
+granting incoming install receipts under checked native evidence. The
+[filesystem and recovery requirements](../portability/filesystem/) specify process
+restart rather than host-crash persistence; no extracted-payload storage-flush sweep
+is performed. Independent selected snapshot copies finish writes and retain their
+own full native evidence. Ordinary
 aggregate staging has no payload-copy fallback.
 Do not create a new global extracted-file inventory or rerun the full scan per unit.
 

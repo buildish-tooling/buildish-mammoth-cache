@@ -148,7 +148,6 @@ try {
             try {
                 def buffer = java.nio.ByteBuffer.wrap(bytes)
                 while (buffer.hasRemaining()) channel.write(buffer)
-                channel.force(true)
             } finally { channel.close() }
             try {
                 java.nio.file.Files.move(temp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
@@ -156,10 +155,6 @@ try {
                 // Another identical registration may have won; compare all bytes below.
             }
             check(target)
-            if (!System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
-                def parent = java.nio.channels.FileChannel.open(operationalDirectory, java.nio.file.StandardOpenOption.READ)
-                try { parent.force(true) } finally { parent.close() }
-            }
         } finally { java.nio.file.Files.deleteIfExists(temp) }
     }
 } catch (Exception failure) {
@@ -174,16 +169,11 @@ try {
         try {
             def buffer = java.nio.ByteBuffer.wrap(bytes)
             while (buffer.hasRemaining()) channel.write(buffer)
-            channel.force(true)
         } finally { channel.close() }
-        if (!System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
-            def parent = java.nio.channels.FileChannel.open(operationalFailure.parent, java.nio.file.StandardOpenOption.READ)
-            try { parent.force(true) } finally { parent.close() }
-        }
         recorded = true
     } catch (java.nio.file.FileAlreadyExistsException known) { recorded = true }
     catch (Exception ignored) { }
-    if (!recorded) throw new org.gradle.api.GradleException("Mammoth operational registration failed without durable failure evidence", failure)
+    if (!recorded) throw new org.gradle.api.GradleException("Mammoth operational registration failed without completed failure evidence", failure)
     logger.warn("Mammoth operational registration failed; relocating cache save will be skipped", failure)
 }
 `;

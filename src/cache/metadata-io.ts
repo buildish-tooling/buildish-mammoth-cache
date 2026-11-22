@@ -108,7 +108,6 @@ export async function writeMetadata(
     const handle = await open(temporary, 'wx', 0o600);
     try {
       await handle.writeFile(text);
-      await handle.sync();
     } finally {
       await handle.close();
     }
