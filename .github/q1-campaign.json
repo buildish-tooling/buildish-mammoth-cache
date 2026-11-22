@@ -1,6 +1,6 @@
 {
-  "enabled": false,
-  "id": "issue18-20261122-resume-scale",
+  "enabled": true,
+  "id": "issue18-20261122-save-work-scale",
   "retainedCounts": [100000],
   "reservationMiB": 2048,
   "maximumQualificationJobs": 1,
