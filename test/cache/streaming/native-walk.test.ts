@@ -141,6 +141,33 @@ it('rejects changed files and directory membership before traversal acceptance',
   ).rejects.toThrow('directory changed');
   expect(f.budget.retained).toBe(0);
 });
+it.each(['throw', 'abort', 'abort and throw'] as const)(
+  'stops before yielding an inspected child on callback %s',
+  async (outcome) => {
+    const f = await fixture();
+    await writeFile(path.join(f.directory, 'file'), 'body');
+    const controller = new AbortController(),
+      abort = new Error('inspection aborted'),
+      failure = new Error('inspection failed'),
+      events: string[] = [];
+    const walk = walkNative(f.root, '', {
+      budget: f.budget,
+      signal: controller.signal,
+      inspectChild() {
+        if (outcome !== 'throw') controller.abort(abort);
+        if (outcome !== 'abort') throw failure;
+        return 'prune';
+      },
+    });
+    await expect(
+      (async () => {
+        for await (const event of walk) events.push(event.tag);
+      })(),
+    ).rejects.toBe(outcome === 'throw' ? failure : abort);
+    expect(events).toEqual(['directory-open']);
+    expect(f.budget.retained).toBe(0);
+  },
+);
 it('rejects links and a file/directory kind change after listing', async () => {
   const f = await fixture();
   await mkdir(path.join(f.directory, 'target'));

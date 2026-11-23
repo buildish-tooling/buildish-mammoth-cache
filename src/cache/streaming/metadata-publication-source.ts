@@ -342,18 +342,18 @@ async function foldMetadata(
   root: number,
   hierarchy: PublicationHierarchy,
 ): Promise<ReadonlyMap<string, PartitionMetadata>> {
-  const summaries = new Map(
-    store.codec.options.model.partitions.map((p) => [
-      p[0],
-      new PartitionMetadataSummary(
-        store.codec.options.model,
-        p[0],
-        options.budget,
-        undefined,
-        options.maxDirectoryEntries,
-      ),
-    ]),
-  );
+  const model = store.codec.options.model;
+  const summaries = model.partitions.map(([id], index) => ({
+    id,
+    bit: 1n << BigInt(index),
+    summary: new PartitionMetadataSummary(
+      model,
+      id,
+      options.budget,
+      undefined,
+      options.maxDirectoryEntries,
+    ),
+  }));
   async function visit(offset: number, physicalRoot = false): Promise<void> {
     options.signal?.throwIfAborted();
     hierarchy.assert();
@@ -362,15 +362,13 @@ async function foldMetadata(
     try {
       const node = lease.node,
         mask = nodeMask(node),
-        selected = [...summaries].filter(
-          ([p]) => physicalRoot || (mask & partitionBit(store.codec.options.model, p)) !== 0n,
-        );
+        selected = physicalRoot ? summaries : summaries.filter(({ bit }) => (mask & bit) !== 0n);
       releaseFrame = options.budget.holdRecord(128 + selected.length * 64);
       if (node[1] === 'file') {
-        for (const [, summary] of selected)
+        for (const { summary } of selected)
           summary.accept(['file', node[2], node[3] as NativeIdentity]);
       } else if (node[1] === 'directory') {
-        for (const [, summary] of selected)
+        for (const { summary } of selected)
           summary.accept(['dir-open', node[2], node[3] as NativeIdentity]);
         if (lease.orderedChildren) {
           for await (const edge of lease.orderedChildren()) await visit(edge[2]);
@@ -380,7 +378,7 @@ async function foldMetadata(
           for await (const edge of hierarchy.children(node))
             if (edge[1] === 'directory') await visit(edge[2]);
         }
-        for (const [, summary] of selected)
+        for (const { summary } of selected)
           summary.accept(['dir-close', node[2], node[3] as NativeIdentity]);
       }
     } finally {
@@ -390,9 +388,9 @@ async function foldMetadata(
   }
   try {
     await visit(root, true);
-    return new Map([...summaries].map(([p, summary]) => [p, summary.finish()]));
+    return new Map(summaries.map(({ id, summary }) => [id, summary.finish()]));
   } finally {
-    for (const summary of summaries.values()) summary.dispose();
+    for (const { summary } of summaries) summary.dispose();
   }
 }
 

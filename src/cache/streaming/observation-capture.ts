@@ -200,10 +200,7 @@ export async function captureObservations(
     directSingleWriter: boolean;
   };
   let capturedIndex: ObservationIndex | undefined;
-  let root: number | undefined,
-    pending: Promise<'prune' | void> | undefined,
-    failure: unknown,
-    completed: FrozenObservation | undefined;
+  let root: number | undefined, failure: unknown, completed: FrozenObservation | undefined;
   const owner = (path: string) => {
     try {
       return model.owner(path);
@@ -230,7 +227,7 @@ export async function captureObservations(
     const relative = path.slice(workspace.root.length + 1);
     if (markerNames.has(relative)) workspace.markers.push([directory, path]);
   };
-  const child = async (c: NativeChild): Promise<'prune' | void> => {
+  const child = (c: NativeChild): 'prune' | void => {
     const frame = frames[frames.length - 1];
     if (!frame || frame.path !== c.parent)
       throw new Error('Observation child has no active parent.');
@@ -308,10 +305,7 @@ export async function captureObservations(
               checkpoint: (phase) => store.fail('observation-purge-' + phase),
             }
           : undefined,
-      inspectChild: (c) => {
-        pending = child(c);
-        return pending;
-      },
+      inspectChild: child,
     },
     work,
   );
@@ -509,7 +503,6 @@ export async function captureObservations(
     failure = e;
     throw e;
   } finally {
-    await pending?.catch(() => {});
     for (const frame of frames) options.budget.release(frame.charge);
     await settleNativeCleanup(
       [

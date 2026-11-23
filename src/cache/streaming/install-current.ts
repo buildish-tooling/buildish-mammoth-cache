@@ -30,7 +30,7 @@ export async function* installCurrentRows(
     {
       ...options,
       metadata: 'exclude',
-      inspectChild: async (child) => {
+      inspectChild: (child) => {
         if (
           child.pruned ||
           child.type === 'symlink' ||

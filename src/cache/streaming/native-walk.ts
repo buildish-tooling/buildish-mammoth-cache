@@ -15,7 +15,6 @@
  */
 
 import type { BigIntStats } from 'node:fs';
-import { withAbort } from './abort';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { lstat, opendir, unlink } from 'node:fs/promises';
 import {
@@ -65,8 +64,8 @@ export interface WalkOptions {
   readonly metadata?: 'exclude' | 'reject';
   /** Prune only when the complete subtree is outside the requested projection. */
   readonly prune?: (path: string) => boolean;
-  /** Same-phase protected-child inventory. Returning prune never follows that object. */
-  readonly inspectChild?: (child: NativeChild, signal: AbortSignal) => Promise<'prune' | void>;
+  /** Synchronous protected-child inventory. Returning prune never follows that object. */
+  readonly inspectChild?: (child: NativeChild) => 'prune' | void;
   readonly signal?: AbortSignal;
   /** Immediate parent held by a caller's checked ancestor scope. Rechecked at both boundaries. */
   readonly parentNative?: NativeIdentity;
@@ -163,7 +162,14 @@ export async function* walkNative(
           fileId,
           pruned,
         };
-        const decision = await withAbort(options.inspectChild(child, signal), signal);
+        signal.throwIfAborted();
+        let decision: 'prune' | void;
+        try {
+          decision = options.inspectChild(child);
+        } finally {
+          // A callback can cancel the walk and throw at the same time.
+          signal.throwIfAborted();
+        }
         if (decision === 'prune' || pruned) {
           yield { tag: 'protected-child', nativePath, ...child };
           return;

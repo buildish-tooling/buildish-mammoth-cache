@@ -116,7 +116,7 @@ it.each([
           1,
           'maven',
           hard,
-          partitions.map((id) => [
+          ['a', 'empty', 'b'].map((id) => [
             id,
             [`repository/**/${id}*.jar`],
             hard,
@@ -161,6 +161,7 @@ it.each([
         const source = await realFold(owner);
         try {
           for (const id of partitions) expect(source.summary(id)[3]).toBe(filesPerPartition);
+          expect(source.summary('empty').slice(3)).toEqual([0, 0, 0]);
           expect(children).toHaveBeenCalledTimes(directories);
           expect(lookup).not.toHaveBeenCalled();
           expect(work.metadataRowsRead - before.metadataRowsRead).toBe(
