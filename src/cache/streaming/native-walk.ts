@@ -28,7 +28,14 @@ import {
   type NativeRoot,
 } from './native';
 import { componentSchema, filePathSchema, pathSchema, relativePathSchema } from './schema';
-import { compareName, joinPath, parentPath, baseName, type WorkingBudget } from './tree-state';
+import {
+  directoryBreadthError,
+  compareName,
+  joinPath,
+  parentPath,
+  baseName,
+  type WorkingBudget,
+} from './tree-state';
 
 export interface NativeChild {
   readonly path: string;
@@ -198,7 +205,7 @@ export async function* walkNative(
         for await (const entry of directory) {
           signal.throwIfAborted();
           work.entries++;
-          if (++entries > max) throw new Error('Managed directory breadth exceeded.');
+          if (++entries > max) throw directoryBreadthError(path, max, 'native walk');
           componentSchema.parse(entry.name);
           const childPath = joinPath(path, entry.name);
           // Count every physical child; inventories additionally keep protected IDs.

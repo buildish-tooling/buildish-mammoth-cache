@@ -58,14 +58,15 @@ cache-partitions: |
   ]
 ```
 
-The group/artifact exclusion is an example for the project's own installed outputs. Adjust it to
-your coordinates. Keep origin markers included wherever repository artifacts remain managed;
-excluding those markers while retaining sibling files is rejected. Exclude whole version or
-coordinate directories so artifact bytes and their marker stay together. A managed directory
-containing excluded classifiers or other non-transient artifact files is rejected during source
-capture, aggregation, and GC. With custom exclusions, restore also checks the existing included
-trees using metadata before archive extraction; this adds traversal cost but no pre-build content
-hashing. Whole-directory exclusions and the default check-state/lock exclusions remain supported.
+The group/artifact exclusion is an example for the project's own installed
+outputs. Adjust it to your coordinates. Keep origin markers with managed
+artifacts so Resolver can apply its existing origin checks. Exclude whole
+directories to leave artifact bytes and their markers outside sharing.
+
+During installation, Mammoth validates incoming views against protected
+non-transient siblings. GC keeps a complete coordinate when an excluded
+artifact would survive. Default resolver check-state and lock exclusions
+continue to apply.
 
 ## Default timestamp garbage collection
 
@@ -73,8 +74,9 @@ Maven local repositories tend to grow monotonically because old dependency versi
 even after the project stops using them. The action therefore enables `cache-gc-mode: timestamp` by
 default for both Maven and Gradle.
 
-For Maven this means managed local-repository directories are pruned before standalone or
-distributed-aggregator jobs save the base cache when their modification time is older than `cache-gc-older-than-days` (`14` by default) and no current local/upstream activity protects them.
+Eligible writable Maven posts prune managed repository directories older than
+`cache-gc-older-than-days` (`14` by default) when current activity does not
+protect them.
 A directory is retained if any managed sibling survives, so old marker timestamps cannot remove
 origin evidence while artifact bytes remain. Current path-only usage also protects siblings.
 No historical last-use grace is stored; `noatime`/`relatime` and clocks can hide activity. This keeps GitHub Actions

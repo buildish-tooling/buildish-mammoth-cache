@@ -29,7 +29,6 @@ export interface BuildToolLifecycle {
     ordinaryHooks: () => Promise<void>,
   ): Promise<void>;
   quiesce(input: ConsumerWindowInput): Promise<Reference | undefined>;
-  verifyRecoveryConsumers(signal: AbortSignal): Promise<void>;
   removeKnownHooks(root: string): Promise<readonly string[]>;
 }
 export interface ConsumerWindowInput {

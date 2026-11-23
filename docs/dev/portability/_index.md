@@ -49,9 +49,10 @@ graph LR
 
 ## Architecture
 
-All providers must meet the [filesystem and recovery requirements](filesystem/).
-Local recovery covers process restart while the operating system remains running;
-Mammoth does not issue explicit storage flushes or promise host-crash persistence.
+All providers must meet the [filesystem and lifecycle requirements](filesystem/).
+The same operation owns source return and cleanup after SDK settlement.
+Interrupted owners require inspection of the retained root and a fresh root
+for another invocation.
 
 The action is designed to run on multiple CI platforms without changes to the shared core.
 The seam between platform-specific and platform-agnostic code is defined by a set of TypeScript

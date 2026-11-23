@@ -23,7 +23,7 @@ import { Digest, equal, tuple, type Value } from './encoding';
 import { ObservationIndex } from './observation-index';
 import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-walk';
 import { type NativeIdentity } from './native';
-import { createCacheGlobMatcher } from '../manifest';
+import { createCacheGlobMatcher } from '../glob';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
 import { workspaceKind } from '../immutable-workspaces';

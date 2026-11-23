@@ -20,35 +20,36 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-Prepare and post share provider-neutral bootstrap and build-tool adapters. Gradle provisions verified
-wrapper JARs and installs result hooks; Maven requires no wrapper provisioning. Orchestration lives
-in `src/phases/prepare/cutoff-flow.ts` and `src/phases/finalize/flow.ts`.
+The Actions use separate prepare and post entrypoints for Gradle and Maven. The
+GitHub adapters read inputs, normalize configuration and construct the host and
+build-tool adapters. Shared orchestration lives in `src/phases/streaming/`.
 
 ## Prepare
 
-The single-run guard claims ownership. Bootstrap derives configuration, Java identity, partitions
-and model, then writes a pending local journal before provisioning/restore. Optional cleanup pins
-re-restore to the matched key; validated worker envelopes are applied. After all prepare reads and
-writes, it records C. No upfront cache inventory/content hashes are captured.
+Prepare claims one owning invocation and resolves the cache root, partitions and
+family. It checks the dedicated root for interrupted owners and known legacy
+mutation intents. Gradle validates and provisions its wrapper. The cache lifecycle
+validates and installs the selected base and any admitted worker contributions
+before enabling build hooks. Prepare then records the activity cutoff, model,
+selected cache evidence and invocation policy in its local-v2 handoff.
 
-Successful cache-disabled prepare writes an explicit disabled CI record. Failed prepare establishes
-no valid cutoff; the post guard skips publication. Superseding prepare invalidates older journals.
+Cache-disabled prepare records a disabled invocation and still checks an existing
+root for unsafe state. It provisions the build tool and sets up reporting hooks.
 
-## Finalize read boundary
+## Post
 
-Post first checks duplicate, owner and prepare-failure CI state. Skipped invocations do not inspect
-the journal/configuration or initialize providers. Enabled invocations load recorded identity and
-bounded journal, scan metadata and durably freeze upsert/used/GC decisions. Only then are SDKs,
-config resolvers, adapters and orchestration dynamically imported. This covers import-time event
-reads when event/config/Java files overlap a custom cache partition.
+Post checks its CI ownership state before opening the local handoff. The handoff
+binds the original root, tool, configuration and cutoff. Removing or altering
+configuration for the post step does not change its policy. Duplicate or
+non-owning posts skip lifecycle work.
 
-Finalize consumes a one-use receipt, bootstraps and reconciles full model, execution and policy.
-Direct core callers preflight before bootstrap too. Drift fails before reports, deletion or upload.
-Reporting can read content after freeze; transient Gradle scripts and report scratch are excluded.
+Read-only and disabled post perform the applicable hook cleanup and build
+reporting. Writable standalone and aggregator posts require the exclusive
+runtime window, then observe metadata, apply GC where enabled and publish
+any changed cache objects. Writable workers publish one validated archive.
+Provider SDK operations run only when the selected route needs them.
 
-Replay permits Mammoth's own atime changes while checking other native metadata. Finalize executes
-frozen GC, publishes a sealed worker completion envelope or eligible immutable generation, and
-replaces the summary with upsert/used/GC and save results. Adapters retain build failures/scan links.
-`src/phases/finalize/reporting.ts` remains side-effect-free and creates no content inventory.
-
-See [Base cache design](../base-cache/) and [Delta protocol](../delta-protocol/) for details.
+A normal fresh post process receives the successful prepare handoff. Work
+interrupted after the owner starts a mutation is preserved for inspection.
+Use a fresh dedicated root for another invocation. See
+[Base cache design](../base-cache/) and [Delta protocol](../delta-protocol/).

@@ -15,24 +15,19 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-import {
-  cutoffJournalPath,
-  loadCutoffJournal,
-  newCutoffJournal,
-  persistCutoffJournal,
-} from '../src/cache/cutoff-state';
-import { snapshotRecord } from '../src/cache/snapshot-lifecycle';
-import { readPartitionSnapshot, stagePartitionSnapshot } from '../src/cache/partition-snapshots';
+import { OpenedInvocation } from '../src/cache/streaming/invocation';
+import { LifecycleHandoff } from '../src/cache/streaming/lifecycle-handoff';
+import { prepareStreaming } from '../src/cache/streaming/prepare';
+import { composedFixture } from './cache/streaming/composed-fixture';
 import { packCacheFiles, unpackCacheFiles } from './support/archive-round-trip';
-import { cutoffFixtureModel, cutoffFixturePolicy } from './support/cutoff-fixture';
 
-it('wipes the archived Gradle subtrees while preserving the pending post lifecycle and snapshot transport', async () => {
+it('wipes the archived Gradle subtrees while preserving the pending local-v2 post handoff', async () => {
   const workflow = parse(await readFile('.github/workflows/it-reusable-gradle.yml', 'utf8')) as {
     jobs: {
       standalone_round_trip: { steps: { uses?: string; run?: string; with?: { path: string } }[] };
@@ -54,49 +49,18 @@ it('wipes the archived Gradle subtrees while preserving the pending post lifecyc
     const home = path.join(root, 'home');
     const gradleHome = path.join(home, '.gradle');
     await mkdir(gradleHome, { recursive: true });
-    const initial = cutoffFixtureModel(gradleHome);
-    const includePaths = [path.join(gradleHome, 'caches/**')];
-    const model = {
-      ...initial,
-      includePaths,
-      partitions: initial.partitions.map((partition) => ({
-        ...partition,
-        publication: 'single-writer' as const,
-        relativeIncludeGlobs: ['caches/**'],
-        absoluteIncludeGlobs: includePaths,
-      })),
-    };
-    const journal = newCutoffJournal(
-      model,
-      { ...cutoffFixturePolicy, jobMode: 'standalone' },
-      {
-        repository: 'test/repo',
-        workflowName: 'CI',
-        jobName: 'standalone_round_trip',
-        runId: 1,
-        runAttempt: 1,
-        sourceRevision: null,
-      },
-    );
-    journal.phase = 'build-ready';
-    journal.cutoff = Date.now();
+    const fixture = await composedFixture({}, undefined, { root: gradleHome }, 'gradle');
+    const prepared = await prepareStreaming(fixture.request);
+    const pending = await OpenedInvocation.open(prepared.anchor, fixture.budget);
+    const state = pending.state;
+    expect(state[4]).toBe('build-ready');
+    const handoff = state[6]!;
+    const invocationRoot = pending.store.root;
+    const before = await readFile(invocationRoot.resolve(handoff[2]));
     for (const subtree of ['caches', 'wrapper']) {
       await mkdir(path.join(gradleHome, subtree), { recursive: true });
       await writeFile(path.join(gradleHome, subtree, 'fixture.bin'), subtree);
     }
-    const source = 'caches/fixture.bin';
-    const sourceStat = await stat(path.join(gradleHome, source));
-    const snapshot = await stagePartitionSnapshot(model, 'data', gradleHome, [
-      {
-        relativePath: source,
-        sourcePath: source,
-        size: sourceStat.size,
-        mode: sourceStat.mode & 0o777,
-        mtimeMs: Math.trunc(sourceStat.mtimeMs),
-      },
-    ]);
-    journal.partitionSnapshots = [snapshotRecord(snapshot, null, 'seed')];
-    await persistCutoffJournal(journal);
     const archive = await packCacheFiles(
       home,
       savedPaths.map((entry) => entry.replace('~/', '')),
@@ -109,10 +73,15 @@ it('wipes the archived Gradle subtrees while preserving the pending post lifecyc
       await expect(readFile(path.join(gradleHome, subtree, 'fixture.bin'))).rejects.toThrow();
     }
     const assertPendingState = async () => {
-      expect(await loadCutoffJournal(model, cutoffJournalPath(journal.invocation))).toEqual(
-        journal,
-      );
-      expect(await readPartitionSnapshot(model, 'data')).toEqual(snapshot);
+      const reopened = await OpenedInvocation.open(prepared.anchor, fixture.budget);
+      expect(reopened.state).toEqual(state);
+      expect(await readFile(invocationRoot.resolve(handoff[2]))).toEqual(before);
+      const facts = await LifecycleHandoff.read(reopened.store, handoff, {
+        budget: fixture.budget,
+      });
+      expect(facts.header[10]).toBe(prepared.cutoff);
+      facts.close();
+      expect(fixture.budget.retained).toBe(0);
     };
     await assertPendingState();
     await unpackCacheFiles(home, archive);

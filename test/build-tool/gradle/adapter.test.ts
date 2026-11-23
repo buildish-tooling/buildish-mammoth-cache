@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
 import type { NormalizedGradleConfig } from '../../../src/config/types';
-import type { CiJobContext } from '../../../src/ci/types';
+import { gitHubStreamingFactories } from '../../../src/ci/github/streaming';
 
 function createTestGradleConfig(gradleUserHome: string): NormalizedGradleConfig {
   return {
@@ -37,6 +37,7 @@ function createTestGradleConfig(gradleUserHome: string): NormalizedGradleConfig 
     cacheKeyPrefix: 'test-prefix',
     cachePartitions: [],
     cacheSchemaVersion: 2,
+    cacheMaxDirectoryEntries: 100_000,
     cleanupEnabled: true,
     restoreCleanupMode: 'none',
     cacheGcMode: 'off',
@@ -46,27 +47,6 @@ function createTestGradleConfig(gradleUserHome: string): NormalizedGradleConfig 
     defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
     wrapperPropertiesFiles: [],
     gradleUserHome,
-  };
-}
-
-function createTestContext(tempDirectory: string | null): CiJobContext {
-  return {
-    eventName: 'push',
-    resolvedRefName: 'main',
-    safeRefName: 'main',
-    runnerOs: 'linux',
-    runnerArch: 'x64',
-    defaultBranch: 'main',
-    isPullRequest: false,
-    repository: 'test/repo',
-    workflowName: 'CI',
-    jobName: 'check',
-    runId: null,
-    runAttempt: null,
-    sourceRevision: null,
-    tempDirectory,
-    workspace: '/workspace',
-    actionPath: null,
   };
 }
 
@@ -82,7 +62,6 @@ describe('GradleBuildToolAdapter', () => {
   it('exposes the correct build tool metadata', () => {
     const adapter = new GradleBuildToolAdapter(createTestGradleConfig('/gradle-home'));
 
-    expect(adapter.getName()).toBe('Gradle');
     expect(adapter.getBuildToolId()).toBe('gradle');
     expect(adapter.getCacheRoot()).toBe('/gradle-home');
   });
@@ -112,11 +91,7 @@ describe('GradleBuildToolAdapter', () => {
   });
 
   it('reports "no builds captured" log line when the CI temp directory is not configured', async () => {
-    const gradleUserHome = await mkdtemp(path.join(os.tmpdir(), 'gradle-adapter-test-'));
-    temporaryDirectories.push(gradleUserHome);
-
-    const adapter = new GradleBuildToolAdapter(createTestGradleConfig(gradleUserHome));
-    const report = await adapter.collectBuildReport(createTestContext(null));
+    const report = await gitHubStreamingFactories().loadReport('gradle', null);
 
     expect(report.anyBuildFailed).toBe(false);
     expect(report.builds).toHaveLength(0);
@@ -124,9 +99,8 @@ describe('GradleBuildToolAdapter', () => {
   });
 
   it('formats log lines with version, outcome, config-cache state, and tasks for each build', async () => {
-    const gradleUserHome = await mkdtemp(path.join(os.tmpdir(), 'gradle-adapter-test-'));
     const runnerTemp = await mkdtemp(path.join(os.tmpdir(), 'gradle-adapter-runner-'));
-    temporaryDirectories.push(gradleUserHome, runnerTemp);
+    temporaryDirectories.push(runnerTemp);
 
     const buildResultsDir = path.join(runnerTemp, '.buildish-mammoth-cache', 'build-results');
     await mkdir(buildResultsDir, { recursive: true });
@@ -158,8 +132,7 @@ describe('GradleBuildToolAdapter', () => {
       'utf8',
     );
 
-    const adapter = new GradleBuildToolAdapter(createTestGradleConfig(gradleUserHome));
-    const report = await adapter.collectBuildReport(createTestContext(runnerTemp));
+    const report = await gitHubStreamingFactories().loadReport('gradle', runnerTemp);
 
     expect(report.anyBuildFailed).toBe(true);
     expect(report.builds).toHaveLength(2);
@@ -170,9 +143,8 @@ describe('GradleBuildToolAdapter', () => {
   });
 
   it('appends a scan URL suffix to the log line when a build scan was published', async () => {
-    const gradleUserHome = await mkdtemp(path.join(os.tmpdir(), 'gradle-adapter-test-'));
     const runnerTemp = await mkdtemp(path.join(os.tmpdir(), 'gradle-adapter-runner-'));
-    temporaryDirectories.push(gradleUserHome, runnerTemp);
+    temporaryDirectories.push(runnerTemp);
 
     const captureRoot = path.join(runnerTemp, '.buildish-mammoth-cache');
     await mkdir(path.join(captureRoot, 'build-results'), { recursive: true });
@@ -197,8 +169,7 @@ describe('GradleBuildToolAdapter', () => {
       'utf8',
     );
 
-    const adapter = new GradleBuildToolAdapter(createTestGradleConfig(gradleUserHome));
-    const report = await adapter.collectBuildReport(createTestContext(runnerTemp));
+    const report = await gitHubStreamingFactories().loadReport('gradle', runnerTemp);
 
     expect(report.logLines[0]).toContain('scan=https://scans.gradle.com/s/abc123');
   });

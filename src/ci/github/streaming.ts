@@ -39,9 +39,9 @@ export function gitHubStreamingFactories(
     loadReport: async (tool, tempDirectory) => {
       if (tool !== 'gradle')
         return { anyBuildFailed: false, warnings: [], summaryLines: [], logLines: [], builds: [] };
-      const { loadGradleBuildReport } = await import('../../build-tool/gradle/build-results');
-      const { buildReportFromGradleReport } = await import('../../build-tool/gradle/adapter');
-      return buildReportFromGradleReport(await loadGradleBuildReport({ tempDirectory }), []);
+      const { loadGradleBuildReport, buildReportFromGradleReport } =
+        await import('../../build-tool/gradle/build-results');
+      return buildReportFromGradleReport(await loadGradleBuildReport({ tempDirectory }));
     },
     reportSink: async () => {
       const { createGitHubReportSink } = await import('./report-sink');

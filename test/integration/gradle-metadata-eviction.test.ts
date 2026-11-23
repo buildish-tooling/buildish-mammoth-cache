@@ -14,19 +14,17 @@
  * limitations under the License.
  */
 
-import { test, expect } from 'vitest';
+import { afterEach, test, expect } from 'vitest';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import * as glob from '@actions/glob';
-import { cutoffJob } from '../support/cutoff-job';
-import { executeFinalizeAction } from '../../src/phases/finalize/flow';
-import {
-  readPartitionSnapshot,
-  restorePartitionSnapshot,
-} from '../../src/cache/partition-snapshots';
+import { streamingIntegrationJob } from '../support/streaming-integration';
+import { nativeCacheBackend, cleanupBaseFixtures } from '../cache/streaming/native-cache-fixture';
+
+afterEach(cleanupBaseFixtures);
 
 // Supply an already installed executable. This check never installs/downloads a Gradle distribution.
 const executable = process.env.BUILDISH_TEST_GRADLE_EXECUTABLE;
@@ -59,26 +57,32 @@ test.skipIf(!executable)(
       });
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('loopback listener');
-      const job = await cutoffJob(path.join(root, 'job'), {
-        inputs: {
-          'cache-partitions': JSON.stringify([
-            { id: 'data', includes: [] },
-            { id: 'modules', includes: ['caches/modules-*/files-*/**'] },
-            {
-              id: 'metadata',
-              includes: ['caches/modules-*/metadata-*/**'],
-              excludes: ['**/gc.properties'],
-              publication: 'single-writer',
-            },
-          ]),
-        },
+      const { backend: cache } = await nativeCacheBackend();
+      const inputs = {
+        'cache-partitions': JSON.stringify([
+          { id: 'modules', includes: ['caches/modules-*/files-*/**'] },
+          {
+            id: 'dependency-metadata',
+            includes: ['caches/modules-*/metadata-*/**'],
+            excludes: ['**/gc.properties'],
+            publication: 'single-writer',
+          },
+        ]),
+      };
+      const job = await streamingIntegrationJob({
+        root: path.join(root, 'seed'),
+        tool: 'gradle',
+        installedGradle: executable,
+        name: 'seed',
+        inputs,
+        cache,
       });
       await writeFile(
-        path.join(job.root, 'settings.gradle'),
+        path.join(job.workspace, 'settings.gradle'),
         "rootProject.name = 'metadata-eviction'\n",
       );
       await writeFile(
-        path.join(job.root, 'build.gradle'),
+        path.join(job.workspace, 'build.gradle'),
         `
 repositories { maven { url = uri('http://127.0.0.1:${address.port}'); allowInsecureProtocol = true } }
 configurations { libraries }
@@ -86,12 +90,12 @@ dependencies { libraries 'org.example:demo:1.0' }
 tasks.register('resolve') { doLast { println configurations.libraries.singleFile.text } }
 `,
       );
-      const run = async () => {
+      const run = async (job: Awaited<ReturnType<typeof streamingIntegrationJob>>) => {
         const result = await promisify(execFile)(
           executable!,
           ['--no-daemon', '--max-workers=2', 'resolve'],
           {
-            cwd: job.root,
+            cwd: job.workspace,
             env: { ...process.env, GRADLE_USER_HOME: job.home, GRADLE_OPTS: '', JAVA_OPTS: '' },
             timeout: 120_000,
             maxBuffer: 4 * 1024 * 1024,
@@ -99,26 +103,46 @@ tasks.register('resolve') { doLast { println configurations.libraries.singleFile
         );
         expect(result.stdout).toContain(artifact.toString());
       };
-      const prepared = await job.prepare();
-      await run();
-      await executeFinalizeAction(job.deps);
-      const model = prepared.bootstrap.cacheModel!;
-      const snapshot = await readPartitionSnapshot(model, 'metadata');
-      expect(snapshot!.manifest.files.some((e) => e.relativePath.endsWith('.bin'))).toBe(true);
-      // Model ordinary artifact eviction while keeping the actual captured resolution indexes.
-      await rm(path.join(job.home, 'caches/modules-2/files-2.1'), { recursive: true, force: true });
-      await restorePartitionSnapshot(model, snapshot!);
+      await job.prepare();
+      await run(job);
+      expect((await job.post()).outcome).toBe('published');
+      const reader = await streamingIntegrationJob({
+        root: path.join(root, 'reader'),
+        tool: 'gradle',
+        installedGradle: executable,
+        name: 'reader',
+        inputs: { ...inputs, 'read-only': 'true' },
+        cache,
+      });
+      for (const file of ['settings.gradle', 'build.gradle'])
+        await writeFile(
+          path.join(reader.workspace, file),
+          await readFile(path.join(job.workspace, file)),
+        );
+      await reader.prepare();
+      expect(reader.outputs['base-cache-restore-status']).toBe('current-lineage-hit');
+      expect(
+        await (
+          await glob.create(path.join(reader.home, 'caches/modules-2/metadata-*/**/*.bin'))
+        ).glob(),
+      ).not.toHaveLength(0);
+      // Evict only the artifact while keeping the restored resolution indexes.
+      await rm(path.join(reader.home, 'caches/modules-2/files-2.1'), {
+        recursive: true,
+        force: true,
+      });
       const before = artifactRequests;
-      await run();
+      await run(reader);
       expect(artifactRequests).toBeGreaterThan(before);
       const files = await (
-        await glob.create(path.join(job.home, 'caches/modules-2/files-2.1/**/*.jar'), {
+        await glob.create(path.join(reader.home, 'caches/modules-2/files-2.1/**/*.jar'), {
           implicitDescendants: false,
           followSymbolicLinks: false,
         })
       ).glob();
       expect(files).toHaveLength(1);
       expect(await readFile(files[0]!)).toEqual(artifact);
+      expect((await reader.post()).outcome).toBe('read-only');
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),

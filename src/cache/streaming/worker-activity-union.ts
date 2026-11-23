@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { directoryBreadthError } from './tree-state';
 import { WorkerNativeIndex } from './worker-native';
 import type { ActivityProjection } from './worker-activity';
 import type { OwnedStore, Reference } from './owned-store';
@@ -66,7 +67,7 @@ export async function writeSelectedActivity(
           for await (const edge of selected.children(lease.node)) {
             signal.throwIfAborted();
             if (++count > maxDirectoryEntries)
-              throw new Error('Managed directory breadth exceeded.');
+              throw directoryBreadthError(path, maxDirectoryEntries, 'worker activity merge');
             const entry = { name: edge[0] },
               kind = edge[1];
             if (kind !== 'file' && kind !== 'directory')
@@ -77,7 +78,7 @@ export async function writeSelectedActivity(
                 throw new Error('Conflicting selected native topology.');
             } else {
               if (names.size === maxDirectoryEntries)
-                throw new Error('Managed directory breadth exceeded.');
+                throw directoryBreadthError(path, maxDirectoryEntries, 'worker activity merge');
               const bytes = 128 + 4 * Buffer.byteLength(entry.name);
               budget.retain(bytes);
               charge += bytes;

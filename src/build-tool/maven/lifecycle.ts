@@ -25,9 +25,6 @@ export const mavenLifecycle: BuildToolLifecycle = Object.freeze({
   async quiesce() {
     return undefined;
   },
-  async verifyRecoveryConsumers(signal) {
-    signal.throwIfAborted();
-  },
   async removeKnownHooks() {
     return [];
   },

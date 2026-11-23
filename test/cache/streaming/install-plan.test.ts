@@ -212,7 +212,7 @@ it('bounds final merged directory breadth even when both separate inputs fit', a
   const input = await f.incoming('data', { 'data/c': 'new', 'data/d': 'new' });
   await expect(
     freezeInstallPlan(f.store, [input], f.budget, { maxDirectoryEntries: 3 }),
-  ).rejects.toThrow('output directory breadth');
+  ).rejects.toThrow('during install selection at "data" (cache-max-directory-entries=3)');
   expect(f.budget.retained).toBe(0);
 });
 it.skipIf(process.platform !== 'win32' && process.platform !== 'darwin')(

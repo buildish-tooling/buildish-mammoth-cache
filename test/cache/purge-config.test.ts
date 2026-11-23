@@ -20,7 +20,6 @@ import { parseCachePartitionsInput } from '../../src/config/shared';
 import { createCachePartitions } from '../../src/cache/model';
 import { resolveCacheModel, resolveModel } from '../../src/cache/streaming/model';
 import { LocalCodec } from '../../src/cache/streaming/local-schema';
-import { cutoffModelSchema } from '../../src/cache/cutoff-state';
 import { writeLocalStream, readLocalStream } from '../../src/cache/streaming/local-stream';
 import { WorkingBudget } from '../../src/cache/streaming/tree-state';
 import { rawSha, type Value } from '../../src/cache/streaming/encoding';
@@ -41,26 +40,22 @@ it('resolves inherited, disabled, replacement and custom purge configuration in 
     [{ id: 'data', purgeableGlobs: [] }, []],
     [{ id: 'data', purgeableGlobs: ['data/*.bak'] }, ['data/*.bak']],
   ] as const) {
-    const [part] = createCachePartitions(
-      '/cache',
-      parseCachePartitionsInput(JSON.stringify([input])),
-      [preset],
-    );
+    const [part] = createCachePartitions(parseCachePartitionsInput(JSON.stringify([input])), [
+      preset,
+    ]);
     expect(part.purgeableGlobs ?? []).toEqual(expected);
-    expect(part.relativeExcludeGlobs).toEqual(['data/ordinary', ...expected]);
-    if (expected.length) expect(part.ordinaryExcludeGlobs).toEqual(['data/ordinary']);
+    expect(part.relativeExcludeGlobs).toEqual(['data/ordinary']);
   }
-  expect(createCachePartitions('/cache', [{ id: 'data', includes: [] }], [preset])).toEqual([]);
+  expect(createCachePartitions([{ id: 'data', includes: [] }], [preset])).toEqual([]);
   const [custom] = createCachePartitions(
-    '/cache',
     parseCachePartitionsInput(
       '[{"id":"custom","includes":["custom/**"],"purgeableGlobs":["custom/*.tmp"]}]',
     ),
   );
   expect(custom.purgeableGlobs).toEqual(['custom/*.tmp']);
-  expect(custom.absoluteExcludeGlobs).toEqual(['/cache/custom/*.tmp']);
+  expect(custom.relativeExcludeGlobs).toEqual([]);
   expect(
-    createCachePartitions('/cache', [{ id: 'custom', includes: ['custom/**'] }])[0].purgeableGlobs,
+    createCachePartitions([{ id: 'custom', includes: ['custom/**'] }])[0].purgeableGlobs,
   ).toBeUndefined();
 });
 it.each(['../x', '/outside', '~/.x', '!data/x', 'data/{a,b}'])(
@@ -165,28 +160,13 @@ it('deduplicates matching claims, excludes purgeable payloads and refuses opaque
     ).toThrow('opaque');
 });
 
-it('round trips resolved rules in existing strict snapshots and exact modelRef streams', async () => {
-  const partitions = createCachePartitions('/cache', [], [preset], ['.mammoth/**']);
-  const frozen = {
-    cacheRoot: '/cache',
-    cacheFamilyKey: 'family',
-    currentRefToken: 'main',
-    currentRefLineagePrefix: 'family-main',
-    fallbackRefLineagePrefixes: [],
-    plannedGenerationId: 'writer',
-    runnerOs: 'linux',
-    runnerArch: 'x64',
-    safeRefName: 'main',
-    partitionFingerprint: 'id',
-    buildToolId: 'maven',
-    partitions,
-    includePaths: partitions.flatMap((p) => p.absoluteIncludeGlobs),
-    excludePaths: partitions.flatMap((p) => p.absoluteExcludeGlobs),
+it('round trips resolved rules in exact model reference streams', async () => {
+  const definition = {
+    buildToolId: 'maven' as const,
+    partitions: createCachePartitions([], [preset], ['.mammoth/**']),
     hardCacheExcludeGlobs: ['.mammoth/**'],
   };
-  const parsed = cutoffModelSchema.parse(frozen);
-  expect(parsed).toEqual(frozen);
-  const resolved = resolveCacheModel(parsed, 'purge-', 1),
+  const resolved = resolveCacheModel(definition, 'purge-', 1),
     codec = new LocalCodec({ ...localOptions(), model: resolved }),
     budget = new WorkingBudget();
   const records: Value[] = [
@@ -215,9 +195,8 @@ it('round trips resolved rules in existing strict snapshots and exact modelRef s
   );
   const changed = resolveCacheModel(
     {
-      ...parsed,
+      ...definition,
       partitions: createCachePartitions(
-        '/cache',
         [{ id: 'data', purgeableGlobs: [] }],
         [preset],
         ['.mammoth/**'],

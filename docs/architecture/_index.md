@@ -28,6 +28,6 @@ key generation, delta exchange protocol, and CI abstraction layer underpin both.
 behaviour is isolated behind a `BuildToolAdapter` interface so the shared phase logic never imports
 tool-specific code.
 
-The [streaming cache protocol draft](../dev/cache-protocol/) defines the proposed
-next incompatible wire format and lifecycle contract. It is unimplemented and does
-not replace the descriptions of released behavior in these architecture pages.
+These pages describe the unreleased development lifecycle. The
+[streaming cache protocol](../dev/cache-protocol/) defines its wire format,
+native storage and invocation handoff.

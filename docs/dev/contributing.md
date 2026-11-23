@@ -204,9 +204,8 @@ To add a new adapter (for example, for `sbt`), you need to:
 
 Create `src/build-tool/sbt/adapter.ts` and implement every method of the interface:
 
-- **`getName()`** — human-readable name shown in job summaries (e.g. `"sbt"`).
-- **`getBuildToolId()`** — stable lowercase machine-readable id baked into every cache manifest
-  (e.g. `"sbt"`). This can never be changed without invalidating all existing caches.
+- **`getBuildToolId()`** — stable identity bound into the cache model and lifecycle. Adding
+  a build tool requires extending the supported identities and validating its model rules.
 - **`getCacheRoot()`** — absolute path to the directory that should be cached (e.g.
   `$HOME/.sbt` or `$HOME/.ivy2/cache`). Read from the normalized action config.
 - **`getBuiltInPartitionPresets()`** — return the ordered list of cache partition presets
@@ -218,8 +217,8 @@ Create `src/build-tool/sbt/adapter.ts` and implement every method of the interfa
   version and log it.
 - **`installBuildHooks(context)`** — install any hooks that capture per-invocation build
   metadata (e.g. an init script). If your tool has no hook mechanism, return immediately.
-- **`collectBuildReport(context)`** — read the hook output, clean up installed hooks, and return
-  a `BuildReport` with Markdown summary lines, plain-text log lines, and per-build metadata.
+  Post hook cleanup, consumer quiescence and build reports belong to the tool
+  lifecycle and post factories. Extend those paths for a new tool as needed.
 
 ### 2. Add a config module
 
@@ -238,8 +237,9 @@ Create `src/build-tool/sbt/config.ts` following the pattern of `gradle/config.ts
 ### 3. Create CI entry-point files
 
 Create `src/ci/github/sbt/main.ts` and `src/ci/github/sbt/post.ts` following the Gradle or
-Maven entry-point files. These are thin wrappers that call `executePrepareAction` and
-`executeFinalizeAction` with an `sbt`-specific `buildToolAdapterFactory`.
+Maven entry-point files. These are thin wrappers around `runStreamingPrepare` and
+`runStreamingPost`, with tool-specific construction in prepare and deferred
+services in post.
 
 Add the two new bundles to `package.json`'s `bundle:github:sbt:main` and
 `bundle:github:sbt:post` scripts, and wire them in `bundle:github:sbt` and `bundle:github`.

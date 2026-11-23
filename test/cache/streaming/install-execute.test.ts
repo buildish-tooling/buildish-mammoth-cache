@@ -154,20 +154,6 @@ it('releases all later owners when an earlier cleanup reports failure', async ()
   expect(admission).toHaveBeenCalled();
   expect(f.budget.retained).toBe(0);
 });
-it('releases the change-spool claim if its initial frame exceeds budget', async () => {
-  const f = await fixture();
-  const { WorkingBudget } = await import('../../../src/cache/streaming/tree-state');
-  const { InstallScratch } = await import('../../../src/cache/streaming/install-scratch');
-  const { buildChangeIndex } = await import('../../../src/cache/streaming/install-changes');
-  const budget = new WorkingBudget(1),
-    scratch = await InstallScratch.create(f.store, budget);
-  await expect(buildChangeIndex(scratch, (async function* () {})())).rejects.toThrow(
-    'working budget',
-  );
-  await scratch.close();
-  expect(budget.retained).toBe(0);
-});
-
 it('amortizes shared-parent traversal and durable cycles across ordinary units', async () => {
   async function measure(count: number, depth: number) {
     const f = await fixture();

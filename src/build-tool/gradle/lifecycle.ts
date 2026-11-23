@@ -46,12 +46,6 @@ export function createGradleLifecycle(
       const { quiesceGradle } = await import('./consumers');
       return quiesceGradle(input, deps);
     },
-    async verifyRecoveryConsumers(signal) {
-      const { inspectGradleDaemons } = await import('./process-inspection');
-      const proof = await (deps.inspect ?? inspectGradleDaemons)(signal);
-      if (proof.remaining || proof.uncertain)
-        throw new Error(proof.reason ?? 'Recovery requires finished Gradle consumers.');
-    },
     async removeKnownHooks(root) {
       const { cleanupGradleBuildResultCapture } = await import('./build-results');
       return cleanupGradleBuildResultCapture(root);

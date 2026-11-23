@@ -27,6 +27,12 @@ import {
   type Unit,
 } from './schema';
 
+export function directoryBreadthError(path: string, limit: number, phase: string): Error {
+  return new Error(
+    `Managed directory breadth exceeded during ${phase} at ${JSON.stringify(path || '.')} (cache-max-directory-entries=${limit}).`,
+  );
+}
+
 export function decodedRecordCharge(bytes: number): number {
   return add(4096, bytes * 8);
 }
@@ -130,7 +136,8 @@ export class TreeState {
     name = Buffer.from(name).toString('utf8');
     const parent = this.frames[this.frames.length - 1];
     if (!parent) throw new Error('Missing parent directory.');
-    if (parent.children === this.maxEntries) throw new Error('Managed directory breadth exceeded.');
+    if (parent.children === this.maxEntries)
+      throw directoryBreadthError(parent.path, this.maxEntries, 'tree validation');
     if (directory) {
       if (
         parent.files.has(name) ||

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { directoryBreadthError } from './tree-state';
 import { workspaceRoot, workspaceKind } from '../immutable-workspaces';
 import type { Value } from './encoding';
 import type { ResolvedModel } from './model';
@@ -352,7 +353,7 @@ export async function selectInstall(
             }
           }
           if (survives && ++outputCount > maxDirectoryEntries)
-            throw new Error('Selected output directory breadth exceeded.');
+            throw directoryBreadthError(path, maxDirectoryEntries, 'install selection');
           if (child !== null) {
             tail = await scratch.append(
               ['selected-edge', tail, name, child, previousKind, desiredKind ?? previousKind],

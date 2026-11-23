@@ -119,12 +119,16 @@ export class WorkerSpool {
       if (!this.readers) this.scratch.releaseReadCache();
     }
   }
-  async *rows(signal: AbortSignal): AsyncGenerator<Value> {
-    for await (const batch of this.batches(signal))
-      for (const row of batch) {
-        signal.throwIfAborted();
-        yield row;
-      }
+  async *rows(signal: AbortSignal, onClose?: () => void): AsyncGenerator<Value> {
+    try {
+      for await (const batch of this.batches(signal))
+        for (const row of batch) {
+          signal.throwIfAborted();
+          yield row;
+        }
+    } finally {
+      onClose?.();
+    }
   }
   async appendBatch(values: readonly Value[], signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
@@ -154,6 +158,7 @@ export class WorkerSpool {
 }
 const memberSchema = z.tuple([z.literal('member'), z.enum(['file', 'unit']), pathSchema]);
 export class DiskMembership implements MembershipSpool {
+  private readonly readers = new Set<AsyncGenerator<Value>>();
   private constructor(
     private readonly store: OwnedStore,
     private readonly budget: WorkingBudget,
@@ -167,7 +172,11 @@ export class DiskMembership implements MembershipSpool {
   }
   async seal(signal: AbortSignal): Promise<() => AsyncIterable<Value>> {
     this.spool.seal(signal);
-    return () => this.spool.rows(signal);
+    return () => {
+      const reader = this.spool.rows(signal, () => this.readers.delete(reader));
+      this.readers.add(reader);
+      return reader;
+    };
   }
   async fork(channel: number, signal: AbortSignal): Promise<MembershipSpool> {
     signal.throwIfAborted();
@@ -180,6 +189,18 @@ export class DiskMembership implements MembershipSpool {
     return fork;
   }
   async dispose(): Promise<void> {
-    await this.spool.dispose();
+    // The rows read only owned local storage. Settle these readers before closing it.
+    try {
+      if (this.readers.size) {
+        const results = await Promise.allSettled(
+          [...this.readers].map((reader) => reader.return(undefined)),
+        );
+        const failed = results.find((result) => result.status === 'rejected');
+        if (failed?.status === 'rejected') throw failed.reason;
+      }
+    } finally {
+      this.readers.clear();
+      await this.spool.dispose();
+    }
   }
 }

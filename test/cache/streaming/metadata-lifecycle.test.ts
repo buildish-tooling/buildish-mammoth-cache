@@ -366,7 +366,6 @@ it.each(['standalone', 'distributed-aggregator'] as const)(
         quiesce: async () => {
           throw new Error('consumers remain');
         },
-        verifyRecoveryConsumers: async () => {},
         removeKnownHooks: async () => [],
       }),
     });

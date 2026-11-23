@@ -42,7 +42,7 @@ beforeEach(() => {
   vi.resetModules();
   for (const key of Object.keys(loads) as (keyof typeof loads)[]) loads[key] = 0;
 });
-it('executes only the needed modules across guard, Maven, cold recovery and cleanup routes', async () => {
+it('executes only the needed modules across guard, Maven, Gradle quiescence and cleanup routes', async () => {
   {
     await import('../../../src/phases/streaming/post');
     await import('../../../src/ci/github/streaming');
@@ -55,14 +55,13 @@ it('executes only the needed modules across guard, Maven, cold recovery and clea
     await tool.prepareCapture(undefined as never, { tempDirectory: 'temp' }, ordinary);
     expect(ordinary).toHaveBeenCalledTimes(1);
     expect(await tool.quiesce(undefined as never)).toBeUndefined();
-    await tool.verifyRecoveryConsumers(new AbortController().signal);
     expect(await tool.removeKnownHooks('root')).toEqual([]);
     expect(loads).toEqual({ gradle: 0, capture: 0, consumers: 0, process: 0, reports: 0 });
   }
   {
     const { resolveLifecycle } = await import('../../../src/build-tool/lifecycle');
-    await (await resolveLifecycle('gradle')).verifyRecoveryConsumers(new AbortController().signal);
-    expect(loads).toEqual({ gradle: 1, capture: 0, consumers: 0, process: 1, reports: 0 });
+    await (await resolveLifecycle('gradle')).quiesce(undefined as never);
+    expect(loads).toEqual({ gradle: 1, capture: 0, consumers: 1, process: 0, reports: 0 });
   }
   {
     const { gitHubStreamingFactories } = await import('../../../src/ci/github/streaming');
@@ -70,7 +69,7 @@ it('executes only the needed modules across guard, Maven, cold recovery and clea
     expect(await factories.removeHooks('old-root', 'maven')).toEqual([]);
     expect(loads.gradle).toBe(1);
     expect(await factories.removeHooks('old-root', 'gradle')).toEqual(['old-root']);
-    expect(loads).toEqual({ gradle: 1, capture: 0, consumers: 0, process: 1, reports: 1 });
+    expect(loads).toEqual({ gradle: 1, capture: 0, consumers: 1, process: 0, reports: 1 });
   }
 });
 it('rejects unsupported identity before resolution and wrong-tool factory results', async () => {

@@ -1,0 +1,145 @@
+#
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This recipe lives outside workflow discovery. Separately admit a fresh run before moving it.
+name: Distributed correctness graph
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed-revision:
+        type: string
+        required: true
+        description: Exact reviewed commit for this run
+permissions:
+  contents: read
+concurrency:
+  group: distributed-correctness-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  MAMMOTH_GRAPH_REVISION: ${{ inputs.reviewed-revision }}
+jobs:
+  worker:
+    if: ${{ false && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && github.ref == 'refs/heads/cache-metadata-redesign' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && github.sha == inputs.reviewed-revision }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux, os: ubuntu-26.04 }
+          - { platform: windows, os: windows-2025 }
+          - { platform: macos, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/it-setup
+        with:
+          java-version: '21'
+          maven: 'true'
+      - name: Expose existing Windows GnuPG
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
+      - name: Exercise production bundles
+        timeout-minutes: 15
+        uses: ./test/qualification/distributed-correctness
+        with:
+          stage: worker
+          platform: ${{ matrix.platform }}
+      - name: Preserve bounded correctness records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distributed-correctness-worker-${{ matrix.platform }}
+          path: build/distributed-correctness-results/
+          retention-days: 3
+          if-no-files-found: warn
+  aggregator:
+    if: ${{ false && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && github.ref == 'refs/heads/cache-metadata-redesign' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && github.sha == inputs.reviewed-revision && needs.worker.result == 'success' }}
+    needs: worker
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux, os: ubuntu-26.04 }
+          - { platform: windows, os: windows-2025 }
+          - { platform: macos, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/it-setup
+        with:
+          java-version: '21'
+          maven: 'true'
+      - name: Expose existing Windows GnuPG
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
+      - name: Exercise production bundles
+        timeout-minutes: 15
+        uses: ./test/qualification/distributed-correctness
+        with:
+          stage: aggregator
+          platform: ${{ matrix.platform }}
+      - name: Preserve bounded correctness records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distributed-correctness-aggregator-${{ matrix.platform }}
+          path: build/distributed-correctness-results/
+          retention-days: 3
+          if-no-files-found: warn
+  consumer:
+    if: ${{ false && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && github.ref == 'refs/heads/cache-metadata-redesign' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && github.sha == inputs.reviewed-revision && needs.aggregator.result == 'success' }}
+    needs: aggregator
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux, os: ubuntu-26.04 }
+          - { platform: windows, os: windows-2025 }
+          - { platform: macos, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/it-setup
+        with:
+          java-version: '21'
+          maven: 'true'
+      - name: Expose existing Windows GnuPG
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
+      - name: Exercise production bundles
+        timeout-minutes: 15
+        uses: ./test/qualification/distributed-correctness
+        with:
+          stage: consumer
+          platform: ${{ matrix.platform }}
+      - name: Preserve bounded correctness records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distributed-correctness-consumer-${{ matrix.platform }}
+          path: build/distributed-correctness-results/
+          retention-days: 3
+          if-no-files-found: warn

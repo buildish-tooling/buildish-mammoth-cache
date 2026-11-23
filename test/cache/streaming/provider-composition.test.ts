@@ -42,7 +42,7 @@ import {
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
 import { JOB_PREPARE_FAILED_STATE } from '../../../src/guard/job-single-run';
 import { createTestRuntimeHost } from '../../support/github-test-runtime';
-import { cutoffFixtureCi } from '../../support/cutoff-fixture';
+import { fixtureCi } from '../../support/ci-fixture';
 import { readGradleActionInputs } from '../../../src/build-tool/gradle/config';
 import { normalizeSharedActionConfig } from '../../../src/config/normalize';
 import { nativeCacheBackend, cleanupBaseFixtures } from './base-fixtures';
@@ -74,7 +74,7 @@ async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string
     info,
     warning,
   });
-  const ci = { ...cutoffFixtureCi(root, 'A'), tempDirectory: temp, sourceRevision: 'rev-1' },
+  const ci = { ...fixtureCi(root, 'A'), tempDirectory: temp, sourceRevision: 'rev-1' },
     config = normalizeSharedActionConfig(readGradleActionInputs(host), {
       phase: 'prepare',
       ciContext: ci,
@@ -87,7 +87,6 @@ async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string
     provision = vi.fn(async () => ({ items: [], warnings: [], additionalOutputs: {} })),
     hooks = vi.fn(async () => {});
   const adapter: BuildToolAdapter = {
-    getName: () => tool,
     getBuildToolId: () => tool,
     getCacheRoot: () => home,
     getBuiltInPartitionPresets: () => [
@@ -103,13 +102,6 @@ async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string
     getHardCacheExcludeGlobs: () => ['.mammoth/**', 'init.d/**', '**/*.lock'],
     provision,
     installBuildHooks: hooks,
-    collectBuildReport: async () => ({
-      anyBuildFailed: false,
-      warnings: [],
-      summaryLines: [],
-      logLines: [],
-      builds: [],
-    }),
   };
   const deps = {
     providerId: 'github',

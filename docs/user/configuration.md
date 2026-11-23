@@ -49,6 +49,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `allow-duplicate-dependent-delta-paths` | Gradle, Maven | `false`                                       | yes         | Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.  |
 | `cache-key-prefix`                      | Gradle, Maven | `buildish-mammoth-cache-`                     | yes         | Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically.                                         |
 | `cache-partitions`                      | Gradle, Maven | `event-dependent or unset`                    | yes         | JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.                                                                |
+| `cache-max-directory-entries`           | Gradle, Maven | `100000`                                      | yes         | Maximum direct entries per managed directory. Must be a positive safe integer. Defaults to 100000.                                                                           |
 | `cleanup-enabled`                       | Gradle, Maven | `true`                                        | yes         | Enables restore cleanup and timestamp garbage collection.                                                                                                                    |
 | `restore-cleanup-mode`                  | Gradle, Maven | `none`                                        | yes         | Restore-time cleanup mode: none or prune-managed.                                                                                                                            |
 | `cache-gc-mode`                         | Gradle, Maven | `timestamp`                                   | yes         | Managed-cache GC: timestamp uses file age and current-build activity; off disables deletion only.                                                                            |
@@ -119,8 +120,8 @@ runtime outputs, and these reference rows cannot silently diverge.
 - A repository config file may set `true`, but cannot set `false` to lower the pull-request safety
   floor. Only a direct workflow input can make that explicit trusted-workflow choice.
 - Prevents remote cache publication and workflow-artifact exchange.
-- Finalize skips cache activity scans, publication snapshot capture and replay checks. Activity
-  statistics are reported as unavailable; snapshot counts describe prepare, not post-build contents.
+- Post skips cache activity scans and publication. Activity
+  statistics are reported as unavailable. Snapshot counts describe prepare.
 - Local restore/extraction, snapshot replacement and integrity validation, provisioning, hooks,
   build reports and bounded lifecycle records remain active. Local cache files remain writable.
 
@@ -183,6 +184,23 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Custom partitions must have at least one include glob.
 - Hard safety excludes are always enforced even when a partition is overridden.
 
+### `cache-max-directory-entries`
+
+The default is `100000`. Set a positive safe integer as a workflow input or in
+`config-file`. A direct workflow value takes precedence. Main records the value
+for post so the same invocation uses one limit.
+
+The limit applies to direct children of each enumerated directory. Native
+listings count entries before filtering them. Merged and staged views also have
+per-directory bounds. A directory beyond the limit fails the affected phase
+with its logical path and the configured allowance. Narrow managed directories
+or increase the allowance when the diagnostic indicates directory breadth.
+
+The active name and decoded-record working budgets are independent of this
+setting. Wide, deep, long-name or high-fan-in workloads can exhaust those
+budgets at a lower entry count. This input gives no repository-wide file limit
+or process memory guarantee.
+
 ### `cleanup-enabled`
 
 - Default: `true`
@@ -214,9 +232,8 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Default: `none`
 - Supported values: `none`, `prune-managed`
 - `prune-managed` only acts after a base-cache hit.
-- It deletes files currently matched by the active managed partitions, then restores the exact
-  selected generation and its originally available partition objects again. A previously available
-  object disappearing during replay fails prepare; an originally missing partition remains cold.
+- It can remove managed leftovers covered by the selected, validated restore. A
+  missing object leaves that partition cold and supplies no cleanup authority.
 - It never deletes files outside the action-managed partition space.
 - It is intentionally an opt-in because it is more destructive and may increase restore time.
 

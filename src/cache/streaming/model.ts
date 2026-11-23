@@ -16,8 +16,8 @@
 
 import { z } from 'zod';
 import type { LocalOptions } from './local-schema';
-import { createCacheGlobMatcher } from '../manifest';
-import { validatePartitionConflictHandling, type CacheModel } from '../model';
+import { createCacheGlobMatcher } from '../glob';
+import { validatePartitionConflictHandling, type CacheModelDefinition } from '../model';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { canonical, encodeRecord, H, scalar, tuple as requireTuple, type Value } from './encoding';
 import {
@@ -134,8 +134,6 @@ function resolveModelWithProfiles(
       description: '',
       relativeIncludeGlobs: p[1],
       relativeExcludeGlobs: p[2],
-      absoluteIncludeGlobs: [],
-      absoluteExcludeGlobs: [],
       publication: p[3],
       ...(p[4] === null ? {} : { writer: p[4] }),
       ...(p[5] === 'default' ? {} : { conflictHandling: p[5] }),
@@ -232,7 +230,7 @@ export function sameModel(a: ResolvedModel, b: ResolvedModel): boolean {
 
 /** Resolve the existing normalized configuration once; freeze these exact rows in modelRef. */
 export function resolveCacheModel(
-  model: Pick<CacheModel, 'buildToolId' | 'hardCacheExcludeGlobs' | 'partitions'>,
+  model: CacheModelDefinition,
   prefix: string,
   schemaVersion: number,
 ): ResolvedModel {
@@ -245,7 +243,7 @@ export function resolveCacheModel(
       model.partitions.map((p) => [
         p.id,
         p.relativeIncludeGlobs,
-        p.ordinaryExcludeGlobs ?? p.relativeExcludeGlobs,
+        p.relativeExcludeGlobs,
         p.publication ?? 'aggregate',
         p.writer ?? null,
         p.conflictHandling ?? 'default',

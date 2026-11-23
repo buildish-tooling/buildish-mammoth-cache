@@ -14,122 +14,23 @@
  * limitations under the License.
  */
 
-import { createHash, randomUUID } from 'node:crypto';
-import path from 'node:path';
-
-import type { CiJobContext } from '../ci';
 import { isWorkspacePartition } from './immutable-workspaces';
-import type { BuildToolAdapter, BuiltInCachePartitionPreset } from '../build-tool/types';
+import type { BuiltInCachePartitionPreset } from '../build-tool/types';
 import type {
   ConfiguredCachePartitionInput,
-  NormalizedActionConfig,
   PartitionPublication,
   PartitionConflictHandling,
 } from '../config/types';
 
-const CACHE_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,512}$/;
-const GENERATION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
-const LOWERCASE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const REF_TOKEN_SLUG_LENGTH = 48;
-const IDENTITY_DIGEST_LENGTH = 12;
-const CONTENT_DIGEST_KEY_LENGTH = 12;
-
-/**
- * Fully derived cache identity and partition metadata for a single job execution.
- *
- * This object is the handoff point between bootstrap-time environment discovery and later
- * cache restore/save or delta-manifest logic.
- */
-export interface CacheModel {
-  /**
-   * Stable action-owned key for structurally compatible cache states.
-   *
-   * Ref and immutable generation identity are deliberately excluded.
-   */
-  readonly cacheFamilyKey: string;
-  /** Collision-resistant token for the provider-resolved current ref. */
-  readonly currentRefToken: string;
-  /** Prefix used to restore or save immutable generations for the current ref. */
-  readonly currentRefLineagePrefix: string;
-  /** Ordered fallback lineage prefixes, currently limited to the repository default branch. */
-  readonly fallbackRefLineagePrefixes: readonly string[];
-  /** Execution-unique generation identifier derived for this writer invocation. */
-  readonly plannedGenerationId: string;
-  /**
-   * Normalized runner operating system, lower-cased by the CI adapter.
-   *
-   * Typical values include `linux`, `windows`, and `macos`.
-   */
-  readonly runnerOs: string;
-  /**
-   * Normalized runner architecture, lower-cased by the CI adapter.
-   *
-   * Typical values include `x64`, `arm64`, and `x86`.
-   */
-  readonly runnerArch: string;
-  /**
-   * Ref name sanitized for safe cache-key usage.
-   *
-   * This is derived by the CI adapter and excludes path separators or other cache-unsafe
-   * characters.
-   */
-  readonly safeRefName: string;
-  /**
-   * Stable digest of the resolved active cache partition layout.
-   *
-   * The fingerprint changes when partition order, includes, or excludes change. It is part of the
-   * cache family, so different cache layouts do not collide.
-   */
-  readonly partitionFingerprint: string;
-  /**
-   * Stable machine-readable build tool identifier from the active {@link BuildToolAdapter}.
-   *
-   * Embedded in every cache manifest so that a manifest produced by one build tool (e.g. `'gradle'`)
-   * is rejected with a clear error when read by a different build tool (e.g. `'maven'`).
-   */
-  readonly buildToolId: string;
-  /**
-   * Absolute path to the build tool's user home / cache root directory.
-   *
-   * Provided by the active {@link BuildToolAdapter}. Used as the base for all relative globs in
-   * the partition definitions and as the root for manifest capture and delta application.
-   */
-  readonly cacheRoot: string;
-  /**
-   * Ordered logical cache partitions that make up the build tool cache model.
-   *
-   * Contains the active built-in partitions plus any custom partitions after overrides and opt-outs
-   * have been resolved.
-   */
-  readonly partitions: readonly CachePartitionDefinition[];
-  /**
-   * Absolute include-globs aggregated from all partitions.
-   *
-   * These are passed to cache and filesystem operations in the listed order.
-   */
-  readonly includePaths: readonly string[];
-  /**
-   * Absolute exclude-globs aggregated and deduplicated from all partitions.
-   *
-   * Always includes the shared exclusions for configuration-cache content and `*.lock` files.
-   */
-  readonly excludePaths: readonly string[];
-  /** Adapter hard excludes, retained separately for complete-unit validation. */
+export interface CacheModelDefinition {
+  readonly buildToolId: 'gradle' | 'maven';
   readonly hardCacheExcludeGlobs: readonly string[];
+  readonly partitions: readonly CachePartitionDefinition[];
 }
 
-/**
- * Describes one logical slice of build tool cache content that should participate in cache
- * restore/save and later delta computation.
- *
- * Relative globs are stable identifiers for manifests and tests, while absolute globs are ready
- * to pass to filesystem or cache APIs for the current {@link CacheModel.cacheRoot}.
- */
 export interface CachePartitionDefinition {
   /** Resolved deletion rules, distinct from preserve-only exclusions. */
   readonly purgeableGlobs?: readonly string[];
-  /** Ordinary/hard exclusions before automatic purge upload filtering, when purging is configured. */
-  readonly ordinaryExcludeGlobs?: readonly string[];
   /** Effective default is omitted to preserve existing compatibility identities. */
   readonly conflictHandling?: Exclude<PartitionConflictHandling, 'default'>;
   /** Defaults to aggregation when absent. Single-writer partitions travel as complete snapshots. */
@@ -146,7 +47,7 @@ export interface CachePartitionDefinition {
   /**
    * Partition include-globs relative to the build tool's cache root.
    *
-   * These remain stable across machines and are preferred for manifests and tests.
+   * These remain stable across machines and contribute to the model identity.
    */
   readonly relativeIncludeGlobs: readonly string[];
   /**
@@ -156,180 +57,9 @@ export interface CachePartitionDefinition {
    * partition-specific excludes from the built-in preset or user override.
    */
   readonly relativeExcludeGlobs: readonly string[];
-  /**
-   * Absolute include-globs rooted under the effective cache root.
-   *
-   * These are the concrete paths used by cache restore/save operations for the current runner.
-   */
-  readonly absoluteIncludeGlobs: readonly string[];
-  /**
-   * Absolute exclude-globs rooted under the effective cache root.
-   *
-   * These mirror `relativeExcludeGlobs` after joining against the cache root.
-   */
-  readonly absoluteExcludeGlobs: readonly string[];
 }
 
-/** Optional injection points for cache-model creation. */
-export interface CacheModelOptions {
-  /** Optional random UUID source used when provider run identity is unavailable. */
-  readonly randomUuid?: () => string;
-}
-
-/** One immutable full-snapshot cache generation ready to be saved. */
-export interface CacheGeneration {
-  /** Cache family shared by compatible generations. */
-  readonly cacheFamilyKey: string;
-  /** Ref lineage under which the generation is published. */
-  readonly lineagePrefix: string;
-  /** Execution-unique writer identifier. */
-  readonly generationId: string;
-  /** SHA-256 digest of the frozen publication decisions. */
-  readonly contentDigest: string;
-  /** Complete immutable backend key. */
-  readonly key: string;
-}
-
-/**
- * Derives the cache key coordinates and partition definitions for the current job.
- */
-export async function createCacheModel(
-  config: NormalizedActionConfig,
-  ciContext: CiJobContext,
-  adapter: BuildToolAdapter,
-  options: CacheModelOptions = {},
-): Promise<CacheModel> {
-  const cacheRoot = adapter.getCacheRoot();
-  const partitions = createCachePartitions(
-    cacheRoot,
-    config.cachePartitions,
-    adapter.getBuiltInPartitionPresets(),
-    adapter.getHardCacheExcludeGlobs(),
-  );
-  validatePartitionConflictHandling(adapter.getBuildToolId(), partitions);
-  const partitionFingerprint = createPartitionFingerprint(
-    partitions,
-    adapter.getHardCacheExcludeGlobs(),
-  );
-  const buildToolId = adapter.getBuildToolId();
-  const cacheFamilyKey = renderCacheFamilyKey(config, buildToolId, partitionFingerprint);
-  const currentRefToken = createCacheRefToken(ciContext.resolvedRefName);
-  const currentRefLineagePrefix = createCacheRefLineagePrefix(cacheFamilyKey, currentRefToken);
-  const defaultBranchRefToken = createCacheRefToken(ciContext.defaultBranch);
-  const fallbackRefLineagePrefixes =
-    defaultBranchRefToken === currentRefToken
-      ? []
-      : [createCacheRefLineagePrefix(cacheFamilyKey, defaultBranchRefToken)];
-  const plannedGenerationId = createPlannedGenerationId(
-    ciContext,
-    options.randomUuid ?? randomUUID,
-  );
-
-  return {
-    cacheFamilyKey,
-    currentRefToken,
-    currentRefLineagePrefix,
-    fallbackRefLineagePrefixes,
-    plannedGenerationId,
-    buildToolId,
-    cacheRoot,
-    runnerOs: ciContext.runnerOs,
-    runnerArch: ciContext.runnerArch,
-    safeRefName: ciContext.safeRefName,
-    partitionFingerprint,
-    hardCacheExcludeGlobs: adapter.getHardCacheExcludeGlobs(),
-    partitions,
-    includePaths: partitions.flatMap((partition) => partition.absoluteIncludeGlobs),
-    excludePaths: deduplicatePaths(
-      partitions.flatMap((partition) => partition.absoluteExcludeGlobs),
-    ),
-  };
-}
-
-/**
- * Renders the action-owned compatibility family for immutable cache generations.
- */
-export function renderCacheFamilyKey(
-  config: NormalizedActionConfig,
-  buildToolId: string,
-  partitionFingerprint: string,
-): string {
-  const cacheFamilyKey = [
-    `${config.cacheKeyPrefix}${buildToolId}`,
-    `v${config.cacheSchemaVersion}`,
-    'partitioned-v3',
-    partitionFingerprint,
-  ].join('-');
-
-  validateCacheKey(cacheFamilyKey, 'cache family key');
-  return cacheFamilyKey;
-}
-
-/**
- * Creates a readable, collision-resistant cache token for a provider-resolved ref.
- *
- * The digest is computed from the trimmed raw ref before lossy slugging, so refs that differ only
- * by case, punctuation, or content beyond the readable prefix never share a lineage.
- */
-export function createCacheRefToken(refName: string): string {
-  const normalizedRefName = refName.trim() || 'unknown-ref';
-  const readableSlug = normalizedRefName
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/gu, '-')
-    .replace(/-+/gu, '-')
-    .replace(/^-|-$/gu, '')
-    .slice(0, REF_TOKEN_SLUG_LENGTH)
-    .replace(/^-|-$/gu, '');
-  const digest = sha256Hex(normalizedRefName).slice(0, IDENTITY_DIGEST_LENGTH);
-
-  return `${readableSlug || 'unknown-ref'}-${digest}`;
-}
-
-/** Creates the immutable-generation prefix for one cache family and ref token. */
-export function createCacheRefLineagePrefix(cacheFamilyKey: string, refToken: string): string {
-  const lineagePrefix = `${cacheFamilyKey}-ref-${refToken}-gen-`;
-  validateCacheKey(lineagePrefix, 'cache ref lineage prefix');
-  return lineagePrefix;
-}
-
-/** Creates the complete immutable cache key for a frozen publication decision digest. */
-export function createCacheGeneration(
-  cacheModel: Pick<
-    CacheModel,
-    'cacheFamilyKey' | 'currentRefLineagePrefix' | 'plannedGenerationId'
-  >,
-  contentDigest: string,
-): CacheGeneration {
-  if (!LOWERCASE_SHA256_PATTERN.test(contentDigest)) {
-    throw new Error('Cache generation content digest must be a lowercase SHA-256 value.');
-  }
-  if (!GENERATION_ID_PATTERN.test(cacheModel.plannedGenerationId)) {
-    throw new Error('Cache generation ID contains unsupported characters or is too long.');
-  }
-
-  const key = `${cacheModel.currentRefLineagePrefix}${cacheModel.plannedGenerationId}-${contentDigest.slice(0, CONTENT_DIGEST_KEY_LENGTH)}`;
-  validateCacheKey(key, 'cache generation key');
-
-  return {
-    cacheFamilyKey: cacheModel.cacheFamilyKey,
-    lineagePrefix: cacheModel.currentRefLineagePrefix,
-    generationId: cacheModel.plannedGenerationId,
-    contentDigest,
-    key,
-  };
-}
-
-/**
- * Computes the build tool cache partitions used by cache restore/save and delta tracking.
- *
- * Rules:
- * - built-ins are considered in stable preset order
- * - built-in overrides replace the preset include/exclude lists entirely
- * - built-ins with empty effective includes are disabled
- * - custom partitions are appended in declaration order and must keep at least one include glob
- */
 export function createCachePartitions(
-  cacheRoot: string,
   configuredPartitions: readonly ConfiguredCachePartitionInput[] = [],
   builtInPresets: readonly BuiltInCachePartitionPreset[] = [],
   hardCacheExcludeGlobs: readonly string[] = [],
@@ -354,7 +84,6 @@ export function createCachePartitions(
         preset.id,
         preset.displayName,
         preset.description,
-        cacheRoot,
         includeGlobs,
         deduplicatePaths(override?.excludes ?? preset.relativeExcludeGlobs),
         hardCacheExcludeGlobs,
@@ -381,7 +110,6 @@ export function createCachePartitions(
         partition.id,
         `Custom partition '${partition.id}'`,
         `User-defined build tool cache partition '${partition.id}'.`,
-        cacheRoot,
         deduplicatePaths(partition.includes),
         deduplicatePaths(partition.excludes ?? []),
         hardCacheExcludeGlobs,
@@ -400,7 +128,6 @@ function createPartition(
   id: CachePartitionDefinition['id'],
   displayName: string,
   description: string,
-  cacheRoot: string,
   relativeIncludeGlobs: readonly string[],
   partitionRelativeExcludeGlobs: readonly string[],
   hardCacheExcludeGlobs: readonly string[],
@@ -413,11 +140,10 @@ function createPartition(
     throw new Error(`Partition '${id}' writer requires single-writer publication.`);
   const deduplicatedIncludeGlobs = deduplicatePaths(relativeIncludeGlobs);
   const ordinaryExcludeGlobs = deduplicatePaths([
-      ...hardCacheExcludeGlobs,
-      ...partitionRelativeExcludeGlobs,
-    ]),
-    purge = deduplicatePaths(purgeableGlobs),
-    relativeExcludeGlobs = deduplicatePaths([...ordinaryExcludeGlobs, ...purge]);
+    ...hardCacheExcludeGlobs,
+    ...partitionRelativeExcludeGlobs,
+  ]);
+  const purge = deduplicatePaths(purgeableGlobs);
 
   return {
     id,
@@ -426,68 +152,14 @@ function createPartition(
     ...(conflictHandling && conflictHandling !== 'default' ? { conflictHandling } : {}),
     displayName,
     description,
-    ...(purge.length ? { purgeableGlobs: purge, ordinaryExcludeGlobs } : {}),
+    ...(purge.length ? { purgeableGlobs: purge } : {}),
     relativeIncludeGlobs: deduplicatedIncludeGlobs,
-    relativeExcludeGlobs,
-    absoluteIncludeGlobs: deduplicatedIncludeGlobs.map((glob) => path.join(cacheRoot, glob)),
-    absoluteExcludeGlobs: relativeExcludeGlobs.map((glob) => path.join(cacheRoot, glob)),
+    relativeExcludeGlobs: ordinaryExcludeGlobs,
   };
-}
-
-function createPartitionFingerprint(
-  partitions: readonly CachePartitionDefinition[],
-  hardCacheExcludeGlobs: readonly string[],
-): string {
-  // Include the hard excludes and fully resolved ordered partition layout so cache keys diverge
-  // whenever the managed cache surface changes.
-  const serializedLayout = JSON.stringify({
-    hardExcludes: hardCacheExcludeGlobs,
-    partitions: partitions.map((partition) => ({
-      id: partition.id,
-      includes: partition.relativeIncludeGlobs,
-      excludes: partition.relativeExcludeGlobs,
-      ...(partition.purgeableGlobs?.length
-        ? {
-            purgeableGlobs: partition.purgeableGlobs,
-            ordinaryExcludes: partition.ordinaryExcludeGlobs,
-          }
-        : {}),
-      publication: partition.publication ?? 'aggregate',
-      writer: partition.writer ?? null,
-      ...(partition.conflictHandling ? { conflictHandling: partition.conflictHandling } : {}),
-    })),
-  });
-
-  return createHash('sha256').update(serializedLayout).digest('hex').slice(0, 16);
 }
 
 function deduplicatePaths(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
-}
-
-function createPlannedGenerationId(
-  ciContext: CiJobContext,
-  randomUuidSource: () => string,
-): string {
-  if (ciContext.runId === null || ciContext.runAttempt === null) {
-    return `uuid-${randomUuidSource()}`;
-  }
-
-  const jobIdentity = [ciContext.repository, ciContext.workflowName, ciContext.jobName].join('\0');
-  const jobDigest = sha256Hex(jobIdentity).slice(0, IDENTITY_DIGEST_LENGTH);
-  return `run-${ciContext.runId}-attempt-${ciContext.runAttempt}-job-${jobDigest}`;
-}
-
-function validateCacheKey(value: string, label: string): void {
-  if (!CACHE_KEY_PATTERN.test(value)) {
-    throw new Error(
-      `Resolved ${label} contains unsupported characters or exceeds the 512 character limit.`,
-    );
-  }
-}
-
-function sha256Hex(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
 }
 
 /** Validate again when restoring persisted models, not only when parsing user inputs. */

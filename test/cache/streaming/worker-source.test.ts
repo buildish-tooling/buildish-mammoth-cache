@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdir, writeFile, rm, readdir, rename, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readdir, rename, readFile, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { Writable } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -28,6 +28,11 @@ import {
   freezeSources as freeze,
   cleanupSourceFixtures,
 } from './worker-source-fixtures';
+import {
+  observationFixture,
+  captureFixtureObservations,
+  executeFixtureGc,
+} from './observation-fixtures';
 afterEach(cleanupSourceFixtures);
 const signal = () => new AbortController().signal;
 async function guarded(...args: Parameters<typeof WorkerSources.create>) {
@@ -86,6 +91,90 @@ it('routes a real frozen tree once, reads selected bodies only during encoding, 
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });
+it('keeps owned empty descendants only in selected complete workspace channels', async () => {
+  const f = await observationFixture('gradle', { role: 'distributed-worker' });
+  const unchanged = 'caches/transforms-4/' + 'a'.repeat(32);
+  const changed = 'caches/transforms-4/' + 'b'.repeat(32);
+  const used = 'caches/transforms-4/' + 'c'.repeat(32);
+  const empty = '/transformed/nested/empty';
+  try {
+    for (const root of [unchanged, changed, used]) {
+      await f.files('', {
+        [root + '/metadata.bin']: 'metadata',
+        [root + '/results.bin']: 'results',
+      });
+      await mkdir(f.store.root.resolve(root + empty), { recursive: true });
+    }
+    await f.files('', { 'data/changed': 'ordinary' });
+    const changedTime = Math.ceil(Date.now() / 1000) + 1200;
+    for (const file of [changed + '/metadata.bin', 'data/changed'])
+      await utimes(f.store.root.resolve(file), changedTime, changedTime);
+    await utimes(f.store.root.resolve(used + '/metadata.bin'), changedTime, Date.now() / 1000 - 1);
+    await captureFixtureObservations(f.store, { budget: f.budget });
+    const { owner } = await executeFixtureGc(f.store, { budget: f.budget });
+    const source = await WorkerSources.create(f.store, { survivors: owner }, f.budget);
+    try {
+      const chunks: Buffer[] = [];
+      const paths: string[] = [];
+      const options = {
+        model: f.model,
+        context: f.store.codec.options.context,
+        authorizedSnapshots: source.snapshots,
+        budget: f.budget,
+      };
+      await writeWorkerArchive(
+        new Writable({
+          write(chunk, _encoding, callback) {
+            chunks.push(Buffer.from(chunk));
+            callback();
+          },
+        }),
+        {
+          ...options,
+          membership: await DiskMembership.create(f.store, f.budget),
+          snapshots: source.snapshots,
+          assertStable: (signal) => source.assertStable(signal),
+        },
+        async function* (signal) {
+          for await (const event of source.events(signal)) {
+            if ('path' in event) paths.push(event.path);
+            yield event;
+          }
+        },
+      );
+      const bodies: string[] = [],
+        usage: string[] = [];
+      await readWorkerArchive(byteSource(Buffer.concat(chunks)), {
+        ...options,
+        membership: await DiskMembership.create(f.store, f.budget),
+        async event(value) {
+          const row = tuple(value);
+          if (row[0] === 'used-unit-open') usage.push(String(row[3]));
+        },
+        async consumeFile({ body, path: file }) {
+          bodies.push(file);
+          for await (const chunk of body) void chunk;
+        },
+      });
+      expect(usage).toEqual([used]);
+      expect(bodies.some((file) => file.startsWith(used))).toBe(false);
+      expect(bodies).toContain(changed + '/results.bin');
+      expect(bodies).toContain('data/changed');
+      expect(paths).toContain(changed + empty);
+      expect(paths).toContain(used + empty);
+      expect(paths).toContain('data/changed');
+      expect(paths.some((file) => file.startsWith(unchanged))).toBe(false);
+      expect(source.work.listings).toBe(0);
+    } finally {
+      await source.dispose();
+    }
+  } finally {
+    await f.finish();
+    await f.close();
+  }
+  expect(f.budget.retained).toBe(0);
+});
+
 it('accepts exactly proved GC removals and rejects missing progress, extra members and retained replacements', async () => {
   const f = await fixture(),
     view = await freeze(f, 'd/b');
@@ -131,6 +220,45 @@ it('seals independent disk membership forks, verifies replay integrity and clean
   const planning = path.join(f.root, f.store.prefix, 'planning');
   expect(await readdir(planning)).toEqual([]);
   expect(await readFile(path.join(f.root, 'd/a'), 'utf8')).toBe('abc');
+});
+
+it('preserves an aborted writer cause while retiring a paused local membership replay', async () => {
+  const f = await fixture();
+  const view = await freeze(f);
+  const source = await WorkerSources.create(f.store, view, f.budget);
+  const failure = new Error('Fixture rejected usage after the aggregate channel');
+  const sink = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  try {
+    let channels = 0;
+    const result = writeWorkerArchive(
+      sink,
+      {
+        model: f.model,
+        context: f.store.codec.options.context,
+        authorizedSnapshots: source.snapshots,
+        budget: f.budget,
+        membership: await DiskMembership.create(f.store, f.budget),
+        snapshots: source.snapshots,
+        assertStable: (signal) => source.assertStable(signal),
+      },
+      async function* (signal) {
+        for await (const event of source.events(signal)) {
+          if (event.type === 'channel-open' && ++channels === 2) throw failure;
+          yield event;
+        }
+      },
+    );
+    await expect(result).rejects.toBe(failure);
+  } finally {
+    await source.dispose();
+    await f.finish();
+  }
+  expect(f.budget.retained).toBe(0);
+  expect(await readdir(f.store.root.resolve(f.store.prefix + 'planning'))).toEqual([]);
 });
 
 it('keeps meaningful empty aggregate directories and complete workspace markers', async () => {
@@ -183,28 +311,43 @@ it('keeps meaningful empty aggregate directories and complete workspace markers'
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });
-it('accepts deleted workspace with protected survivors and rejects unrelated ancestor changes', async () => {
-  const f = await fixture(),
-    unit = 'caches/transforms-4/' + 'a'.repeat(32);
-  await mkdir(path.join(f.root, unit, 'transformed'), { recursive: true });
-  await writeFile(path.join(f.root, unit, 'keep.lock'), 'protected');
-  await writeFile(path.join(f.root, unit, 'metadata.bin'), 'm');
-  await writeFile(path.join(f.root, unit, 'results.bin'), 'r');
-  const view = await freeze(f, 'remove-unit', unit),
-    sources = await WorkerSources.create(f.store, view, f.budget);
-  for await (const e of sources.events(signal())) {
-    expect(e.type).not.toBe('unit-open');
-    if (e.type === 'file') for await (const b of e.bytes) void b;
+it('accepts GC survivors but rejects a changed ancestor of a selected workspace', async () => {
+  const f = await observationFixture('gradle', { role: 'distributed-worker' });
+  const removed = 'caches/transforms-4/' + 'a'.repeat(32);
+  const selected = 'caches/transforms-4/' + 'b'.repeat(32);
+  try {
+    for (const unit of [removed, selected]) {
+      await mkdir(f.store.root.resolve(unit + '/transformed'), { recursive: true });
+      await f.files('', { [unit + '/metadata.bin']: 'm', [unit + '/results.bin']: 'r' });
+    }
+    await f.files('', { [removed + '/keep.lock']: 'protected' });
+    for (const file of ['metadata.bin', 'results.bin'])
+      await utimes(f.store.root.resolve(removed + '/' + file), 1, 1);
+    const changedTime = Math.ceil(Date.now() / 1000) + 1200;
+    await utimes(f.store.root.resolve(selected + '/metadata.bin'), changedTime, changedTime);
+    await captureFixtureObservations(f.store, { budget: f.budget });
+    const { owner } = await executeFixtureGc(f.store, { budget: f.budget });
+    const view = { survivors: owner };
+    const sources = await WorkerSources.create(f.store, view, f.budget);
+    try {
+      const opened: string[] = [];
+      for await (const event of sources.events(signal())) {
+        if (event.type === 'unit-open') opened.push(event.unit[1]);
+        if (event.type === 'file') for await (const bytes of event.bytes) void bytes;
+      }
+      expect(opened).toEqual([selected]);
+      expect(await readFile(f.store.root.resolve(removed + '/keep.lock'), 'utf8')).toBe(
+        'protected',
+      );
+    } finally {
+      await sources.dispose();
+    }
+    await rm(f.store.root.resolve(removed), { recursive: true });
+    await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
+  } finally {
+    await f.finish();
+    await f.close();
   }
-  await sources.dispose();
-  await rm(path.join(f.root, unit), { recursive: true });
-  await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
-  await f.finish();
-  expect(f.budget.retained).toBe(0);
-  await mkdir(path.join(f.root, unit), { recursive: true });
-  await writeFile(path.join(f.root, unit, 'new.lock'), 'unexpected');
-  await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
-  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 

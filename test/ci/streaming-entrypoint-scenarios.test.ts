@@ -381,3 +381,20 @@ it.each(['maven', 'gradle'] as const)(
   },
   30000,
 );
+
+it.each(['maven', 'gradle'] as const)(
+  'actual %s post enforces the directory limit frozen by main',
+  async (tool) => {
+    const job = await entrypointJob(root, tool, 'directory-limit', {
+      ...inputs,
+      'cache-max-directory-entries': '4',
+    });
+    await job.run('main');
+    for (let n = 0; n < 5; n++) await job.write('data/shared/' + n, 'retained');
+    await expect(job.run('post', { 'INPUT_CACHE-MAX-DIRECTORY-ENTRIES': '100' })).rejects.toThrow(
+      /during native walk at "data\/shared" \(cache-max-directory-entries=4\)/u,
+    );
+    expect(await readFile(path.join(job.home, 'data/shared/4'), 'utf8')).toBe('retained');
+    expect((await job.trace()).some(([event]) => event === 'cache-save')).toBe(false);
+  },
+);

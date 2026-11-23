@@ -22,31 +22,22 @@ limitations under the License.
 
 ## Status and ownership
 
-**Draft specification for an incompatible, unreleased format.** Streaming
-prepare/build/post composition is implemented, including worker processing,
-native-base/generation acquisition, GC, rename-only relocation/return, publication
-and same-operation return, and Gradle invocation capture/shutdown with provider integration.
-The unreleased Gradle/Maven Action source delegates now select this lifecycle.
-Existing release tags retain their published implementation; incompatible release
-exposure remains separate work.
+This describes the implemented, incompatible development protocol for the two
+GitHub Actions. The profiles below have their own versions. Use a compatible
+revision across every cooperating job. Old cache families start cold.
 
-Integrated review, complete-pipeline resource/platform qualification, release
-cleanup and final cutover review remain release gates. Implementation does not
-establish large-cache scale, throughput or RSS/paging qualification, or additional
-platform support. This page does not describe the released worker format or
-announce availability. The profile names below identify the proposed protocol,
-independently of the Mammoth release number. Mixed old/new workers are unsupported;
-old base caches start cold under a new cache family. All cooperating jobs must
-upgrade together.
+The product contract includes dedicated roots, same-operation source return and
+bounded metadata work. Throughput, memory residency and the full distributed
+platform matrix depend on separate evidence.
 
 This file, `docs/dev/cache-protocol.md`, is the canonical developer reference for
 the streaming wire and protocol contract. Keep it in the versioned site docs and
-update it with any change to serialization, acceptance, ownership or recovery rules.
+update it with any change to serialization, acceptance, ownership or retained-state rules.
 Implementation must follow the documented contract; do not leave a different format
 specified only in source code, tests, investigation notes or a pull request.
 
 Implementation comments at serializers, parsers, digest projections, merge
-boundaries and publication/recovery transitions **must reference this file and the
+boundaries and publication or cleanup transitions **must reference this file and the
 relevant heading anchor**. For example:
 
 ```typescript
@@ -59,9 +50,8 @@ site URL. Update these references when sections move. These references keep the 
 to the same contract.
 
 This page and the linked [native-base/generation](../native-base-protocol/) and
-[local lifecycle](../cache-lifecycle-protocol/) specifications define the reviewable
-version-1 contract, including exact schemas, examples and failure cases. No format
-is ready to ship until its parser, lifecycle and platform qualification passes. See also the [architecture overview](../../architecture/)
+[local lifecycle](../cache-lifecycle-protocol/) specifications define the active contract, including exact schemas, examples
+and failure cases. See also the [architecture overview](../../architecture/)
 and [threat model](../../threat-model/).
 
 ## Profiles and common rules
@@ -196,12 +186,11 @@ before exposing Q under the [filesystem recovery contract](../portability/filesy
 is separate from the one subsequent TAR/gzip parse; the SDK's computed actual hash
 is not exposed by its download result.
 
-Upload retries use exactly the frozen path/name/bytes. If upload outcome is
-ambiguous, exact-name readback must match size and reported SHA-256; without a
-reported digest, download/hash the raw bytes and compare with the frozen package.
-Never refreeze live sources to recover an upload. The backend API has no cancellation
-hook: an in-flight SDK call must settle before its local staging is retired, then
-cancellation is observed. Local streams/readers remain cancellation-aware.
+Upload uses one attempt with the immutable package. Success requires a direct
+positive receipt binding the name, ID, size and any reported digest. An ambiguous
+or failed attempt retains its package and reports the path. The backend has no
+cancellation hook. The SDK call settles before owned staging can retire.
+Local streams and readers remain cancellation-aware.
 
 ### TAR profile
 
@@ -629,8 +618,9 @@ returns are local errors with retained locations, never warning-only cache misse
 
 ## Resource accounting
 
-The default managed-directory breadth limit is proposed as **100,000 direct entries**,
-with a positive-integer override. Count physical source entries before unbounded
+The default managed-directory breadth limit is **100,000 direct entries**.
+`cache-max-directory-entries` accepts a positive safe integer for either Action
+and is recorded by prepare for post. Count physical source entries before unbounded
 allocation, and distinct children in managed input/staged/selected merged directories,
 including usage projections. Apply caps per actual directory, never recursively to
 a whole cache. For a selected workspace, check each input and the chosen output,
@@ -644,10 +634,8 @@ sequence/type/order/pairing with scalar state and bounded records instead. More 
 control-name set. Unknown members are still errors, and effective payload names
 provided through PAX still undergo all managed-name checks.
 
-Working limits for the first implementation proof are listed below. They bound
-active memory, not total cache size, and require actual parser/runner qualification
-before release. A 100k-directory default is not a promise that every possible depth,
-name length and worker-fan-in combination fits in memory.
+The limits below govern active structures independently of total cache size.
+Depth, name length and worker fan-in affect working memory at any breadth setting.
 
 | Resource                          | Proof limit / rule                                                                                              |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -662,7 +650,7 @@ There is **no Mammoth total-file, total-control-count, cache/partition/package/s
 byte quota or aggregate disk/free-space admission gate**. Counts/digests/EOF remain
 integrity checks. Safe-integer, native filesystem and backend representability limits
 still apply. Real ENOSPC, service quota, timeout and I/O failures must preserve
-recovery guarantees; environmental capacity is not guaranteed by the format.
+same-operation cleanup and retained-state guarantees; environmental capacity is not guaranteed by the format.
 
 Account for compressed archives, selected native staging, snapshots and operation-local
 metadata. One file-meta adds a TAR header, metadata body and padding per payload

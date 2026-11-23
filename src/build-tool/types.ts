@@ -100,7 +100,7 @@ export interface CapturedBuildItem {
 }
 
 /**
- * Build report produced by {@link BuildToolAdapter.collectBuildReport}.
+ * Post-build report for the host log and summary.
  *
  * The adapter is responsible for generating its own tool-specific Markdown and log lines;
  * the finalize phase inserts them verbatim into the job summary and log group.
@@ -131,25 +131,14 @@ export interface BuildReport {
  * - the location of its user/home directory (the cache root),
  * - the built-in cache partition presets and hard exclusion globs,
  * - tool-specific provisioning (wrapper JAR verification, distribution download),
- * - build hook installation / cleanup (init scripts, lifecycle extensions), and
- * - post-build result collection (build reports, scan links).
+ * - build hook installation (init scripts or lifecycle extensions).
  *
  * The shared phase logic calls the adapter methods at well-defined points in the
  * prepare/finalize lifecycle without importing any tool-specific modules directly.
  */
 export interface BuildToolAdapter {
-  /** Human-readable tool name used in log output and job summaries (e.g. `"Gradle"`). */
-  getName(): string;
-
-  /**
-   * Stable machine-readable build tool identifier embedded in every cache manifest.
-   *
-   * The value must be a lowercase ASCII string (e.g. `'gradle'`, `'maven'`). It is baked into
-   * the adapter implementation — never supplied by user configuration — so a mismatched manifest
-   * from a different build tool is detected with a clear error rather than producing silent
-   * cache corruption.
-   */
-  getBuildToolId(): string;
+  /** Stable build-tool identity for the model and lifecycle. */
+  getBuildToolId(): 'gradle' | 'maven';
 
   /** Absolute path to the build tool's user home / cache root directory. */
   getCacheRoot(): string;
@@ -172,7 +161,7 @@ export interface BuildToolAdapter {
   /**
    * Validates and provisions the build tool before the build starts.
    *
-   * Called during the prepare-phase bootstrap, after the base cache has been restored.
+   * Called during prepare before base restoration.
    * Implementations should verify wrapper/distribution integrity and download any
    * missing artifacts.
    *
@@ -183,18 +172,8 @@ export interface BuildToolAdapter {
   /**
    * Installs any build hook needed to capture per-invocation build metadata.
    *
-   * Called during the prepare phase, after bootstrap completes.
+   * Called during prepare before the build starts.
    * For Gradle this installs the build-result-capture init script.
-   * Failures are expected to be caught and logged as non-fatal by the caller.
    */
   installBuildHooks(context: CiJobContext): Promise<void>;
-
-  /**
-   * Collects the build report and cleans up any installed build hooks.
-   *
-   * Called at the start of the finalize phase, before the post-build manifest is captured.
-   * Returns a {@link BuildReport} whose summary and log lines the finalize phase embeds
-   * directly into the job summary and log group.
-   */
-  collectBuildReport(context: CiJobContext): Promise<BuildReport>;
 }

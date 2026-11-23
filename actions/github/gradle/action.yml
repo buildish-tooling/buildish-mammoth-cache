@@ -14,7 +14,8 @@
 # limitations under the License.
 
 name: Buildish Mammoth Cache Action for Gradle
-description: Secure Gradle wrapper provisioning plus local and distributed cache management for Gradle builds in GitHub Actions.
+description: >-
+  Cache management for Gradle builds in GitHub Actions with verified wrapper provisioning. Use a dedicated cache root and compatible Action versions across cooperating jobs.
 author: Buildish
 inputs:
   config-file:
@@ -51,6 +52,9 @@ inputs:
     default: buildish-mammoth-cache-
   cache-partitions:
     description: JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.
+    required: false
+  cache-max-directory-entries:
+    description: Maximum direct entries per managed directory. Must be a positive safe integer. Defaults to 100000.
     required: false
   cleanup-enabled:
     description: Enables restore cleanup and timestamp garbage collection.

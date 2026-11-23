@@ -19,7 +19,6 @@ import type { CiJobContext } from '../../ci';
 import type { NormalizedMavenConfig } from '../../config/types';
 import type {
   BuiltInCachePartitionPreset,
-  BuildReport,
   BuildToolAdapter,
   BuildToolProvisioning,
   ProvisionOptions,
@@ -40,7 +39,7 @@ import type {
  * - `**\/resolver-status.properties` — remote metadata check status.
  * - `**\/*.lock` — transient resolver lock files; always runner-local.
  *
- * `provision()`, `installBuildHooks()`, and `collectBuildReport()` are intentional no-ops in v1.
+ * `provision()` and `installBuildHooks()` are intentional no-ops.
  * Maven wrapper validation and Develocity / Maven Build Cache extension support are planned for a
  * future minor release.
  */
@@ -51,11 +50,7 @@ export class MavenBuildToolAdapter implements BuildToolAdapter {
     this.#config = config;
   }
 
-  getName(): string {
-    return 'Maven';
-  }
-
-  getBuildToolId(): string {
+  getBuildToolId(): 'maven' {
     return 'maven';
   }
 
@@ -81,18 +76,6 @@ export class MavenBuildToolAdapter implements BuildToolAdapter {
   async installBuildHooks(_context: CiJobContext): Promise<void> {
     // Maven does not support build-lifecycle hooks analogous to Gradle init scripts in v1.
     // Develocity / Maven Build Cache extension hook installation is planned for a later release.
-  }
-
-  async collectBuildReport(_context: CiJobContext): Promise<BuildReport> {
-    // Build report collection (build scan links, per-invocation metadata) is not implemented
-    // in v1 for Maven. A future release will add Develocity Maven extension support.
-    return {
-      anyBuildFailed: false,
-      warnings: [],
-      summaryLines: [],
-      logLines: [],
-      builds: [],
-    };
   }
 }
 

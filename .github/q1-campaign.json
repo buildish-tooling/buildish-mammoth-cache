@@ -1,9 +1,0 @@
-{
-  "enabled": false,
-  "id": "issue18-r2-scale-20261123-1750",
-  "retainedCounts": [100000],
-  "reservationMiB": 2048,
-  "maximumQualificationJobs": 1,
-  "maximumAllocatedJobMinutes": 17,
-  "route": "resume-scale"
-}

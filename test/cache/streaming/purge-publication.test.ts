@@ -54,6 +54,7 @@ const config: NormalizedGradleConfig = {
   cacheKeyPrefix: 'test-',
   cachePartitions: [],
   cacheSchemaVersion: 2,
+  cacheMaxDirectoryEntries: 100_000,
   cleanupEnabled: true,
   restoreCleanupMode: 'none',
   cacheGcMode: 'off',
@@ -73,7 +74,6 @@ it.each([false, true])(
           buildToolId: 'gradle',
           hardCacheExcludeGlobs: adapter.getHardCacheExcludeGlobs(),
           partitions: createCachePartitions(
-            '/cache',
             [],
             adapter.getBuiltInPartitionPresets(),
             adapter.getHardCacheExcludeGlobs(),

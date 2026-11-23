@@ -30,9 +30,8 @@ driven at runtime. Every other interface has a workable or straightforward mappi
 ### `BaseCacheBackend` (`src/cache/backend.ts`) — no suitable native frontend
 
 This is the most significant gap. The architecture calls `restoreCache(key, restoreKeys, paths)`
-and `saveCache(key, paths)` **at runtime** with a composite key
-(`${prefix}-v${schema}-${partitionFingerprint}-${javaVersion}-${os}-${arch}-${ref}`) and a
-restore-key fallback sequence.
+and `saveCache(key, paths)` **at runtime**. It uses family and lineage identities
+to acquire a generation and its exact object refs.
 
 Bitbucket's native cache system is **entirely declarative**: it is configured in
 `bitbucket-pipelines.yml` at pipeline definition time, keyed only by a hash of specified files,

@@ -224,7 +224,12 @@ export class WorkerSources {
           } catch {
             /* unowned scaffold */
           }
-          if (partition) for (const channel of routes(partition, 'upsert')) await ensure(channel);
+          if (partition) {
+            // Empty descendants follow the complete unit's existing selection, including usage.
+            const channels =
+              unit?.descriptor[2] === 'subtree' ? unit.channels : routes(partition, 'upsert');
+            for (const channel of channels) await ensure(channel);
+          }
         }
         if (!directory[1])
           for (let channel = 0; channel < this.channels.length; channel++) await ensure(channel);

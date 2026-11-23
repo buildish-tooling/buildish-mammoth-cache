@@ -18,7 +18,7 @@ import { timed } from '../../util/timing';
 import { hostTiming } from '../../host/timing';
 import { resolveLifecycle } from '../../build-tool/lifecycle';
 import { randomBytes } from 'node:crypto';
-import { createCachePartitions, validatePartitionConflictHandling } from '../../cache/model';
+import { createCachePartitions } from '../../cache/model';
 import { resolveCacheModel, lineageId } from '../../cache/streaming/model';
 import { lineagePrefix } from '../../cache/streaming/native-records';
 import { contextSchema } from '../../cache/streaming/schema';
@@ -101,12 +101,10 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
     }
     const hard = adapter.getHardCacheExcludeGlobs(),
       partitions = createCachePartitions(
-        root,
         config.cachePartitions,
         adapter.getBuiltInPartitionPresets(),
         hard,
       );
-    validatePartitionConflictHandling(tool, partitions);
     const model = resolveCacheModel(
       { buildToolId: tool, hardCacheExcludeGlobs: hard, partitions },
       config.cacheKeyPrefix,
@@ -114,6 +112,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
     );
     const result = await prepareStreaming({
       ...options,
+      maxDirectoryEntries: config.cacheMaxDirectoryEntries,
       root,
       model,
       context,
