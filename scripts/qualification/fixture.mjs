@@ -17,7 +17,17 @@
 // Q1-only deterministic fixture/oracle. No resident file catalogue.
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { mkdir, open, opendir, readFile, rm, statfs, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  open,
+  opendir,
+  readFile,
+  rm,
+  stat,
+  statfs,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 
 export function relativeFile(index, count) {
@@ -53,8 +63,12 @@ export async function mutate(root, count) {
   const modified = count / 10,
     deleted = count / 20;
   assert(Number.isInteger(deleted));
-  for (let i = 0; i < modified; i++)
-    await writeFile(path.join(root, relativeFile(i, count)), body(i, true));
+  for (let i = 0; i < modified; i++) {
+    const file = path.join(root, relativeFile(i, count));
+    const before = await stat(file);
+    await writeFile(file, body(i, true));
+    await utimes(file, before.atime, new Date(before.mtimeMs + 2000));
+  }
   for (let i = modified; i < modified + deleted; i++)
     await rm(path.join(root, relativeFile(i, count)));
   for (let i = count / 4; i < count / 4 + deleted; i++) {

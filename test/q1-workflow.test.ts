@@ -15,37 +15,24 @@
  */
 
 import { expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { gate } from '../scripts/qualification/gate.mjs';
 import { parse } from 'yaml';
-import { runInNewContext } from 'node:vm';
-it('keeps Q1 execution deliberate and in the real fork push scope with non-cancelling ownership', () => {
+it('keeps one qualification workflow with bounded, deliberate routes', () => {
+  expect(existsSync('.github/workflows/q1-resumption.yml')).toBe(false);
   const workflow = parse(readFileSync('.github/workflows/q1.yml', 'utf8'));
-  expect(Object.keys(workflow.on)).toEqual(['push']);
-  expect(workflow.on.push).toEqual({
-    branches: ['cache-metadata-redesign'],
-    paths: ['.github/q1-campaign.json'],
+  expect(Object.keys(workflow.jobs)).toEqual(['scale', 'worker', 'aggregator', 'consumer']);
+  expect(workflow.on).toEqual({
+    push: { branches: ['cache-metadata-redesign'], paths: ['.github/q1-campaign.json'] },
   });
   expect(workflow.permissions).toEqual({ contents: 'read' });
   expect(workflow.concurrency['cancel-in-progress']).toBe(false);
-  let jobs = 0,
-    minutes = 0;
-  for (const job of Object.values(workflow.jobs) as {
-    strategy?: { matrix: { include?: unknown[]; tool?: unknown[] } };
-    'timeout-minutes': number;
-  }[]) {
-    const count = job.strategy?.matrix.include?.length ?? job.strategy?.matrix.tool?.length ?? 1;
-    jobs += count;
-    minutes += count * job['timeout-minutes'];
-  }
-  expect(jobs).toBe(15);
-  expect(minutes).toBe(430);
   for (const job of Object.values(workflow.jobs)) {
     const condition = String((job as { if: string }).if);
     expect(condition).toContain("github.repository == 'snazy/buildish-mammoth-cache'");
-    expect(condition).toContain('[Q1 campaign]');
+    expect(condition).toContain("github.ref == 'refs/heads/cache-metadata-redesign'");
   }
 });
 it('uses a CI JavaScript Action for real SDK context without registering another post', () => {
@@ -62,12 +49,14 @@ it('a disabled campaign emits false before every tool/action/build even with a d
       config,
       JSON.stringify({
         enabled: false,
-        route: 'full',
-        maximumQualificationJobs: 15,
-        maximumAllocatedJobMinutes: 430,
+        route: 'resume-scale',
+        retainedCounts: [100000],
+        reservationMiB: 2048,
+        maximumQualificationJobs: 1,
+        maximumAllocatedJobMinutes: 17,
       }),
     );
-    expect(await gate(config, output, 'full')).toBe(false);
+    expect(await gate(config, output, 'resume-scale')).toBe(false);
     expect(await readFile(output, 'utf8')).toBe('enabled=false\n');
     const workflow = parse(readFileSync('.github/workflows/q1.yml', 'utf8'));
     for (const job of Object.values(workflow.jobs)) {
@@ -77,57 +66,6 @@ it('a disabled campaign emits false before every tool/action/build even with a d
       for (const step of steps.slice(marker + 1))
         expect(step.if).toContain("steps.campaign.outputs.enabled == 'true'");
     }
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-it('selects only the four independent remaining jobs and rejects mixed markers', () => {
-  const w = parse(readFileSync('.github/workflows/q1.yml', 'utf8'));
-  const select = (
-    message: string,
-    repository = 'snazy/buildish-mammoth-cache',
-    cancelled = false,
-  ) =>
-    Object.entries(w.jobs)
-      .filter(([, job]) =>
-        runInNewContext((job as { if: string }).if, {
-          github: { repository, event: { head_commit: { message } } },
-          needs: { consumer: { result: 'failure' }, parity: { result: 'failure' } },
-          always: () => true,
-          cancelled: () => cancelled,
-          contains: (a: string, b: string) => a.includes(b),
-        }),
-      )
-      .map(([name]) => name);
-  expect(select('[Q1 remaining]')).toEqual(['scale', 'diagnostic']);
-  expect(select('[Q1 remaining] [Q1 campaign]')).toEqual([]);
-  expect(select('ordinary change')).toEqual([]);
-  expect(select('[Q1 remaining]', 'unrelated/repository')).toEqual([]);
-  expect(select('[Q1 remaining]', 'snazy/buildish-mammoth-cache', true)).toEqual([]);
-  const jobs = select('[Q1 remaining]').map((name) => w.jobs[name]);
-  expect(jobs.reduce((n, j) => n + (j.strategy?.matrix.include.length ?? 1), 0)).toBe(4);
-  expect(
-    jobs.reduce((n, j) => n + (j.strategy?.matrix.include.length ?? 1) * j['timeout-minutes'], 0),
-  ).toBe(210);
-});
-
-it('admits only a matching explicit remaining route and its bounded allocation', async () => {
-  const root = await mkdtemp(path.resolve('build/q1-remaining-gate-'));
-  try {
-    const file = path.join(root, 'config'),
-      output = path.join(root, 'output');
-    const config = {
-      enabled: true,
-      route: 'remaining',
-      maximumQualificationJobs: 4,
-      maximumAllocatedJobMinutes: 210,
-    };
-    await writeFile(file, JSON.stringify(config));
-    expect(await gate(file, output, 'remaining')).toBe(true);
-    await expect(gate(file, output, 'full')).rejects.toThrow('route mismatch');
-    await writeFile(file, JSON.stringify({ ...config, maximumQualificationJobs: 15 }));
-    await expect(gate(file, output, 'remaining')).rejects.toThrow();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -162,7 +162,13 @@ export async function invocation(
         ],
         {
           cwd: workspace,
-          env: { ...env, ...exported, ...state, Q1_NODE_METRICS: telemetry },
+          env: {
+            ...env,
+            ...exported,
+            ...state,
+            Q1_NODE_METRICS: telemetry,
+            Q1_GENERATION: path.join(dir, 'generation.json'),
+          },
           started: observer,
         },
       );
@@ -191,35 +197,60 @@ export async function invocation(
     }
     return { ...result, nodeMetrics, outputs: await outputs() };
   };
-  const completion = async () => {
-    const locator = JSON.parse(await readFile(path.join(home, '.mammoth/v1/current.json'), 'utf8'));
-    const state = JSON.parse(await readFile(path.join(home, locator[3]), 'utf8'));
-    assert.equal(state[4], 'completed');
-    assert(
-      ['published', 'no-change', 'worker-uploaded', 'read-only'].includes(state[14]),
-      'Required lifecycle did not succeed: ' + state[14],
-    );
-    let generation = null,
-      entries = [];
-    if (state[8]) {
-      const pub = JSON.parse(await readFile(path.join(home, state[8][2]), 'utf8'));
-      generation = pub[8];
-      const record = JSON.parse(await readFile(path.join(home, pub[7][2]), 'utf8'));
-      entries = record[8];
-      if (state[14] === 'no-change') {
-        const bindings = JSON.parse(await readFile(path.join(home, state[5][2]), 'utf8'));
-        generation = bindings[9][1];
-      }
-    }
-    return {
-      outcome: state[14],
-      entries,
-      generation,
-      quiescence: state[13] !== null,
-      workerReceipt: state[12]?.[3] != null,
-    };
-  };
+  const completion = () => extractCompletion(home, path.join(dir, 'generation.json'));
   return { tool, identity, dir, home, workspace, env, phase, outputs, completion };
+}
+// Only current local-v2 documents and independently captured outgoing control bytes.
+export async function extractCompletion(home, outgoing) {
+  const read = async (file) => JSON.parse(await readFile(file, 'utf8'));
+  const locator = await read(path.join(home, '.mammoth/v1/current.json'));
+  const state = await read(path.join(home, locator[3]));
+  assert.equal(state.length, 8);
+  assert.equal(state[0], 'local-state');
+  assert.equal(state[1], 2);
+  assert.equal(state[2], locator[2]);
+  assert.equal(state[4], 'completed');
+  const terminal = state[7];
+  assert.equal(terminal?.length, 5);
+  assert.equal(terminal[0], 'outcome');
+  const outcome = terminal[1];
+  assert(
+    ['published', 'no-change', 'worker-uploaded', 'read-only'].includes(outcome),
+    'Required lifecycle did not succeed: ' + outcome,
+  );
+  let record = null;
+  if (outcome === 'published') record = await read(outgoing);
+  else if (outcome === 'no-change' || outcome === 'read-only') {
+    const handoff = (await readFile(path.join(home, state[6][2]), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .find((row) => row[0] === 'handoff');
+    assert.equal(handoff[0], 'handoff');
+    assert.equal(handoff[1], 2);
+    if (handoff[8]) record = await read(path.join(home, handoff[8][1][2]));
+    if (outcome === 'no-change') assert(record, 'Missing reused generation');
+  }
+  if (record) {
+    assert.equal(record.length, 12);
+    assert.deepEqual(record.slice(0, 3), ['generation', 2, 'generation-v2']);
+    if (outcome !== 'read-only') assert.equal(record[11], terminal[2]);
+    assert(record[8].length > 0, 'Missing partition evidence');
+  }
+  const workerReceipt =
+    outcome === 'worker-uploaded' &&
+    Number.isSafeInteger(terminal[3]) &&
+    terminal[3] > 0 &&
+    typeof terminal[4] === 'string' &&
+    terminal[4].length > 0;
+  if (outcome === 'worker-uploaded') assert(workerReceipt, 'Missing worker receipt');
+  return {
+    outcome,
+    entries: record?.[8] ?? [],
+    generation: record?.[11] ?? null,
+    quiescence: ['published', 'no-change'].includes(outcome),
+    workerReceipt,
+  };
 }
 export function gradleTasks(stage, identity) {
   if (stage === 'parity-reader') return ['resolveStandalone'];

@@ -13,30 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Q1 streaming qualification
-# Deliberate two-dot PUSH selection. PR path filters would re-run for the entire PR diff.
+name: Q1 qualification
 on:
   push:
     branches: [cache-metadata-redesign]
     paths: [.github/q1-campaign.json]
 permissions:
   contents: read
-# No cancel-in-progress: do not terminate an owned relocation when another commit arrives.
 concurrency:
   group: q1-${{ github.ref }}
   cancel-in-progress: false
 env:
   Q1_HEAD_SHA: ${{ github.sha }}
-  Q1_ROUTE: ${{ contains(github.event.head_commit.message, '[Q1 remaining]') && 'remaining' || 'full' }}
+  Q1_ROUTE: ${{ contains(github.event.head_commit.message, '[Q1 resume-scale]') && 'resume-scale' || 'resume-graph' }}
 jobs:
-  parity:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
-    strategy:
-      fail-fast: false
-      matrix:
-        tool: [gradle, maven]
+  scale:
+    if: ${{ !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && github.ref == 'refs/heads/cache-metadata-redesign' && !contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 17
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,51 +43,23 @@ jobs:
         with:
           java-version: '21'
           maven: 'true'
-      - name: Expose existing Windows GnuPG
-        if: steps.campaign.outputs.enabled == 'true' && (runner.os == 'Windows')
-        shell: pwsh
-        run: ./.github/scripts/expose-gpg-windows.ps1
-      - name: Set dedicated parity home
+      - name: Bounded Linux Maven-entrypoint exercise
         if: steps.campaign.outputs.enabled == 'true'
-        shell: bash
-        env:
-          TOOL: ${{ matrix.tool }}
-        run: |
-          echo "GRADLE_USER_HOME=$RUNNER_TEMP/q1-parity-$TOOL" >> "$GITHUB_ENV"
-          echo "MAVEN_USER_HOME=$RUNNER_TEMP/q1-parity-$TOOL" >> "$GITHUB_ENV"
-      - name: Ordinary Gradle Action
-        if: steps.campaign.outputs.enabled == 'true' && (matrix.tool == 'gradle')
-        uses: ./actions/github/gradle # zizmor: ignore[self-repository] consumes bundles built in this checkout
+        timeout-minutes: 15
+        uses: $/.github/actions/q1
         with:
-          base-directory: test/fixtures/integration/gradle-project
-          read-only: false
-          cache-gc-mode: 'off'
-          cache-key-prefix: q1-parity-${{ github.run_id }}-${{ github.run_attempt }}-
-          cache-partitions: '[{"id":"q-proof","includes":["q-proof/**"]}]'
-      - name: Ordinary Maven Action
-        if: steps.campaign.outputs.enabled == 'true' && (matrix.tool == 'maven')
-        uses: ./actions/github/maven # zizmor: ignore[self-repository] consumes bundles built in this checkout
+          stage: scale
+          platform: linux
+      - name: Preserve bounded qualification records
+        if: always() && steps.campaign.outputs.enabled == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          base-directory: test/fixtures/integration/maven-project
-          read-only: false
-          cache-gc-mode: 'off'
-          cache-key-prefix: q1-parity-${{ github.run_id }}-${{ github.run_attempt }}-
-          cache-partitions: '[{"id":"q-proof","includes":["q-proof/**"]}]'
-      - name: Build and write sentinel before automatic post
-        if: steps.campaign.outputs.enabled == 'true'
-        shell: bash
-        env:
-          TOOL: ${{ matrix.tool }}
-        run: |
-          if [[ "$TOOL" == gradle ]]; then
-            (cd test/fixtures/integration/gradle-project && ./gradlew --console=plain resolveStandalone test)
-          else
-            (cd test/fixtures/integration/maven-project && mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P standalone dependency:resolve)
-          fi
-          mkdir -p "$GRADLE_USER_HOME/q-proof"
-          printf 'ordinary-%s' "$TOOL" > "$GRADLE_USER_HOME/q-proof/parity.txt"
+          name: q1-resume-scale-linux-${{ github.run_attempt }}
+          path: build/q1-results/
+          retention-days: 3
+          if-no-files-found: warn
   worker:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
+    if: ${{ !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && github.ref == 'refs/heads/cache-metadata-redesign' && !contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && contains(github.event.head_commit.message, '[Q1 resume-graph]') && !contains(github.event.head_commit.message, '[Q1 resume-scale]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -116,24 +82,29 @@ jobs:
           java-version: '21'
           maven: 'true'
       - name: Expose existing Windows GnuPG
-        if: steps.campaign.outputs.enabled == 'true' && (runner.os == 'Windows')
+        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: ./.github/scripts/expose-gpg-windows.ps1
-      - uses: $/.github/actions/q1
+      - name: Build read-only macOS classification helper
+        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'macOS'
+        shell: bash
+        run: node_modules/.bin/esbuild src/build-tool/gradle/darwin-process-inspection.ts --bundle --platform=node --target=node24 --format=cjs --outfile=build/q1-darwin-inspection.cjs
+      - name: Exercise production bundles
         if: steps.campaign.outputs.enabled == 'true'
+        uses: $/.github/actions/q1
         with:
           stage: worker
           platform: ${{ matrix.platform }}
       - name: Preserve bounded qualification records
-        if: steps.campaign.outputs.enabled == 'true' && (always())
+        if: always() && steps.campaign.outputs.enabled == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: q1-${{ github.job }}-${{ matrix.platform }}-${{ github.run_attempt }}
+          name: q1-resume-worker-${{ matrix.platform }}-${{ github.run_attempt }}
           path: build/q1-results/
           retention-days: 3
           if-no-files-found: warn
   aggregator:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
+    if: ${{ !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && github.ref == 'refs/heads/cache-metadata-redesign' && !contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && contains(github.event.head_commit.message, '[Q1 resume-graph]') && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && needs.worker.result == 'success' }}
     needs: worker
     strategy:
       fail-fast: false
@@ -157,24 +128,29 @@ jobs:
           java-version: '21'
           maven: 'true'
       - name: Expose existing Windows GnuPG
-        if: steps.campaign.outputs.enabled == 'true' && (runner.os == 'Windows')
+        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: ./.github/scripts/expose-gpg-windows.ps1
-      - uses: $/.github/actions/q1
+      - name: Build read-only macOS classification helper
+        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'macOS'
+        shell: bash
+        run: node_modules/.bin/esbuild src/build-tool/gradle/darwin-process-inspection.ts --bundle --platform=node --target=node24 --format=cjs --outfile=build/q1-darwin-inspection.cjs
+      - name: Exercise production bundles
         if: steps.campaign.outputs.enabled == 'true'
+        uses: $/.github/actions/q1
         with:
           stage: aggregator
           platform: ${{ matrix.platform }}
       - name: Preserve bounded qualification records
-        if: steps.campaign.outputs.enabled == 'true' && (always())
+        if: always() && steps.campaign.outputs.enabled == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: q1-${{ github.job }}-${{ matrix.platform }}-${{ github.run_attempt }}
+          name: q1-resume-aggregator-${{ matrix.platform }}-${{ github.run_attempt }}
           path: build/q1-results/
           retention-days: 3
           if-no-files-found: warn
   consumer:
-    if: github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]')
+    if: ${{ !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && github.ref == 'refs/heads/cache-metadata-redesign' && !contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && contains(github.event.head_commit.message, '[Q1 resume-graph]') && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && needs.aggregator.result == 'success' }}
     needs: aggregator
     strategy:
       fail-fast: false
@@ -198,102 +174,24 @@ jobs:
           java-version: '21'
           maven: 'true'
       - name: Expose existing Windows GnuPG
-        if: steps.campaign.outputs.enabled == 'true' && (runner.os == 'Windows')
+        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: ./.github/scripts/expose-gpg-windows.ps1
-      - uses: $/.github/actions/q1
+      - name: Build read-only macOS classification helper
+        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'macOS'
+        shell: bash
+        run: node_modules/.bin/esbuild src/build-tool/gradle/darwin-process-inspection.ts --bundle --platform=node --target=node24 --format=cjs --outfile=build/q1-darwin-inspection.cjs
+      - name: Exercise production bundles
         if: steps.campaign.outputs.enabled == 'true'
+        uses: $/.github/actions/q1
         with:
           stage: consumer
           platform: ${{ matrix.platform }}
       - name: Preserve bounded qualification records
-        if: steps.campaign.outputs.enabled == 'true' && (always())
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: q1-${{ github.job }}-${{ matrix.platform }}-${{ github.run_attempt }}
-          path: build/q1-results/
-          retention-days: 3
-          if-no-files-found: warn
-  scale:
-    if: always() && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && ((contains(github.event.head_commit.message, '[Q1 remaining]') && !contains(github.event.head_commit.message, '[Q1 campaign]')) || (contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && needs.consumer.result == 'success'))
-    needs: consumer
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { platform: linux, os: ubuntu-26.04 }
-          - { platform: windows, os: windows-2025 }
-          - { platform: macos, os: macos-15 }
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Read deliberate campaign gate
-        id: campaign
-        run: node scripts/qualification/gate.mjs
-      - uses: $/.github/actions/it-setup
-        if: steps.campaign.outputs.enabled == 'true'
-        with:
-          java-version: '21'
-          maven: 'true'
-      - name: Expose existing Windows GnuPG
-        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'Windows'
-        shell: pwsh
-        run: ./.github/scripts/expose-gpg-windows.ps1
-      - uses: $/.github/actions/q1
-        if: steps.campaign.outputs.enabled == 'true'
-        with:
-          stage: scale
-          platform: ${{ matrix.platform }}
-      - name: Preserve scale records
         if: always() && steps.campaign.outputs.enabled == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: q1-scale-${{ matrix.platform }}-${{ github.run_attempt }}
-          path: build/q1-results/
-          retention-days: 3
-          if-no-files-found: warn
-  diagnostic:
-    if: always() && !cancelled() && github.repository == 'snazy/buildish-mammoth-cache' && !contains(github.event.head_commit.message, '[Q1 resume-scale]') && !contains(github.event.head_commit.message, '[Q1 resume-graph]') && ((contains(github.event.head_commit.message, '[Q1 remaining]') && !contains(github.event.head_commit.message, '[Q1 campaign]')) || (contains(github.event.head_commit.message, '[Q1 campaign]') && !contains(github.event.head_commit.message, '[Q1 remaining]') && needs.consumer.result == 'success' && needs.parity.result == 'success'))
-    needs: [consumer, parity]
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Read deliberate campaign gate
-        id: campaign
-        run: node scripts/qualification/gate.mjs
-      - uses: $/.github/actions/it-setup
-        if: steps.campaign.outputs.enabled == 'true'
-        with:
-          java-version: '21'
-          maven: 'true'
-      - name: Expose existing Windows GnuPG
-        if: steps.campaign.outputs.enabled == 'true' && runner.os == 'Windows'
-        shell: pwsh
-        run: ./.github/scripts/expose-gpg-windows.ps1
-      - name: Check out the actual optimized released baseline
-        if: steps.campaign.outputs.enabled == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: buildish-tooling/buildish-mammoth-cache
-          ref: 00147da2c35e460d53e6b9d10be6bba35f4cf98f # verified v0.2.2 materialized release
-          path: build/q1-legacy
-          persist-credentials: false
-      - uses: $/.github/actions/q1
-        if: steps.campaign.outputs.enabled == 'true'
-        with:
-          stage: diagnostic
-          platform: linux
-      - name: Preserve diagnostic records
-        if: always() && steps.campaign.outputs.enabled == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: q1-diagnostic-${{ github.run_attempt }}
+          name: q1-resume-consumer-${{ matrix.platform }}-${{ github.run_attempt }}
           path: build/q1-results/
           retention-days: 3
           if-no-files-found: warn

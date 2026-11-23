@@ -29,7 +29,7 @@ const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
-function workflow(file = 'q1-resumption') {
+function workflow(file = 'q1') {
   return parse(readFileSync('.github/workflows/' + file + '.yml', 'utf8'));
 }
 function selected(
@@ -65,11 +65,9 @@ function selected(
     })
     .map(([name]) => name);
 }
-it('selects exactly one17-minute scale job or nine20-minute graph jobs, never legacy work', () => {
+it('selects exactly one17-minute scale job or nine20-minute graph jobs', () => {
   expect(selected('[Q1 resume-scale]')).toEqual(['scale']);
   expect(selected('[Q1 resume-graph]')).toEqual(['worker', 'aggregator', 'consumer']);
-  for (const marker of ['[Q1 resume-scale]', '[Q1 resume-graph]'])
-    expect(selected(marker, { file: 'q1' })).toEqual([]);
   const w = workflow();
   for (const [route, names] of [
     ['resume-scale', ['scale']],

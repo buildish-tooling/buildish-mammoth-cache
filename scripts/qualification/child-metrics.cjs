@@ -36,3 +36,27 @@ if (target)
       process.exitCode = exitCode || 1;
     }
   });
+
+// Capture only bounded outgoing generation control bytes, never payload inventories.
+if (process.env.Q1_GENERATION) {
+  const promises = require('node:fs/promises');
+  const originalOpen = promises.open;
+  promises.open = async function (file, ...args) {
+    const handle = await originalOpen.call(this, file, ...args);
+    if (
+      typeof file === 'string' &&
+      /[\\/]base[\\/][^/\\]+[\\/]record\.json$/u.test(file) &&
+      args[0] === 'wx'
+    ) {
+      const originalWrite = handle.writeFile;
+      handle.writeFile = async function (bytes, ...options) {
+        const result = await originalWrite.call(this, bytes, ...options);
+        if (bytes.length > 1024 * 1024) throw new Error('Oversized Q1 generation');
+        writeFileSync(process.env.Q1_GENERATION, bytes, { flag: 'wx', mode: 0o600 });
+        return result;
+      };
+    }
+    return handle;
+  };
+  require('node:module').syncBuiltinESMExports();
+}

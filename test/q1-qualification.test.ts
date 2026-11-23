@@ -15,10 +15,12 @@
  */
 
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { generate, mutate, verify, capacity } from '../scripts/qualification/fixture.mjs';
 import {
+  extractCompletion,
   gradleTasks,
   fileCommands,
   commandEnv,
@@ -194,4 +196,117 @@ it('authors complete Gradle metadata at the designated writer while retaining ot
   expect(gradleTasks('aggregator', 'q1-aggregator-linux-gradle')).toEqual(all);
   expect(gradleTasks('consumer', 'q1-consumer-linux-gradle')).toEqual(all);
   expect(gradleTasks('parity-reader', 'q1-parity-reader-gradle')).toEqual(['resolveStandalone']);
+});
+
+it('extracts local-v2 terminal evidence and rejects incomplete, abandoned and unconfirmed outcomes', async () => {
+  const home = await root();
+  await mkdir(path.join(home, '.mammoth/v1'), { recursive: true });
+  const save = async (name: string, value: unknown) =>
+    writeFile(path.join(home, name), JSON.stringify(value) + '\n');
+  const reference = ['ref', 'handoff', 'handoff', 1, 'hash'];
+  const state: unknown[] = ['local-state', 2, 'owner', 3, 'completed', null, reference, null];
+  const entries = [
+    ['empty', 'q0'],
+    ['object', 'q1', ['reference']],
+  ];
+  const generation = [
+    'generation',
+    2,
+    'generation-v2',
+    'family',
+    'model',
+    'lineage',
+    'writer',
+    'decision',
+    entries,
+    [['q0', 'q1']],
+    'hash',
+    'key',
+  ];
+  await save('.mammoth/v1/current.json', ['current', 1, 'owner', 'state']);
+  await save('outgoing', generation);
+  await save('generation', generation);
+  await writeFile(
+    path.join(home, 'handoff'),
+    JSON.stringify(['local-stream']) +
+      '\n' +
+      JSON.stringify([
+        'handoff',
+        2,
+        null,
+        null,
+        null,
+        1,
+        'disabled',
+        null,
+        ['key', ['ref', 'generation', 'generation']],
+      ]) +
+      '\n',
+  );
+  const extract = async (terminal: unknown, phase = 'completed') => {
+    state[4] = phase;
+    state[7] = terminal;
+    await save('state', state);
+    return extractCompletion(home, path.join(home, 'outgoing'));
+  };
+  for (const outcome of ['published', 'no-change', 'read-only']) {
+    expect(
+      await extract(['outcome', outcome, outcome === 'read-only' ? null : 'key', null, null]),
+    ).toMatchObject({ outcome, generation: 'key', entries });
+  }
+  expect(await extract(['outcome', 'worker-uploaded', null, 42, 'artifact'])).toMatchObject({
+    workerReceipt: true,
+    generation: null,
+    quiescence: false,
+  });
+  for (const outcome of ['abandoned', 'skipped-not-quiescent', 'feature-unavailable'])
+    await expect(extract(['outcome', outcome, null, null, null])).rejects.toThrow(
+      'did not succeed',
+    );
+  await expect(extract(null, 'post-active')).rejects.toThrow();
+  await expect(extract(['outcome', 'worker-uploaded', null, null, null])).rejects.toThrow(
+    'receipt',
+  );
+  await expect(extract(['outcome', 'published', 'wrong-key', null, null])).rejects.toThrow();
+  await rm(path.join(home, 'outgoing'));
+  await expect(extract(['outcome', 'published', 'key', null, null])).rejects.toThrow();
+});
+
+it('makes same-size fixture rewrites metadata-visible', async () => {
+  const home = await root();
+  await generate(home, 40);
+  const file = path.join(home, 'q0/0/0.bin');
+  const before = await stat(file);
+  await mutate(home, 40);
+  const after = await stat(file);
+  expect(after.size).toBe(before.size);
+  expect(after.mtimeMs).toBeGreaterThan(before.mtimeMs + 1000);
+});
+
+it('captures outgoing control bytes through the real child preload before staging retirement', async () => {
+  const directory = await root();
+  const output = path.join(directory, 'captured.json');
+  execFileSync(
+    process.execPath,
+    [
+      '--require',
+      path.resolve('scripts/qualification/child-metrics.cjs'),
+      '--input-type=module',
+      '-e',
+      `
+    import { open, mkdir, rm } from 'node:fs/promises';
+    const stage = ${JSON.stringify(directory)} + '/base/id';
+    await mkdir(stage, { recursive: true });
+    const handle = await open(stage + '/record.json', 'wx');
+    await handle.writeFile(Buffer.from('["generation",2]\\n'));
+    await handle.close();
+    await rm(stage, { recursive: true });
+  `,
+    ],
+    { env: { ...process.env, Q1_GENERATION: output } },
+  );
+  expect(JSON.parse(await (await import('node:fs/promises')).readFile(output, 'utf8'))).toEqual([
+    'generation',
+    2,
+  ]);
 });

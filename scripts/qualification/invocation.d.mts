@@ -50,3 +50,14 @@ export function withPhaseProgress<T>(
   persist: () => Promise<void>,
   invoke: () => Promise<T>,
 ): Promise<T>;
+
+export function extractCompletion(
+  home: string,
+  outgoing: string,
+): Promise<{
+  outcome: string;
+  entries: unknown[][];
+  generation: string | null;
+  quiescence: boolean;
+  workerReceipt: boolean;
+}>;

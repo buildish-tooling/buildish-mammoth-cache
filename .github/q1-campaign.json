@@ -1,7 +1,9 @@
 {
-  "enabled": false,
-  "id": "issue18-20261122-save-work-scale",
-  "retainedCounts": [100000],
+  "enabled": true,
+  "id": "issue18-r2-scale-20261123-1626",
+  "retainedCounts": [
+    100000
+  ],
   "reservationMiB": 2048,
   "maximumQualificationJobs": 1,
   "maximumAllocatedJobMinutes": 17,
