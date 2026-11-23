@@ -44,6 +44,14 @@ No project tooling needs to be installed globally. The setup below only updates 
 the selected nvm-managed Node.js installation; all project dependencies are installed locally
 via `npm ci`.
 
+`npm run compile` uses the native TypeScript 7 compiler supplied by the pinned
+`typescript-native` npm alias. The separate `typescript` alias points to Microsoft's
+TypeScript 6 compatibility package so ESLint's parser can continue using its supported
+compiler API. Keep both aliases: replacing the compatibility alias with TypeScript 7
+breaks API consumers. The alias name `typescript-native` avoids opting into
+`typescript-eslint`'s separate experimental `@typescript/native` backend, which requires
+TypeScript 7.1. Neither compiler is included in the shipped Action bundles.
+
 ---
 
 ## Local setup
