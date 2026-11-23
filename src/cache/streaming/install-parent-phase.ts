@@ -27,7 +27,11 @@ import { parentPath, type WorkingBudget } from './tree-state';
 // Process-local mutable directory facts. Only popped dirty frames are spooled;
 // these are same-process mutation bookkeeping, never restart authority.
 export class InstallParentPhase {
-  private hasSaved = true;
+  private hasSaved: boolean;
+  private readonly baseline?: {
+    native(path: string): Promise<NativeIdentity | null>;
+    projection(path: string): Promise<string | null>;
+  };
   private readonly frames: {
     path: string;
     native: NativeIdentity;
@@ -42,14 +46,15 @@ export class InstallParentPhase {
     readonly budget: WorkingBudget,
     readonly expected: (physical: string) => Promise<NativeIdentity | null>,
     readonly signal?: AbortSignal,
-    private readonly baseline?: {
-      native(path: string): Promise<NativeIdentity | null>;
-      projection(path: string): Promise<string | null>;
+    options?: {
+      freshLedger?: true;
+      baseline?: InstallParentPhase['baseline'];
     },
   ) {
     // A supplied baseline belongs to a newly created moving-window ledger.
     // Other callers can reopen an epoch ledger and must probe existing records.
-    if (baseline) this.hasSaved = false;
+    this.baseline = options?.baseline;
+    this.hasSaved = !options?.freshLedger && !this.baseline;
   }
   private key(path: string) {
     return this.ledger + createHash('sha256').update(path).digest('hex');
@@ -114,8 +119,11 @@ export class InstallParentPhase {
     );
   }
   async effective(path: string): Promise<NativeIdentity | null> {
+    return (await this.changedNative(path)) ?? this.expected(path);
+  }
+  async changedNative(path: string): Promise<NativeIdentity | null> {
     const frame = this.frames.find((f) => f.path === path);
-    return frame ? frame.native : ((await this.saved(path)) ?? this.expected(path));
+    return frame ? frame.native : this.saved(path);
   }
   async created(path: string, native: NativeIdentity, projection: string | null = null) {
     const bytes = encodeRecord([path, native, projection]);

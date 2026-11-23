@@ -33,10 +33,15 @@ import { PartitionMetadataSummary, type PartitionMetadata } from './partition-me
 import type { NativeIdentity } from './native';
 import { GcSurvivorOwner } from './gc-execute';
 import { MetadataSnapshot } from './metadata-snapshot';
+import type { ObservedDirectory } from './observation-index';
+
+type PublicationNodeLease = Awaited<ReturnType<typeof indexedNode>> & {
+  orderedChildren?: () => ReturnType<typeof indexedEntries>;
+};
 
 interface PublicationHierarchy {
   assert(): void;
-  node(offset: number): ReturnType<typeof indexedNode>;
+  node(offset: number): Promise<PublicationNodeLease>;
   children(node: IndexedNode): ReturnType<typeof indexedEntries>;
   release(): void;
 }
@@ -159,6 +164,13 @@ export class MetadataPublicationSource {
     const index = owner.index,
       release = owner.borrow(),
       store = index.store;
+    async function* survivingChildren(node: ObservedDirectory): ReturnType<typeof indexedEntries> {
+      GcSurvivorOwner.assertReceipt(owner);
+      for await (const edge of index.children(node)) {
+        GcSurvivorOwner.assertReceipt(owner);
+        if (edge[5] !== null && !edge[6]) yield [edge[1], edge[2] as IndexedNode[1], edge[5]];
+      }
+    }
     const hierarchy: PublicationHierarchy = {
       assert: () => owner.assert(),
       release,
@@ -189,7 +201,7 @@ export class MetadataPublicationSource {
               'node',
               'directory',
               observed[1],
-              await owner.directoryNative(observed[1]),
+              (await owner.changedDirectoryNative(observed[1])) ?? observed[2],
               null,
               observed[10][3],
               observed[10][4],
@@ -202,6 +214,9 @@ export class MetadataPublicationSource {
           const uncharge = index.options.budget.holdRecord(256 + encodeRecord(node).length * 4);
           return {
             node,
+            // The strict observation writer admits non-directory children before directories.
+            orderedChildren:
+              observed[0] === 'observed-directory' ? () => survivingChildren(observed) : undefined,
             release: () => {
               uncharge();
               lease.release();
@@ -219,10 +234,7 @@ export class MetadataPublicationSource {
         try {
           if (lease.node[0] !== 'observed-directory' || lease.node[1] !== node[2])
             throw new Error('Survivor directory cursor mismatch.');
-          for await (const edge of index.children(lease.node)) {
-            GcSurvivorOwner.assertReceipt(owner);
-            if (edge[5] !== null && !edge[6]) yield [edge[1], edge[2] as IndexedNode[1], edge[5]];
-          }
+          yield* survivingChildren(lease.node);
         } finally {
           lease.release();
         }
@@ -360,10 +372,14 @@ async function foldMetadata(
       } else if (node[1] === 'directory') {
         for (const [, summary] of selected)
           summary.accept(['dir-open', node[2], node[3] as NativeIdentity]);
-        for await (const edge of hierarchy.children(node))
-          if (edge[1] === 'file') await visit(edge[2]);
-        for await (const edge of hierarchy.children(node))
-          if (edge[1] === 'directory') await visit(edge[2]);
+        if (lease.orderedChildren) {
+          for await (const edge of lease.orderedChildren()) await visit(edge[2]);
+        } else {
+          for await (const edge of hierarchy.children(node))
+            if (edge[1] === 'file') await visit(edge[2]);
+          for await (const edge of hierarchy.children(node))
+            if (edge[1] === 'directory') await visit(edge[2]);
+        }
         for (const [, summary] of selected)
           summary.accept(['dir-close', node[2], node[3] as NativeIdentity]);
       }

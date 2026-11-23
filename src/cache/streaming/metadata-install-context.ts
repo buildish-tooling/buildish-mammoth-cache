@@ -25,6 +25,7 @@ import {
   indexedEntries,
   indexedNode,
   IndexDirectories,
+  nodeHasDirectFiles,
   nodeMask,
   partitionBit,
   type IndexedNode,
@@ -412,6 +413,7 @@ export class MetadataInstallContext {
               await accept({ value: ['dir-close', '', native], start: 1, end: 2, record: 1 });
             }
           },
+          { trackDirectFiles: store.codec.options.model.tuple[2] === 'maven' },
         );
         context.sources.set(
           entry[1],
@@ -456,18 +458,11 @@ async function deriveMetadataGroups(
       context.work.coordinateNodes++;
       const node: IndexedNode = lease.node;
       if (node[1] !== 'directory') return;
-      let emitted = false;
-      for await (const edge of indexedEntries(context.scratch, node)) {
-        context.work.coordinateEdges++;
-        if (
-          edge[1] === 'file' &&
-          !emitted &&
-          (node[2] === 'repository' || node[2].startsWith('repository/'))
-        ) {
-          emitted = true;
-          yield node[2];
-        }
-      }
+      if (
+        nodeHasDirectFiles(node) &&
+        (node[2] === 'repository' || node[2].startsWith('repository/'))
+      )
+        yield node[2];
       for await (const edge of indexedEntries(context.scratch, node)) {
         context.work.coordinateEdges++;
         if (edge[1] === 'directory') yield* coordinates(edge[2]);

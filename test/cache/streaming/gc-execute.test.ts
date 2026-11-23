@@ -23,6 +23,8 @@ import {
 } from './observation-fixtures';
 import { Digest } from '../../../src/cache/streaming/encoding';
 import { InstallParentPhase } from '../../../src/cache/streaming/install-parent-phase';
+import { GcProgram } from '../../../src/cache/streaming/gc-program';
+import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import { observationFixture } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
@@ -275,6 +277,100 @@ it('counts original capture, actual selected GC and cleanup across shared-parent
     expect(results[1].encoding[key]).toBeLessThan(results[0].encoding[key] * 4.5);
   await writeFile('build/ls2-gc-counts.json', JSON.stringify(results, null, 2) + '\n');
 });
+
+it.each([4, 16])(
+  'admits %i retained Maven units without reading the observation Q',
+  async (units) => {
+    const f = await observationFixture();
+    fixtures.push(f);
+    for (let unit = 0; unit < units; unit++) {
+      const parent = `repository/shared/unit-${unit}`;
+      await f.files('', { [parent + '/a.jar']: 'keep', [parent + '/a.pom']: 'keep' });
+    }
+    await f.files('', { 'data/ordinary': 'keep' });
+    const observation = await captureObservations(f.store, { budget: f.budget }),
+      index = observation.index!,
+      q = observation.reference[2];
+    const beforeReplay = f.store.root.work.metadataRowsRead,
+      program = await GcProgram.create(index),
+      expected = program.final;
+    await program.close();
+    expect(f.store.root.work.metadataRowsRead - beforeReplay).toBe(14 + 9 * units);
+    const read = vi.spyOn(f.store.root, 'read'),
+      open = vi.spyOn(f.store.root, 'openRead'),
+      scratch = vi.spyOn(InstallScratch, 'create'),
+      before = f.store.root.work.metadataRowsRead;
+    const { cursor } = await executeGc(f.store, { budget: f.budget });
+    expect(cursor).toEqual(expected);
+    expect(cursor[4]).toBe(units + 2); // ordinary file and final root in addition to units
+    expect(read.mock.calls.some(([name]) => name === q)).toBe(false);
+    expect(open.mock.calls.filter(([name]) => name === q)).toEqual([
+      [q, f.store.completedStream(observation.reference)!.native],
+    ]);
+    expect(scratch).not.toHaveBeenCalled();
+    expect(f.store.root.work.metadataRowsRead).toBe(before);
+    await f.finish();
+    expect(f.budget.retained).toBe(0);
+  },
+);
+
+it('rejects and preserves a changed observation Q before retained-only completion', async () => {
+  const f = await observationFixture();
+  fixtures.push(f);
+  await f.files('', { 'data/keep': 'keep' });
+  const observation = await captureObservations(f.store, { budget: f.budget }),
+    q = f.store.root.resolve(observation.reference[2]);
+  await writeFile(q, 'changed');
+  try {
+    await expect(executeGc(f.store, { budget: f.budget })).rejects.toMatchObject({
+      errors: [
+        expect.objectContaining({ message: 'Native source missing or changed.' }),
+        expect.objectContaining({ message: expect.stringContaining('Produced metadata changed') }),
+      ],
+    });
+    expect(await readFile(q, 'utf8')).toBe('changed');
+  } finally {
+    await unlink(q);
+  }
+  await f.finish();
+  expect(f.budget.retained).toBe(0);
+});
+
+it.each(['missing', 'threshold', 'abort', 'barrier'] as const)(
+  'withholds retained-only survivor authority after a %s failure',
+  async (failure) => {
+    const f = await observationFixture();
+    fixtures.push(f);
+    await f.files('', { 'data/keep': 'keep' });
+    const observation = await captureObservations(f.store, { budget: f.budget }),
+      controller = new AbortController();
+    if (failure === 'missing') await unlink(f.store.root.resolve(observation.reference[2]));
+    if (failure === 'abort') controller.abort(new Error('Retained-only GC aborted'));
+    if (failure === 'barrier')
+      vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+        if (name === 'gc-deletions-durable') throw new Error('Retained-only GC barrier failed');
+      });
+    const options = {
+      budget: f.budget,
+      signal: controller.signal,
+      batchOperations: failure === 'threshold' ? 0 : undefined,
+    };
+    const messages = {
+      missing: 'Native source missing or changed',
+      threshold: 'Invalid GC batch thresholds',
+      abort: 'Retained-only GC aborted',
+      barrier: 'Retained-only GC barrier failed',
+    };
+    await expect(executeGc(f.store, options)).rejects.toThrow(messages[failure]);
+    await expect(
+      GcSurvivorOwner.execute(observation.index!, { budget: f.budget }),
+    ).rejects.toThrow();
+    expect(await f.store.root.stat(observation.reference[2])).toBeNull();
+    expect(await readFile(f.store.root.resolve('data/keep'), 'utf8')).toBe('keep');
+    await f.finish();
+    expect(f.budget.retained).toBe(0);
+  },
+);
 
 it('grants no survivor authority when the deletion barrier fails after all native removals', async () => {
   const f = await fixture(4);

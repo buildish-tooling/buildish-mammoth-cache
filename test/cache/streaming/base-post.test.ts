@@ -21,6 +21,8 @@ import { postStreamingBase, type BasePostRequest } from '../../../src/cache/stre
 import { OpenedInvocation } from '../../../src/cache/streaming/invocation';
 import { NativeRoot } from '../../../src/cache/streaming/native';
 import { resolveModel } from '../../../src/cache/streaming/model';
+import { MetadataPublicationSource } from '../../../src/cache/streaming/metadata-publication-source';
+import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
 import { gradleResolver } from './quiescence-fixture';
 const fixtures: MetadataFixture[] = [];
 afterEach(async () => {
@@ -99,6 +101,103 @@ it('reuses exact prior choices without saves on a fresh invocation', async () =>
   expect(logs.some((s) => s.includes('SDK save'))).toBe(false);
   expect(f.save).toHaveBeenCalledTimes(before);
 });
+it.each([
+  [4, 3],
+  [24, 3],
+  [4, 24],
+])(
+  'folds warm Maven survivors once with %i shared coordinates and %i files per partition',
+  async (units, width) => {
+    const hard = ['.mammoth/**', '**/*.lock'],
+      partitions = ['a', 'b'],
+      model = resolveModel(
+        [
+          'model',
+          1,
+          'maven',
+          hard,
+          partitions.map((id) => [
+            id,
+            [`repository/**/${id}*.jar`],
+            hard,
+            'aggregate',
+            null,
+            'default',
+          ]),
+        ],
+        'survivor-work-',
+        1,
+      );
+    const f = await fixture(model),
+      initial = await f.prepare();
+    for (let unit = 0; unit < units; unit++) {
+      const parent = `repository/group/unit-${unit}/0-version/`;
+      const files: Record<string, string> = { [parent + 'keep.lock']: 'protected' };
+      for (const id of partitions)
+        for (let file = 0; file < width; file++) files[`${parent}${id}${file}.jar`] = 'dependency';
+      await f.files(f.root, files);
+    }
+    // Direct files must precede the lexically earlier subdirectory in the summary.
+    await f.files(f.root, {
+      'repository/group/unit-0/a-direct.jar': 'dependency',
+      'repository/group/unit-0/b-direct.jar': 'dependency',
+    });
+    const first = await post(f, initial.anchor);
+    expect(first.outcome).toBe('published');
+    const saves = f.save.mock.calls.length,
+      next = await f.prepare({ nonce: 'b'.repeat(32) });
+    const directories = 3 + units * 2, // root, repository, group, and two directories per coordinate
+      filesPerPartition = units * width + 1,
+      files = filesPerPartition * partitions.length,
+      projectedChildren = directories - 1 + files + units + 1; // includes keep.lock and .mammoth
+    const realFold = MetadataPublicationSource.survivors;
+    const fold = vi
+      .spyOn(MetadataPublicationSource, 'survivors')
+      .mockImplementation(async (owner) => {
+        const work = owner.index.store.root.work,
+          before = { ...work },
+          children = vi.spyOn(ObservationIndex.prototype, 'children'),
+          lookup = vi.spyOn(ObservationIndex.prototype, 'directory');
+        const source = await realFold(owner);
+        try {
+          for (const id of partitions) expect(source.summary(id)[3]).toBe(filesPerPartition);
+          expect(children).toHaveBeenCalledTimes(directories);
+          expect(lookup).not.toHaveBeenCalled();
+          expect(work.metadataRowsRead - before.metadataRowsRead).toBe(
+            directories + files + projectedChildren,
+          );
+          for (const counter of [
+            'stats',
+            'nativeWalks',
+            'indexBuilds',
+            'scratchLogicalWriteBytes',
+            'renames',
+            'unlinks',
+          ] as const)
+            expect(work[counter], counter).toBe(before[counter]);
+          return source;
+        } catch (error) {
+          await source.dispose();
+          throw error;
+        }
+      });
+    const logs: string[] = [];
+    expect(await post(f, next.anchor, { timing: { info: (s) => logs.push(s) } })).toEqual({
+      outcome: 'no-change',
+      key: first.key,
+    });
+    expect(fold).toHaveBeenCalledTimes(1);
+    for (const id of partitions)
+      expect(logs).toContain(`Mammoth: partition publication [partition=${id}] (reuse).`);
+    expect(logs.some((s) => s.includes('partition staging') || s.includes('source return'))).toBe(
+      false,
+    );
+    expect(f.save).toHaveBeenCalledTimes(saves);
+    expect(await readFile(f.root + '/repository/group/unit-0/0-version/keep.lock', 'utf8')).toBe(
+      'protected',
+    );
+  },
+);
 it.each([
   'object-null',
   'object-throw',

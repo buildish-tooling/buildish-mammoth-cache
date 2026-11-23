@@ -119,6 +119,35 @@ it('promotes direct Maven siblings together while keeping nested coordinate deci
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });
+it.each([false, true])(
+  'isolates Maven snapshot ownership to direct children; nested=%s',
+  async (nested) => {
+    const hard = ['.mammoth/**'],
+      model = resolveModel(
+        [
+          'model',
+          1,
+          'maven',
+          hard,
+          [
+            ['data', ['repository/**/*.jar'], hard, 'aggregate', null, 'default'],
+            ['state', ['repository/**/*.pom'], hard, 'single-writer', 'A', 'default'],
+          ],
+        ],
+        'observation-owner-',
+        1,
+      );
+    const f = await fixture('maven', { model }),
+      coordinate = 'repository/g/a/1';
+    await old(f, coordinate + '/a.jar');
+    await old(f, coordinate + (nested ? '/child/a.pom' : '/a.pom'));
+    const capture = captureObservations(f.store, { budget: f.budget });
+    if (nested) await expect(capture).resolves.toHaveProperty('index');
+    else await expect(capture).rejects.toThrow('Maven direct unit splits a snapshot owner');
+    await f.finish();
+    expect(f.budget.retained).toBe(0);
+  },
+);
 it.each([true, false])(
   'only deletes complete Gradle workspace markers; complete=%s',
   async (complete) => {
@@ -199,15 +228,24 @@ it('does not follow an excluded symlink or accept a managed one', async () => {
   await other.finish();
   expect(other.budget.retained).toBe(0);
 });
-it('captures a growing hot directory with linear listings/rows and stable policy cutoff', async () => {
+it('captures growing shared Maven coordinates with linear work and stable policy cutoff', async () => {
   const counts: number[] = [];
   for (const count of [4, 16]) {
     const f = await fixture();
-    for (let n = 0; n < count; n++) await old(f, 'data/f' + String(n).padStart(2, '0'));
+    for (let n = 0; n < count; n++) {
+      const unit = `repository/shared/unit-${n}`;
+      await old(f, unit + '/a.jar');
+      await old(f, unit + '/a.pom');
+    }
+    await old(f, 'repository/shared/keep.lock');
     const before = f.store.codec.schemas.documents.bindings.parse(
       await f.store.readDocument(tuple(await f.store.state())[5], 'bindings'),
     )[8];
+    const pointReads = vi.spyOn(InstallScratch.prototype, 'record');
     const out = await captureObservations(f.store, { budget: f.budget });
+    // One root/repository/shared read each and one render + digest visit per unit node.
+    expect(pointReads).toHaveBeenCalledTimes(3 + 6 * count);
+    pointReads.mockRestore();
     let records = 0;
     await f.store.readStream(
       out.reference,
@@ -218,8 +256,8 @@ it('captures a growing hot directory with linear listings/rows and stable policy
       },
     );
     counts.push(records);
-    expect(out.work.listings).toBe(2);
-    expect(out.work.entries).toBe(count + 2);
+    expect(out.work.listings).toBe(3 + count);
+    expect(out.work.entries).toBe(4 + 3 * count);
     await f.finish();
     expect(f.budget.retained).toBe(0);
     const after = f.store.codec.schemas.documents.bindings.parse(
@@ -227,7 +265,7 @@ it('captures a growing hot directory with linear listings/rows and stable policy
     )[8];
     expect(after).toEqual(before);
   }
-  expect(counts[1] - counts[0]).toBe(24);
+  expect(counts[1] - counts[0]).toBe(108);
 });
 
 it('ignores prepare-time activity for removed files and replaced file/directory kinds', async () => {

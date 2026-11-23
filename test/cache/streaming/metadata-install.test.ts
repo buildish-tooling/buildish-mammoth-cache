@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rename } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { installFixture } from './install-fixture';
 import { resolveModel } from '../../../src/cache/streaming/model';
@@ -169,7 +169,6 @@ it('folds native coordinate groups, rejects crossings/invented joins, and keeps 
     await mkdir(invented.store.root.resolve(root + '/repository/distinct-' + i), {
       recursive: true,
     });
-    const { rename } = await import('node:fs/promises');
     await rename(
       invented.store.root.resolve(
         root + '/repository/shared/unit-' + String(i).padStart(3, '0') + '/file-p1',
@@ -189,6 +188,34 @@ it('folds native coordinate groups, rejects crossings/invented joins, and keeps 
   await expect(discover(invented)).rejects.toThrow('Invented');
   expect(invented.budget.retained).toBe(0);
 });
+it.each([2, 8])(
+  'visits each recovery-group edge once with %i units per partition',
+  async (units) => {
+    const f = await fixture(2, units),
+      a = f.materialized[0].root + '/payload',
+      b = f.materialized[1].root + '/payload';
+    // The shared parent is the only join, and a child in A sorts before its direct file.
+    await rename(
+      f.store.root.resolve(a + '/repository/shared/unit-000'),
+      f.store.root.resolve(a + '/repository/shared/a-nested'),
+    );
+    await rename(
+      f.store.root.resolve(b + '/repository/shared'),
+      f.store.root.resolve(b + '/repository/distinct'),
+    );
+    await f.files(a, { 'repository/shared/file-p0': 'direct' });
+    await f.files(b, { 'repository/shared/file-p1': 'direct' });
+
+    const c = await discover(f),
+      directories = 7 + 2 * units,
+      files = 2 * (units + 1);
+    expect(c.cold).toEqual([]);
+    expect(c.work.coordinateNodes).toBe(directories);
+    expect(c.work.coordinateEdges).toBe(directories - 2 + files); // two payload roots have no edge
+    await c.dispose();
+    expect(f.budget.retained).toBe(0);
+  },
+);
 it('rejects an arbitrary delta-shaped source without original completed merge/native index provenance', async () => {
   const f = await fixture(1, 0);
   expect(() =>

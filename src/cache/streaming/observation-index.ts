@@ -20,7 +20,7 @@ import { Digest } from './encoding';
 import { InstallScratch } from './install-scratch';
 import { tuple, equal, encodeRecord, add, type Value } from './encoding';
 import { isWorkspaceScaffolding, baseName, compareName, parentPath } from './tree-state';
-import type { NativeIdentity } from './native';
+import { sameNative, type NativeIdentity } from './native';
 import type { NativeOperationOptions } from './native-operation';
 import { settleNativeCleanup } from './native-operation';
 
@@ -123,6 +123,7 @@ export class ObservationIndex {
     readonly options: NativeOperationOptions,
     readonly rows: number,
     readonly completed: ['cursor', string, number, number, number, null],
+    readonly hasGcSelections: boolean,
     private readonly ownsReference: boolean,
   ) {
     this.directories = new ObservationDirectories(this);
@@ -146,6 +147,7 @@ export class ObservationIndex {
       count = 0,
       boundary = 0,
       unitActive = false,
+      hasGcSelections = false,
       completed: ['cursor', string, number, number, number, null] | undefined,
       transferred = false;
     const edge = (frame: Frame, name: string, kind: string): ObservedChild => {
@@ -216,7 +218,10 @@ export class ObservationIndex {
         if (r[5] === 'retain') {
           frame.retainedFiles |= bit;
           frame.remainingOwners |= bit;
-        } else frame.changed = true;
+        } else {
+          frame.changed = true;
+          hasGcSelections = true;
+        }
         e[6] = r[5] === 'delete' ? 1 : 0;
         equal([e[3], e[4]], [n[3], n[4]], 'projected file identity');
         e[5] = await scratch.append([
@@ -232,7 +237,11 @@ export class ObservationIndex {
         ]);
       } else if (r[0] === 'unit-open') {
         unitActive = true;
-        if (r[3] === 'subtree' && r[5] === 'delete') frame.deleting = true;
+        // Selected units still require GC admission even if they contain no file targets.
+        if (r[5] === 'delete') {
+          hasGcSelections = true;
+          if (r[3] === 'subtree') frame.deleting = true;
+        }
         const charge = 256 + 4 * encodeRecord(r).length;
         options.budget.retain(charge);
         frame.charge += charge;
@@ -367,6 +376,7 @@ export class ObservationIndex {
           options,
           count,
           completed,
+          hasGcSelections,
           ownsReference,
         );
       },
@@ -424,6 +434,35 @@ export class ObservationIndex {
   }
   get work() {
     return this.scratch.work;
+  }
+  async completedWithoutGcSelections(signal: AbortSignal): Promise<ObservationIndex['completed']> {
+    ObservationIndex.assert(this);
+    signal.throwIfAborted();
+    const proof = this.store.completedStream(this.reference);
+    if (
+      this.hasGcSelections ||
+      !this.ownsReference ||
+      !proof ||
+      proof.purpose !== 'observations' ||
+      proof.partition !== null ||
+      proof.maxDirectoryEntries !== (this.options.maxDirectoryEntries ?? 100000) ||
+      this.completed[2] !== proof.footerStart ||
+      this.completed[3] !== this.rows - 1
+    )
+      throw new Error('Missing original retained-only observation completion.');
+    const path = this.reference[2],
+      root = this.store.root,
+      { handle, identity } = await root.openRead(path, proof.native);
+    try {
+      signal.throwIfAborted();
+      const named = await root.stat(path);
+      if (!named || !sameNative(identity, named, true))
+        throw new Error('Native source name changed.');
+    } finally {
+      await handle.close();
+    }
+    signal.throwIfAborted();
+    return this.completed;
   }
   async node(offset: number): Promise<{ node: ObservedNode; release: () => void }> {
     ObservationIndex.assert(this);

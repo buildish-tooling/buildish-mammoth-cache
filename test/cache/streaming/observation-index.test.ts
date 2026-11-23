@@ -20,8 +20,8 @@ import { GcProgram } from '../../../src/cache/streaming/gc-program';
 import { GcSurvivorOwner } from '../../../src/cache/streaming/gc-execute';
 import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
 import { captureFixtureObservations as captureObservations } from './observation-fixtures';
-import { tuple, type Value } from '../../../src/cache/streaming/encoding';
-import { observationFixture } from './observation-fixtures';
+import { Digest, tuple, type Value } from '../../../src/cache/streaming/encoding';
+import { observationFixture, rows } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -77,6 +77,44 @@ it('validates full observation Q/EOF and rejects corrupt byte references', async
     ref = [...f.observed.reference] as typeof f.observed.reference;
   ref[4] = 'c'.repeat(64);
   await expect(ObservationIndex.open(f.store, ref, { budget: f.budget })).rejects.toThrow();
+  await f.finish();
+  expect(f.budget.retained).toBe(0);
+});
+it('does not certify an empty selected Maven unit as retained-only', async () => {
+  const f = await observationFixture();
+  fixtures.push(f);
+  await f.files('', { repository: null });
+  const native = (await f.store.root.stat('repository'))!,
+    digest = new Digest('observation-unit');
+  digest.update(['directory', 'repository', native]);
+  const sha = digest.digest();
+  const index = await ObservationIndex.write(
+    f.store,
+    rows([
+      ['dir-open', '', f.store.root.binding],
+      ['child', 'repository', 'directory', native[3], native[4]],
+      ['dir-open', 'repository', native],
+      ['unit-open', 'maven-directory', 'repository', 'direct', 'none', 'delete', sha],
+      ['unit-close', 'maven-directory', 'repository', sha],
+      ['dir-close', 'repository'],
+      ['dir-close', ''],
+    ]),
+    { budget: f.budget },
+  );
+  try {
+    expect(index.hasGcSelections).toBe(true);
+    await expect(index.completedWithoutGcSelections(new AbortController().signal)).rejects.toThrow(
+      'retained-only observation completion',
+    );
+    const program = await GcProgram.create(index);
+    try {
+      expect(program.final).toEqual(index.completed);
+    } finally {
+      await program.close();
+    }
+  } finally {
+    await index.dispose();
+  }
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });

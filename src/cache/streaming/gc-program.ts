@@ -31,6 +31,10 @@ type Frame = [
   Value,
 ];
 export type GcBatch = ['gc-batch', number, number];
+interface GcBatchLimits {
+  operations?: number;
+  bytes?: number;
+}
 // Batch cells: unit-spool start/end, observation nextByte/nextRecord/boundary,
 // frame-spool start/end. Ephemeral work bound to the original process-owned index.
 export class GcProgram {
@@ -40,14 +44,15 @@ export class GcProgram {
     readonly batches: InstallScratch,
     readonly final: GcCursor,
   ) {}
-  static async create(
-    index: ObservationIndex,
-    limits: { operations?: number; bytes?: number } = {},
-  ): Promise<GcProgram> {
+  static validateLimits(limits: GcBatchLimits) {
     const operations = limits.operations ?? 16384,
       bytes = limits.bytes ?? 8 * 1024 * 1024;
     if (![operations, bytes].every((n) => Number.isSafeInteger(n) && n > 0))
       throw new Error('Invalid GC batch thresholds.');
+    return { operations, bytes };
+  }
+  static async create(index: ObservationIndex, limits: GcBatchLimits = {}): Promise<GcProgram> {
+    const { operations, bytes } = GcProgram.validateLimits(limits);
     const store = index.store,
       options = index.options,
       signal = options.signal,

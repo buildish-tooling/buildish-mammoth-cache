@@ -20,6 +20,7 @@ import { observationFixture } from './observation-fixtures';
 import { captureFixtureObservations as captureObservations } from './observation-fixtures';
 import { GcSurvivorOwner } from '../../../src/cache/streaming/gc-execute';
 import { MetadataPublicationSource } from '../../../src/cache/streaming/metadata-publication-source';
+import { sameNative } from '../../../src/cache/streaming/native';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -30,24 +31,36 @@ it.each([false, true])(
   async (changed) => {
     const f = await observationFixture();
     fixtures.push(f);
-    await f.files('', { 'data/shared/retained': 'keep', 'data/shared/expired': 'old' });
-    if (changed) await utimes(f.store.root.resolve('data/shared/expired'), 1.234, 1.234);
+    const files = ['expired-a', 'expired-b', 'retained'];
+    await f.files('', Object.fromEntries(files.map((name) => [`data/shared/${name}`, name])));
+    if (changed) {
+      for (const name of files.slice(0, 2))
+        await utimes(f.store.root.resolve(`data/shared/${name}`), 1.234, 1.234);
+      await utimes(f.store.root.resolve('data/shared'), 2.345, 2.345);
+    }
+    const original = (await f.store.root.stat('data/shared'))!;
     const captured = await captureObservations(f.store, { budget: f.budget, retainIndex: true });
     const builds = f.store.root.work.indexBuilds;
-    const owner = await GcSurvivorOwner.execute(captured.index!, { budget: f.budget });
+    const owner = await GcSurvivorOwner.execute(captured.index!, {
+      budget: f.budget,
+      batchOperations: 1,
+    });
+    const survivingNative = (await f.store.root.stat('data/shared'))!;
+    expect(sameNative(original, survivingNative, true)).toBe(!changed);
     let source: MetadataPublicationSource | undefined;
     try {
       expect(owner.index).toBe(captured.index);
       expect(f.store.root.work.indexBuilds).toBe(builds);
       source = await MetadataPublicationSource.survivors(owner);
       expect(f.store.root.work.indexBuilds).toBe(builds);
-      expect(source.summary('data')[3]).toBe(changed ? 1 : 2);
+      expect(source.summary('data')[3]).toBe(changed ? 1 : 3);
       await expect(owner.dispose()).rejects.toThrow('still borrowed');
       const names: string[] = [];
       async function visit(offset: number): Promise<void> {
         const lease = await source!.node(offset);
         try {
           if (lease.node[1] === 'file') names.push(lease.node[2]);
+          if (lease.node[2] === 'data/shared') expect(lease.node[3]).toEqual(survivingNative);
           for await (const edge of source!.children(lease.node)) await visit(edge[2]);
         } finally {
           lease.release();
@@ -55,7 +68,7 @@ it.each([false, true])(
       }
       await visit(source.index);
       expect(names).toEqual(
-        changed ? ['data/shared/retained'] : ['data/shared/expired', 'data/shared/retained'],
+        (changed ? files.slice(2) : files).map((name) => `data/shared/${name}`),
       );
     } finally {
       await source?.dispose();

@@ -35,8 +35,9 @@ export type IndexedNode = readonly [
   number,
   number,
   number,
+  ...hasDirectFiles: [] | [1],
 ];
-// fields: tag,kind,path,N/protected fact,sha,owner-mask,protected-count,childrenStart,childrenEnd,sourceStart,sourceEnd
+// fields: tag,kind,path,N/protected fact,sha,owner-mask,protected-count,childrenStart,childrenEnd,sourceStart,sourceEnd,Maven direct files
 interface Frame {
   path: string;
   native: NativeIdentity;
@@ -45,10 +46,14 @@ interface Frame {
   count: number;
   mask: bigint;
   protectedCount: number;
+  hasDirectFiles?: true;
   release: () => void;
 }
 export function nodeMask(node: IndexedNode): bigint {
   return BigInt('0x' + node[5]);
+}
+export function nodeHasDirectFiles(node: IndexedNode): boolean {
+  return node[11] === 1;
 }
 export function partitionBit(model: ResolvedModel, id: string): bigint {
   const index = model.partitions.findIndex((p) => p[0] === id);
@@ -81,6 +86,7 @@ export async function buildObservedInstallIndex(
   partition: string | null,
   signal: AbortSignal,
   produce: (accept: (row: LocalRow) => Promise<void>) => Promise<void>,
+  { trackDirectFiles = false }: { trackDirectFiles?: boolean } = {},
 ): Promise<number> {
   signal.throwIfAborted();
   scratch.store.root.work.indexBuilds++;
@@ -101,6 +107,7 @@ export async function buildObservedInstallIndex(
     parent.count++;
     parent.mask |= nodeMask(node);
     parent.protectedCount += node[6];
+    if (trackDirectFiles && node[1] === 'file') parent.hasDirectFiles = true;
   }
   async function close(end: number) {
     const frame = frames.pop();
@@ -160,6 +167,7 @@ export async function buildObservedInstallIndex(
         finish,
         frame.start,
         end,
+        ...(frame.hasDirectFiles ? ([1] as const) : ([] as const)),
       ];
       const offset = await scratch.append(node, claim.token);
       await child(offset, node);

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { unlink, rmdir } from 'node:fs/promises';
+import { mkdir, unlink, rmdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tuple, canonical, type Value } from './encoding';
 import { sameNative, type NativeIdentity } from './native';
@@ -32,6 +32,13 @@ export interface GcOptions extends NativeOperationOptions {
   readonly batchBytes?: number;
 }
 const defaultSignal = () => new AbortController().signal;
+
+async function finishBatch(store: OwnedStore, phase: InstallParentPhase, signal: AbortSignal) {
+  signal.throwIfAborted();
+  await phase.barrier();
+  signal.throwIfAborted();
+  await store.fail('gc-deletions-durable');
+}
 
 async function apply(
   store: OwnedStore,
@@ -84,10 +91,7 @@ async function apply(
         marker = undefined;
       }
     }
-    signal.throwIfAborted();
-    await phase.barrier();
-    signal.throwIfAborted();
-    await store.fail('gc-deletions-durable');
+    await finishBatch(store, phase, signal);
   } finally {
     marker?.release();
   }
@@ -108,13 +112,22 @@ async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttem
     failure: unknown;
   let cursor: GcCursor | undefined;
   try {
-    program = await GcProgram.create(index, {
+    const limits = {
       operations: options.batchOperations,
       bytes: options.batchBytes,
-    });
+    };
+    if (index.hasGcSelections) program = await GcProgram.create(index, limits);
+    else {
+      GcProgram.validateLimits(limits);
+      cursor = await index.completedWithoutGcSelections(options.signal);
+    }
     container = store.prefix + 'mutation/' + randomUUID();
-    await store.makeParents(container + '/ledger/pending');
+    await store.makeParents(container);
+    await mkdir(store.root.resolve(container));
+    store.root.work.directoryCreations++;
     native = await store.root.stat(container);
+    await mkdir(store.root.resolve(container + '/ledger'));
+    store.root.work.directoryCreations++;
     phase = new InstallParentPhase(
       store,
       '',
@@ -129,16 +142,19 @@ async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttem
         }
       },
       options.signal,
+      { freshLedger: true },
     );
     options.signal.throwIfAborted();
-    for await (const value of program.batches.rows(0, program.batches.position)) {
-      options.signal.throwIfAborted();
-      const batch = value as GcBatch;
-      await apply(store, program.evidence(batch[1], batch[2]), index, phase);
-    }
-    cursor = program.final;
+    if (program) {
+      for await (const value of program.batches.rows(0, program.batches.position)) {
+        options.signal.throwIfAborted();
+        const batch = value as GcBatch;
+        await apply(store, program.evidence(batch[1], batch[2]), index, phase);
+      }
+      cursor = program.final;
+    } else await finishBatch(store, phase, options.signal);
     await attempt.guard();
-    await program.close();
+    await program?.close();
     program = undefined;
     options.signal.throwIfAborted();
   } catch (error) {
@@ -219,6 +235,10 @@ export class GcSurvivorOwner {
     const actual = await this.phase.effective(path);
     if (!actual) throw new Error('Missing surviving directory.');
     return actual;
+  }
+  changedDirectoryNative(path: string): Promise<NativeIdentity | null> {
+    this.assert();
+    return this.phase.changedNative(path);
   }
   async dispose(): Promise<void> {
     if (this.#readers) throw new Error('GC survivor hierarchy still borrowed.');

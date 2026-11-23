@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { ownsLocalSnapshot } from './model';
+import { ownsLocalSnapshot, type Partition } from './model';
 import type { PostAttempt } from './lifecycle-attempt';
 import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore, Reference } from './owned-store';
@@ -190,7 +190,14 @@ export async function captureObservations(
     charge: number;
     unitActivity: Activity;
     activityTimes: readonly [string, string];
-    unit?: { kind: string; markers: readonly [boolean, string][]; complete: number };
+    activity: Activity;
+    allDelete: boolean;
+    files: number;
+    directActivity: Activity;
+    directDelete: boolean;
+    directFiles: number;
+    directMask: bigint;
+    directSingleWriter: boolean;
   };
   let capturedIndex: ObservationIndex | undefined;
   let root: number | undefined,
@@ -256,12 +263,31 @@ export async function captureObservations(
       return 'prune';
     }
   };
-  const attach = (offset: number) => {
+  const attach = (
+    offset: number,
+    act: Activity,
+    decision: Decision,
+    files: number,
+    directOwner?: Partition,
+  ) => {
     const parent = frames[frames.length - 1];
     if (!parent) {
       if (root !== undefined) throw new Error('Multiple observation roots.');
       root = offset;
-    } else parent.entries[parent.entries.length - 1].offset = offset;
+      return;
+    }
+    parent.entries[parent.entries.length - 1].offset = offset;
+    parent.activity = maxActivity(parent.activity, act);
+    parent.files += files;
+    parent.allDelete &&= decision === 'delete';
+    if (directOwner) {
+      parent.directActivity = maxActivity(parent.directActivity, act);
+      parent.directFiles++;
+      parent.directDelete &&= decision === 'delete';
+      const pi = model.partitions.findIndex((p) => p[0] === directOwner[0]);
+      parent.directMask |= 1n << BigInt(pi);
+      parent.directSingleWriter ||= model.partitions[pi][3] === 'single-writer';
+    }
   };
   const walk = walkNative(
     store.root,
@@ -310,13 +336,23 @@ export async function captureObservations(
           if (workspace) throw new Error('Nested observation workspace.');
           workspace = { root: e.path, markers: [] };
         }
+        const charge = 128; // Per-directory reduction state.
+        options.budget.retain(charge);
         frames.push({
           path: e.path,
           native: e.identity,
           entries: [],
-          charge: 0,
+          charge,
           unitActivity,
           activityTimes: e.activityTimes ?? [e.identity[8], e.identity[9]],
+          activity: unitActivity,
+          allDelete: true,
+          files: 0,
+          directActivity: unitActivity,
+          directDelete: true,
+          directFiles: 0,
+          directMask: 0n,
+          directSingleWriter: false,
         });
       } else if (e.tag === 'file') {
         mark(e.path, false);
@@ -356,43 +392,24 @@ export async function captureObservations(
             decision,
             1,
           ]),
+          act,
+          decision,
+          1,
+          p,
         );
       } else {
         const frame = frames.pop()!;
         try {
-          let act = frame.unitActivity,
-            direct = frame.unitActivity,
-            allDelete = true,
-            directDelete = true,
-            files = 0,
-            directFiles = 0,
-            mask = 0n,
-            single = false;
-          if (BigInt(frame.activityTimes[0]) >= cutoff || BigInt(frame.activityTimes[1]) >= cutoff)
-            act = 'upsert';
-          for (const entry of frame.entries)
-            if (entry.offset !== null) {
-              const lease = await tree.record(entry.offset);
-              try {
-                const n = lease.value as Node;
-                act = maxActivity(act, n[4]);
-                files += n[9];
-                allDelete &&= n[5] === 'delete';
-                if (n[0] === 'file') {
-                  direct = maxActivity(direct, n[4]);
-                  directFiles++;
-                  directDelete &&= n[5] === 'delete';
-                  const pi = model.partitions.findIndex((p) => p[0] === n[3]);
-                  mask |= 1n << BigInt(pi);
-                  single ||= model.partitions[pi][3] === 'single-writer';
-                }
-              } finally {
-                lease.release();
-              }
-            }
+          const { files, directFiles, directMask } = frame,
+            act =
+              BigInt(frame.activityTimes[0]) >= cutoff || BigInt(frame.activityTimes[1]) >= cutoff
+                ? 'upsert'
+                : frame.activity,
+            decision = files > 0 && frame.allDelete ? 'delete' : 'retain';
+          let directDelete = frame.directDelete;
           if (
-            single &&
-            (mask & (mask - 1n)) !== 0n &&
+            frame.directSingleWriter &&
+            (directMask & (directMask - 1n)) !== 0n &&
             model.tuple[2] === 'maven' &&
             e.path.startsWith('repository/')
           )
@@ -450,17 +467,17 @@ export async function captureObservations(
             e.identity,
             null,
             act,
-            files > 0 && allDelete ? 'delete' : 'retain',
+            decision,
             start,
             end,
             kind,
             files,
             complete,
-            direct,
+            frame.directActivity,
             directFiles > 0 && directDelete ? 'delete' : 'retain',
             directFiles,
           ]);
-          attach(offset);
+          attach(offset, act, decision, files);
         } finally {
           options.budget.release(frame.charge);
         }
