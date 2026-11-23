@@ -15,6 +15,9 @@
  */
 
 import { defineConfig } from 'vitest/config';
+import { prepareTarStream } from './scripts/prepare-tar-stream.mjs';
+
+prepareTarStream();
 
 /**
  * Whether the integration test project should be included in this Vitest run.

@@ -100,8 +100,13 @@ flowchart LR
 
 ## Unreleased development changes
 
-Development now uses post-prepare timestamp cutoffs to select worker upserts and usage paths.
-Default timestamp GC combines old file mtime with current-build activity protection. It stores
-no historical last-use manifest; filesystem/clock misses may cause downloads or recomputation.
-Frozen local journals bound recovery state and retire obsolete checkpoints. Read-only tracking
-and full-generation upload optimization remain separate follow-ups.
+Development uses independently stored native partition objects, immutable
+generation records and worker TAR-v2 archives. Unchanged partitions can reuse
+their exact objects. Changes must be visible in filesystem metadata for base
+comparison. The new cache family starts cold, so upgrade cooperating jobs
+together.
+
+Use a dedicated build-tool home for each active invocation. The same post
+operation owns source return after SDK settlement, and interrupted roots are
+preserved. Development also adds the configurable per-directory entry limit
+and keeps active metadata memory bounds independent.

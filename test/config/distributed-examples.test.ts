@@ -24,7 +24,7 @@ import {
 } from '../../src/build-tool/gradle/config';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import { createCachePartitions } from '../../src/cache/model';
-import { cutoffFixtureCi } from '../support/cutoff-fixture';
+import { fixtureCi } from '../support/ci-fixture';
 
 interface Workflow {
   env: { MAMMOTH_CACHE_PARTITIONS: string };
@@ -55,12 +55,11 @@ describe('distributed Gradle workflow examples', () => {
         };
         const config = normalizeGradleActionConfig(readGradleActionInputs(source), {
           phase: 'prepare',
-          ciContext: cutoffFixtureCi(process.cwd(), jobName),
+          ciContext: fixtureCi(process.cwd(), jobName),
           env: {},
         });
         const adapter = new GradleBuildToolAdapter(config);
         const resolved = createCachePartitions(
-          '/cache',
           config.cachePartitions,
           adapter.getBuiltInPartitionPresets(),
           adapter.getHardCacheExcludeGlobs(),

@@ -22,30 +22,8 @@ import path from 'node:path';
 import { test } from 'vitest';
 import { gradleExecutable } from '../support/gradle-executable';
 
-import { createGitHubPlatform, createGitHubReportSink } from '../../src/ci/github';
-import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
 import { loadGradleBuildReport } from '../../src/build-tool/gradle/build-results';
-import {
-  normalizeGradleActionConfig,
-  readGradleActionInputs,
-  resolveGradleActionInputsFromConfigFile,
-} from '../../src/build-tool/gradle/config';
-import type { NormalizedGradleConfig } from '../../src/config/types';
-import { executePrepareAction } from '../../src/phases/prepare/flow';
-import {
-  createFinalizeActionSummaryLines,
-  executeFinalizeAction,
-} from '../../src/phases/finalize/flow';
-import type { SummaryWriter } from '../../src/ci/github/report-sink';
-import type { CompositeHost } from '../../src/host/types';
-import {
-  STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
-  type WorkflowArtifactBackend,
-} from '../../src/delta/backend';
-import {
-  STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-  type BaseCacheBackend,
-} from '../../src/cache/backend';
+import { streamingIntegrationJob } from '../support/streaming-integration';
 
 const RUN_ID = '92002';
 const RUN_ATTEMPT = '1';
@@ -82,27 +60,20 @@ async function main(): Promise<void> {
 
   try {
     const runtime = await stageProject(stagedRoot, fixtureSourceDirectory);
-    const summary = createSummaryCapture();
+    const job = await streamingIntegrationJob({
+      root: stagedRoot,
+      home: runtime.gradleUserHome,
+      tool: 'gradle',
+      installedGradle: process.env.BUILDISH_TEST_GRADLE_EXECUTABLE,
+      name: 'build-reporting',
+      inputs: { 'cache-enabled': 'false', 'read-only': 'true' },
+    });
     const gradleInvocations: readonly GradleInvocation[] = [
       { args: ['help', 'publishFakeBuildScan'], label: 'Help and publish fake Build Scan' },
       { args: ['publishFakeBuildScanFailure'], label: 'Fail fake Build Scan publication' },
     ];
 
-    await executePrepareAction({
-      artifactBackend: unavailableArtifactApi(),
-      cacheBackend: unavailableCacheApi(),
-      ...(await createGitHubActionDependencies(
-        runtime,
-        {
-          'base-directory': 'project',
-          'cache-enabled': 'false',
-          'read-only': 'true',
-        },
-        summary.writer,
-        'prepare',
-        stagedRoot,
-      )),
-    });
+    assert.deepEqual(await job.prepare(), { outcome: 'disabled' });
 
     for (const invocation of gradleInvocations) {
       await runGradle(runtime, invocation.args, invocation.label, invocation.expectedExitCode ?? 0);
@@ -144,63 +115,31 @@ async function main(): Promise<void> {
     );
     await runGradle(runtime, ['failingVerification'], 'Fail verification task', 1);
 
-    const finalizeStatus = await executeFinalizeAction({
-      artifactBackend: unavailableArtifactApi(),
-      cacheBackend: unavailableCacheApi(),
-      ...(await createGitHubActionDependencies(
-        runtime,
-        {
-          'base-directory': 'project',
-          'cache-enabled': 'false',
-          'read-only': 'true',
-        },
-        summary.writer,
-        'finalize',
-        stagedRoot,
-      )),
-    });
-    await writeFile(
-      summaryPath,
-      `${createFinalizeActionSummaryLines(finalizeStatus).join('\n')}\n`,
-      'utf8',
-    );
+    const report = await loadGradleBuildReport({ tempDirectory: job.env.RUNNER_TEMP });
+    assert.equal((await job.post()).outcome, 'disabled');
+    await writeFile(summaryPath, job.summaries.join('\n') + '\n', 'utf8');
 
-    assert.equal(finalizeStatus.buildReport.builds.length, successfulReport.builds.length + 2);
+    assert.equal(report.builds.length, successfulReport.builds.length + 2);
     assert.equal(
-      finalizeStatus.buildReport.builds.filter((build) => !build.buildFailed).length,
+      report.builds.filter((build) => !build.buildFailed).length,
       successfulReport.builds.length,
     );
-    assert.equal(finalizeStatus.buildReport.builds.filter((build) => build.buildFailed).length, 2);
+    assert.equal(report.builds.filter((build) => build.buildFailed).length, 2);
     assert.ok(
-      finalizeStatus.buildReport.builds.some(
-        (build) => build.buildFailed && build.requestedTasks === ':tests:test',
-      ),
+      report.builds.some((build) => build.buildFailed && build.requestedTasks === ':tests:test'),
     );
     assert.ok(
-      finalizeStatus.buildReport.builds.some(
+      report.builds.some(
         (build) => build.buildScanUri === 'https://scans.gradle.com/s/fake-published-scan',
       ),
     );
-    assert.ok(finalizeStatus.buildReport.builds.some((build) => build.buildScanFailed));
-    assert.ok(
-      finalizeStatus.buildReport.builds.some(
-        (build) => build.requestedTasks === 'failingVerification',
-      ),
-    );
-    assert.ok(
-      finalizeStatus.buildReport.builds.some(
-        (build) => build.requestedTasks === 'help publishFakeBuildScan',
-      ),
-    );
+    assert.ok(report.builds.some((build) => build.buildScanFailed));
+    assert.ok(report.builds.some((build) => build.requestedTasks === 'failingVerification'));
+    assert.ok(report.builds.some((build) => build.requestedTasks === 'help publishFakeBuildScan'));
 
     const summaryText = await readFile(summaryPath, 'utf8');
-    assert.match(summaryText, /## Buildish Mammoth Cache for Gradle/u);
-    // When a jobUrl is available the heading is wrapped in an HTML link:
-    //   ### <a href="…">Gradle builds</a>
-    // When it is absent it is plain text:
-    //   ### Gradle builds
-    // Either way the tool name must appear as a level-3 heading.
-    assert.match(summaryText, /### (?:<a [^>]+>)?Gradle builds/u);
+    assert.match(summaryText, /## Mammoth cache post/u);
+    assert.match(summaryText, /- Build outcomes: \d+ succeeded, 2 failed/u);
     // createGradleBuildSummaryLines renders a markdown list, not an HTML table.
     assert.match(summaryText, /### Performed Gradle builds/u);
     // escapeSummaryText escapes hyphens as \- in Markdown, so project names appear with
@@ -248,7 +187,6 @@ interface LocalRuntime {
   readonly env: NodeJS.ProcessEnv;
   readonly gradleUserHome: string;
   readonly projectDirectory: string;
-  readonly state: Map<string, string>;
 }
 
 async function stageProject(
@@ -264,7 +202,6 @@ async function stageProject(
   return {
     projectDirectory,
     gradleUserHome,
-    state: new Map<string, string>(),
     env: {
       ...process.env,
       GITHUB_ACTION: '__run',
@@ -281,7 +218,7 @@ async function stageProject(
       HOME: stagedRoot,
       RUNNER_OS: normalizeRunnerOs(process.platform),
       RUNNER_ARCH: normalizeRunnerArch(process.arch),
-      RUNNER_TEMP: path.join(stagedRoot, 'runner-temp'),
+      RUNNER_TEMP: path.join(stagedRoot, 'temp'),
     },
   };
 }
@@ -395,97 +332,6 @@ public class BuildReportingTest {
   );
 }
 
-function createInputProvider(values: Record<string, string>): { getInput(name: string): string } {
-  return {
-    getInput(name: string): string {
-      return values[name] ?? '';
-    },
-  };
-}
-
-async function createGitHubActionDependencies(
-  runtime: { readonly env: NodeJS.ProcessEnv; readonly state: Map<string, string> },
-  inputs: Record<string, string>,
-  summaryWriter: SummaryWriter,
-  phase: 'prepare' | 'finalize',
-  workspace: string,
-) {
-  const logPrefix = phase;
-  const inputProvider = createInputProvider(inputs);
-  const runtimeHost: CompositeHost = {
-    getInput(name): string {
-      return inputProvider.getInput(name);
-    },
-    getState(name): string {
-      return runtime.state.get(name) ?? '';
-    },
-    saveState(name, value): void {
-      runtime.state.set(name, value);
-    },
-    setOutput(): void {},
-    info(message): void {
-      console.log(`[${logPrefix}] ${message}`);
-    },
-    warning(message): void {
-      console.warn(`[${logPrefix}] ${message}`);
-    },
-    setFailed(message): void {
-      throw new Error(message);
-    },
-  };
-
-  const ciProvider = createGitHubPlatform({
-    env: runtime.env,
-    eventPayload: {
-      repository: { default_branch: 'main' },
-    },
-  });
-
-  const directInputs = readGradleActionInputs(runtimeHost);
-  const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, { workspace });
-  const config: NormalizedGradleConfig = normalizeGradleActionConfig(rawInputs, {
-    phase,
-    ciContext: ciProvider.context,
-    env: runtime.env,
-  });
-
-  return {
-    runtimeHost,
-    ciProvider,
-    config,
-    reportSink: createGitHubReportSink({
-      env: runtime.env,
-      summaryWriter,
-    }),
-    buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
-  };
-}
-
-function createSummaryCapture(): {
-  readonly flushes: string[][];
-  readonly writer: SummaryWriter;
-} {
-  const lines: string[] = [];
-  const flushes: string[][] = [];
-  return {
-    flushes,
-    writer: {
-      addRaw(text: string, _addEol?: boolean): SummaryWriter {
-        lines.push(text);
-        return this;
-      },
-      async write(): Promise<void> {
-        if (lines.length === 0) {
-          return;
-        }
-
-        flushes.push([...lines]);
-        lines.length = 0;
-      },
-    },
-  };
-}
-
 async function runGradle(
   runtime: LocalRuntime,
   args: readonly string[],
@@ -495,7 +341,7 @@ async function runGradle(
   console.log(`\n--- ${label} ---`);
   const executable = gradleExecutable();
   console.log(`Gradle executable: ${executable}`);
-  const result = await runProcess(executable, args, {
+  const result = await runProcess(executable, ['--no-daemon', ...args], {
     cwd: runtime.projectDirectory,
     env: runtime.env,
   });
@@ -505,53 +351,6 @@ async function runGradle(
     `Gradle command '${label}' exited with ${result.exitCode}. Output:\n${result.output}`,
   );
   return result.output;
-}
-
-function unavailableCacheApi(): BaseCacheBackend {
-  return {
-    capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
-    isFeatureAvailable(): boolean {
-      return false;
-    },
-    async restoreCache(): Promise<string | undefined> {
-      throw new Error('restoreCache must not be called when the cache feature is unavailable.');
-    },
-    async saveCache(): Promise<number> {
-      throw new Error('saveCache must not be called when the cache feature is unavailable.');
-    },
-    isMissingPathsError(): boolean {
-      return false;
-    },
-  };
-}
-
-function unavailableArtifactApi(): WorkflowArtifactBackend {
-  return {
-    capabilities: {
-      ...STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
-      supportsDeletion: false,
-      supportsCrossExecutionLookup: false,
-    },
-    async uploadArtifact(): Promise<never> {
-      throw new Error(
-        'Artifact operations should not run in the build-reporting integration test.',
-      );
-    },
-    async listArtifacts(): Promise<readonly []> {
-      return [];
-    },
-    async getArtifact(): Promise<never> {
-      throw new Error(
-        'Artifact operations should not run in the build-reporting integration test.',
-      );
-    },
-    async downloadArtifact(): Promise<never> {
-      throw new Error(
-        'Artifact operations should not run in the build-reporting integration test.',
-      );
-    },
-    async deleteArtifact(): Promise<void> {},
-  };
 }
 
 async function runProcess(

@@ -14,63 +14,23 @@
  * limitations under the License.
  */
 
+import { resolveCacheModel } from '../../src/cache/streaming/model';
 import { describe, expect, it } from 'vitest';
 
-import {
-  createCacheGeneration,
-  createCacheModel,
-  createCachePartitions,
-  createCacheRefToken,
-  renderCacheFamilyKey,
-} from '../../src/cache/model';
+import { createCachePartitions } from '../../src/cache/model';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
-import type { CiJobContext } from '../../src/ci/types';
-import type { NormalizedGradleConfig } from '../../src/config/types';
+import {
+  normalizeGradleActionConfig,
+  readGradleActionInputs,
+} from '../../src/build-tool/gradle/config';
+import { fixtureCi } from '../support/ci-fixture';
 
-const baseConfig: NormalizedGradleConfig = {
+const config = normalizeGradleActionConfig(readGradleActionInputs({ getInput: () => '' }), {
   phase: 'prepare',
-  baseDirectory: '.',
-  cacheEnabled: true,
-  readOnly: false,
-  jobMode: 'standalone',
-  dependentJobs: [],
-  workerArtifactRetentionDays: 7,
-  allowDuplicateDependentDeltaPaths: false,
-  cacheKeyPrefix: 'buildish-mammoth-cache-',
-  cachePartitions: [],
-  cacheSchemaVersion: 2,
-  wrapperSelectionMode: 'default',
-  wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
-  defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
-  wrapperPropertiesFiles: [],
-  cleanupEnabled: true,
-  restoreCleanupMode: 'none',
-  cacheGcMode: 'off',
-  cacheGcOlderThanDays: 14,
-  gradleUserHome: '/home/runner/.gradle',
-};
-
-/** Shared Gradle adapter instance for cache model tests. Constructed from baseConfig so the cacheRoot matches. */
-const gradleAdapter = new GradleBuildToolAdapter(baseConfig);
-
-const baseCiContext: CiJobContext = {
-  eventName: 'push',
-  resolvedRefName: 'feature/cache model',
-  safeRefName: 'feature-cache-model',
-  runnerOs: 'linux',
-  runnerArch: 'x64',
-  defaultBranch: 'main',
-  isPullRequest: false,
-  repository: 'buildish-tooling/buildish',
-  workflowName: 'CI',
-  jobName: 'check',
-  runId: 123,
-  runAttempt: 1,
-  sourceRevision: null,
-  tempDirectory: null,
-  workspace: '/workspace',
-  actionPath: '/workspace',
-};
+  ciContext: fixtureCi('/cache'),
+  env: { GRADLE_USER_HOME: '/cache' },
+});
+const gradleAdapter = new GradleBuildToolAdapter(config);
 
 describe('partition policy', () => {
   it('inherits snapshot policy and patterns while permitting explicit file exclusions', () => {
@@ -84,7 +44,6 @@ describe('partition policy', () => {
       relativeExcludeGlobs: ['**/gc.properties'],
     };
     const [partition] = createCachePartitions(
-      '/cache',
       [{ id: 'metadata', writer: 'master', excludes: ['metadata/skip.bin'] }],
       [preset],
       ['**/*.lock'],
@@ -96,134 +55,41 @@ describe('partition policy', () => {
       relativeExcludeGlobs: ['**/*.lock', 'metadata/skip.bin'],
     });
     expect(() =>
-      createCachePartitions('/cache', [{ id: 'custom', includes: ['data/**'], writer: 'master' }]),
+      createCachePartitions([{ id: 'custom', includes: ['data/**'], writer: 'master' }]),
     ).toThrow(/requires single-writer/);
-    expect(() =>
-      createCachePartitions('/cache', [{ id: 'custom', publication: 'single-writer' }]),
-    ).toThrow(/at least one include/);
-  });
-
-  it('separates cache compatibility for publication and writer changes', async () => {
-    const model = async (publication: 'aggregate' | 'single-writer', writer?: string) =>
-      createCacheModel(
-        {
-          ...baseConfig,
-          cachePartitions: [
-            { id: 'extra', includes: ['extra/**'], publication, ...(writer ? { writer } : {}) },
-          ],
-        },
-        baseCiContext,
-        gradleAdapter,
-      );
-    const models = await Promise.all([
-      model('aggregate'),
-      model('single-writer'),
-      model('single-writer', 'one'),
-      model('single-writer', 'two'),
-    ]);
-    expect(new Set(models.map((m) => m.partitionFingerprint)).size).toBe(4);
-  });
-});
-
-describe('cache identity rendering', () => {
-  it('renders an action-owned cache family without ref or generation identity', () => {
-    expect(renderCacheFamilyKey(baseConfig, 'gradle', 'feedcafe1234abcd')).toBe(
-      'buildish-mammoth-cache-gradle-v2-partitioned-v3-feedcafe1234abcd',
+    expect(() => createCachePartitions([{ id: 'custom', publication: 'single-writer' }])).toThrow(
+      /at least one include/,
     );
   });
 
-  it.each(['gradle', 'maven'])(
-    'keeps explicit namespaces and structural compatibility for %s',
-    (tool) => {
-      const key = renderCacheFamilyKey(baseConfig, tool, 'feedcafe1234abcd');
-      expect(
-        renderCacheFamilyKey(
-          { ...baseConfig, cacheKeyPrefix: 'project-java21-linux-' },
-          tool,
-          'feedcafe1234abcd',
-        ),
-      ).not.toBe(key);
-      expect(
-        renderCacheFamilyKey({ ...baseConfig, cacheSchemaVersion: 99 }, tool, 'feedcafe1234abcd'),
-      ).not.toBe(key);
-      expect(renderCacheFamilyKey(baseConfig, tool, 'different-layout')).not.toBe(key);
-      expect(
-        renderCacheFamilyKey(
-          baseConfig,
-          tool === 'gradle' ? 'maven' : 'gradle',
-          'feedcafe1234abcd',
-        ),
-      ).not.toBe(key);
-    },
-  );
-
-  it.each(['gradle', 'maven'])(
-    'constructs %s families without reading JAVA_HOME or launching Java',
-    async (tool) => {
-      const capture = { ...process.env };
-      // Trap inherited environment reads without changing the caller's actual JAVA_HOME.
-      const env = new Proxy(capture, {
-        get(target, key) {
-          if (key === 'JAVA_HOME') throw new Error('Cache identity must not inspect Java');
-          return Reflect.get(target, key);
-        },
-      });
-      const adapter = new GradleBuildToolAdapter(baseConfig);
-      adapter.getBuildToolId = () => tool;
-      if (tool === 'maven') adapter.getBuiltInPartitionPresets = () => [];
-      const previousEnv = process.env;
-      process.env = env;
-      try {
-        const model = await createCacheModel(baseConfig, baseCiContext, adapter);
-        expect(model.cacheFamilyKey).toMatch(
-          new RegExp('^buildish-mammoth-cache-' + tool + '-v2-partitioned-v3-[a-f0-9]{16}$', 'u'),
-        );
-        expect(model).not.toHaveProperty('javaMajor');
-      } finally {
-        process.env = previousEnv;
-      }
-    },
-  );
-
-  it('keeps lossy slug collisions in different ref lineages', () => {
-    const slashToken = createCacheRefToken('feature/cache');
-    const dashToken = createCacheRefToken('feature-cache');
-
-    expect(slashToken).toMatch(/^feature-cache-[a-f0-9]{12}$/u);
-    expect(dashToken).toMatch(/^feature-cache-[a-f0-9]{12}$/u);
-    expect(slashToken).not.toBe(dashToken);
-  });
-
-  it('creates a generation beneath the current ref lineage', () => {
-    const model = {
-      cacheFamilyKey: 'family',
-      currentRefLineagePrefix: 'family-ref-main-000000000000-gen-',
-      plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
-    };
-
-    expect(createCacheGeneration(model, 'b'.repeat(64)).key).toBe(
-      'family-ref-main-000000000000-gen-run-1-attempt-1-job-aaaaaaaaaaaa-bbbbbbbbbbbb',
-    );
-  });
-
-  it('rejects a malformed canonical content digest', () => {
-    expect(() =>
-      createCacheGeneration(
+  it('separates cache compatibility for publication and writer changes', () => {
+    const models = [
+      undefined,
+      { publication: 'single-writer' as const },
+      { publication: 'single-writer' as const, writer: 'one' },
+      { publication: 'single-writer' as const, writer: 'two' },
+    ].map((policy) =>
+      resolveCacheModel(
         {
-          cacheFamilyKey: 'family',
-          currentRefLineagePrefix: 'family-ref-main-000000000000-gen-',
-          plannedGenerationId: 'run-1-attempt-1-job-aaaaaaaaaaaa',
+          buildToolId: 'gradle',
+          hardCacheExcludeGlobs: ['.mammoth/**'],
+          partitions: createCachePartitions(
+            [{ id: 'extra', includes: ['extra/**'], ...policy }],
+            [],
+            ['.mammoth/**'],
+          ),
         },
-        'not-a-sha256',
+        'local-',
+        8,
       ),
-    ).toThrow(/lowercase SHA-256/u);
+    );
+    expect(new Set(models.map((model) => model.family)).size).toBe(4);
   });
 });
 
 describe('createCachePartitions', () => {
   it('defines the default active partitions and enforces hard excludes', () => {
     const partitions = createCachePartitions(
-      '/home/runner/.gradle',
       [],
       gradleAdapter.getBuiltInPartitionPresets(),
       gradleAdapter.getHardCacheExcludeGlobs(),
@@ -254,21 +120,11 @@ describe('createCachePartitions', () => {
     expect(
       partitions.find((partition) => partition.id === 'modules')?.relativeExcludeGlobs,
     ).toContain('caches/modules-*/metadata-*/**');
-    expect(partitions[0]?.absoluteIncludeGlobs).toContain(
-      '/home/runner/.gradle/caches/modules-*/files-*/**',
-    );
-    expect(partitions[0]?.absoluteExcludeGlobs).toContain('/home/runner/.gradle/**/*.lock');
-    expect(partitions[0]?.absoluteExcludeGlobs).toContain(
-      '/home/runner/.gradle/caches/*/cc-keystore',
-    );
-    expect(partitions[0]?.absoluteExcludeGlobs).toContain(
-      '/home/runner/.gradle/caches/modules-*/metadata-*/**',
-    );
+    expect(partitions[0]?.relativeIncludeGlobs).toContain('caches/modules-*/files-*/**');
   });
 
   it('supports built-in overrides, transform selection, and custom partitions', () => {
     const partitions = createCachePartitions(
-      '/home/runner/.gradle',
       [
         {
           id: 'modules',
@@ -311,7 +167,6 @@ describe('createCachePartitions', () => {
   it('rejects empty custom partitions', () => {
     expect(() =>
       createCachePartitions(
-        '/home/runner/.gradle',
         [{ id: 'custom-empty', includes: [], excludes: [] }],
         gradleAdapter.getBuiltInPartitionPresets(),
         gradleAdapter.getHardCacheExcludeGlobs(),
@@ -320,74 +175,54 @@ describe('createCachePartitions', () => {
   });
 });
 
-describe('createCacheModel', () => {
-  it('derives the cache model from the normalized config and ci context', async () => {
-    const cacheModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {});
-
-    expect(cacheModel.cacheFamilyKey).toMatch(
-      /^buildish-mammoth-cache-gradle-v2-partitioned-v3-[a-f0-9]{16}$/u,
-    );
-    expect(cacheModel.currentRefLineagePrefix).toMatch(
-      /^buildish-mammoth-cache-gradle-v2-partitioned-v3-[a-f0-9]{16}-ref-feature-cache-model-[a-f0-9]{12}-gen-$/u,
-    );
-    expect(cacheModel.fallbackRefLineagePrefixes).toHaveLength(1);
-    expect(cacheModel.plannedGenerationId).toMatch(/^run-123-attempt-1-job-[a-f0-9]{12}$/u);
-    expect(cacheModel.cacheRoot).toBe('/home/runner/.gradle');
-    expect(cacheModel.partitionFingerprint).toMatch(/^[a-f0-9]{16}$/);
-    expect(cacheModel.partitions).toHaveLength(7);
-    expect(cacheModel.includePaths).toContain('/home/runner/.gradle/wrapper/dists/**');
-    expect(cacheModel.excludePaths).toContain('/home/runner/.gradle/**/configuration-cache/**');
-    expect(cacheModel.excludePaths).toContain('/home/runner/.gradle/**/*.lock');
-    expect(cacheModel.excludePaths).toContain('/home/runner/.gradle/caches/*/cc-keystore');
-    expect(cacheModel.excludePaths).toContain(
-      '/home/runner/.gradle/caches/modules-*/metadata-*/**',
-    );
-  });
-
-  it('changes the partition fingerprint and cache family when the partition layout changes', async () => {
-    const defaultModel = await createCacheModel(baseConfig, baseCiContext, gradleAdapter, {});
-    const customizedConfig = {
-      ...baseConfig,
-      cachePartitions: [
-        {
-          id: 'transforms-metadata',
-          includes: ['caches/transforms-*/**'],
-          excludes: [],
-        },
-      ],
-    };
-    const customizedAdapter = new GradleBuildToolAdapter(customizedConfig);
-    const customizedModel = await createCacheModel(
-      customizedConfig,
-      baseCiContext,
-      customizedAdapter,
-      {},
-    );
-
-    expect(customizedModel.partitions.map((partition) => partition.id)).toContain(
-      'transforms-metadata',
-    );
-    expect(customizedModel.partitionFingerprint).not.toBe(defaultModel.partitionFingerprint);
-    expect(customizedModel.cacheFamilyKey).not.toBe(defaultModel.cacheFamilyKey);
-  });
-
-  it('uses a supplied UUID seed and omits fallback when the current ref is the default branch', async () => {
-    const cacheModel = await createCacheModel(
-      baseConfig,
+it('resolves actual Gradle purge defaults through the adapter and honors disable overrides', () => {
+  const resolve = (overrides: Parameters<typeof createCachePartitions>[0] = []) =>
+    resolveCacheModel(
       {
-        ...baseCiContext,
-        resolvedRefName: 'main',
-        safeRefName: 'main',
-        runId: null,
-        runAttempt: null,
+        buildToolId: 'gradle',
+        hardCacheExcludeGlobs: gradleAdapter.getHardCacheExcludeGlobs(),
+        partitions: createCachePartitions(
+          overrides,
+          gradleAdapter.getBuiltInPartitionPresets(),
+          gradleAdapter.getHardCacheExcludeGlobs(),
+        ),
       },
-      gradleAdapter,
-      {
-        randomUuid: () => '123e4567-e89b-12d3-a456-426614174000',
-      },
+      'purge-',
+      1,
     );
-
-    expect(cacheModel.plannedGenerationId).toBe('uuid-123e4567-e89b-12d3-a456-426614174000');
-    expect(cacheModel.fallbackRefLineagePrefixes).toEqual([]);
-  });
+  const model = resolve(),
+    hash = 'a'.repeat(32);
+  for (const [path, owners] of [
+    ['caches/modules-2/modules-2.lock', ['modules', 'dependency-metadata']],
+    ['caches/jars-9/jars-9.lock', ['modules']],
+    [`caches/jars-9/${hash}/source.jar.lock.lock`, ['modules']],
+    [`caches/jars-9/${hash}/source.jar.lock`, ['modules']],
+    [`caches/9.2.1/transforms/${hash}/${hash}.lock`, ['transforms-metadata']],
+    [`caches/9.2.1/kotlin-dsl/scripts/${hash}/${hash}.lock`, ['kotlin-dsl']],
+    [`caches/9.2.1/kotlin-dsl/accessors/${hash}/${hash}.lock`, ['kotlin-dsl']],
+    ['caches/9.2.1/generated-gradle-jars/generated-gradle-jars.lock', ['kotlin-dsl']],
+    [`caches/9.2.1/groovy-dsl/${hash}/${hash}.lock`, ['groovy-dsl']],
+    ['caches/build-cache-1/build-cache-1.lock', ['build-cache']],
+    ['caches/build-cache-2/build-cache-2.lock', []],
+    ['caches/modules-2/modules-unrelated.lock', []],
+    ['caches/modules-3/modules-3.lock', []],
+    ['caches/jars-9/jars-unrelated.lock', []],
+    ['caches/jars-8/jars-8.lock', []],
+    ['caches/build-cache-1/entry', []],
+    ['caches/build-cache-1/gc.properties', []],
+    ['wrapper/dists/gradle/hash/gradle.zip.lck', []],
+    [`caches/jars-9/${hash}/source.jar.receipt`, []],
+  ] as const)
+    expect(model.purge(path), path).toEqual(owners);
+  expect(
+    resolve([{ id: 'modules', purgeableGlobs: [] }]).purge('caches/modules-2/modules-2.lock'),
+  ).toEqual(['dependency-metadata']);
+  expect(
+    resolve([{ id: 'modules', includes: [] }]).purge('caches/modules-2/modules-2.lock'),
+  ).toEqual(['dependency-metadata']);
+  expect(
+    resolve([{ id: 'build-cache', purgeableGlobs: [] }]).purge(
+      'caches/build-cache-1/build-cache-1.lock',
+    ),
+  ).toEqual([]);
 });

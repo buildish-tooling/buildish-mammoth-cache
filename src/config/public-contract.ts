@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { DEFAULT_MAX_DIRECTORY_ENTRIES } from './types';
+
 /** Build-tool action variants covered by the public contract. */
 export type ActionBuildTool = 'gradle' | 'maven';
 
@@ -29,6 +31,7 @@ export type RawActionInputProperty =
   | 'allowDuplicateDependentDeltaPaths'
   | 'cacheKeyPrefix'
   | 'cachePartitions'
+  | 'cacheMaxDirectoryEntries'
   | 'cleanupEnabled'
   | 'restoreCleanupMode'
   | 'cacheGcMode'
@@ -180,6 +183,16 @@ export const PUBLIC_ACTION_INPUTS = [
     configFileValueKind: 'structured',
     description:
       'JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.',
+  },
+  {
+    name: 'cache-max-directory-entries',
+    property: 'cacheMaxDirectoryEntries',
+    tools: BOTH,
+    runtimeDefault: String(DEFAULT_MAX_DIRECTORY_ENTRIES),
+    configFile: 'allowed',
+    configFileValueKind: 'number',
+    description:
+      'Maximum direct entries per managed directory. Must be a positive safe integer. Defaults to 100000.',
   },
   {
     name: 'cleanup-enabled',

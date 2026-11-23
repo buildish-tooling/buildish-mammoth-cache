@@ -33,6 +33,8 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+DORMANT_GRAPH = "test/qualification/distributed-correctness"
+ARCHIVE_PATHS = (".", f":(exclude,literal){DORMANT_GRAPH}")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
 
@@ -95,6 +97,14 @@ def tree(repo: Path, commit: str) -> dict[str, Entry]:
             raise ValueError("Tracked historical docs/releases content must not ship")
         entries[name] = Entry(mode, blob, int(size))
     return entries
+
+
+def archive_entries(entries: dict[str, Entry]) -> dict[str, Entry]:
+    return {
+        name: entry
+        for name, entry in entries.items()
+        if name != DORMANT_GRAPH and not name.startswith(f"{DORMANT_GRAPH}/")
+    }
 
 
 def check_member(name: str, prefix: str, is_directory: bool) -> str | None:
@@ -225,8 +235,10 @@ def package(args: argparse.Namespace) -> None:
             f"--prefix={source_root}/",
             f"--output={raw_tar}",
             args.source_commit,
+            "--",
+            *ARCHIVE_PATHS,
         )
-        verify_tar(raw_tar, source, f"{source_root}/")
+        verify_tar(raw_tar, archive_entries(source), f"{source_root}/")
         with raw_tar.open("rb") as data, source_archive.open("xb") as compressed:
             with gzip.GzipFile(
                 filename="", mode="wb", fileobj=compressed, mtime=0
@@ -240,9 +252,13 @@ def package(args: argparse.Namespace) -> None:
             f"--prefix={action_root}/",
             f"--output={action_archive}",
             args.materialized_commit,
+            "--",
+            *ARCHIVE_PATHS,
         )
         distribution = staging / "distribution"
-        verify_zip(action_archive, materialized, f"{action_root}/", distribution)
+        verify_zip(
+            action_archive, archive_entries(materialized), f"{action_root}/", distribution
+        )
         # Parse metadata using trusted tooling; never execute selected-source bundles here.
         env = {
             key: value

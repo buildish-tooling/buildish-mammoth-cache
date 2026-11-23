@@ -41,7 +41,9 @@ export const JOB_MODES = ['standalone', 'distributed-worker', 'distributed-aggre
 export type JobMode = (typeof JOB_MODES)[number];
 
 /** Internal base-cache identity schema. Bump whenever compatibility semantics change. */
-export { CUTOFF_CACHE_SCHEMA_VERSION as CACHE_SCHEMA_VERSION } from '../cache/cutoff-format';
+export const CACHE_SCHEMA_VERSION = 8;
+
+export const DEFAULT_MAX_DIRECTORY_ENTRIES = 100_000;
 
 /**
  * How wrapper property files should be selected after input normalization.
@@ -90,6 +92,8 @@ export type PartitionConflictHandling =
   'default' | 'choose-worker-directory' | 'choose-worker-entry';
 
 export interface ConfiguredCachePartitionInput {
+  /** Disposable regular-file globs; [] disables preset purging. Relative to the cache root. */
+  readonly purgeableGlobs?: readonly string[];
   /** Omission inherits the preset; default keeps existing conflict behavior. */
   readonly conflictHandling?: PartitionConflictHandling;
   /** Stable machine-readable partition identifier. */
@@ -137,6 +141,7 @@ export interface RawSharedActionInputs {
   readonly cacheKeyPrefix: string;
   /** Raw JSON array of built-in partition overrides and custom partition definitions. */
   readonly cachePartitions: string;
+  readonly cacheMaxDirectoryEntries: string;
   /** Raw `cleanup-enabled` input. Empty string later defaults to `'true'`. */
   readonly cleanupEnabled: string;
   /** Raw restore cleanup mode. Empty string later defaults to `'none'`. */
@@ -248,6 +253,8 @@ export interface NormalizedActionConfig {
    * Currently fixed by the implementation, not by user input.
    */
   readonly cacheSchemaVersion: number;
+  /** Maximum direct entries per enumerated managed directory. */
+  readonly cacheMaxDirectoryEntries: number;
   /** Whether post-build cleanup behavior is enabled. Defaults to `true`. */
   readonly cleanupEnabled: boolean;
   /** Restore-time cleanup mode applied before the build starts. Defaults to `none`. */

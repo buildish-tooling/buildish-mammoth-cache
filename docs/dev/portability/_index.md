@@ -49,6 +49,11 @@ graph LR
 
 ## Architecture
 
+All providers must meet the [filesystem and lifecycle requirements](filesystem/).
+The same operation owns source return and cleanup after SDK settlement.
+Interrupted owners require inspection of the retained root and a fresh root
+for another invocation.
+
 The action is designed to run on multiple CI platforms without changes to the shared core.
 The seam between platform-specific and platform-agnostic code is defined by a set of TypeScript
 interfaces. See [CI Abstraction Layer](../../architecture/ci-abstraction/) for the full interface

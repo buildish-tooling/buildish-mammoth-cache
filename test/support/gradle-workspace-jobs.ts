@@ -18,12 +18,11 @@ import { execFile } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
-import { readCutoffLifecycle } from '../../src/phases/cutoff-lifecycle';
-import { cutoffJob } from './cutoff-job';
-import { CutoffArtifacts } from './cutoff-artifacts';
-import { ImmutableCacheBackend } from './immutable-cache-backend';
-import { captureWorkspaceEvidence } from './gradle-workspace-evidence';
+import type { ResolvedModel } from '../../src/cache/streaming/model';
+import { nativeCacheBackend } from '../cache/streaming/native-cache-fixture';
+import { memoryArtifacts } from '../cache/streaming/memory-artifact-fixture';
+import { streamingIntegrationJob } from './streaming-integration';
+import { captureStreamingWorkspaceEvidence } from './gradle-workspace-evidence';
 
 export const transformProjects = [
   'transform-cacheable',
@@ -47,8 +46,8 @@ export async function mixedWorkspaceJobs() {
   for (const home of [java21, java25]) await access(path.join(home, 'bin/javac'));
   await mkdir('build', { recursive: true });
   const root = await mkdtemp(path.resolve('build/gradle-mixed-workspaces-'));
-  const backend = new ImmutableCacheBackend(path.join(root, 'archives'));
-  const artifacts = new CutoffArtifacts(path.join(root, 'artifacts'));
+  const backend = await nativeCacheBackend();
+  const artifacts = memoryArtifacts();
   const invocations: string[] = [];
   const jarInput = path.join(root, 'jar-input');
   await mkdir(path.join(jarInput, 'nested/empty'), { recursive: true });
@@ -75,31 +74,22 @@ export async function mixedWorkspaceJobs() {
     },
   ) {
     const variant = options.variant ?? 'A';
-    const j = await cutoffJob(path.join(root, name), {
+    const j = await streamingIntegrationJob({
+      root: path.join(root, name),
+      tool: 'gradle',
+      installedGradle: executable,
       name,
-      cacheBackend: backend,
-      artifactBackend: artifacts,
+      cache: backend.backend,
+      artifacts: artifacts.api,
       inputs: {
         'job-mode': options.mode ?? 'standalone',
         'dependent-jobs': options.dependencies ?? '',
-        'cache-gc-mode': 'off',
         'read-only': String(options.readOnly ?? false),
       },
     });
-    const adapter = new GradleBuildToolAdapter({
-      ...j.deps.config,
-      gradleUserHome: j.home,
-      wrapperSelectionMode: 'default',
-      wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
-      defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',
-      wrapperPropertiesFiles: [],
-    });
-    j.adapter.getBuildToolId = () => 'gradle';
-    j.adapter.getBuiltInPartitionPresets = () => adapter.getBuiltInPartitionPresets();
-    j.adapter.getHardCacheExcludeGlobs = () => adapter.getHardCacheExcludeGlobs();
-    await cp('test/fixtures/gradle-mixed-workspaces', j.root, { recursive: true });
+    await cp('test/fixtures/gradle-mixed-workspaces', j.workspace, { recursive: true });
     for (const file of ['variant.gradle', 'extra/build.gradle.kts']) {
-      const target = path.join(j.root, file);
+      const target = path.join(j.workspace, file);
       await writeFile(
         target,
         (await readFile(target, 'utf8')).replace(
@@ -109,14 +99,14 @@ export async function mixedWorkspaceJobs() {
       );
     }
     for (const project of transformProjects) {
-      const directory = path.join(j.root, project);
+      const directory = path.join(j.workspace, project);
       await mkdir(directory);
       await writeFile(path.join(directory, 'build.gradle'), transformScript);
       await cp(jar, path.join(directory, 'input.jar'));
       await cp(jar, path.join(directory, 'extra-' + variant + '.jar'));
     }
     await writeFile(
-      path.join(j.root, 'gradle.properties'),
+      path.join(j.workspace, 'gradle.properties'),
       'org.gradle.java.installations.auto-download=false\norg.gradle.java.installations.auto-detect=false\n' +
         `org.gradle.java.installations.paths=${java21},${java25}\n`,
     );
@@ -130,7 +120,7 @@ export async function mixedWorkspaceJobs() {
     ) {
       invocations.push(label);
       console.log('Gradle stage:', label);
-      const logPath = path.join(j.root, label + '.log');
+      const logPath = path.join(j.workspace, label + '.log');
       try {
         const { stdout, stderr } = await promisify(execFile)(
           executable!,
@@ -148,7 +138,7 @@ export async function mixedWorkspaceJobs() {
             ...(runOptions.args ?? []),
           ],
           {
-            cwd: j.root,
+            cwd: j.workspace,
             timeout: 150_000,
             maxBuffer: 8 * 1024 * 1024,
             env: {
@@ -173,12 +163,23 @@ export async function mixedWorkspaceJobs() {
         throw new Error(`Gradle stage ${label} failed; log: ${logPath}`, { cause: error });
       }
     }
-    async function evidence() {
-      const state = readCutoffLifecycle(j.deps.runtimeHost.getState);
-      assert(state.cacheEnabled);
-      return captureWorkspaceEvidence(state.model);
-    }
-    return { ...j, run, evidence, variant };
+    let model: ResolvedModel | undefined;
+    return {
+      ...j,
+      root: j.workspace,
+      run,
+      variant,
+      async prepare() {
+        const prepared = await j.prepare();
+        assert('store' in prepared);
+        model = prepared.store.codec.options.model;
+        return prepared;
+      },
+      evidence() {
+        assert(model, 'Prepare supplies the managed workspace model.');
+        return captureStreamingWorkspaceEvidence(j.home, model);
+      },
+    };
   }
   return { root, backend, artifacts, job, invocations };
 }

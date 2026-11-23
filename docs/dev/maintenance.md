@@ -41,26 +41,18 @@ the process. A key-material or fingerprint mismatch fails verification. GnuPG mu
 signature successfully, and the reported primary and signing fingerprints must match a pinned
 entry. Verification uses an isolated temporary keyring with automatic key retrieval disabled.
 
-## Cache schema version
+## Cache schema and profile changes
 
-`CACHE_SCHEMA_VERSION` in `src/config/types.ts` is part of every action-owned cache family. Bump it
-whenever a change to the cache content or partition layout would make an existing base cache entry
-invalid or unsafe to reuse on the next run.
+The streaming family identity binds `CACHE_SCHEMA_VERSION` from
+`src/config/types.ts`, the resolved partition model, and the named wire,
+native, generation and local profiles. The current family uses schema 8 and
+the v2 worker, native, generation and local profiles. An incompatible
+format change needs corresponding profiles, vectors, Action docs and a
+coordinated upgrade. Old backend families start cold.
 
-Schema version bumps create a new cache family: existing lineages from the previous version are
-effectively abandoned and a cold start occurs for all users.
-
-## Partition fingerprint changes
-
-The `partitionFingerprint` value is a 16-character hex prefix of the SHA-256 of the full ordered
-partition layout (including IDs, includes, excludes, and hard excludes). Any change to the active
-partition set automatically produces a new fingerprint — and therefore a new cache family — without
-requiring a manual schema version bump. This covers:
-
-- Enabling or disabling a built-in partition.
-- Changing include or exclude globs for any active partition.
-- Adding or removing a custom partition.
-- Changing the `HARD_CACHE_EXCLUDE_GLOBS` list.
+Changes to ordered partition ownership, purge rules, publication settings
+or writer assignment already affect the model digest. See the canonical
+[model/key contract](../native-base-protocol/#model-family-and-key-identities).
 
 ## Static analysis and security scanning
 
@@ -138,25 +130,22 @@ generators. Both generated files must reject suspicious capture roots independen
 callers cannot bypass the executable-source boundary. The build-results module re-exports the
 existing path-embedding helpers as its stable facade.
 
-## Manifest performance benchmark
+## Cache lifecycle checks
 
-`npm run benchmark:manifest -- 10000 --shape=broad,deep` measures manifest capture, delta
-computation, and serialization against repeatable synthetic broad and deep cache trees. Use the same
-file count and shape list for before/after comparisons, and record Node version, elapsed capture
-time, peak heap, and peak RSS. The fixture and local filesystem dominate parts of the result, so
-treat the numbers as directional rather than as a production service-level objective.
+The default tests cover exact reuse, worker validation, GC and source return.
+The installation-work regressions count activity across partitions and shared
+directories. Product logs include elapsed phase timing for diagnosis.
 
-On POSIX systems, a constrained-descriptor check can be run in a subshell without changing machine
-configuration:
+For an explicit local check of the dormant distributed-correctness helper in a
+Git checkout, run:
 
-```bash
-ulimit -n 64
-npm run benchmark:manifest -- 10000 --shape=broad,deep
+```sh
+node --test test/qualification/distributed-correctness/helpers.test.mjs
 ```
 
-Manifest and metadata traversal use a shared default concurrency bound of 32. If that implementation
-constant changes, rerun both normal and constrained-descriptor scenarios and verify that canonical
-manifest digests remain unchanged across concurrency limits.
+This checks local helper logic without hosted SDK calls. The workflow recipe is
+outside workflow discovery and both primary release archives omit the helper.
+A hosted exercise requires a separately reviewed, fresh whole-graph admission.
 
 ## Adding a new CI provider
 
@@ -172,7 +161,7 @@ Per-provider implementation notes:
 
 Unit coverage exercises complete membership replacement, configured exclusions, writer ownership,
 missing versus empty versus invalid contributions, optional discovery, publication projection, GC,
-and interrupted snapshot/journal installation. The archive test uses the installed GitHub glob
+and interrupted-owner rejection. The archive test uses the installed GitHub glob
 implementation and GNU tar, rather than a backend that ignores path patterns.
 
 To check real Gradle recovery after ordinary artifact eviction while retaining captured binary
@@ -185,6 +174,5 @@ INTEGRATION_TESTS=1 BUILDISH_TEST_GRADLE_EXECUTABLE=/absolute/path/to/gradle/bin
 
 The test uses a loopback Maven repository, a disposable Gradle home under `build/`, and
 `--no-daemon`. It does not provision Gradle or use public dependency repositories. It is skipped
-when the executable is not supplied. This checks missing-artifact recovery through Mammoth's
-captured snapshot; it does not promise offline completeness, binary-index merging, or portability
+when the executable is not supplied. This checks missing-artifact recovery after a native snapshot round trip; it does not promise offline completeness, binary-index merging, or portability
 across every Gradle format and platform.

@@ -18,7 +18,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { createCacheModel } from '../../../src/cache/model';
+import { createCachePartitions } from '../../../src/cache/model';
+import { resolveCacheModel } from '../../../src/cache/streaming/model';
+import { gitHubStreamingFactories } from '../../../src/ci/github/streaming';
 import { MavenBuildToolAdapter } from '../../../src/build-tool/maven/adapter';
 import type { NormalizedMavenConfig } from '../../../src/config/types';
 import type { CiJobContext } from '../../../src/ci/types';
@@ -36,6 +38,7 @@ function makeConfig(overrides: Partial<NormalizedMavenConfig> = {}): NormalizedM
     cacheKeyPrefix: 'buildish-mammoth-cache-',
     cachePartitions: [],
     cacheSchemaVersion: 2,
+    cacheMaxDirectoryEntries: 100_000,
     cleanupEnabled: true,
     restoreCleanupMode: 'none',
     cacheGcMode: 'off',
@@ -66,10 +69,6 @@ const STUB_CI_CONTEXT: CiJobContext = {
 
 describe('MavenBuildToolAdapter', () => {
   describe('identity', () => {
-    it('getName returns Maven', () => {
-      expect(new MavenBuildToolAdapter(makeConfig()).getName()).toBe('Maven');
-    });
-
     it('getBuildToolId returns maven', () => {
       expect(new MavenBuildToolAdapter(makeConfig()).getBuildToolId()).toBe('maven');
     });
@@ -133,34 +132,25 @@ describe('MavenBuildToolAdapter', () => {
     });
   });
 
-  it('uses a different family and fallback lineage from the former marker-excluding layout', async () => {
-    const config = makeConfig(),
-      adapter = new MavenBuildToolAdapter(config);
-    const legacy = new MavenBuildToolAdapter(config);
-    legacy.getHardCacheExcludeGlobs = () => [
-      ...adapter.getHardCacheExcludeGlobs(),
-      '**/_remote.repositories',
-    ];
-    const options = {};
-    const currentModel = await createCacheModel(
-      config,
-      { ...STUB_CI_CONTEXT, resolvedRefName: 'feature' },
-      adapter,
-      options,
-    );
-    const oldModel = await createCacheModel(
-      config,
-      { ...STUB_CI_CONTEXT, resolvedRefName: 'feature' },
-      legacy,
-      options,
-    );
-    expect(currentModel.partitionFingerprint).not.toBe(oldModel.partitionFingerprint);
-    expect(currentModel.cacheFamilyKey).not.toBe(oldModel.cacheFamilyKey);
-    expect(
-      currentModel.fallbackRefLineagePrefixes.every((p) =>
-        p.startsWith(currentModel.cacheFamilyKey),
-      ),
-    ).toBe(true);
+  it('uses a different family from the former marker-excluding layout', () => {
+    const config = makeConfig();
+    const adapter = new MavenBuildToolAdapter(config);
+    const hard = adapter.getHardCacheExcludeGlobs();
+    const resolve = (hardCacheExcludeGlobs: readonly string[]) =>
+      resolveCacheModel(
+        {
+          buildToolId: 'maven',
+          hardCacheExcludeGlobs,
+          partitions: createCachePartitions(
+            [],
+            adapter.getBuiltInPartitionPresets(),
+            hardCacheExcludeGlobs,
+          ),
+        },
+        config.cacheKeyPrefix,
+        config.cacheSchemaVersion,
+      );
+    expect(resolve(hard).family).not.toBe(resolve([...hard, '**/_remote.repositories']).family);
   });
 
   describe('provision', () => {
@@ -185,10 +175,9 @@ describe('MavenBuildToolAdapter', () => {
     });
   });
 
-  describe('collectBuildReport', () => {
+  describe('streaming post report', () => {
     it('returns an empty build report', async () => {
-      const adapter = new MavenBuildToolAdapter(makeConfig());
-      const report = await adapter.collectBuildReport(STUB_CI_CONTEXT);
+      const report = await gitHubStreamingFactories().loadReport('maven', null);
       expect(report.anyBuildFailed).toBe(false);
       expect(report.warnings).toEqual([]);
       expect(report.summaryLines).toEqual([]);

@@ -96,6 +96,15 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
       throw new Error(`Invalid conflict-handling policy for partition '${id}'.`);
     return {
       id,
+      ...(partition.purgeableGlobs === undefined
+        ? {}
+        : {
+            purgeableGlobs: validateCachePartitionGlobList(
+              partition.purgeableGlobs,
+              `cache-partitions entry '${id}' purgeableGlobs`,
+              'exclude',
+            ),
+          }),
       ...(partition['conflict-handling'] === undefined
         ? {}
         : { conflictHandling: partition['conflict-handling'] }),

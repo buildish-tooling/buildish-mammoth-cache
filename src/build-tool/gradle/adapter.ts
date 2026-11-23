@@ -17,19 +17,12 @@
 import type { CiJobContext } from '../../ci';
 import type { NormalizedGradleConfig } from '../../config/types';
 import type {
-  BuildReport,
   BuildToolAdapter,
   BuildToolProvisioning,
   BuiltInCachePartitionPreset,
   ProvisionOptions,
 } from '../types';
-import {
-  cleanupGradleBuildResultCapture,
-  createGradleBuildSummaryLines,
-  installGradleBuildResultCapture,
-  loadGradleBuildReport,
-  type GradleBuildReport,
-} from './build-results';
+import { installGradleBuildResultCapture } from './build-results';
 import { INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME } from './build-result-capture-scripts';
 import { provisionWrapperJars, type WrapperProvisionOptions } from './wrapper/download';
 import { validateTargetWrapperProperties } from './wrapper/static-validation';
@@ -55,12 +48,17 @@ const GRADLE_HARD_CACHE_EXCLUDE_GLOBS: readonly string[] = [
  * Built-in Gradle cache partition presets in stable resolution order.
  *
  * This order is user-visible: active built-ins are emitted first and custom partitions are
- * appended afterward. The ordered layout also contributes to the `partitionFingerprint`.
+ * appended afterward. The ordered layout also contributes to the model identity.
  * All globs are relative to `GRADLE_USER_HOME`.
  */
 const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPreset[] = [
   {
     id: 'modules',
+    purgeableGlobs: [
+      'caches/modules-2/modules-2.lock',
+      'caches/jars-9/jars-9.lock',
+      'caches/jars-9/*/*.lock',
+    ],
     displayName: 'Dependency modules',
     description:
       'Downloaded dependency artifacts, plugin jars, and shared resource stores reused across builds.',
@@ -74,6 +72,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'dependency-metadata',
+    purgeableGlobs: ['caches/modules-2/modules-2.lock'],
     displayName: 'Dependency metadata',
     description: 'Complete dependency-resolution metadata snapshots from a single writer.',
     defaultEnabled: true,
@@ -83,6 +82,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'transforms-metadata',
+    purgeableGlobs: ['caches/*/transforms/*/*.lock'],
     conflictHandling: 'choose-worker-directory',
     displayName: 'Transforms and metadata',
     description: 'Complete artifact-transform workspaces selected from one worker per workspace.',
@@ -96,6 +96,11 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'kotlin-dsl',
+    purgeableGlobs: [
+      'caches/*/generated-gradle-jars/generated-gradle-jars.lock',
+      'caches/*/kotlin-dsl/scripts/*/*.lock',
+      'caches/*/kotlin-dsl/accessors/*/*.lock',
+    ],
     conflictHandling: 'choose-worker-directory',
     displayName: 'Kotlin DSL caches',
     description: 'Compiled Kotlin DSL scripts and generated Gradle API jars.',
@@ -109,6 +114,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'groovy-dsl',
+    purgeableGlobs: ['caches/*/groovy-dsl/*/*.lock'],
     displayName: 'Groovy DSL caches',
     description:
       'Complete compiled Groovy script workspaces selected from one worker per workspace.',
@@ -123,6 +129,7 @@ const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPre
   },
   {
     id: 'build-cache',
+    purgeableGlobs: ['caches/build-cache-1/build-cache-1.lock'],
     conflictHandling: 'choose-worker-entry',
     displayName: 'Local build cache',
     description: 'Reusable local task output cache entries maintained by Gradle.',
@@ -167,7 +174,7 @@ export interface GradleAdapterOptions {
  *
  * Encapsulates Gradle-specific cache partition presets, hard excludes, wrapper JAR
  * provisioning with SHA-256 and PGP signature verification, init-script injection for
- * per-invocation build-result capture, and post-build report collection.
+ * per-invocation build-result capture.
  */
 export class GradleBuildToolAdapter implements BuildToolAdapter {
   readonly #config: NormalizedGradleConfig;
@@ -178,11 +185,7 @@ export class GradleBuildToolAdapter implements BuildToolAdapter {
     this.#options = options;
   }
 
-  getName(): string {
-    return 'Gradle';
-  }
-
-  getBuildToolId(): string {
+  getBuildToolId(): 'gradle' {
     return 'gradle';
   }
 
@@ -235,53 +238,4 @@ export class GradleBuildToolAdapter implements BuildToolAdapter {
   async installBuildHooks(context: CiJobContext): Promise<void> {
     await installGradleBuildResultCapture(this.#config.gradleUserHome, context);
   }
-
-  async collectBuildReport(context: CiJobContext): Promise<BuildReport> {
-    const [report, cleanupWarnings] = await Promise.all([
-      loadGradleBuildReport(context),
-      cleanupGradleBuildResultCapture(this.#config.gradleUserHome),
-    ]);
-
-    return buildReportFromGradleReport(report, cleanupWarnings);
-  }
-}
-
-function buildReportFromGradleReport(
-  report: GradleBuildReport,
-  cleanupWarnings: readonly string[],
-): BuildReport {
-  const anyBuildFailed = report.builds.some((build) => build.buildFailed);
-  const summaryLines = createGradleBuildSummaryLines(report);
-  const logLines = createGradleBuildLogLines(report);
-
-  return {
-    anyBuildFailed,
-    warnings: [...report.warnings, ...cleanupWarnings],
-    summaryLines,
-    logLines,
-    builds: report.builds.map((build) => ({
-      buildFailed: build.buildFailed,
-      requestedTasks: build.requestedTasks || null,
-      buildScanUri: build.buildScanUri,
-      buildScanFailed: build.buildScanFailed,
-    })),
-  };
-}
-
-function createGradleBuildLogLines(report: GradleBuildReport): readonly string[] {
-  if (report.builds.length === 0) {
-    return ['No Gradle build invocations were captured.'];
-  }
-
-  return report.builds.map((build) => {
-    const outcome = build.buildFailed ? 'FAILED' : 'SUCCESS';
-    const configCache = build.configCacheHit ? ' (config-cache hit)' : ' (config-cache miss)';
-    const scanSuffix = build.buildScanUri ? ` scan=${build.buildScanUri}` : '';
-    return (
-      `Gradle ${build.gradleVersion} ${outcome}${configCache}` +
-      ` tasks='${build.requestedTasks}'` +
-      ` project='${build.rootProjectName}'` +
-      scanSuffix
-    );
-  });
 }

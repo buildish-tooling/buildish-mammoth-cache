@@ -72,37 +72,28 @@ directory to be included as upserts. This can increase payload sizes when a vers
 classifiers. It carries the worker's artifact bytes and origin marker
 together, including siblings whose timestamps did not change. It does not replicate deletions.
 
-By default, if two worker packages update the same directory, they must contain identical path sets,
-content hashes and sizes for that directory. Otherwise aggregation fails before applying the plan.
-`allow-duplicate-dependent-delta-paths` cannot override this Maven directory check. Even markers
-with matching properties can conflict because Resolver writes timestamp comments; Mammoth neither
-parses nor merges those properties.
+Under the strict policy, competing worker directories must have equivalent
+managed members and contents. The codec has bounded comparison rules for
+portable metadata. Origin differences or differing artifact membership can
+still fail the merge. `allow-duplicate-dependent-delta-paths` applies to ordinary
+path conflicts and does not override Maven directory validation.
 
 Opt-in partition `conflict-handling: choose-worker-directory` elects the producer
 with the smallest job name in JavaScript UTF-16 ordinal order and retains its
 complete immediate-directory contribution. Membership differences trigger the
 same election as content differences. It does not combine properties, bytes or
 attributes from losing workers. The policy is limited to aggregate Maven
-repository partitions and participates in their compatibility fingerprint.
-Default families remain unchanged. This trades the losing workers' cache
+repository partitions and participates in their model and family identity. This trades the losing workers' cache
 contents and resolution contexts for one actual producer view. Usage-only
 packages cannot win; forwarding changes producer identity. Different directories
 can elect different producers. See [configuration](../../user/configuration/).
 
-Before applying any upserts, the aggregator checks all non-transient files already in each
-target directory, including files excluded from caching. An existing sibling absent from the
-worker's complete view makes the update fail before any managed files change. Source snapshots
-and payload staging likewise reject directories containing excluded artifacts while their marker
-remains managed. Whole-directory exclusions remain supported; selectively excluding classifiers,
-POMs, checksums, or other artifact files from a managed directory is rejected when those files
-are present. Resolver check-state files and locks are exempt.
-
-When custom Maven exclusions are configured, base restore performs a metadata-only scan of the
-existing included trees before allowing archive extraction. This also catches directories
-containing only excluded artifacts, before a restored marker could relabel them. It adds traversal
-cost for custom exclusions, without storing a pre-build baseline or hashing pre-build contents.
-Default exclusions alone do not add this pre-restore scan. Existing package integrity and ownership
-checks still apply.
+Before live installation, Mammoth checks selected incoming views against
+target siblings, including protected non-transient files outside cache ownership.
+An incoming marker cannot displace the provenance of an excluded artifact.
+GC retains the whole coordinate when a protected non-transient sibling survives.
+Resolver check-state files and locks are exempt. Use whole-directory exclusions
+to preserve selected coordinates outside managed publication.
 
 The qualified topology uses the enhanced local repository manager with its default
 `_remote.repositories` tracking filename and unsplit `repository/` layout under a dedicated Maven
@@ -113,9 +104,9 @@ directory contributions, retaining the same target-completeness checks. Custom m
 qualified. Workers may add different artifact/version directories. Independent workers adding different classifiers, origins,
 or local installs to the same version directory can fail aggregation. Seed shared plugin and
 transitive dependencies in one job first, serialize overlapping resolution, or use standalone mode.
-Do not run Maven concurrently with Mammoth's prepare/finalize operations. Application remains
-file-by-file, so a filesystem failure can leave a partial application requiring a fresh aggregator
-retry; this is not an atomic directory transaction.
+Finish Maven and other repository consumers before Mammoth prepares or posts.
+An installation failure can leave retained local state. Inspect the original
+root and use a fresh dedicated root for a new aggregator invocation.
 
 ## Activity and garbage collection
 

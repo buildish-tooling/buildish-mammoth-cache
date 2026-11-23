@@ -57,8 +57,13 @@ Build these primary archives once for the candidate. The component-owned
 
 | Archive              | Identity and content                                                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Source `.tar.gz`     | Exact tracked source tree S, with its source/legal files; no untracked generated `dist/` or nested historical-docs worktree.         |
+| Source `.tar.gz`     | Tracked source tree S, with its source/legal files; no untracked generated `dist/` or nested historical-docs worktree.               |
 | GitHub Action `.zip` | Materialized tree M, with both Action descriptors, all four executable main/post bundles, and the required root/bundled legal files. |
+
+Both primary archives exclude the dormant internal graph at
+`test/qualification/distributed-correctness/`. The packager compares the full
+committed trees S and M outside `dist/` before applying that exclusion to the
+archives.
 
 Use detached ASCII-armored OpenPGP signatures over each archive's exact bytes, plus
 SHA-256 and SHA-512 checksum sidecars for each archive. Record the complete inventory,

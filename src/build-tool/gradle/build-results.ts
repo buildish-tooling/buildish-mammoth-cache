@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+import type { BuildReport } from '../types';
 import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { GradleOperationalCapture } from './build-result-capture-scripts';
 
 import { z } from 'zod';
 
@@ -130,13 +132,14 @@ type CapturedBuildScanFile = z.infer<typeof capturedBuildScanFileSchema>;
 export async function installGradleBuildResultCapture(
   gradleUserHome: string,
   context: BuildCaptureContext = { tempDirectory: null },
+  operational?: GradleOperationalCapture,
 ): Promise<void> {
   const initDirectory = path.join(gradleUserHome, 'init.d');
   const captureRoot = resolveCaptureRoot(context);
   await mkdir(initDirectory, { recursive: true });
   await writeFile(
     path.join(initDirectory, INIT_SCRIPT_FILE_NAME),
-    createInitScriptContents(captureRoot),
+    createInitScriptContents(captureRoot, operational),
     {
       encoding: 'utf8',
     },
@@ -390,4 +393,41 @@ function truncateSummaryText(value: string, maxLength: number): string {
   }
 
   return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+export function buildReportFromGradleReport(report: GradleBuildReport): BuildReport {
+  const anyBuildFailed = report.builds.some((build) => build.buildFailed);
+  const summaryLines = createGradleBuildSummaryLines(report);
+  const logLines = createGradleBuildLogLines(report);
+
+  return {
+    anyBuildFailed,
+    warnings: report.warnings,
+    summaryLines,
+    logLines,
+    builds: report.builds.map((build) => ({
+      buildFailed: build.buildFailed,
+      requestedTasks: build.requestedTasks || null,
+      buildScanUri: build.buildScanUri,
+      buildScanFailed: build.buildScanFailed,
+    })),
+  };
+}
+
+function createGradleBuildLogLines(report: GradleBuildReport): readonly string[] {
+  if (report.builds.length === 0) {
+    return ['No Gradle build invocations were captured.'];
+  }
+
+  return report.builds.map((build) => {
+    const outcome = build.buildFailed ? 'FAILED' : 'SUCCESS';
+    const configCache = build.configCacheHit ? ' (config-cache hit)' : ' (config-cache miss)';
+    const scanSuffix = build.buildScanUri ? ` scan=${build.buildScanUri}` : '';
+    return (
+      `Gradle ${build.gradleVersion} ${outcome}${configCache}` +
+      ` tasks='${build.requestedTasks}'` +
+      ` project='${build.rootProjectName}'` +
+      scanSuffix
+    );
+  });
 }

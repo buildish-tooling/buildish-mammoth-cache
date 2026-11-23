@@ -38,10 +38,7 @@ import {
   escapeSummaryText,
   safeHtml,
 } from '../../src/util/html';
-import {
-  normalizeUserSuppliedRelativePath,
-  validateNormalizedRelativePosixPath,
-} from '../../src/util/paths';
+import { normalizeUserSuppliedRelativePath } from '../../src/util/paths';
 import { parseSerializedJson, parseWithZod } from '../../src/util/serialization';
 import { buildMinimalChildEnv } from '../../src/util/spawn';
 
@@ -90,27 +87,6 @@ describe('validation helpers', () => {
     };
     expect(() => parseWithZod(schema, {}, 'my-label')).toThrow(
       'Invalid my-label: Unknown validation error',
-    );
-  });
-
-  it('validates normalized relative POSIX paths for caller-defined roots', () => {
-    expect(validateNormalizedRelativePosixPath('payload/000001.bin', 'path', 'the package')).toBe(
-      'payload/000001.bin',
-    );
-    expect(() => validateNormalizedRelativePosixPath('../escape', 'path', 'the package')).toThrow(
-      /normalized relative POSIX path inside the package/u,
-    );
-    expect(() =>
-      validateNormalizedRelativePosixPath('payload\\000001.bin', 'path', 'the package'),
-    ).toThrow(/normalized relative POSIX path inside the package/u);
-    expect(() => validateNormalizedRelativePosixPath('\\escape', 'path', 'the package')).toThrow(
-      /normalized relative POSIX path inside the package/u,
-    );
-    expect(() =>
-      validateNormalizedRelativePosixPath('\\\\server\\share\\payload.bin', 'path', 'the package'),
-    ).toThrow(/normalized relative POSIX path inside the package/u);
-    expect(() => validateNormalizedRelativePosixPath('C:/escape', 'path', 'the package')).toThrow(
-      /normalized relative POSIX path inside the package/u,
     );
   });
 

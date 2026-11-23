@@ -24,7 +24,7 @@ import { parse as parseYaml } from 'yaml';
 import { parseCachePartitionsInput } from '../../src/config/shared';
 import { readActionInputs, resolveActionInputsFromConfigFile } from '../../src/config/inputs';
 import { normalizeSharedActionConfig } from '../../src/config/normalize';
-import { cutoffFixtureCi } from '../support/cutoff-fixture';
+import { fixtureCi } from '../support/ci-fixture';
 
 describe('canonical raw action inputs', () => {
   it.each(['gradle', 'maven'] as const)(
@@ -52,7 +52,7 @@ describe('canonical raw action inputs', () => {
             for (const phase of ['prepare', 'finalize'] as const) {
               const config = normalizeSharedActionConfig(resolved, {
                 phase,
-                ciContext: cutoffFixtureCi(workspace),
+                ciContext: fixtureCi(workspace),
               });
               expect(config.workerArtifactRetentionDays).toBe(directValue === undefined ? 1 : 7);
             }
@@ -166,3 +166,40 @@ async function withConfigFile(
     await rm(workspace, { recursive: true, force: true });
   }
 }
+
+it.each(['gradle', 'maven'] as const)(
+  'resolves the %s managed directory limit from public inputs',
+  async (tool) => {
+    const descriptor = parseYaml(await readFile(`actions/github/${tool}/action.yml`, 'utf8')) as {
+      inputs: Record<string, { default?: string | number | boolean }>;
+    };
+    const key = 'cache-max-directory-entries';
+    await withConfigFile('limit.yml', `${key}: 42\n`, async (workspace) => {
+      for (const [direct, file, expected] of [
+        ['', '', 100_000],
+        ['', 'limit.yml', 42],
+        ['7', 'limit.yml', 7],
+      ] as const) {
+        const args: Record<string, string> = {
+          'config-file': file,
+          ...(direct ? { [key]: direct } : {}),
+        };
+        const raw = readActionInputs(tool, {
+          getInput: (name) => args[name] ?? String(descriptor.inputs[name]?.default ?? ''),
+        });
+        const inputs = await resolveActionInputsFromConfigFile(tool, raw, { workspace });
+        const config = normalizeSharedActionConfig(inputs, {
+          phase: 'prepare',
+          ciContext: fixtureCi(workspace),
+        });
+        expect(config.cacheMaxDirectoryEntries).toBe(expected);
+      }
+      for (const invalid of ['0', '-1', '1.5', '1e2', 'NaN', '9007199254740992']) {
+        const raw = readActionInputs(tool, { getInput: (name) => (name === key ? invalid : '') });
+        expect(() =>
+          normalizeSharedActionConfig(raw, { phase: 'prepare', ciContext: fixtureCi(workspace) }),
+        ).toThrow(/cache-max-directory-entries must be a positive safe integer/u);
+      }
+    });
+  },
+);

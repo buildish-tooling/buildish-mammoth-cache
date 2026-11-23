@@ -23,14 +23,14 @@ limitations under the License.
 ## Overview
 
 The action is built around a strict boundary between CI-platform-specific adapters and a shared core.
-All platform knowledge lives in `src/ci/`. The shared core in `src/phases/` never imports from
-`src/ci/` — it only depends on abstract interfaces.
+Provider implementations live in `src/ci/`. Shared streaming phases use provider-facing types and
+receive host and backend factories from the entrypoints.
 
 ```mermaid
 graph TD
     subgraph "CI adapters (src/ci/github/)"
-        GH_MAIN["main.ts\nrunPrepareExecution()"]
-        GH_POST["post.ts\nrunFinalizeExecution()"]
+        GH_MAIN["{gradle,maven}/main.ts\nrunStreamingPrepare()"]
+        GH_POST["{gradle,maven}/post.ts\nrunStreamingPost()"]
         GH_HOST["host.ts\nHostReporter + HostStateStore"]
         GH_CACHE["cache.ts\nBaseCacheBackend"]
         GH_ARTS["artifacts.ts\nWorkflowArtifactBackend"]
@@ -46,9 +46,8 @@ graph TD
     end
 
     subgraph "Shared core (src/phases/)"
-        BOOT["bootstrap.ts"]
-        PREP["prepare/flow.ts"]
-        FIN["finalize/flow.ts"]
+        PREP["streaming/prepare.ts"]
+        FIN["streaming/post.ts"]
     end
 
     GH_MAIN --> I_HOST
@@ -60,17 +59,18 @@ graph TD
     GH_POST --> I_ARTS
     GH_POST --> I_CI
 
-    I_HOST --> BOOT
-    I_CACHE --> BOOT
-    I_ARTS --> BOOT
-    I_CI --> BOOT
-    BOOT --> PREP
-    BOOT --> FIN
+    I_HOST --> PREP
+    I_HOST --> FIN
+    I_CACHE --> PREP
+    I_CACHE --> FIN
+    I_ARTS --> PREP
+    I_ARTS --> FIN
+    I_CI --> PREP
 ```
 
 ## The shared seam
 
-A CI adapter must supply implementations of five interfaces before calling into the shared core:
+A CI adapter must supply implementations of the relevant interfaces before calling into the shared core:
 
 | Interface                 | Defined in             | Purpose                                                                     |
 | ------------------------- | ---------------------- | --------------------------------------------------------------------------- |
@@ -83,8 +83,8 @@ A CI adapter must supply implementations of five interfaces before calling into 
 | `WorkflowArtifactBackend` | `src/delta/backend.ts` | Upload, list, and download delta artifact packages                          |
 | `CiPlatformAdapter`       | `src/ci/types.ts`      | Expose `CiJobContext` (job/run identity and source revision when available) |
 
-The shared core receives these as plain dependency-injection arguments. No global state; no
-environment variable reads after the adapter layer.
+The shared core receives these as plain dependency-injection arguments. The phases consume normalized inputs and an invocation handoff. Post defers SDK creation
+until the owning lifecycle needs it.
 
 ## Provider boundary rules
 
@@ -103,7 +103,7 @@ adapters without touching phase logic.
 
 ### What must NOT be in `src/ci/<provider>/`
 
-- Cache key computation, partition fingerprint calculation, manifest capture, or delta computation.
+- Cache family and generation identity, metadata observation and worker archive reduction.
 - Wrapper discovery or verification.
 - Any decision about whether to save or skip the base cache.
 - Any decision about whether to upload or skip a delta artifact.
@@ -112,7 +112,7 @@ Those decisions belong in `src/phases/` and draw only on the abstract interface 
 
 ### What must NOT be in `src/phases/`
 
-- Any import from `src/ci/`.
+- Imports of concrete provider implementations.
 - Any reference to a specific CI provider's API, SDK, or environment variable names.
 - Any fallback behavior that assumes a specific provider.
 
@@ -122,9 +122,9 @@ shapes, never the concrete implementations.
 ## Adding a new provider
 
 1. Create `src/ci/<provider>/` with implementations for each interface in the seam table above.
-2. Create phase entrypoints (equivalent to `src/ci/github/main.ts` and `src/ci/github/post.ts`)
-   that construct the concrete implementations and pass them to `runPrepareExecution()` /
-   `runFinalizeExecution()`.
+2. Create phase entrypoints (equivalent to `src/ci/github/gradle/main.ts` and `src/ci/github/gradle/post.ts`)
+   that construct the concrete implementations and pass them to `runStreamingPrepare()` /
+   `runStreamingPost()`.
 3. Create an action directory under `actions/<provider>/<build-tool>/` with an `action.yml`
    (equivalent to `actions/github/gradle/`) for the CI platform's action descriptor files.
 4. No changes to `src/phases/`, `src/cache/`, `src/delta/`, or `src/config/` should be needed

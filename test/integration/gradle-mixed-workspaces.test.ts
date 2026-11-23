@@ -16,9 +16,11 @@
 import assert from 'node:assert/strict';
 import { lstat, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { expect, test } from 'vitest';
-import { executeFinalizeAction } from '../../src/phases/finalize/flow';
+import { afterEach, expect, test } from 'vitest';
+import { cleanupBaseFixtures } from '../cache/streaming/native-cache-fixture';
 import { mixedProbeTasks, mixedWorkspaceJobs } from '../support/gradle-workspace-jobs';
+
+afterEach(cleanupBaseFixtures);
 
 const enabled =
   !!process.env.BUILDISH_TEST_GRADLE_EXECUTABLE &&
@@ -37,11 +39,26 @@ function transformLines(log: string, kind?: string) {
     .split('\n')
     .filter((line) => line.startsWith('TRANSFORM_EXECUTED ') && (!kind || line.includes(kind)));
 }
-function noCompilation(log: string) {
+async function noCompilation(job: Job, label: string) {
+  const log = await job.run(label, { cache: 'disabled' });
   expect(transformLines(log)).toEqual([]);
   expect(log).not.toContain('Kotlin DSL script compilation');
   expect(log).not.toContain('Kotlin DSL accessors for');
-  expect(log.split('\n').filter((line) => line.startsWith('Compiling '))).toEqual([]);
+  // Writable streaming jobs add capture hooks. Only the fixture's capture scripts may compile.
+  const capture = [
+    'buildish-mammoth-cache.build-result-capture.init.gradle',
+    'buildish-mammoth-cache.build-result-capture-service.plugin.groovy',
+  ].map((file) => "'" + path.join(job.home, 'init.d', file).replaceAll('\\', '/') + "'");
+  expect(
+    log
+      .split('\n')
+      .filter(
+        (line) =>
+          line.startsWith('Compiling ') &&
+          !capture.some((file) => line.replaceAll('\\', '/').includes(file)),
+      ),
+  ).toEqual([]);
+  return log;
 }
 async function output(j: Job) {
   expect(await readFile(path.join(j.root, 'kotlin/build/probe.txt'), 'utf8')).toBe('same output');
@@ -62,6 +79,13 @@ async function restored(j: Job, expected: ReturnType<typeof union>) {
   for (const unit of expected.units.values())
     for (const empty of unit.workspace.emptyDirectories)
       expect((await lstat(path.join(j.home, empty))).isDirectory()).toBe(true);
+}
+async function published(j: Job, original: ReturnType<typeof union>) {
+  expect((await j.post()).outcome).toBe('published');
+  const actual = await j.evidence();
+  for (const [key, value] of original.units) expect(actual.units.get(key)).toEqual(value);
+  for (const [key, value] of original.archives) expect(actual.archives.get(key)).toEqual(value);
+  return actual;
 }
 function distinctCommonOrigins(a: Evidence, b: Evidence, kind: 'groovy' | 'kotlin-script') {
   const common = [...a.units].filter(
@@ -86,7 +110,7 @@ test.skipIf(!enabled)(
         await j.prepare();
         expect((await j.evidence()).units.size).toBe(0);
       }
-      expect(f.backend.savedKeys).toHaveLength(0);
+      expect(f.backend.objects.size).toBe(0);
       const logA = await a.run('cold-a21', {
         cache: 'enabled',
         tasks: [...mixedProbeTasks, 'compileJava'],
@@ -145,11 +169,7 @@ test.skipIf(!enabled)(
           other.hashes.filter(([p]) => p !== key + '/metadata.bin'),
         );
       }
-      const sizes = new Map(
-        ea.snapshot.partitions
-          .flatMap((p) => p.entries)
-          .map((e) => [e.relativePath, e.identity.size]),
-      );
+      const sizes = ea.sizes;
       expect(commonTransforms.some(([key]) => sizes.get(key + '/results.bin') === 0)).toBe(true);
       expect(
         commonTransforms.some(([, u]) =>
@@ -181,37 +201,34 @@ test.skipIf(!enabled)(
         expect([...left.units.keys()].some((k) => !right.units.has(k))).toBe(true);
         expect([...left.archives.keys()].some((k) => !right.archives.has(k))).toBe(true);
       }
-      for (const j of [c, b, a]) await executeFinalizeAction(j.deps);
+      for (const j of [c, b, a]) expect((await j.post()).outcome).toBe('worker-uploaded');
       const expected = union(ec, eb, ea);
       const aggregate = await f.job('aggregate', {
         jdk: '21',
         mode: 'distributed-aggregator',
         dependencies: 'worker-c,worker-b,worker-a',
       });
-      const prepared = await aggregate.prepare();
-      expect(prepared.dependentDeltaResult!.warnings.join('\n')).toContain(
-        'Gradle cache unit selection resolved',
-      );
+      await aggregate.prepare();
+      expect(aggregate.warnings.join('\n')).toContain('Worker merge selected winners');
+      expect(aggregate.outputs['dependent-delta-artifact-count']).toBe('3');
       await restored(aggregate, expected);
-      noCompilation(await aggregate.run('aggregate21-direct', { cache: 'disabled' }));
-      await executeFinalizeAction(aggregate.deps);
+      await noCompilation(aggregate, 'aggregate21-direct');
+      // Capture hook compilation can contribute additional local workspaces.
+      const publishedBase = await published(aggregate, expected);
       for (const jdk of ['21', '25'] as const) {
         const direct = await f.job('direct-' + jdk, { jdk, readOnly: true });
-        expect((await direct.prepare()).bootstrap.baseCacheResult?.status).toBe(
-          'current-lineage-hit',
-        );
-        await restored(direct, expected);
+        expect((await direct.prepare()).restoreStatus).toBe('current-lineage-hit');
+        await restored(direct, publishedBase);
         await rm(path.join(direct.home, 'caches/build-cache-1'), { recursive: true, force: true });
-        const log = await direct.run('direct' + jdk, { cache: 'disabled' });
-        noCompilation(log);
+        const log = await noCompilation(direct, 'direct' + jdk);
         expect(log).toContain('GROOVY_PROBE_EXECUTED');
         expect(log).toContain('KOTLIN_PROBE_EXECUTED');
         await output(direct);
-        await executeFinalizeAction(direct.deps);
+        expect((await direct.post()).outcome).toBe('read-only');
       }
       const cached = await f.job('task-reader21', { jdk: '21', readOnly: true });
       await cached.prepare();
-      await restored(cached, expected);
+      await restored(cached, publishedBase);
       const layouts = new Set(
         [...expected.units.values()]
           .filter((u) => u.workspace.kind === 'artifact-transform')
@@ -231,7 +248,7 @@ test.skipIf(!enabled)(
       expect(transformLines(archiveOnlyLog, 'empty NonCacheableExpandJar')).toHaveLength(1);
       expect(transformLines(archiveOnlyLog, 'none NonCacheableExpandJar')).toHaveLength(1);
       await output(cached);
-      await executeFinalizeAction(cached.deps);
+      expect((await cached.post()).outcome).toBe('read-only');
       const inputs = await f.job('input-reader25', { jdk: '25', readOnly: true });
       await inputs.prepare();
       const java25 = await inputs.run('compiler25-miss', {
@@ -252,7 +269,7 @@ test.skipIf(!enabled)(
       expect(java21).not.toContain(':strict FROM-CACHE');
       expect(await classMajor(inputs)).toBe(65);
       expect(await readFile(path.join(inputs.root, 'build/strict.txt'), 'utf8')).toBe('b');
-      await executeFinalizeAction(inputs.deps);
+      expect((await inputs.post()).outcome).toBe('read-only');
       const seedA = await f.job('seeded-a', {
         jdk: '21',
         variant: 'C',
@@ -264,8 +281,8 @@ test.skipIf(!enabled)(
         mode: 'distributed-worker',
       });
       for (const j of [seedA, seedB]) {
-        expect((await j.prepare()).bootstrap.baseCacheResult?.status).toBe('current-lineage-hit');
-        await restored(j, expected);
+        expect((await j.prepare()).restoreStatus).toBe('current-lineage-hit');
+        await restored(j, publishedBase);
       }
       const seedEvidence = [];
       for (const j of [seedA, seedB]) {
@@ -273,9 +290,9 @@ test.skipIf(!enabled)(
         expect(log.split('\n').some((line) => line.startsWith('Compiling '))).toBe(true);
         expect(log).toContain('GROOVY_VARIANT_' + j.variant);
         const e = await j.evidence();
-        expect([...e.units.keys()].some((k) => !expected.units.has(k))).toBe(true);
+        expect([...e.units.keys()].some((k) => !publishedBase.units.has(k))).toBe(true);
         seedEvidence.push(e);
-        await executeFinalizeAction(j.deps);
+        expect((await j.post()).outcome).toBe('worker-uploaded');
       }
       const seededExpected = union(seedEvidence[1]!, seedEvidence[0]!);
       const merged = await f.job('seeded-aggregate', {
@@ -286,27 +303,21 @@ test.skipIf(!enabled)(
       });
       await merged.prepare();
       await restored(merged, seededExpected);
-      noCompilation(await merged.run('seeded-aggregate21', { cache: 'disabled' }));
-      await executeFinalizeAction(merged.deps);
+      await noCompilation(merged, 'seeded-aggregate21');
+      const publishedMerged = await published(merged, seededExpected);
       const consumer = await f.job('seeded-reader25', { jdk: '25', variant: 'D', readOnly: true });
       await consumer.prepare();
-      await restored(consumer, seededExpected);
-      noCompilation(await consumer.run('seeded-reader25', { cache: 'disabled' }));
+      await restored(consumer, publishedMerged);
+      await noCompilation(consumer, 'seeded-reader25');
       await output(consumer);
-      await executeFinalizeAction(consumer.deps);
-      for (const entry of f.backend.entries) {
-        const patterns = JSON.parse(entry.version) as string[];
-        expect(
-          patterns.every((p) => !p.includes('publication-') && !p.includes('mammoth-generation-')),
-        ).toBe(true);
-        expect(
-          patterns.some((p) =>
-            /^\.mammoth\/(?:generations-v3\/record.json|partition-objects-v3\/[^/]+\/object.json)$/u.test(
-              p,
-            ),
-          ),
-        ).toBe(true);
-      }
+      expect((await consumer.post()).outcome).toBe('read-only');
+      const saves = f.backend.calls.filter((call) => call.kind === 'save');
+      expect(saves.some((call) => call.key.includes('-g-'))).toBe(true);
+      expect(saves.some((call) => call.key.includes('-p-'))).toBe(true);
+      for (const save of saves)
+        expect(save.paths).toEqual(
+          save.key.includes('-p-') ? ['envelope.json', 'payload/'] : ['record.json'],
+        );
       await writeFile(
         path.join(f.root, 'invocations.json'),
         JSON.stringify(f.invocations, null, 2) + '\n',

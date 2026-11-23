@@ -64,6 +64,7 @@ it.each(['gradle', 'maven'])(
             GITHUB_RUN_ATTEMPT: attempt,
             ACTION_BASE_CACHE_RESTORE_STATUS: status,
             ACTION_JOB_MODE: 'distributed-aggregator',
+            ACTION_READ_ONLY: 'false',
             ACTION_DEPENDENT_DELTA_STATUS: 'applied',
             ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: '3',
           },
@@ -148,9 +149,7 @@ it('keeps native write jobs out of PR routing and requires local integration too
     expect(pr.if).toBe("github.event_name == 'pull_request'");
     expect(pr.with['run-writable-scenarios']).toBe(false);
     expect(pr.with['run-cross-platform']).toBe(false);
-    expect(workflow.jobs[`integration-trusted-${tool}`].if).toBe(
-      "github.event_name != 'pull_request'",
-    );
+    expect(workflow.jobs[`integration-trusted-${tool}`].if).toBe("github.event_name == 'push'");
     expect(workflow.jobs.required_checks.needs).toContain(`integration-trusted-${tool}`);
     expect(workflow.jobs.required_checks.needs).toContain(`integration-pr-${tool}`);
   }

@@ -61,7 +61,10 @@ describe('createGitHubWorkflowArtifactBackend', () => {
     await backend.downloadArtifact(7, { path: '/tmp/work', expectedHash: 'sha256:test', scope });
     await backend.deleteArtifact('delta', { scope });
 
-    expect(backend.capabilities).toEqual(STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES);
+    expect(backend.capabilities).toEqual({
+      ...STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
+      supportsRawWorkerArchives: true,
+    });
     expect(recorded).toEqual({
       list: { latest: true, findBy },
       get: { findBy },
@@ -93,4 +96,38 @@ describe('createGitHubWorkflowArtifactBackend', () => {
       }),
     ).rejects.toThrow("must use 'owner/name' form");
   });
+});
+
+it('forwards raw flags and returns the actual SDK basename while legacy options remain unchanged', async () => {
+  const calls: unknown[][] = [];
+  const backend = createGitHubWorkflowArtifactBackend({
+    async uploadArtifact(...args: unknown[]) {
+      calls.push(args);
+      return { id: 7, size: 9, digest: 'a'.repeat(64) };
+    },
+    async downloadArtifact(...args: unknown[]) {
+      calls.push(args);
+      return { downloadPath: '/raw', digestMismatch: false };
+    },
+  } as never);
+  const response = await backend.uploadArtifact('ignored-name', ['/tmp/actual.tar.gz'], '/tmp', {
+    skipArchive: true,
+    compressionLevel: 0,
+  });
+  expect(response.name).toBe('actual.tar.gz');
+  expect(calls[0]).toEqual([
+    'ignored-name',
+    ['/tmp/actual.tar.gz'],
+    '/tmp',
+    { skipArchive: true, compressionLevel: 0 },
+  ]);
+  await backend.downloadArtifact(7, { path: '/raw', skipDecompress: true });
+  expect(calls[1]).toEqual([
+    7,
+    { path: '/raw', expectedHash: undefined, findBy: undefined, skipDecompress: true },
+  ]);
+  await expect(
+    backend.uploadArtifact('ignored', [], '/tmp', { skipArchive: true }),
+  ).rejects.toThrow('exactly one');
+  expect(calls).toHaveLength(2);
 });

@@ -24,8 +24,8 @@ Gradle dependency metadata is cached by default in `dependency-metadata`. A stan
 its complete snapshot automatically. On prepare, preexisting managed metadata is replaced; cache
 misses start that partition empty, and displaced files produce a warning and GitHub summary.
 For distributed jobs, [select a metadata writer](../distributed-jobs/#gradle-metadata-writer) using the
-same partition configuration in every job. Without one, Mammoth retains the previous snapshot and
-warns that local metadata updates will not be published.
+same partition configuration in every job. Without a configured writer, the aggregator publishes its
+own complete snapshot; ordinary workers' metadata updates are omitted.
 
 ## What this action does
 

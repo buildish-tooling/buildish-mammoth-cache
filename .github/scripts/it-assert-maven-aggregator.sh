@@ -25,6 +25,7 @@ else
     *) exit 1 ;;
   esac
 fi
+test "$ACTION_READ_ONLY" = 'false'
 test "$ACTION_JOB_MODE" = 'distributed-aggregator'
 test "$ACTION_DEPENDENT_DELTA_STATUS" = 'applied'
 test "$ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT" = '3'

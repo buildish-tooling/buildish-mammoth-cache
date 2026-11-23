@@ -18,7 +18,6 @@
     "smoke-test": "node scripts/smoke-test.mjs",
     "integration-test:build-reporting": "make --no-print-directory integration-test-build-reporting",
     "integration-test:distributed-reuse": "make --no-print-directory integration-test-distributed-reuse",
-    "benchmark:manifest": "esbuild test/bench/manifest-benchmark.ts --bundle --platform=node --target=node24 --format=esm --outfile=build/manifest-benchmark.mjs && node --expose-gc build/manifest-benchmark.mjs",
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
@@ -26,7 +25,9 @@
     "release-legal:check": "node scripts/release-legal.mjs --check",
     "release-legal:check-incompatible-licenses": "node scripts/release-legal.mjs --check-incompatible-licenses",
     "release-legal:write": "node scripts/release-legal.mjs --write",
-    "verify": "npm audit --audit-level=high && npm run lint && npm run format && npm run test && npm run rebuild && npm run release-legal:check-incompatible-licenses"
+    "verify": "npm audit --audit-level=high && npm run lint && npm run format && npm run test && npm run rebuild && npm run release-legal:check-incompatible-licenses",
+    "precompile": "node scripts/prepare-tar-stream.mjs",
+    "prebundle": "node scripts/prepare-tar-stream.mjs"
   },
   "keywords": [
     "github-actions",
@@ -56,6 +57,7 @@
     "@actions/artifact": "6.3.1",
     "@actions/cache": "6.3.0",
     "@actions/core": "3.0.1",
+    "tar-stream": "3.2.0",
     "yaml": "2.9.1",
     "zod": "4.6.7"
   },

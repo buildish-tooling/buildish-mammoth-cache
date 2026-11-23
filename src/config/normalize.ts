@@ -27,6 +27,7 @@ import { normalizeRelativePath, parseCachePartitionsInput, validateCacheKeyPrefi
 import {
   CACHE_GC_MODES,
   CACHE_SCHEMA_VERSION,
+  DEFAULT_MAX_DIRECTORY_ENTRIES,
   JOB_MODES,
   RESTORE_CLEANUP_MODES,
   type NormalizedActionConfig,
@@ -64,6 +65,7 @@ export function normalizeSharedActionConfig(
     cacheKeyPrefix: validateCacheKeyPrefix(rawInputs.cacheKeyPrefix || 'buildish-mammoth-cache-'),
     cachePartitions: parseCachePartitionsInput(rawInputs.cachePartitions),
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
+    cacheMaxDirectoryEntries: parseDirectoryEntryLimit(rawInputs.cacheMaxDirectoryEntries),
     cleanupEnabled: parseBooleanInput(rawInputs.cleanupEnabled || 'true', 'cleanup-enabled'),
     restoreCleanupMode: parseEnumInput(
       rawInputs.restoreCleanupMode || 'none',
@@ -77,6 +79,15 @@ export function normalizeSharedActionConfig(
     ),
     cacheGcOlderThanDays: parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14'),
   };
+}
+
+function parseDirectoryEntryLimit(input: string): number {
+  const text = input.trim();
+  if (!text) return DEFAULT_MAX_DIRECTORY_ENTRIES;
+  const limit = Number(text);
+  if (!/^[0-9]+$/u.test(text) || !Number.isSafeInteger(limit) || limit < 1)
+    throw new Error('cache-max-directory-entries must be a positive safe integer.');
+  return limit;
 }
 
 function parseWorkerArtifactRetentionDays(input: string): number {

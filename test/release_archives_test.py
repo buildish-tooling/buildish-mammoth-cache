@@ -120,6 +120,39 @@ class ReleaseArchivesTest(unittest.TestCase):
         self.assertFalse(list(self.root.glob(".mammoth-package-*")))
         return result
 
+    def test_omits_only_the_dormant_graph_from_both_archives(self) -> None:
+        graph = "test/qualification/distributed-correctness"
+        retained = f"{graph}-other/example.txt"
+        repo, source, materialized = self.pair(
+            "graph isolation", {f"{graph}/nested/helper.mjs": "dormant", retained: "shipped"}
+        )
+        self.run_package(repo=repo, source=source, materialized=materialized)
+        output = self.root / "archives"
+        with (
+            tarfile.open(next(output.glob("*.tar.gz"))) as source_archive,
+            zipfile.ZipFile(next(output.glob("*.zip"))) as action_archive,
+        ):
+            for names in (source_archive.getnames(), action_archive.namelist()):
+                self.assertTrue(any(name.endswith("/" + retained) for name in names))
+                self.assertFalse(
+                    any(
+                        name.rstrip("/").endswith("/" + graph) or f"/{graph}/" in name
+                        for name in names
+                    )
+                )
+
+        (repo / graph / "nested" / "helper.mjs").write_text("changed after source")
+        git(repo, "add", "--all")
+        git(repo, "commit", "-m", "change omitted file in materialization")
+        result = self.run_package(
+            repo=repo,
+            source=source,
+            materialized=git(repo, "rev-parse", "HEAD"),
+            output=self.root / "mismatched",
+            success=False,
+        )
+        self.assertIn("preserve source files/modes", result.stderr)
+
     def test_exact_commits_archive_roots_modes_and_no_worktree_fallback(self) -> None:
         (self.repo / "source.txt").write_text("uncommitted corruption\n")
         (self.repo / "untracked.txt").write_text("must not ship\n")

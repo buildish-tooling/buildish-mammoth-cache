@@ -15,8 +15,6 @@
  */
 
 export const CACHE_METADATA_DIRECTORY = '.mammoth';
-export const CUTOFF_STATE_DIRECTORY = '.mammoth/cutoff-state-v2';
-export const EMPTY_GENERATION_PATH = '.mammoth/empty-generation-v1';
 export function isCacheMetadataPath(relativePath: string): boolean {
   return relativePath.split('/').some((part) => /^\.mammoth(?:[ .]|$)/iu.test(part));
 }

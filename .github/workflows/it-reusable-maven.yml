@@ -17,25 +17,10 @@ name: IT Mammoth Cache for Maven (Reusable)
 
 # Real GitHub integration scenario graph for Mammoth Cache for Maven.
 #
-# Scenario layout:
-# - maven_standalone_round_trip exercises a writable Linux cache round-trip by capturing the
-#   action-generated cache key, saving a cache snapshot immediately, wiping the Maven local
-#   repository, restoring that exact key, and proving the fixture resolves offline.
-# - maven_worker_a + maven_worker_b + maven_worker_c -> maven_aggregator exercises distributed worker delta
-#   publication plus same-run aggregator download/merge/apply using deterministic worker job names.
-#   Assertion: all worker-profile dependencies resolve offline in the aggregator after merge.
-# - maven_duplicate_invocation_guard proves duplicate same-job action usage is rejected.
-# - maven_pull_request_worker -> maven_pull_request_read_only checks the full PR read-only
-#   distributed topology under minimal permissions.
-# - maven_standalone_cross_platform verifies the Linux publication in fresh Windows/macOS jobs.
-#   Maven (from setup-java) is available on all runners; no GnuPG setup is required.
-#
-# Isolation/safety notes:
-# - Every scenario stages a fresh fixture copy into a unique per-job build directory.
-# - Every cache family includes github.run_id to isolate workflow runs. Distributed families stay
-#   stable across attempts so selective reruns can consume retained worker envelopes. Other
-#   scenarios also include github.run_attempt to isolate their cache round-trip assertions.
-# - Distributed artifact exchange stays within the current workflow run only.
+# Standalone producer -> fresh offline reader.
+# Worker matrix -> Linux aggregator -> native readers and Linux warm -> change -> changed reader.
+# Pull requests exercise only the read-only worker -> aggregator pair.
+# Distributed families stay stable across attempts so partial reruns can reuse worker artifacts.
 
 on:
   workflow_call:
@@ -88,12 +73,13 @@ env:
     [{"id":"repository","conflict-handling":"choose-worker-directory"},{"id":"it-portability","includes":["it-portability/**"],"publication":"aggregate"}]
 
 jobs:
-  # Performs a deterministic same-job save -> wipe -> restore cycle using the action-generated
-  # cache key, which avoids relying on post-job cache propagation timing between separate jobs.
   maven_standalone_round_trip:
-    name: Linux Maven standalone round-trip (offline exact restore)
+    name: Linux Maven standalone producer
     if: inputs.run-writable-scenarios
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    outputs:
+      attempt: ${{ steps.observer.outputs.attempt }}
     defaults:
       run:
         shell: bash
@@ -103,24 +89,41 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-seed
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
         with:
           maven: 'true'
 
-      - name: Stage fixture
-        run: bash .github/scripts/stage-fixture.sh maven-standalone-round-trip
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh seed
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        id: observer
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: seed
+          stage: seed
 
       - name: Prepare Mammoth Cache for Maven
         id: prepare
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
-          base-directory: build/integration-fixtures/maven-standalone-round-trip
-          cache-key-prefix: it-maven-standalone-${{ github.run_id }}-${{ github.run_attempt }}-
+          base-directory: build/integration-fixtures/seed
+          job-mode: standalone
+          cache-key-prefix: it-maven-standalone-${{ github.run_id }}-a${{ github.run_attempt }}-
           github-event-name: ${{ inputs.caller-event-name }}
           github-ref-name: ${{ inputs.caller-resolved-ref-name }}
           github-default-branch: ${{ inputs.caller-default-branch }}
-          github-job-name: maven_standalone_round_trip
+          github-job-name: seed
 
       - name: Assert prepare outputs
         env:
@@ -134,42 +137,79 @@ jobs:
         run: bash .github/scripts/it-assert-maven-standalone.sh
 
       - name: Resolve standalone dependencies online
-        working-directory: build/integration-fixtures/maven-standalone-round-trip
-        run: mvn -P standalone dependency:resolve
+        working-directory: build/integration-fixtures/seed
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P standalone dependency:resolve
 
-      - name: Save exact standalone cache snapshot
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Require the resolved standalone dependency
+        run: node .github/scripts/it-cache-fixture.mjs standalone maven
+
+  maven_standalone_reader:
+    name: Linux Maven standalone fresh reader
+    if: inputs.run-writable-scenarios
+    needs: [maven_standalone_round_trip]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: |
-            ~/.m2/repository
-            ~/.m2/wrapper/dists
-          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
+          persist-credentials: false
 
-      - name: Wipe Maven local repository to prove restore
-        run: |
-          rm -rf "$HOME/.m2/repository"
-          mkdir -p "$HOME/.m2/repository"
-
-      - name: Restore exact standalone cache snapshot
-        id: restore
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.m2/repository
-            ~/.m2/wrapper/dists
-          key: ${{ steps.prepare.outputs.cache-lineage-prefix }}integration-round-trip
-
-      - name: Verify the saved cache restores offline
-        working-directory: build/integration-fixtures/maven-standalone-round-trip
-        run: mvn -P standalone dependency:resolve --offline
-
-      - name: Assert exact cache reuse
-        run: test "${STEPS_RESTORE_OUTPUTS_CACHE_HIT}" = 'true'
+      - name: Set isolated cache root
         env:
-          STEPS_RESTORE_OUTPUTS_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-standalone-reader
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
 
-  # Each worker publishes an independent same-run delta artifact for the aggregator.
-  # Reuse the distributed graph: native workers on main, Linux workers on release branches.
+      - name: Set up integration test environment
+        uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
+
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh standalone-reader
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: standalone-reader
+          stage: reader
+
+      - name: Prepare Mammoth Cache for Maven
+        id: prepare
+        uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
+        with:
+          base-directory: build/integration-fixtures/standalone-reader
+          job-mode: standalone
+          cache-key-prefix: it-maven-standalone-${{ github.run_id }}-a${{ needs.maven_standalone_round_trip.outputs.attempt }}-
+          read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: standalone-reader
+
+      - name: Require the exact published generation
+        uses: ./.github/actions/it-restore-proof # zizmor: ignore[self-repository] reads artifacts from this run
+        with:
+          tool: maven
+          producer: seed
+          attempt: ${{ needs.maven_standalone_round_trip.outputs.attempt }}
+          prepare: ${{ toJSON(steps.prepare.outputs) }}
+          read-only: 'true'
+
+      - name: Require dependency bytes before the offline build
+        run: node .github/scripts/it-cache-fixture.mjs standalone maven
+
+      - name: Resolve dependencies offline
+        working-directory: build/integration-fixtures/standalone-reader
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P standalone dependency:resolve --offline
+
   maven_workers:
     name: Maven distributed ${{ matrix.worker.id }} (${{ matrix.worker.os }}, Java ${{ matrix.worker.java }})
     if: inputs.run-writable-scenarios
@@ -225,6 +265,16 @@ jobs:
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
 
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: ${{ matrix.worker.id }}
+          stage: worker
+
       - name: Prepare Mammoth Cache for Maven
         id: prepare
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
@@ -258,13 +308,14 @@ jobs:
           & mvn.cmd -B "-Dmaven.repo.local=$env:MAVEN_USER_HOME/repository" -P $env:WORKER_PROFILE dependency:resolve
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  # The job finishes its normal action post publication before fresh readers start.
   maven_aggregator:
     name: Linux Maven distributed aggregator (merge and publish)
     if: inputs.run-writable-scenarios
     needs: [maven_workers]
     runs-on: ubuntu-26.04
     timeout-minutes: 20
+    outputs:
+      attempt: ${{ steps.observer.outputs.attempt }}
     env:
       EXPECTED_ARCH: x64
     defaults:
@@ -292,6 +343,17 @@ jobs:
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven_aggregator
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        id: observer
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: maven_aggregator
+          stage: aggregator
 
       - name: Prepare Mammoth Cache for Maven
         id: prepare
@@ -332,11 +394,11 @@ jobs:
           & mvn.cmd -B "-Dmaven.repo.local=$env:MAVEN_USER_HOME/repository" -P worker-a,worker-b,worker-c dependency:resolve --offline
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  # Proves that two action invocations in the same GitHub job cannot race or double-run post-work.
   maven_duplicate_invocation_guard:
     name: Linux Maven duplicate invocation guard (same-job safety)
     if: inputs.run-writable-scenarios
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -383,11 +445,11 @@ jobs:
         env:
           STEPS_DUPLICATE_ACTION_OUTCOME: ${{ steps.duplicate_action.outcome }}
 
-  # A PR worker exercises distributed-worker finalize without artifact write permission.
   maven_pull_request_worker:
     name: Maven pull request distributed worker (no artifact upload)
     if: inputs.run-pr-scenarios
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -397,6 +459,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-maven_pull_request_worker
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
         with:
@@ -405,7 +472,18 @@ jobs:
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-pull-request-worker
 
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: maven_pull_request_worker
+          stage: pr
+
       - name: Prepare Mammoth Cache for Maven
+        id: prepare
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/maven-pull-request-worker
@@ -418,14 +496,28 @@ jobs:
 
       - name: Run a read-only PR worker build
         working-directory: build/integration-fixtures/maven-pull-request-worker
-        run: mvn -P worker-a dependency:resolve
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P worker-a dependency:resolve
 
-  # Validates the full PR worker/aggregator topology under minimal permissions.
+      - name: Require the worker's read-only prepare policy
+        env:
+          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
+          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
+          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
+          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
+          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
+        run: |
+          test "$ACTION_JOB_MODE" = distributed-worker
+          test "$ACTION_READ_ONLY" = true
+          test "$ACTION_BASE_CACHE_RESTORE_STATUS" = miss
+          test "$ACTION_DEPENDENT_DELTA_STATUS" = not-configured
+          test "$ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT" = 0
+
   maven_pull_request_read_only:
     name: Maven pull request aggregator (explicit read-only no-op)
     if: inputs.run-pr-scenarios
     needs: [maven_pull_request_worker]
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -435,6 +527,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-maven_pull_request_read_only
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
       - name: Set up integration test environment
         uses: $/.github/actions/it-setup
         with:
@@ -442,6 +539,16 @@ jobs:
 
       - name: Stage fixture
         run: bash .github/scripts/stage-fixture.sh maven-pull-request
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: maven_pull_request_read_only
+          stage: pr
 
       - name: Prepare Mammoth Cache for Maven
         id: prepare
@@ -458,7 +565,7 @@ jobs:
 
       - name: Run a read-only PR aggregator build
         working-directory: build/integration-fixtures/maven-pull-request
-        run: mvn -P standalone dependency:resolve
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P standalone dependency:resolve
 
       - name: Assert the PR default stayed read-only
         env:
@@ -469,7 +576,6 @@ jobs:
           ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
         run: bash .github/scripts/it-assert-maven-pr.sh
 
-  # Repurpose the native smoke jobs as fresh readers of the Linux publication.
   maven_standalone_cross_platform:
     name: Maven fresh reader (${{ matrix.reader.os }}, Java ${{ matrix.reader.java }})
     if: inputs.run-cross-platform && inputs.run-writable-scenarios
@@ -510,6 +616,16 @@ jobs:
       - name: Stage fresh fixture
         run: bash .github/scripts/stage-fixture.sh maven_reader-${{ matrix.reader.id }}
 
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: maven_reader-${{ matrix.reader.id }}
+          stage: reader
+
       - name: Prepare Mammoth Cache for Maven
         id: prepare
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
@@ -524,14 +640,14 @@ jobs:
           github-default-branch: ${{ inputs.caller-default-branch }}
           github-job-name: maven_reader-${{ matrix.reader.id }}
 
-      - name: Assert reader action outputs
-        env:
-          ACTION_BASE_CACHE_RESTORE_STATUS: ${{ steps.prepare.outputs.base-cache-restore-status }}
-          ACTION_JOB_MODE: ${{ steps.prepare.outputs.job-mode }}
-          ACTION_READ_ONLY: ${{ steps.prepare.outputs.read-only }}
-          ACTION_DEPENDENT_DELTA_STATUS: ${{ steps.prepare.outputs.dependent-delta-status }}
-          ACTION_DEPENDENT_DELTA_ARTIFACT_COUNT: ${{ steps.prepare.outputs.dependent-delta-artifact-count }}
-        run: node .github/scripts/it-cache-fixture.mjs reader maven
+      - name: Require the exact published generation
+        uses: ./.github/actions/it-restore-proof # zizmor: ignore[self-repository] reads artifacts from this run
+        with:
+          tool: maven
+          producer: maven_aggregator
+          attempt: ${{ needs.maven_aggregator.outputs.attempt }}
+          prepare: ${{ toJSON(steps.prepare.outputs) }}
+          read-only: 'true'
 
       - name: Assert every worker filesystem contribution
         run: node .github/scripts/it-cache-fixture.mjs assert maven
@@ -548,3 +664,237 @@ jobs:
         run: |
           & mvn.cmd -B "-Dmaven.repo.local=$env:MAVEN_USER_HOME/repository" -P worker-a,worker-b,worker-c dependency:resolve --offline
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  maven_warm:
+    name: Linux Maven writable exact reuse
+    if: inputs.run-writable-scenarios
+    needs: [maven_aggregator]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-warm
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up integration test environment
+        uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
+
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh warm
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: warm
+          stage: warm
+
+      - name: Prepare Mammoth Cache for Maven
+        id: prepare
+        uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
+        with:
+          base-directory: build/integration-fixtures/warm
+          job-mode: standalone
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
+          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: warm
+
+      - name: Require the exact published generation
+        uses: ./.github/actions/it-restore-proof # zizmor: ignore[self-repository] reads artifacts from this run
+        with:
+          tool: maven
+          producer: maven_aggregator
+          attempt: ${{ needs.maven_aggregator.outputs.attempt }}
+          prepare: ${{ toJSON(steps.prepare.outputs) }}
+          read-only: 'false'
+
+      - name: Verify restored worker contributions
+        run: node .github/scripts/it-cache-fixture.mjs assert maven
+
+  maven_change:
+    name: Linux Maven metadata-visible change
+    if: inputs.run-writable-scenarios
+    needs: [maven_aggregator, maven_warm]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    outputs:
+      attempt: ${{ steps.observer.outputs.attempt }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-change
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up integration test environment
+        uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
+
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh change
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        id: observer
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: change
+          stage: change
+
+      - name: Prepare Mammoth Cache for Maven
+        id: prepare
+        uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
+        with:
+          base-directory: build/integration-fixtures/change
+          job-mode: standalone
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
+          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: mammoth-it-change-${{ github.run_id }}-a${{ github.run_attempt }}
+          github-default-branch: ${{ inputs.caller-resolved-ref-name }}
+          github-job-name: change
+
+      - name: Require the exact published generation
+        uses: ./.github/actions/it-restore-proof # zizmor: ignore[self-repository] reads artifacts from this run
+        with:
+          tool: maven
+          producer: maven_aggregator
+          attempt: ${{ needs.maven_aggregator.outputs.attempt }}
+          prepare: ${{ toJSON(steps.prepare.outputs) }}
+          restore-status: fallback-lineage-hit
+          read-only: 'false'
+
+      - name: Verify restored worker contributions
+        run: node .github/scripts/it-cache-fixture.mjs assert maven
+
+      - name: Write one metadata-visible fixture change
+        run: node .github/scripts/it-cache-fixture.mjs change maven
+
+  maven_changed_reader:
+    name: Linux Maven fresh changed reader
+    if: inputs.run-writable-scenarios
+    needs: [maven_change]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-maven-changed-reader
+        run: printf 'MAVEN_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up integration test environment
+        uses: $/.github/actions/it-setup
+        with:
+          maven: 'true'
+
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh changed-reader
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty maven
+
+      - name: Register lifecycle assertion after Mammoth post
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: maven
+          job: changed-reader
+          stage: changed
+          producer-attempt: ${{ needs.maven_change.outputs.attempt }}
+
+      - name: Prepare Mammoth Cache for Maven
+        id: prepare
+        uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
+        with:
+          base-directory: build/integration-fixtures/changed-reader
+          job-mode: standalone
+          cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
+          cache-key-prefix: it-maven-distributed-${{ github.run_id }}-
+          read-only: true
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: mammoth-it-change-${{ github.run_id }}-a${{ needs.maven_change.outputs.attempt }}
+          github-default-branch: ${{ inputs.caller-resolved-ref-name }}
+          github-job-name: changed-reader
+
+      - name: Require the exact published generation
+        uses: ./.github/actions/it-restore-proof # zizmor: ignore[self-repository] reads artifacts from this run
+        with:
+          tool: maven
+          producer: change
+          attempt: ${{ needs.maven_change.outputs.attempt }}
+          prepare: ${{ toJSON(steps.prepare.outputs) }}
+          read-only: 'true'
+
+      - name: Verify restored worker contributions
+        run: node .github/scripts/it-cache-fixture.mjs assert maven changed
+
+      - name: Resolve dependencies offline
+        working-directory: build/integration-fixtures/changed-reader
+        run: mvn -B "-Dmaven.repo.local=$MAVEN_USER_HOME/repository" -P worker-a,worker-b,worker-c dependency:resolve --offline
+
+  required_lifecycle:
+    name: Require selected lifecycle scenarios
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    needs:
+      - maven_standalone_round_trip
+      - maven_standalone_reader
+      - maven_workers
+      - maven_aggregator
+      - maven_standalone_cross_platform
+      - maven_warm
+      - maven_change
+      - maven_changed_reader
+      - maven_duplicate_invocation_guard
+      - maven_pull_request_worker
+      - maven_pull_request_read_only
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enforce lifecycle job results
+        shell: bash
+        env:
+          IT_SCENARIO_RESULTS: ${{ toJSON(needs) }}
+          IT_RUN_WRITABLE: ${{ inputs.run-writable-scenarios }}
+          IT_RUN_PR: ${{ inputs.run-pr-scenarios }}
+          IT_RUN_NATIVE: ${{ inputs.run-cross-platform }}
+        run: node .github/scripts/it-require-results.mjs maven

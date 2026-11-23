@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import path from 'node:path';
 import artifactClient, { type ArtifactClient } from '@actions/artifact';
 
 import {
@@ -32,8 +33,14 @@ export function createGitHubWorkflowArtifactBackend(
   client: ArtifactClient = artifactClient,
 ): WorkflowArtifactBackend {
   return {
-    capabilities: STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
+    capabilities: {
+      ...STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
+      supportsRawWorkerArchives: true,
+    },
     async uploadArtifact(name, files, rootDirectory, options) {
+      if (options?.skipArchive && files.length !== 1)
+        throw new Error('Raw worker upload requires exactly one file.');
+      const actualName = options?.skipArchive ? path.basename(files[0]!) : name;
       const response = await client.uploadArtifact(name, [...files], rootDirectory, options);
 
       if (!response.id || typeof response.size !== 'number') {
@@ -44,7 +51,7 @@ export function createGitHubWorkflowArtifactBackend(
 
       return {
         id: response.id,
-        name,
+        name: actualName,
         size: response.size,
         digest: response.digest ?? null,
       };
@@ -68,6 +75,7 @@ export function createGitHubWorkflowArtifactBackend(
       const response = await client.downloadArtifact(artifactId, {
         path: options?.path,
         expectedHash: options?.expectedHash,
+        ...(options?.skipDecompress ? { skipDecompress: true } : {}),
         findBy: toGitHubFindBy(options?.scope),
       });
 

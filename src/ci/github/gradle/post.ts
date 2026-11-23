@@ -15,51 +15,15 @@
  */
 
 import { createGitHubHost } from '../host';
-import { runGuardedCutoffPost } from '../../../phases/finalize/preflight';
+import { gitHubStreamingFactories } from '../streaming';
+import { runStreamingPost } from '../../../phases/streaming/post';
 
 const runtimeHost = createGitHubHost();
-async function main(): Promise<void> {
-  await runGuardedCutoffPost(runtimeHost, async (preflight) => {
-    // Importing the artifact SDK can read GITHUB_EVENT_PATH. Defer the entire graph.
-    const { GradleBuildToolAdapter } = await import('../../../build-tool/gradle/adapter');
-    const {
-      readGradleActionInputs,
-      resolveGradleActionInputsFromConfigFile,
-      normalizeGradleActionConfig,
-    } = await import('../../../build-tool/gradle/config');
-    const { runFinalizeExecution } = await import('../../../phases/finalize/cli');
-    const { readGitHubPlatformActionInputs } = await import('../action-inputs');
-    const {
-      createGitHubBaseCacheBackend,
-      createGitHubPlatform,
-      createGitHubReportSink,
-      createGitHubWorkflowArtifactBackend,
-    } = await import('../index');
-    const ciProvider = createGitHubPlatform({
-      env: process.env,
-      ...readGitHubPlatformActionInputs(runtimeHost, 'gradle'),
-    });
-    const directInputs = readGradleActionInputs(runtimeHost);
-    const rawInputs = await resolveGradleActionInputsFromConfigFile(directInputs, {
-      workspace: ciProvider.context.workspace,
-    });
-    const config = normalizeGradleActionConfig(rawInputs, {
-      phase: 'finalize',
-      ciContext: ciProvider.context,
-      env: process.env,
-    });
-    await runFinalizeExecution({
-      runtimeHost,
-      ciProvider,
-      config,
-      preflight,
-      reportSink: createGitHubReportSink({ env: process.env }),
-      cacheBackend: createGitHubBaseCacheBackend(undefined, config.gradleUserHome),
-      artifactBackend: config.readOnly ? undefined : createGitHubWorkflowArtifactBackend(),
-      buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
-    });
-  });
-}
-main().catch((error: unknown) => {
+runStreamingPost({
+  ...gitHubStreamingFactories(),
+  runtimeHost,
+  // Dedicated job root/completed consumers; recovery retains its own cleanup lifetime.
+  assertCurrent: (): undefined => {},
+}).catch((error: unknown) => {
   runtimeHost.setFailed(error instanceof Error ? error.message : String(error));
 });

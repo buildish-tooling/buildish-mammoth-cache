@@ -59,8 +59,9 @@ Mammoth caches artifact files in `modules` and resolution metadata in the separa
 enabled-by-default `dependency-metadata` partition. In standalone mode, the current job owns
 metadata publication. Distributed mode accepts one complete snapshot from the partition's
 configured `writer`; other jobs' local updates are omitted. If the writer contributes no snapshot,
-Mammoth carries forward the previous snapshot. With no writer configured, it also emits a warning
-and explains the retained metadata in the GitHub summary.
+Mammoth carries forward the previous snapshot. With no writer configured, or with the aggregator
+itself named, the aggregator publishes its own complete metadata snapshot. Ordinary workers
+export metadata only when explicitly named as writer.
 
 A snapshot replaces the entire configured metadata file set, including removals. An explicit empty
 snapshot clears it; an absent contribution preserves it. Before restore, Mammoth removes preexisting
@@ -192,10 +193,9 @@ the unsuffixed directory variant also has synthetic coverage based on the source
 layouts are skipped with bounded warnings. Partial ownership fails capture.
 Required directories may be empty. Legacy `caches/<version>/scripts/` content and
 generated Gradle API JARs retain ordinary strict handling in the same partition.
-Native references carry workspace roots and exact ordinary-file paths so both
-surfaces survive publication and restore. The guarded replacement, recovery and
-whole-unit GC mechanics are shared with Groovy below. `default` retains complete
-capture but rejects conflicting views, including origin-only differences.
+Native objects carry literal managed files and directories. Guarded native
+placement, same-operation cleanup and whole-unit GC are shared with Groovy.
+The `default` conflict policy rejects differing complete worker views.
 
 ## Groovy DSL workspaces
 
@@ -216,22 +216,20 @@ Cleanup state, locks and temporary roots are excluded.
 Workers upload complete changed workspaces. `choose-worker-directory` selects the
 smallest producer job name for overlapping views, preserving metadata and outputs
 from one producer together. Distinct workspace keys can come from different workers.
-Unused keys from another project may remain cached. No hash of `GRADLE_USER_HOME`
-is added to the family. Incoming units replace only managed workspace contents,
-with guarded staging and recoverable replacement intent. GC uses whole units.
+Unused keys from another project may remain cached. The family excludes the local
+`GRADLE_USER_HOME` path. Incoming unit replacement operates on managed contents
+through guarded native placement. GC works on complete units.
 
-Each Groovy partition has an immutable base object containing native workspace paths
-and a family-bound descriptor. References carry the accepted workspace roots to keep
-SDK path versions consistent. Empty directories are reconstructed from validated
-metadata. Changed partitions are hashed/archived directly without payload staging
-copies; unchanged objects are reused. Restore moves disposable extracted inputs
-into guarded workspace staging, with verified cross-filesystem fallback where needed.
-Workers continue to stage full changed units for envelope upload. Missing base objects
-start their partitions cold without discarding unrelated validated cache partitions.
+A nonempty Groovy base partition uses a native object containing its literal
+files and directories with a bounded identity descriptor. Metadata-visible
+changes drive reuse. A changed partition can be moved into owned SDK staging
+and returned after the SDK settles in the same operation. Incoming worker TAR-v2
+archives still validate each body and complete unit. Missing base objects can
+start a partition cold while unrelated validated objects remain available.
 
 Local Linux qualification covered Gradle 8.7 and 9.8.1, relocation, and Java 21/25.
-The end-to-end Mammoth regression uses Gradle 9.8.1 with Java 21/25 and a Kotlin DSL
-control. Gradle 8.14.6 and 9.9.1 source inspection informs the metadata requirement;
+The local mixed-workspace integration runs with an installed Gradle executable,
+Java 21/25 and a Kotlin DSL control. Gradle 8.14.6 and 9.9.1 source inspection informs the metadata requirement;
 those versions were not runtime-qualified here. Native Windows/macOS and hosted
 artifact-action parity remain unqualified. These results establish reuse for the
 tested fixtures, with no general performance or universal compatibility claim.

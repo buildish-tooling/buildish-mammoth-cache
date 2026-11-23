@@ -19,12 +19,23 @@
 // Small filesystem assertions shared by the existing native integration jobs.
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
-import { chmod, glob, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  chmod,
+  glob,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { cacheHome, producerEvidence } from '../actions/it-observe/evidence.mjs';
+import { assertDependency } from './it-cache-dependencies.mjs';
 
 const [operation, tool, worker] = process.argv.slice(2);
 const root =
@@ -43,7 +54,42 @@ const fixtures = new Map([
 const script = Buffer.from('#!/bin/sh\nprintf "mammoth executable\\n"\n');
 const fileAt = (id, name) => path.join(root, 'it-portability', id, name);
 
-if (operation === 'seed') {
+if (operation === 'empty') {
+  const home = cacheHome(tool);
+  const contents = await readdir(home).catch((error) => {
+    if (error.code !== 'ENOENT') throw error;
+    return [];
+  });
+  assert.deepEqual(contents, [], 'Tool home was populated before prepare');
+} else if (operation === 'exact') {
+  const {
+    IT_PRODUCER_ATTEMPT: attempt,
+    IT_EXPECTED_RESTORE: expectedRestore,
+    IT_EXPECTED_READ_ONLY: expectedReadOnly,
+  } = process.env;
+  assert(attempt, 'Missing producer attempt');
+  const producer = await producerEvidence(tool, worker, attempt);
+  const prepare = JSON.parse(process.env.IT_PREPARE);
+  assert.equal(prepare['base-cache-restore-status'], expectedRestore);
+  assert.equal(prepare['read-only'], expectedReadOnly);
+  assert.equal(prepare['job-mode'], 'standalone');
+  assert.equal(prepare['dependent-delta-status'], 'not-configured');
+  assert.equal(prepare['dependent-delta-artifact-count'], '0');
+  assert.equal(prepare['restored-cache-key'], producer.key, 'Restored a different generation');
+} else if (operation === 'standalone') {
+  await assertDependency(tool, cacheHome(tool), 'standalone');
+} else if (operation === 'change') {
+  const file = fileAt('worker_a', '-leading-dash.txt');
+  const before = await stat(file);
+  await appendFile(file, 'changed\n');
+  const time = new Date(before.mtimeMs - 2000);
+  await utimes(file, time, time);
+  const after = await stat(file);
+  assert(
+    after.size > before.size && after.mtimeMs !== before.mtimeMs,
+    'Invisible fixture mutation',
+  );
+} else if (operation === 'seed') {
   assert(workers.includes(worker));
   for (const [name, bytes] of fixtures) {
     const file = fileAt(worker, name);
@@ -61,11 +107,17 @@ if (operation === 'seed') {
 } else if (operation === 'assert') {
   for (const id of workers) {
     for (const [name, bytes] of fixtures) {
-      assert.deepEqual(
-        await readFile(fileAt(id, name)),
-        name === 'empty file' ? Buffer.alloc(0) : Buffer.concat([Buffer.from(id + '\n'), bytes]),
-        `${id}/${name}`,
-      );
+      const expected =
+        name === 'empty file'
+          ? Buffer.alloc(0)
+          : Buffer.concat([
+              Buffer.from(id + '\n'),
+              bytes,
+              worker === 'changed' && id === 'worker_a' && name === '-leading-dash.txt'
+                ? Buffer.from('changed\n')
+                : Buffer.alloc(0),
+            ]);
+      assert.deepEqual(await readFile(fileAt(id, name)), expected, `${id}/${name}`);
     }
     if (id !== 'worker_b') {
       const executable = fileAt(id, 'executable script.sh');
@@ -79,23 +131,7 @@ if (operation === 'seed') {
     }
   }
   if (tool === 'maven') {
-    // Maven 3.10's Resolver qualifies origin keys with the configured repository URL.
-    const central =
-      'central-' + createHash('sha1').update('https://repo.maven.apache.org/maven2').digest('hex');
-    for (const [directory, jar] of [
-      ['com/google/guava/guava/33.6.0-jre', 'guava-33.6.0-jre.jar'],
-      ['commons-io/commons-io/2.22.0', 'commons-io-2.22.0.jar'],
-      ['org/apache/commons/commons-collections4/4.5.0', 'commons-collections4-4.5.0.jar'],
-    ]) {
-      const artifact = path.join(root, 'repository', directory);
-      assert((await stat(path.join(artifact, jar))).size > 0);
-      assert(
-        (await readFile(path.join(artifact, '_remote.repositories'), 'utf8'))
-          .split(/\r?\n/u)
-          .includes(jar + '>' + central + '='),
-        `Expected Central origin marker for ${directory}/${jar}`,
-      );
-    }
+    for (const id of workers) await assertDependency(tool, root, id, { central: true });
   }
 } else if (operation === 'groovy') {
   // Inspect restored real workspaces before running Gradle, which could rebuild them.
@@ -151,10 +187,6 @@ if (operation === 'seed') {
       .filter((line) => /Compiling|FROM-CACHE/u.test(line))
       .join('\n') + '\n',
   );
-} else if (operation === 'reader') {
-  assert.equal(process.env.ACTION_BASE_CACHE_RESTORE_STATUS, 'current-lineage-hit');
-  assert.equal(process.env.ACTION_READ_ONLY, 'true');
-  assert.equal(process.env.ACTION_JOB_MODE, 'standalone');
 } else {
   throw new Error(`Unknown fixture operation: ${operation}`);
 }

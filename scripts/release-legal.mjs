@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
+import { prepareTarStream, upstreamPackagePath } from './prepare-tar-stream.mjs';
 
 /**
  * Generate and verify distribution-oriented legal files for the bundled GitHub
@@ -465,6 +466,7 @@ async function collectBundledPackageRoots() {
   // The esbuild metafile is the authoritative answer to "what ships in the
   // action bundle". We intentionally do not scan package-lock.json alone,
   // because many installed packages never make it into dist/github/.
+  prepareTarStream();
   const packageLock = JSON.parse(await fs.readFile(packageLockPath, 'utf8'));
   const candidateRoots = Object.keys(packageLock.packages)
     .filter((packagePath) => packagePath.startsWith('node_modules/'))
@@ -484,7 +486,7 @@ async function collectBundledPackageRoots() {
 
   const packageRoots = new Set();
   for (const inputPath of Object.keys(result.metafile.inputs)) {
-    const normalizedInputPath = inputPath.replace(/\\/g, '/');
+    const normalizedInputPath = upstreamPackagePath(inputPath);
     const packageRoot = candidateRoots.find(
       (candidateRoot) =>
         normalizedInputPath === candidateRoot ||

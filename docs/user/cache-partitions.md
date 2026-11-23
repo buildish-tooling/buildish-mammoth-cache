@@ -60,10 +60,9 @@ Set `enabled: false` on `transforms-metadata` to disable it or
 
 Direct capture includes outputs of non-build-cacheable transforms. These may contain
 private dependency content or data written by build logic: cache and artifact readers
-must be allowed to see those contents. This partition adds scans, hashing, archive and
-transfer I/O, and may duplicate build-cache output bytes. No speedup is guaranteed.
-Cache schema 8 intentionally starts new Gradle and Maven families, including previously
-configured transform partitions; old file-only captures are not promoted to complete units.
+must be allowed to see those contents. Worker validation, native staging and transfer add I/O. Transform output can also
+duplicate bytes stored in the Gradle build-cache partition. The current storage and
+worker profiles start new families for Gradle and Maven.
 
 The `groovy-dsl` partition captures complete hashed workspaces under
 `caches/*/groovy-dsl/<32-hex-key>/`, including both metadata files, compiled classes,
@@ -76,9 +75,8 @@ locks, temporary workspaces and cleanup bookkeeping are excluded.
 
 Changed members select the whole workspace for upload; any observed usage protects
 the whole workspace from GC. GC removes a workspace only when every member is old
-and unprotected. Base publication hashes and archives native files in each changed Groovy partition;
-unchanged partition objects are reused. Empty directories travel as validated metadata, without
-another archive layer or base-upload payload staging copy.
+and unprotected. Base publication archives native files and directories in changed partitions.
+Unaffected partition objects are reused.
 Set `enabled: false` on `groovy-dsl` to disable it, or set `conflict-handling: default`
 to reject conflicting complete workspace views. Single-writer publication is unsupported.
 
@@ -116,9 +114,28 @@ partition covers and why certain files are excluded.
 Built-in partitions for both tools keep a deterministic order. Custom partitions are appended after
 the active built-ins in the order supplied by `cache-partitions`.
 
-The resolved partition order, include/exclude sets, publication policies, and writer identities are hashed into
-`partitionFingerprint`, which is part of the cache family. Changing the active partition layout
+The resolved partition order, include/exclude sets, publication policies, and writer identities are bound into
+the model identity, which is part of the cache family. Changing the active partition layout
 produces a different family and therefore starts a cold lineage for the complete managed state.
+
+## Purgeable files (unreleased streaming lifecycle)
+
+The existing `cache-partitions` entries accept `purgeableGlobs`. Omit the field to
+inherit preset defaults, use `[]` to disable purging, or supply a list to replace
+defaults. Custom partitions can supply rules too; their default is no purging.
+For example, `{"id":"build-cache","purgeableGlobs":[]}` disables its default rules.
+A custom partition can use `{"id":"scratch","includes":["scratch/**"],
+"purgeableGlobs":["scratch/**/*.tmp"]}`. These are explicit disposable-file rules;
+ordinary `excludes` preserve files locally. Purgeable files are excluded from uploads.
+
+Deletion is available only to the unreleased streaming lifecycle's explicitly gated
+pre-capture primitive, after all consumers are excluded; it is not enabled in released
+Action prepare/post paths. Rules remain confined to the managed root, cannot delete
+another partition's nonconsenting payload, follow links or delete reserved metadata.
+Only files encountered by the existing traversal qualify. Hard-pruned directories,
+including Gradle configuration-cache and journal subtrees, remain opaque: rules aimed
+there are unsupported, and broad rules do not cause extra traversal. Effective rules
+are frozen for retry; changing current defaults cannot change an existing attempt.
 
 ## Include and exclude semantics
 
@@ -128,7 +145,7 @@ produces a different family and therefore starts a cold lineage for the complete
   the preset. This permits a writer-only override.
 - Built-in overrides with `includes: []` disable that built-in.
 - Custom partitions with `includes: []` are rejected.
-- If the same file matches more than one active partition, manifest capture fails instead of guessing an owner.
+- If the same file matches more than one active partition, ownership validation fails instead of guessing an owner.
 
 Hard safety excludes are always applied to every active partition and cannot be removed:
 
@@ -161,9 +178,10 @@ Each partition resolves a `publication` policy and an optional distributed `writ
 
 `aggregate` preserves the existing cutoff upsert/usage exchange and conflict checks.
 `single-writer` captures and replaces the complete configured file set, including deletions.
-Standalone jobs own their snapshots automatically. In distributed mode only the named writer's
-snapshot qualifies; all jobs can restore it and modify their local copies. A validated snapshot can
-be published even if its build failed. The aggregator can itself be explicitly named as writer.
+Standalone jobs own their snapshots automatically, regardless of the configured writer. In
+distributed mode, the aggregator owns snapshots with no configured writer or with itself named as
+writer. An ordinary worker exports a snapshot only when explicitly named. All jobs can restore
+snapshots and modify their local copies. A validated snapshot can be published even if its build failed.
 
 ```yaml
 cache-partitions:
@@ -177,8 +195,8 @@ This is config-file YAML. For a direct action input, pass the equivalent JSON st
 cache-partitions: '[{"id":"dependency-metadata","writer":"worker-a"}]'
 ```
 
-If no writer is configured or it contributes no snapshot, the previous snapshot survives unchanged.
-A warning and GitHub summary explain the fallback. A corrupt or incompatible contribution fails;
+If a different job is named as writer and contributes no snapshot, the previous snapshot survives
+unchanged. A warning and GitHub summary explain the fallback. A corrupt or incompatible contribution fails;
 it is not treated as missing. A writer's explicit empty snapshot clears the configured set.
 
 Snapshot completeness follows the user's include/exclude definition, with required hard excludes.
@@ -235,23 +253,23 @@ Examples:
 ```
 
 This example: overrides `modules`, disables `kotlin-dsl`, and adds a custom partition. The
-`partitionFingerprint` changes, so it uses a different cache family than the default layout.
+model identity changes, so it uses a different cache family than the default layout.
 
 ## Timestamp garbage collection
 
-`cache-gc-mode: timestamp` is the default. Writable standalone/aggregate jobs remove regular managed
-files with mtime older than grace (14 days, minimum two), unless current local/upstream activity
-protects the path. Prepare records C after its own work; finalize uses ctime/mtime >= C for assumed
+`cache-gc-mode: timestamp` is the default. Eligible writable post operations can
+remove regular managed files with an mtime older than the age threshold (14 days by
+default, minimum two) when current local or upstream activity does not protect them. Prepare records C after its own work; finalize uses ctime/mtime >= C for assumed
 upserts and atime >= C for access-only observations.
 
 No historical last-use grace is stored. `noatime`, `relatime`, coalesced timestamps and clock changes
-can hide use, causing useful old files to be removed and redownloaded or recomputed. Workers and
-read-only jobs skip GC. `cleanup-enabled: false` and `cache-gc-mode: off` disable deletion, retaining
-writable tracking/exchange costs. Read-only finalize skips publication-only scans, snapshot capture
-and replay checks; activity counts are unavailable. Prepare still verifies restored snapshots and
-replaces their managed live files. #7 tracks full-generation upload costs.
+can hide use, causing useful old files to be removed and redownloaded or recomputed.
+Read-only jobs skip GC. Writable workers can run timestamp GC before packaging. `cleanup-enabled: false` and `cache-gc-mode: off` disable deletion, retaining
+writable tracking and exchange costs. Read-only post skips activity capture and
+publication. Prepare still validates restored snapshots and replaces their managed
+live files.
 
-Aggregate partitions exchange no tombstones: locally deleted paths can return after restore/replay
+Aggregate partitions exchange no tombstones: locally deleted paths can return after restore
 until GC. Single-writer snapshots replace membership, so their deletions propagate without tombstones.
 These partitions skip per-file GC; ordinary artifact GC still runs independently.
 The internal namespace `.mammoth`, including case/portable aliases and names beginning `.mammoth.`
@@ -261,33 +279,22 @@ Use `cache-gc-mode: off` or increase grace when old dependencies must remain ava
 
 ## Restore cleanup behavior
 
-Single-writer partitions always replace preexisting managed files before restore, with a warning
-and GitHub summary when files are displaced. A miss starts them empty. This applies even with
-`cleanup-enabled: false`; excluded files survive. Retained seed snapshots are independent of local
-build changes. Complete snapshot copy/hash staging adds local I/O in standalone mode too.
+Single-writer partitions replace existing managed files with the admitted snapshot
+and start empty on a miss. This applies even with `cleanup-enabled: false`.
+Excluded files survive. Snapshots that must survive a mutable build may need
+independent local copies.
 
-For ordinary partitions, `restore-cleanup-mode: prune-managed` is the optional narrow cleanup mode.
+For ordinary partitions, `restore-cleanup-mode: prune-managed` is opt-in.
+It acts after a base hit within the managed scope of validated objects. A
+missing partition object supplies no prune authority. Disabling a partition
+leaves its previously managed paths outside the current cleanup scope.
 
-- It only runs after a base-cache hit.
-- It only deletes files currently matched by the active managed partitions.
-- After pruning, it restores the matched base cache again before the build starts.
-- It does not delete unmanaged files elsewhere in the build tool cache directory.
-- If you disable a partition, files from that now-disabled partition are no longer considered
-  action-managed and are left untouched.
-- If the follow-up restore misses after pruning, the action fails rather than continuing with a
-  partially pruned managed cache space.
-
-This is intentionally narrower than "delete everything outside the include patterns" because the
-action does not own the entire build tool cache directory, especially on long-lived self-hosted runners.
-
-Maven origin markers (`_remote.repositories`) remain cached. Changed files under `repository/`
-carry their complete managed directory in worker packages; different worker views of the same
-directory fail aggregation by default, even with duplicate-path overrides. GC retains a managed directory
-while any sibling survives. Partial-directory exclusions cannot leave excluded artifact bytes
-beside a replaced or deleted marker: source capture, aggregation, and GC reject such directories,
-and custom-exclusion restores validate the existing tree before extraction. Whole-directory
-exclusions remain supported. See [Maven caching patterns](../maven-caching-patterns/) for topology,
-snapshot/local-install exclusions, and cold-seeding guidance.
+Maven origin markers (`_remote.repositories`) remain cached. Worker upserts include
+the complete managed directory. Different required worker views fail aggregation
+under the strict policy. Target validation prevents replacing a marker over an
+excluded artifact sibling. GC preserves a coordinate with a protected sibling.
+Use whole-directory exclusions to keep specific local artifacts out of publication.
+See [Maven caching patterns](../maven-caching-patterns/).
 
 The explicit Maven `conflict-handling: choose-worker-directory` partition policy
 can instead select one complete producer view per immediate directory. It keeps
@@ -298,22 +305,20 @@ verification remain enforced. See [configuration](../configuration/).
 
 ## Cross-generation reuse and recovery
 
-Reuse follows existing cutoff and snapshot change decisions, with membership comparison for
-removals. It does not hash every managed ordinary file before and after a build. Empty partitions
-are explicit generation entries, so an older nonempty object is never fetched as fallback.
+Metadata-visible changes drive reuse. Mammoth compares paths, sizes and
+filesystem metadata, and can miss byte rewrites that preserve the compared
+metadata. Incoming worker content still receives strict archive validation.
+Empty partitions are explicit generation entries.
 
-Restore uses exact objects from one selected generation. An expired object makes its partition
-cold while other validated partitions remain available; logs distinguish complete hits, partial
-hits and misses. Missing snapshot partitions start empty. Maven partitions sharing a coordinate
-directory recover together to keep artifacts and origin markers coherent. Corrupt metadata or
-payloads fail validation. Normal builds can refill missing caches; no recovery command is required.
+Restore uses exact objects from one selected generation. An expired object
+can leave its partition cold while other validated partitions remain available.
+Maven partitions sharing a coordinate recover together. Normal builds can
+refill missing objects.
 
-The storage format changes the action-owned family, so old monolithic caches start cold. Expect
-more backend requests, independently evictable objects and extraction staging space. Changed ordinary
-and Groovy files are hashed and archived at native paths; existing snapshot payloads are archived
-directly. Base uploads create no extra payload copies or hardlinks. Restore normally moves verified
-files from root-local staging; cross-filesystem moves use a verified, recoverable copy fallback.
-Snapshot ownership/capture retains its existing separate snapshot representation and copy cost.
-Partition transfers are sequential, with the backend SDK handling concurrency inside each archive.
-No end-to-end speed or wire-byte saving has been measured. See
-[base cache design](../../architecture/base-cache/) for publication ordering and retry behavior.
+The current profiles use a new action-owned family. Upgrade cooperating jobs
+together and expect old backend entries to miss. Changed base objects archive
+native files and directories. The same post operation returns writable sources
+after the SDK settles. Native placement and transfer use same-filesystem moves.
+Allow space for extraction, independent snapshots, archives and temporary metadata.
+See the [base cache design](../../architecture/base-cache/) and
+[troubleshooting](../troubleshooting/#interrupted-cache-operations).

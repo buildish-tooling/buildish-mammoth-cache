@@ -20,24 +20,18 @@ import {
   resolveGradleActionInputsFromConfigFile,
   normalizeGradleActionConfig,
 } from '../../../build-tool/gradle/config';
-import { runPrepareExecution } from '../../../phases/prepare/cli';
+import { runStreamingPrepare } from '../../../phases/streaming/prepare';
+import { gitHubStreamingFactories } from '../streaming';
+import { createGitHubHost } from '../host';
+import { createGitHubPlatform } from '../provider';
 import type { NormalizedGradleConfig } from '../../../config/types';
 import { readGitHubPlatformActionInputs } from '../action-inputs';
-
-import {
-  createGitHubBaseCacheBackend,
-  createGitHubPlatform,
-  createGitHubReportSink,
-  createGitHubHost,
-  createGitHubWorkflowArtifactBackend,
-} from '../index';
 
 const runtimeHost = createGitHubHost();
 const ciProvider = createGitHubPlatform({
   env: process.env,
   ...readGitHubPlatformActionInputs(runtimeHost, 'gradle'),
 });
-const reportSink = createGitHubReportSink({ env: process.env });
 
 async function main(): Promise<void> {
   const directInputs = readGradleActionInputs(runtimeHost);
@@ -50,13 +44,14 @@ async function main(): Promise<void> {
     env: process.env,
   });
 
-  await runPrepareExecution({
+  await runStreamingPrepare({
+    ...gitHubStreamingFactories(config.gradleUserHome),
+    providerId: 'github',
+    // Dedicated job root/completed consumers; tool inspection supplies fresh evidence.
+    assertCurrent: (): undefined => {},
     runtimeHost,
     ciProvider,
-    reportSink,
     config,
-    cacheBackend: createGitHubBaseCacheBackend(undefined, config.gradleUserHome),
-    artifactBackend: config.readOnly ? undefined : createGitHubWorkflowArtifactBackend(),
     buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
   });
 }

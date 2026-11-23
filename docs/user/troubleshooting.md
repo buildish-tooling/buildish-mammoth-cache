@@ -91,7 +91,8 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
 **Diagnostic steps:**
 
 1. **Keep timestamp GC enabled.** `cache-gc-mode: timestamp` is the default and prunes managed
-   files before standalone or distributed-aggregator jobs save the base cache when mtime is older than `cache-gc-older-than-days` without current local/upstream activity protection.
+   files in eligible writable post operations when mtime is older than
+   `cache-gc-older-than-days` and current local or upstream activity does not protect them.
    No historical last-use grace is stored; noatime/relatime and coalesced clocks can hide use.
    `off` disables deletion only, retaining tracking/exchange costs.
 
@@ -235,16 +236,41 @@ already present in the repository.
 The token is applied only to requests targeting `api.github.com` and `raw.githubusercontent.com`.
 It is never written to workflow summaries, log output, or post-action persisted state.
 
-## Cutoff recovery errors
+## Interrupted cache operations
 
-Missing, oversized, corrupt, superseded or inconsistent local state fails finalize closed. Run a fresh
-prepare rather than editing the journal. Normal retention keeps current only; interrupted pointer
-writes may leave a candidate, and a corrupt pointer conservatively preserves unknown journals until
-successful replacement.
+Dedicate the Gradle or Maven user home to one active invocation at a time.
+Keep other processes out of the root while Mammoth prepares, observes or moves
+cache contents. Use the same home for the Action and the build. For example,
+set Gradle's `GRADLE_USER_HOME` to the same path as an explicit
+`gradle-user-home` input.
 
-Fresh aggregation may rewrite identical upserts and upload a complete generation. Usage alone does
-not force a base save. Read-only overhead (#6) and full-generation optimization (#7) remain follow-ups.
-Linux fixtures do not establish large-cache affordability; native Windows/macOS validation is open.
+If the Action reports an interrupted lifecycle or an incompatible legacy intent,
+preserve the old root and start the next invocation with a fresh dedicated root.
+Check the reported paths for retained data before removing any files. A
+disabled-cache invocation still checks a root that already exists.
+
+If writable Gradle post reports a quiescence failure, check the log for the
+installation or unavailable process evidence. Ensure Gradle builds and any
+consumers have finished, including nested builds and background daemons. The
+Action can safely stop registered Gradle daemons when it can establish ownership.
+Required aggregator publication fails when that evidence is unavailable.
+A standalone save can be skipped with a diagnostic. For Maven, finish all
+repository users before post.
+
+A failed or unconfirmed worker upload reports any retained immutable package.
+Preserve the package and inspect that original invocation's failure. For a
+failed source return, inspect both the original and retained paths and avoid
+overwriting either copy. Start a new workflow invocation on clean dedicated
+roots after diagnosing the failure.
+
+## Directory breadth and memory diagnostics
+
+A directory breadth error gives the phase, directory and effective
+[`cache-max-directory-entries`](../configuration/#cache-max-directory-entries)
+value. A working-budget error instead identifies name metadata or decoded
+records. The breadth setting leaves those budgets in force.
+Phase timings in the Action log help locate time spent in observation,
+validation, publication and backend SDK calls.
 
 ## Cross-platform cache sharing
 

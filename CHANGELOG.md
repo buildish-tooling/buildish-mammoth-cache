@@ -18,90 +18,34 @@ limitations under the License.
 
 ## Unreleased
 
-- Add `worker-artifact-retention-days` to the Gradle and Maven actions, defaulting to `7`.
-  Request `1` day for shorter worker artifact residence with a narrower selective/aggregator-only
-  retry window. Backend limits and removal can shorten availability further. Cache expiry and
-  timestamp GC remain independent; successful aggregation still retains worker envelopes.
-
-- Save immutable partition objects independently and publish a small generation record last.
-  Reuse unchanged partition payloads across generations, publish explicit empty entries for removals,
-  and recover available partitions when another object expires. Maven coordinate owners spanning
-  partitions recover together. Preserve snapshot ownership, complete Groovy workspaces, read-only
-  finalize and frozen publication retries; confirm ambiguous saves by exact readback. The new
-  `partitioned-v2` family starts cold and uses CI lifecycle 6/local journal 4; worker formats stay
-  unchanged. Transfers remain sequential between partitions with SDK archive concurrency. This
-  adds backend requests and extraction staging space. Archive native ordinary/Groovy files and
-  existing snapshot payloads directly, with no extra save-side payload copies or hardlinks. Restore
-  uses moves on the managed filesystem, with verified recoverable cross-device copy fallback.
-  Recheck frozen sources after uploads; no measured speed or wire-byte saving is claimed.
-
-- Enable a separate default Gradle `groovy-dsl` partition with whole-workspace
-  `conflict-handling: choose-worker-directory`. Preserve both metadata files, output
-  membership and empty directories from one producer per hashed workspace. Keep
-  distinct workspace keys, reject partial overrides and use whole-workspace GC.
-  Transport empty directories as validated metadata with flat payloads, without a
-  nested archive. Guarded replacement supports interruption recovery. Changed Groovy partitions
-  use native hash/archive publication; worker-envelope staging remains separate. Qualify real
-  Gradle 9.8.1 Java 21/25 distributed reuse and retain the Kotlin DSL control.
-
-- Add opt-in partition `conflict-handling: choose-worker-directory` for aggregate Maven repository
-  partitions. Select a complete producer directory deterministically, including differing file sets,
-  rather than mixing files or parsing origin markers. Losing classifiers, origin entries and local
-  installs may be unavailable downstream. Preserve strict default behavior, default cache identities,
-  and checks for existing or excluded target siblings absent from the winner. Opt-in families are
-  isolated by the effective policy. Enable the mode explicitly in hosted Maven distributed scenarios.
-
-- Share Gradle and Maven cache families across Java versions, operating systems and architectures by default.
-  Opt into separation with `cache-key-prefix`. Remove Java detection, probing and Java-based lifecycle
-  drift checks; build tools and project inputs determine output reuse. Enable
-  GitHub cross-OS archives with cache-root-relative path identity and extraction. Equal-content
-  worker entries tolerate permission differences and retain executable bits; restored worker and
-  snapshot files receive portable permissions. Restore executable Gradle and Maven distribution launchers
-  on POSIX. Preserve strict content conflicts, Maven origins/directory checks and snapshot ownership.
-  Shorter family keys start cold with no fallback to the former platform-specific families.
-
-- Skip publication-only activity scans, replay verification, snapshot capture and generation
-  decisions in read-only finalize. Preserve restore validation, lifecycle identity/configuration
-  checks and build reports. Report uncollected activity statistics as unavailable and label snapshot
-  counts as prepare state. Read-only completion retains no per-file publication decisions.
-
-- Cache Gradle dependency metadata in a default `dependency-metadata` partition. Add partition
-  `publication` (`aggregate` or `single-writer`) and optional distributed `writer` configuration.
-  Standalone jobs own their snapshots; distributed publication uses only the designated job and
-  otherwise retains the previous snapshot with a warning and GitHub summary. Full configured
-  snapshot replacement propagates removals and preserves user exclusions. Preexisting managed
-  metadata is replaced before restore, including clearing it on a miss, even when ordinary cleanup
-  is disabled. Snapshot partitions skip per-file GC. The guarded staged representation adds a full
-  copy/hash cost in standalone mode too; distributed writers also upload complete snapshots.
-- Migrate to cache family 6, manifest 5, package 6, CI lifecycle 5 and local journal 3. Publication
-  policy and writer identity affect layout compatibility. Earlier families start cold. Add guarded
-  archive transport and interruption/retry coverage; preserve existing ordinary aggregation and
-  Maven consistency checks. Correct the unsupported dependency-metadata absolute-path rationale.
-
-- Preserve Maven `_remote.repositories` origin markers. Changed repository files travel with their
-  complete managed directory; aggregation rejects different worker directory views and incomplete
-  updates over existing aggregator files, including when duplicate-path overrides are enabled.
-  GC retains provenance with surviving siblings. Excluded artifact siblings cause source capture,
-  aggregation, and GC to fail before marker changes; custom-exclusion restores validate the existing
-  tree with metadata before extraction. Whole-directory exclusions remain supported. Canonically
-  order usage-only paths, including mixed-case classifiers. Use a common seeded repository and one writer
-  per changed directory, or standalone mode. The changed Maven partition fingerprint starts a cold
-  cache family; seed from a fresh dedicated Maven user home. Snapshots and local installs remain
-  included unless excluded by caller configuration. Add real Resolver regression coverage.
-
-- Replace pre-build content inventories with post-prepare cutoff activity. Worker envelopes carry
-  assumed changed upserts and path-only usage, with no tombstones or historical last-use manifest.
-  Timestamp GC uses old mtime plus current-build protection; filesystem/clock misses may cause
-  useful artifacts to be redownloaded or recomputed. `off` disables deletion only.
-- Migrate to cache family 4, manifest 3, package 4 and CI lifecycle 3. Old families are cold misses.
-  Freeze retry decisions in bounded local journals, retire obsolete checkpoints, and publish a
-  constant empty-generation marker when GC removes the last managed file.
-- Keep full-generation publication optimization separate (#7). No storage redesign is introduced.
-
-- Retain distributed worker envelopes after failed and successful aggregation so aggregator-only
-  retries can recover without rerunning workers. Workers request seven-day retention by default, subject
-  to backend expiry or removal and workflow-run deletion. This uses temporary artifact storage;
-  local staging and download directories are still cleaned up.
+- Switch Gradle and Maven to the v2 native partition, generation, local handoff
+  and worker TAR profiles. Upgrade cooperating workflow jobs together. Older
+  cache families start cold.
+- Publish changed native partition objects before the immutable generation.
+  Reuse exact refs for unaffected partitions, including when only lineage
+  metadata changes. Base change detection uses filesystem metadata and can
+  miss byte rewrites that preserve it. Incoming worker bodies and complete
+  units still receive strict validation.
+- Use dedicated cache roots and an exclusive prepare/post window. Gradle writable
+  publication verifies consumer quiescence. Transfers require source return
+  after SDK settlement in the owning operation. Interrupted owners are rejected.
+  Failed worker uploads may retain immutable packages at reported paths.
+- Configure `cache-max-directory-entries` for either Action. It defaults to
+  `100000` direct entries per managed directory. The working-memory bounds
+  remain independent and the Action log identifies the phase and directory.
+- Preserve complete Gradle Groovy, Kotlin and transform workspaces and
+  designated dependency-metadata snapshots. Use per-entry selection for
+  eligible Gradle task-cache archives. Maven retains origin markers and supports
+  opt-in complete-directory selection alongside the strict default.
+- Share compatible cache families across Java versions, operating systems
+  and architectures. Build tools still determine reuse, and native permissions
+  depend on the restoring host. Use `cache-key-prefix` to separate incompatible
+  workloads deliberately.
+- Worker artifact retention is configurable with `worker-artifact-retention-days`
+  from 1 to 400, defaulting to 7. Backend retention and workflow lifetime
+  determine actual availability. Successful aggregation retains worker artifacts.
+- Use post-prepare timestamp and activity evidence for GC. Read-only post skips
+  activity capture and publication.
 
 - Rename verified Gradle wrapper metadata to `gradle-wrapper-<version>.jar.sha256`
   and `gradle-wrapper-<version>.jar.asc`. The checksum filename lets custom launchers

@@ -368,6 +368,7 @@ function createConfig(overrides: Partial<NormalizedGradleConfig> = {}): Normaliz
     cacheKeyPrefix: 'buildish-mammoth-cache-',
     cachePartitions: [],
     cacheSchemaVersion: 2,
+    cacheMaxDirectoryEntries: 100_000,
     wrapperSelectionMode: 'default',
     wrapperPropertiesGlob: '**/gradle/wrapper/gradle-wrapper.properties',
     defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',

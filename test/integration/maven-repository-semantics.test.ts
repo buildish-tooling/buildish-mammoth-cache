@@ -19,31 +19,13 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'no
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, afterAll, it, expect } from 'vitest';
-import { captureCacheMetadataSnapshot } from '../../src/cache/manifest';
-import { selectCutoffActivity } from '../../src/cache/cutoff-selection';
-import {
-  cutoffModelSchema,
-  freezeCutoffSelection,
-  newCutoffJournal,
-  persistCutoffJournal,
-  cutoffDecisionDigest,
-} from '../../src/cache/cutoff-state';
-import { collectCutoffGarbage } from '../../src/cache/cutoff-gc';
-import { cutoffFixturePolicy } from '../support/cutoff-fixture';
-import { stageCutoffPackage } from '../../src/delta/cutoff-service';
-import { mergeCutoffPackages, applyCutoffPlan } from '../../src/delta/cutoff-apply';
-import { mavenFixtureModel, mavenFixtureState } from '../support/maven-cache';
-import { createCacheGeneration } from '../../src/cache/model';
-import {
-  freezePartitionPublication,
-  publishPartitionGeneration,
-} from '../../src/cache/partition-publication';
-import { restoreBaseCache } from '../../src/cache/service';
-import { ImmutableCacheBackend } from '../support/immutable-cache-backend';
-import { packCacheFiles, unpackCacheFiles } from '../support/archive-round-trip';
+import { streamingIntegrationJob } from '../support/streaming-integration';
+import { nativeCacheBackend, cleanupBaseFixtures } from '../cache/streaming/native-cache-fixture';
+import { memoryArtifacts } from '../cache/streaming/memory-artifact-fixture';
 
 const exec = promisify(execFile);
 let root: string, classpath: string;
+let cache: Awaited<ReturnType<typeof nativeCacheBackend>>;
 const release = 'test:example:jar:1.0';
 const artifact = 'repository/test/example/1.0/example-1.0.jar';
 const marker = 'repository/test/example/1.0/_remote.repositories';
@@ -51,6 +33,7 @@ const marker = 'repository/test/example/1.0/_remote.repositories';
 beforeAll(async () => {
   await mkdir('build', { recursive: true });
   root = await mkdtemp(path.resolve('build/integration-maven-semantics-'));
+  cache = await nativeCacheBackend();
   const version = (
     await exec('mvn', ['--version'], { env: { ...process.env, MAVEN_ARGS: '', MAVEN_OPTS: '' } })
   ).stdout;
@@ -75,6 +58,7 @@ beforeAll(async () => {
   await resolve('seed', release);
 }, 30_000);
 afterAll(async () => {
+  await cleanupBaseFixtures();
   if (root) await rm(root, { recursive: true, force: true });
 });
 
@@ -117,23 +101,66 @@ async function cloneSeed(name: string) {
   await cp(path.join(root, 'seed'), path.join(root, name), { recursive: true });
 }
 
+function scenario(scope: string, inputs: Record<string, string> = {}) {
+  const artifacts = memoryArtifacts();
+  function action(
+    local: string,
+    name: string,
+    overrides: Record<string, string> = {},
+    now?: () => number,
+  ) {
+    return streamingIntegrationJob({
+      root: path.join(root, 'jobs', scope, name),
+      home: path.join(root, local),
+      tool: 'maven',
+      name,
+      inputs: { 'cache-key-prefix': 'maven-semantics-' + scope + '-', ...inputs, ...overrides },
+      cache: cache.backend,
+      artifacts: artifacts.api,
+      now,
+    });
+  }
+  return {
+    action,
+    async worker(source: string, name: string) {
+      const job = await action('worker-home-' + scope + '-' + name, name, {
+        'job-mode': 'distributed-worker',
+      });
+      await job.prepare();
+      await cp(path.join(root, source, 'repository'), path.join(job.home, 'repository'), {
+        recursive: true,
+      });
+      expect((await job.post()).outcome).toBe('worker-uploaded');
+    },
+    aggregator(local: string, names: string) {
+      return action(local, 'aggregator', {
+        'job-mode': 'distributed-aggregator',
+        'dependent-jobs': names,
+      });
+    },
+  };
+}
+
 it.each([false, true])(
-  'matches native origin resolution through real cache globs and tar (exclude markers: %s)',
+  'matches native origin resolution through streaming partition-object archives (exclude markers: %s)',
   async (excluded) => {
-    const model = await mavenFixtureModel(path.join(root, 'seed'));
-    const snapshot = await captureCacheMetadataSnapshot(model);
-    const files = snapshot.partitions.flatMap((p) =>
-      p.entries.map((e) => path.join(model.cacheRoot, e.relativePath)),
-    );
-    expect(files).toContain(path.join(root, 'seed', marker));
-    const selected = files.filter((f) => !excluded || !f.endsWith('/_remote.repositories'));
-    const archive = await packCacheFiles(
-      model.cacheRoot,
-      selected.map((f) => path.relative(model.cacheRoot, f)),
-      path.join(root, `archive-${excluded}`),
-    );
+    const inputs = {
+      'cache-partitions': JSON.stringify(
+        excluded ? [{ id: 'repository', excludes: ['**/_remote.repositories'] }] : [],
+      ),
+    };
+    const f = scenario('archived-' + excluded, inputs);
+    const writer = await f.action('writer-' + excluded, 'writer');
+    await writer.prepare();
+    await cp(path.join(root, 'seed/repository'), path.join(writer.home, 'repository'), {
+      recursive: true,
+    });
+    expect((await writer.post()).outcome).toBe('published');
     const local = `restored-${excluded}`;
-    await unpackCacheFiles(path.join(root, local), archive);
+    const reader = await f.action(local, 'reader', { 'read-only': 'true' });
+    await reader.prepare();
+    expect(reader.outputs['base-cache-restore-status']).toBe('current-lineage-hit');
+    expect((await reader.post()).outcome).toBe('read-only');
     const native = `native-${excluded}`;
     // Resolve independently: this control has never passed through Mammoth or an archive.
     expect(await resolve(native)).toBe('A');
@@ -208,10 +235,10 @@ it('keeps locally installed artifacts available across active repository changes
   expect(
     await resolve('installed', release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
   ).toBe('LOCAL');
-  const worker = await mavenFixtureState(path.join(root, 'installed'));
-  const pkg = await stageCutoffPackage(worker.state, worker.ci);
-  const target = await mavenFixtureModel(path.join(root, 'restored-install'));
-  await applyCutoffPlan(mergeCutoffPackages([pkg], target, worker.ci), target);
+  const f = scenario('installed');
+  await f.worker('installed', 'installer');
+  const target = await f.aggregator('restored-install', 'installer');
+  await target.prepare();
   expect(
     await resolve('restored-install', release, {
       offline: true,
@@ -243,66 +270,46 @@ it('merges disjoint real worker directories and resolves their artifacts offline
   await publish('remote-a', 'other', '1.0', 'OTHER');
   await resolve('worker-a');
   await resolve('worker-b', 'test:other:jar:1.0');
-  const a = await mavenFixtureState(path.join(root, 'worker-a'), 'worker-a');
-  const b = await mavenFixtureState(path.join(root, 'worker-b'), 'worker-b');
-  const packages = [
-    await stageCutoffPackage(a.state, a.ci),
-    await stageCutoffPackage(b.state, b.ci),
-  ];
-  const model = await mavenFixtureModel(path.join(root, 'aggregator'));
-  await applyCutoffPlan(mergeCutoffPackages(packages, model, a.ci), model);
+  const f = scenario('disjoint');
+  await f.worker('worker-a', 'worker-a');
+  await f.worker('worker-b', 'worker-b');
+  const parent = await f.aggregator('aggregator', 'worker-a,worker-b');
+  await parent.prepare();
+  expect(parent.outputs['dependent-delta-artifact-count']).toBe('2');
   expect(await resolve('aggregator', release, { offline: true })).toBe('A');
   expect(await resolve('aggregator', 'test:other:jar:1.0', { offline: true })).toBe('OTHER');
   await expect(
     resolve('aggregator', release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
   ).rejects.toThrow(/offline mode/u);
 });
-// Strict classifier/origin conflict combinations are filesystem regressions in
-// test/cache/maven-repository.test.ts; native excluded-source controls remain below.
 
-it('GC preserves origin checks with old marker timestamps and evicts the whole inactive directory', async () => {
-  await cloneSeed('gc');
-  const model = await mavenFixtureModel(path.join(root, 'gc'));
-  for (const name of [artifact, marker])
-    await utimes(path.join(model.cacheRoot, name), 1700000000, 1700000000);
+it('GC preserves protected coordinates with old marker timestamps and evicts inactive coordinates', async () => {
   const cutoff = Date.now() + 10000;
-  const snapshot = await captureCacheMetadataSnapshot(model);
-  const selected = selectCutoffActivity(snapshot, cutoff, cutoff, 14, true, {
-    upserts: [],
-    used: [artifact],
-  });
-  expect(selected.gc).toEqual([]);
-  expect(selected.used).toContain(marker);
-  await expect(
-    resolve('gc', release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
-  ).rejects.toThrow(/offline mode/u);
-  // Reset atime after the real resolution attempt, then deliberately model a native activity miss.
-  for (const name of [artifact, marker])
-    await utimes(path.join(model.cacheRoot, name), 1700000000, 1700000000);
-  const ci = (await mavenFixtureState(path.join(root, 'gc'))).ci;
-  const journal = newCutoffJournal(
-    model,
-    { ...cutoffFixturePolicy, jobMode: 'standalone' },
-    {
-      repository: ci.repository,
-      workflowName: ci.workflowName,
-      jobName: ci.jobName,
-      runId: ci.runId,
-      runAttempt: ci.runAttempt,
-      sourceRevision: null,
-    },
-  );
-  journal.phase = 'build-ready';
-  journal.cutoff = cutoff;
-  await persistCutoffJournal(journal);
-  await freezeCutoffSelection(
-    journal,
-    selectCutoffActivity(await captureCacheMetadataSnapshot(model), cutoff, cutoff, 14, true),
-    cutoff,
-  );
-  expect((await collectCutoffGarbage(journal))!.deletedFileCount).toBe(2);
-  await expect(readFile(path.join(model.cacheRoot, marker))).rejects.toThrow();
-  await expect(resolve('gc', release, { offline: true })).rejects.toThrow(/offline mode/u);
+  const old = 1700000000;
+  for (const [local, used] of [
+    ['gc-used', true],
+    ['gc-inactive', false],
+  ] as const) {
+    await cloneSeed(local);
+    for (const name of [artifact, marker]) await utimes(path.join(root, local, name), old, old);
+    const f = scenario(local);
+    const owner = await f.action(local, 'owner', { 'cache-gc-mode': 'timestamp' }, () => cutoff);
+    await owner.prepare();
+    if (used) {
+      // Model a visible access on a noatime filesystem without changing mtime.
+      await utimes(path.join(owner.home, artifact), Math.ceil(cutoff / 1000) + 1, old);
+      await owner.post();
+      expect(await resolve(local, release, { offline: true })).toBe('A');
+      await expect(
+        resolve(local, release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
+      ).rejects.toThrow(/offline mode/u);
+    } else {
+      await owner.post();
+      await expect(readFile(path.join(owner.home, marker))).rejects.toThrow();
+      await expect(readFile(path.join(owner.home, artifact))).rejects.toThrow();
+      await expect(resolve(local, release, { offline: true })).rejects.toThrow(/offline mode/u);
+    }
+  }
 });
 
 const excludeSources = {
@@ -340,22 +347,13 @@ it('rejects a B marker over excluded A sources before aggregation changes any by
   // A missing artifact can still have an entry in Resolver's marker. The destination may
   // retain an excluded copy, so source-side validation alone cannot protect aggregation.
   await rm(path.join(root, 'excluded-worker', sourcesArtifact));
-  const worker = await mavenFixtureState(
-    path.join(root, 'excluded-worker'),
-    'excluded-worker',
-    excludeSources,
-  );
-  const pkg = await stageCutoffPackage(worker.state, worker.ci);
-  expect(
-    pkg.manifest.partitions.flatMap((p) => p.upserts.map((e) => e.relativePath)),
-  ).not.toContain(sourcesArtifact);
-  const model = await mavenFixtureModel(path.join(root, 'excluded-target'), excludeSources);
-  const before = await readFile(path.join(model.cacheRoot, marker), 'utf8');
-  await expect(
-    applyCutoffPlan(mergeCutoffPackages([pkg], model, worker.ci), model),
-  ).rejects.toThrow(/Incomplete Maven repository directory/u);
-  expect(await readFile(path.join(model.cacheRoot, marker), 'utf8')).toBe(before);
-  expect(await readFile(path.join(model.cacheRoot, artifact), 'utf8')).toBe('A');
+  const f = scenario('excluded-merge', excludeSources);
+  await f.worker('excluded-worker', 'excluded-worker');
+  const parent = await f.aggregator('excluded-target', 'excluded-worker');
+  const before = await readFile(path.join(parent.home, marker), 'utf8');
+  await expect(parent.prepare()).rejects.toThrow(/Incomplete Maven repository directory/u);
+  expect(await readFile(path.join(parent.home, marker), 'utf8')).toBe(before);
+  expect(await readFile(path.join(parent.home, artifact), 'utf8')).toBe('A');
   expect(await resolve('excluded-target', sourcesCoordinates, { offline: true })).toBe('A-SOURCES');
   await expect(
     resolve('excluded-target', sourcesCoordinates, {
@@ -366,24 +364,24 @@ it('rejects a B marker over excluded A sources before aggregation changes any by
   ).rejects.toThrow(/offline mode/u);
 });
 
-it('refuses GC of a marker when real excluded sources would survive', async () => {
+it('retains the complete Maven coordinate when excluded sources would survive GC', async () => {
   await cloneSourcesSeed('excluded-gc', 'a');
-  const home = path.join(root, 'excluded-gc');
-  const { state } = await mavenFixtureState(home);
-  state.model = cutoffModelSchema.parse(await mavenFixtureModel(home, excludeSources));
-  state.policy.jobMode = 'standalone';
-  state.selection!.gc = state.selection!.upserts.filter((e) => e.relativePath !== sourcesArtifact);
-  state.selection!.upserts = [];
-  state.selection!.members = state.selection!.members!.filter(
-    (e) => e.relativePath !== sourcesArtifact,
+  const cutoff = Date.now() + 10000;
+  const f = scenario('excluded-gc', excludeSources);
+  const owner = await f.action(
+    'excluded-gc',
+    'owner',
+    { 'cache-gc-mode': 'timestamp' },
+    () => cutoff,
   );
-  await persistCutoffJournal(state);
-  const before = await readFile(path.join(home, marker), 'utf8');
-  await expect(collectCutoffGarbage(state)).rejects.toThrow(
-    /Incomplete Maven repository directory/u,
-  );
-  expect(await readFile(path.join(home, marker), 'utf8')).toBe(before);
-  expect(await readFile(path.join(home, artifact), 'utf8')).toBe('A');
+  for (const file of [artifact, marker, sourcesArtifact])
+    await utimes(path.join(owner.home, file), 1700000000, 1700000000);
+  await owner.prepare();
+  const before = await readFile(path.join(owner.home, marker), 'utf8');
+  expect((await owner.post()).outcome).toBe('published');
+  expect(await readFile(path.join(owner.home, sourcesArtifact), 'utf8')).toBe('A-SOURCES');
+  expect(await readFile(path.join(owner.home, marker), 'utf8')).toBe(before);
+  expect(await readFile(path.join(owner.home, artifact), 'utf8')).toBe('A');
   expect(await resolve('excluded-gc', sourcesCoordinates, { offline: true })).toBe('A-SOURCES');
   await expect(
     resolve('excluded-gc', sourcesCoordinates, {
@@ -392,9 +390,6 @@ it('refuses GC of a marker when real excluded sources would survive', async () =
       remote: 'remote-b',
     }),
   ).rejects.toThrow(/offline mode/u);
-  await expect(captureCacheMetadataSnapshot(state.model)).rejects.toThrow(
-    /Incomplete Maven repository directory/u,
-  );
 });
 
 const chooseDirectory = {
@@ -418,18 +413,14 @@ it.each([false, true])(
         'LOSER-SOURCES',
       );
     }
-    const a = await mavenFixtureState(path.join(root, winner), 'a-worker', chooseDirectory);
-    const b = await mavenFixtureState(path.join(root, loser), 'z-worker', chooseDirectory);
-    const packages = [
-      await stageCutoffPackage(b.state, b.ci),
-      await stageCutoffPackage(a.state, a.ci),
-    ];
+    const f = scenario('policy-' + different, chooseDirectory);
+    await f.worker(loser, 'z-worker');
+    await f.worker(winner, 'a-worker');
     const targetName = `policy-target-${different}`;
-    const target = await mavenFixtureModel(path.join(root, targetName), chooseDirectory);
-    const plan = mergeCutoffPackages(packages, target, a.ci);
-    expect(plan.directoryConflicts?.count).toBe(1);
-    await applyCutoffPlan(plan, target);
-    expect(await readFile(path.join(target.cacheRoot, marker), 'utf8')).toBe(
+    const target = await f.aggregator(targetName, 'a-worker,z-worker');
+    await target.prepare();
+    expect(target.warnings.join('\n')).toContain('Worker merge selected winners');
+    expect(await readFile(path.join(target.home, marker), 'utf8')).toBe(
       await readFile(path.join(root, winner, marker), 'utf8'),
     );
     for (const local of [winner, targetName]) {
@@ -443,7 +434,7 @@ it.each([false, true])(
         );
     }
     if (different)
-      await expect(readFile(path.join(target.cacheRoot, sourcesArtifact))).rejects.toThrow();
+      await expect(readFile(path.join(target.home, sourcesArtifact))).rejects.toThrow();
   },
 );
 
@@ -468,22 +459,11 @@ it('can discard an unretrievable local install when the remote worker wins its d
     source,
   ]);
   expect(await resolve('policy-local-loser', coordinates, { offline: true })).toBe('LOCAL-ONLY');
-  const a = await mavenFixtureState(
-    path.join(root, 'policy-remote-winner'),
-    'a-remote',
-    chooseDirectory,
-  );
-  const b = await mavenFixtureState(
-    path.join(root, 'policy-local-loser'),
-    'z-local',
-    chooseDirectory,
-  );
-  const packages = [
-    await stageCutoffPackage(b.state, b.ci),
-    await stageCutoffPackage(a.state, a.ci),
-  ];
-  const model = await mavenFixtureModel(path.join(root, 'policy-install-target'), chooseDirectory);
-  await applyCutoffPlan(mergeCutoffPackages(packages, model, a.ci), model);
+  const f = scenario('policy-installed', chooseDirectory);
+  await f.worker('policy-local-loser', 'z-local');
+  await f.worker('policy-remote-winner', 'a-remote');
+  const target = await f.aggregator('policy-install-target', 'a-remote,z-local');
+  await target.prepare();
   expect(await resolve('policy-install-target', release, { offline: true })).toBe('A');
   await expect(resolve('policy-install-target', coordinates, { offline: true })).rejects.toThrow(
     /offline mode/u,
@@ -491,21 +471,7 @@ it('can discard an unretrievable local install when the remote worker wins its d
   await expect(resolve('policy-install-target', coordinates)).rejects.toThrow(
     /Could not find artifact/u,
   );
-  expect(await readFile(path.join(model.cacheRoot, marker), 'utf8')).toBe(
+  expect(await readFile(path.join(target.home, marker), 'utf8')).toBe(
     await readFile(path.join(root, 'policy-remote-winner', marker), 'utf8'),
   );
-});
-
-it('preserves native Maven origin resolution through independent partition-object archives', async () => {
-  const { state, model } = await mavenFixtureState(path.join(root, 'seed'));
-  state.policy.jobMode = 'standalone';
-  const backend = new ImmutableCacheBackend(path.join(root, 'partition-archives'));
-  const generation = createCacheGeneration(model, cutoffDecisionDigest(state));
-  await freezePartitionPublication(state, generation);
-  await publishPartitionGeneration(state, backend);
-  const target = await mavenFixtureModel(path.join(root, 'partition-restored'));
-  expect((await restoreBaseCache(target, { cacheBackend: backend })).status).toBe(
-    'current-lineage-hit',
-  );
-  expect(await resolve('partition-restored', release, { offline: true })).toBe('A');
 });

@@ -65,8 +65,8 @@ sequenceDiagram
 4. Aggregate prepare validates/applies selected envelopes and retains upstream activity before C.
    Used-only paths do not recreate absent files.
 5. Aggregate finalize performs eligible GC and requires successful publication for upserts, GC
-   removal or a nonempty miss. Usage alone does not require a generation. Fresh replay may still
-   upload identical material again. Aggregate partitions exchange no deletion tombstones. A
+   removal or a nonempty miss. Usage alone does not require a generation. Base reuse follows
+   observed metadata and may miss byte rewrites with identical metadata. Aggregate partitions exchange no deletion tombstones. A
    single-writer snapshot replaces its complete configured membership, including removals, and
    metadata-only changes independently require publication.
 
@@ -89,8 +89,9 @@ artifact downloads still aggregate normally; their local dependency-metadata upd
 Choose a writer whose build resolves the dependencies you want covered. Metadata learned only by
 other jobs may need resolution again later. A validated snapshot qualifies even if its build failed.
 
-An aggregator can instead name itself as `writer`. In that case its own post-build metadata wins;
-without explicitly naming it, running Gradle in the aggregator does not grant metadata ownership.
+An aggregator owns the complete snapshot when no `writer` is configured or when it names itself.
+In either case its own post-build metadata wins. If another job is named, that job's snapshot or
+the prepared fallback remains authoritative despite the aggregator's local changes.
 
 ### Complete workflow with an existing worker as writer
 
@@ -254,9 +255,9 @@ replacement in the summary. A miss starts those partitions empty, including on s
 and with ordinary cleanup disabled. User-excluded files survive. Explicit include/exclude overrides
 are allowed; their effect on Gradle's internal metadata relationships is the user's responsibility.
 
-Mammoth retains authoritative snapshot bytes separately from each job's mutable local Gradle data.
-Snapshot staging copies/hashes the full configured file set in standalone mode as well; distributed
-writers also upload complete payloads. Snapshot partitions skip Mammoth's per-file GC. Artifact GC
+Authoritative snapshot bytes may be held independently of a job's mutable Gradle
+data. An assigned writer uploads its complete managed snapshot. Standalone jobs
+normally publish their own observed snapshot. Snapshot partitions skip Mammoth's per-file GC. Artifact GC
 continues independently, so metadata can refer to evicted artifacts and offline completeness is
 not guaranteed. See [Cache partitions](../cache-partitions/#publication-policies) and
 [Gradle cache internals](../../architecture/gradle-cache-internals/).
@@ -315,6 +316,12 @@ jobs:
 
 ## Requirements and constraints
 
+Upgrade all workers, snapshot writers, aggregators and cache readers together
+when changing incompatible Action versions. The native v2 and worker TAR-v2
+profiles use a new family, so older base objects produce cold misses.
+Use dedicated cache roots and keep other processes out of the roots during
+prepare and post. See [interrupted cache operations](../troubleshooting/#interrupted-cache-operations).
+
 **Job names must be unique within the workflow run.** Delta artifacts are identified by job name.
 Two worker jobs with the same name would produce the same artifact name and the aggregator would
 only see one of them.
@@ -353,14 +360,15 @@ expired workers. Base cache expiry and timestamp GC are independent. Retry avail
 ends when the backend expires or removes the artifacts, the workflow run is deleted, or a user or
 administrator removes them. Repository, organization, and backend limits can shorten the requested
 period; availability for the full period is not guaranteed. Retention uses
-temporary artifact storage until removal. Temporary upload/download staging is cleaned after use. Authoritative partition snapshot transport
-is retained locally for publication and retries and is reset at the next prepare.
+temporary artifact storage until removal. Normal completion retires known
+operation-local staging. Failed or unconfirmed worker uploads can leave an
+immutable package at a reported path.
 
 If a required envelope is missing or expired, aggregation fails with the worker name even if a base
 cache was restored. Rerun the affected worker and then the aggregator within the same workflow run.
-A fresh retry can rewrite matching worker upserts and publish another complete generation, even
-when resulting bytes match an earlier successful aggregate. Existing targets are not hashed
-to prove a no-op; remote worker envelopes remain available for recovery.
+Use fresh dedicated roots for the affected invocations. Retained remote artifacts
+remain eligible for selection under the workflow/run and cache family rules.
+Mammoth does not resume local staging or attempt to salvage interrupted uploads.
 
 **A successful writable worker always uploads one envelope.** This includes workers that changed no
 managed cache files: their explicit empty envelope is proof of participation and is distinct from a
@@ -370,8 +378,9 @@ missing or failed worker.
 
 Gradle and Maven workers can share with an aggregator using another Java version, OS or architecture when their
 family inputs match. Platform information remains in producer diagnostics. Same-path different
-contents still conflict, including Maven directory inconsistencies; equal bytes with incidental
-permission differences coalesce and retain executable bits from either producer.
+contents still conflict under strict policies, including inconsistent Maven directories. Equal
+ordinary worker files can coalesce across permission differences. Native base permissions depend
+on the restoring host and SDK. Windows cannot reconstruct Unix execute bits that were lost.
 
 Use a workflow input such as `cache-key-prefix: project-${{ runner.os }}-${{ runner.arch }}-` to
 isolate platforms, or include `${{ matrix.java }}` for explicit Java separation. All jobs in a sharing
