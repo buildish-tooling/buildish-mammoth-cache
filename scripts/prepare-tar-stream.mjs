@@ -29,7 +29,7 @@ const upstream = {
   'index.js': '0db9eceef5224dbc34c224c398b50eef4b99f937c80c81f660928615a248ed4f',
   'constants.js': '6dcd4aa7d4ab7876c54b28bc6bf281e9d6423787b17eae4353a87af34605972e',
   'pack.js': '9885de07c3fc948aeebdec5e113f536c3e540230a3f0a24c82c3e80339bc8235',
-  'package.json': '9f0900ab79650f230a8d67da1b4ffa31b8340eb90f3565bdaadfea1ba79ac43d',
+  'package.json': '3a3449df0cb466c4b45481691ed385d07c7c1d616bafaa7c8cf71f8bd9203045',
   LICENSE: '3fe8d55a98dbf260eace67c00cf9bc53edb46234e840098a0b93df3096b97fb6',
 };
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -41,7 +41,7 @@ export function prepareTarStream() {
   const files = new Map();
   for (const [name, sha] of Object.entries(upstream)) {
     const bytes = fs.readFileSync(path.join(source, name));
-    if (hash(bytes) !== sha) throw new Error(`tar-stream 3.2.0 source mismatch: ${name}`);
+    if (hash(bytes) !== sha) throw new Error(`tar-stream 3.2.2 source mismatch: ${name}`);
     files.set(name, bytes);
   }
   const patchDir = path.join(root, 'patches/tar-stream');

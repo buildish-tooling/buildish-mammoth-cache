@@ -233,7 +233,7 @@ proof that oversized PAX or trailing data were checked before buffering.
 
 ### Parser enforcement interface and dependency gate
 
-Unmodified `tar-stream` 3.2.0 callbacks cannot enforce this subset: extension bodies
+Unmodified `tar-stream` 3.2.2 callbacks cannot enforce this subset: extension bodies
 are decoded before entry delivery, duplicate keys are overwritten, and padding/end
 framing is normalized. Mammoth therefore pins the dependency and builds an isolated
 copy with a small reproducible patch. Installed packages are not modified. Strict
