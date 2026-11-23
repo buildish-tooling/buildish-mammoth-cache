@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "id": "issue18-r2-scale-20261123-1750",
   "retainedCounts": [100000],
   "reservationMiB": 2048,
