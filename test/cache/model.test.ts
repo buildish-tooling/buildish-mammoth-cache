@@ -105,11 +105,6 @@ describe('createCachePartitions', () => {
       'wrapper-dists',
     ]);
     expect(
-      partitions.every((partition) =>
-        partition.relativeExcludeGlobs.includes('**/configuration-cache/**'),
-      ),
-    ).toBe(true);
-    expect(
       partitions.every((partition) => partition.relativeExcludeGlobs.includes('**/*.lock')),
     ).toBe(true);
     expect(
@@ -121,6 +116,28 @@ describe('createCachePartitions', () => {
       partitions.find((partition) => partition.id === 'modules')?.relativeExcludeGlobs,
     ).toContain('caches/modules-*/metadata-*/**');
     expect(partitions[0]?.relativeIncludeGlobs).toContain('caches/modules-*/files-*/**');
+  });
+
+  it('keeps wrapper distribution documentation and sources named configuration-cache', () => {
+    const hardCacheExcludeGlobs = gradleAdapter.getHardCacheExcludeGlobs();
+    const model = resolveCacheModel(
+      {
+        buildToolId: 'gradle',
+        hardCacheExcludeGlobs,
+        partitions: createCachePartitions(
+          [],
+          gradleAdapter.getBuiltInPartitionPresets(),
+          hardCacheExcludeGlobs,
+        ),
+      },
+      'test-',
+      8,
+    );
+    const distribution = 'wrapper/dists/gradle-9.9.2-all/8gcrr1xgd8zr4y1n2fg3m4wzh/gradle-9.9.2';
+    for (const scope of ['docs/userguide/img/configuration-cache', 'src/configuration-cache']) {
+      expect(model.owner(`${distribution}/${scope}`)[0]).toBe('wrapper-dists');
+      expect(model.owner(`${distribution}/${scope}/example.txt`)[0]).toBe('wrapper-dists');
+    }
   });
 
   it('supports built-in overrides, transform selection, and custom partitions', () => {

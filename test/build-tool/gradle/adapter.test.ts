@@ -87,7 +87,6 @@ describe('GradleBuildToolAdapter', () => {
 
     expect(globs).toContain('**/*.lock');
     expect(globs).toContain('caches/*/cc-keystore');
-    expect(globs).toContain('**/configuration-cache/**');
   });
 
   it('reports "no builds captured" log line when the CI temp directory is not configured', async () => {

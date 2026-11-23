@@ -37,7 +37,6 @@ const GRADLE_HARD_CACHE_EXCLUDE_GLOBS: readonly string[] = [
   `init.d/${INIT_SCRIPT_FILE_NAME}`,
   `init.d/${SERVICE_PLUGIN_FILE_NAME}`,
   '**/.buildish-mammoth-cache/**',
-  '**/configuration-cache/**', // Configuration cache: machine- and process-specific
   'caches/*/cc-keystore', // Configuration cache encryption key — security critical
   'caches/journal-1/**', // File-system access journal: not portable across runners
   '**/*.lock', // Lock files: invalid when restored on a different PID/host
