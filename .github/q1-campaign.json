@@ -1,7 +1,7 @@
 {
-  "enabled": true,
+  "enabled": false,
   "id": "issue18-r2-graph-20261123-1712",
-  "retainedCounts": [250000],
+  "retainedCounts": [100000],
   "reservationMiB": 2048,
   "maximumQualificationJobs": 9,
   "maximumAllocatedJobMinutes": 180,
