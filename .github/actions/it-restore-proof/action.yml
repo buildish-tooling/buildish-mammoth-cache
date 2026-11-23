@@ -1,0 +1,55 @@
+#
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Verify the published Mammoth generation
+description: Match the actual prepare outputs to a specific producer's automatic post receipt.
+inputs:
+  tool:
+    description: Build tool under test.
+    required: true
+  producer:
+    description: Expected logical producer job.
+    required: true
+  attempt:
+    description: Run attempt of that producer.
+    required: true
+  prepare:
+    description: Prepare outputs used to verify the exact read.
+    required: true
+  restore-status:
+    description: Expected complete current or fallback lineage hit.
+    default: current-lineage-hit
+  read-only:
+    description: Expected access mode for the current job.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download the intended producer's post receipt
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: mammoth-it-${{ inputs.tool }}-${{ inputs.producer }}-a${{ inputs.attempt }}
+        path: ${{ runner.temp }}/mammoth-it-evidence
+
+    - name: Require the exact published generation
+      shell: bash
+      env:
+        IT_TOOL: ${{ inputs.tool }}
+        IT_PRODUCER_JOB: ${{ inputs.producer }}
+        IT_PRODUCER_ATTEMPT: ${{ inputs.attempt }}
+        IT_PREPARE: ${{ inputs.prepare }}
+        IT_EXPECTED_RESTORE: ${{ inputs.restore-status }}
+        IT_EXPECTED_READ_ONLY: ${{ inputs.read-only }}
+      run: node .github/scripts/it-cache-fixture.mjs exact "$IT_TOOL" "$IT_PRODUCER_JOB"
