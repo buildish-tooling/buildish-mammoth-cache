@@ -101,7 +101,7 @@ export async function mergeCompleteUnit(
               if (
                 other[1] !== f.path ||
                 other[2] !== f.partition ||
-                other[3] !== meta[4] ||
+                other[3] !== meta[3] ||
                 other[4] !== header.size
               )
                 throw new Error('Different complete-unit member/content facts.');
@@ -112,7 +112,7 @@ export async function mergeCompleteUnit(
             }
           mode = normalizeMode(store.codec.options.model.tuple[2], f.path, mode);
           if (selected) {
-            await pending!.finish(String(meta[4]), header.size, mode, time);
+            await pending!.finish(String(meta[3]), header.size, mode, time);
             await activity.member('upsert', f.path, f.partition, signal);
           } else if (collect && handling === 'default') {
             if (!spool) {
@@ -124,7 +124,7 @@ export async function mergeCompleteUnit(
                 'unit-file',
                 f.path,
                 f.partition,
-                String(meta[4]),
+                String(meta[3]),
                 header.size,
                 header.mode,
                 header.mtimeMs,

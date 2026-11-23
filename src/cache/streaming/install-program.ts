@@ -14,107 +14,37 @@
  * limitations under the License.
  */
 
-import { decodeRecords, equal, type Value } from './encoding';
-import { EvidenceFile } from './evidence-file';
+import { equal, type Value } from './encoding';
 import { InstallScratch } from './install-scratch';
 import type { InstallAdmission } from './install-admission';
-import type { InstallCursor } from './install-batches';
 import type { OwnedStore, Reference } from './owned-store';
-import { NativeHashBuffer } from './native-read-phase';
+import type { MetadataInstallContext } from './metadata-install-context';
 import type { WorkingBudget } from './tree-state';
 
-export type InstallBatch = readonly ['batch', InstallCursor, InstallCursor, number, number];
+export type InstallBatch = readonly ['batch', number, number];
 export class InstallReaders {
-  readonly hashes: NativeHashBuffer;
-  private readonly readers = new Map<string, EvidenceFile>();
-  private readonly owned = new Set<EvidenceFile>();
-  private readonly preimages = new Map<string, Reference>();
-  get preimageReferences(): Reference[] {
-    return [...this.preimages.values()];
-  }
   kind: 'file' | 'directory' = 'file';
+  private readonly metadata: MetadataInstallContext;
   constructor(
     readonly store: OwnedStore,
     readonly budget: WorkingBudget,
     readonly maxDirectoryEntries: number,
-    admission?: InstallAdmission,
-    readonly allowOld = false,
+    admission: InstallAdmission,
   ) {
-    this.hashes = new NativeHashBuffer(budget);
-    for (const reader of [...(admission?.source ?? []), ...(admission?.old ?? [])])
-      if (reader) this.readers.set(reader.reference[2], reader);
+    admission.assert(store);
+    this.metadata = admission.frozen.metadata;
   }
   async reader(binding: Value, signal: AbortSignal) {
-    const e = this.store.codec.schemas.memberEvidence.parse(binding),
-      ref = e[1];
-    const existing = this.readers.get(ref[2]);
-    if (existing) {
-      equal(existing.reference, ref, 'native reference');
-      return existing;
-    }
-    if (this.readers.size >= this.store.codec.options.model.partitions.length * 2)
-      throw new Error('More than one source/preimage reference per partition.');
-    // The first row is only a bounded partition hint. EvidenceFile verifies the
-    // entire header, raw reference, grammar and EOF before this reader escapes.
-    let partition: string | undefined;
-    for await (const record of decodeRecords(this.store.root.read(ref[2]))) {
-      const row = record.value;
-      if (!Array.isArray(row) || row[0] !== 'local-stream')
-        throw new Error('Missing native header.');
-      partition = this.store.codec.schemas.partition.parse(row[6]);
-      break;
-    }
-    if (!partition) throw new Error('Empty native reference.');
-    const reader = await EvidenceFile.open(
-      this.store,
-      ref,
-      partition,
-      this.budget,
-      signal,
-      undefined,
-      this.maxDirectoryEntries,
-    );
-    this.readers.set(ref[2], reader);
-    this.owned.add(reader);
-    return reader;
-  }
-  async before(value: Value, signal: AbortSignal) {
-    if (!Array.isArray(value) || value[0] !== 'install') return;
-    const op = this.store.codec.schemas.rows.install.parse(value);
-    if (!this.allowOld && op[6] !== 'insert')
-      throw new Error('Replacement/deletion slice not enabled.');
-    let source: EvidenceFile | null = null,
-      old: EvidenceFile | null = null;
-    if (op[4]) source = await this.reader(op[4], signal);
-    if (op[5]) {
-      old = await this.reader(op[5], signal);
-      this.preimages.set(old.reference[2], old.reference);
-    }
-    if (source && old && source.partition !== old.partition)
-      throw new Error('Mixed source/preimage partitions.');
-    if (source && op[3] !== this.store.prefix + 'install/' + source.partition + '/' + op[2])
-      throw new Error('Unbound disposable source path.');
-    if (op[7] !== null && op[7] !== this.store.prefix + 'backups/' + op[1])
-      throw new Error('Unbound backup path.');
-    const binding = (op[4] ?? op[5])!;
-    const reader = (source ?? old)!;
-    this.kind = await reader.member(binding, op[2], null, async () => {}, signal);
+    signal.throwIfAborted();
+    this.metadata.assert(this.store);
+    return this.metadata.reader(binding);
   }
   async close() {
-    this.hashes.dispose();
-    const results = await Promise.allSettled([...this.owned].map((r) => r.close()));
-    this.owned.clear();
-    this.readers.clear();
-    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (failed.length)
-      throw new AggregateError(
-        failed.map((r) => r.reason),
-        'Install reader cleanup failed.',
-      );
+    /* Original context/index lifetime belongs to admission. */
   }
 }
 
-/** One verified plan pass; fixed-size batch descriptors and operation bytes spool sequentially. */
+/** Batches already-admitted operations and their original native facts; no source-span replay. */
 export class InstallProgram {
   private constructor(
     readonly store: OwnedStore,
@@ -122,9 +52,6 @@ export class InstallProgram {
     readonly readers: InstallReaders,
     readonly rows: InstallScratch,
     readonly batches: InstallScratch,
-    readonly context: Reference,
-    readonly initial: InstallCursor,
-    readonly end: InstallCursor,
   ) {}
   static async create(
     store: OwnedStore,
@@ -132,98 +59,63 @@ export class InstallProgram {
     readers: InstallReaders,
     signal: AbortSignal,
     targets = { operations: 16384, bytes: 8 * 1024 * 1024 },
+    admission?: InstallAdmission,
   ): Promise<InstallProgram> {
+    if (!admission) throw new Error('Install program requires admitted operations.');
+    admission.assert(store);
+    equal(plan, admission.frozen.plan, 'admitted install plan');
     if (![targets.operations, targets.bytes].every((n) => Number.isSafeInteger(n) && n > 0))
       throw new Error('Invalid install batch targets.');
-    const rows = await InstallScratch.create(store, readers.budget);
+    const rows = admission.operations;
     let batches: InstallScratch | undefined;
     try {
       batches = await InstallScratch.create(store, readers.budget);
-      let context: Reference | undefined,
-        initial: InstallCursor | undefined,
-        end: InstallCursor | undefined;
-      let unitStart: InstallCursor | undefined,
-        unitOffset = 0,
-        unitOperations = 0;
-      let batch: InstallBatch | undefined,
-        batchOperations = 0,
-        boundary = 0;
-      for await (const record of store.rows(
-        plan,
-        'install-plan',
-        {
-          budget: readers.budget,
-          partition: null,
-          maxDirectoryEntries: readers.maxDirectoryEntries,
-          installKind: () => readers.kind,
-        },
-        signal,
-        (v) => readers.before(v, signal),
-      )) {
-        const value = record.value as readonly Value[];
-        if (value[0] === 'install-context') {
-          context = store.codec.schemas.ref('install-current').parse(value[1]);
-          initial = ['cursor', plan[4], record.end, record.record + 1, 0, null];
-          end = initial;
-        }
-        if (value[0] === 'install-unit-open') {
-          unitStart = ['cursor', plan[4], record.start, record.record, boundary, null];
-          unitOffset = rows.position;
-          unitOperations = 0;
-        }
-        if (value[0] === 'install' || value[0] === 'install-parent') unitOperations++;
-        if (
-          value[0] !== 'local-stream' &&
-          value[0] !== 'local-end' &&
-          value[0] !== 'install-context'
-        )
-          await rows.append(record.value);
-        if (value[0] === 'install-unit-close') {
-          if (!unitStart) throw new Error('Missing unit start.');
-          end = ['cursor', plan[4], record.end, record.record + 1, ++boundary, null];
-          await batches.append(['unit-boundary', unitStart, end, unitOffset, rows.position]);
-          if (
-            batch &&
-            (batchOperations + unitOperations > targets.operations ||
-              record.end - batch[1][2] > targets.bytes)
-          ) {
-            await batches.append(batch);
-            batch = undefined;
-            batchOperations = 0;
+      let start = 0,
+        unitStart = 0,
+        unitOperations = 0,
+        operations = 0,
+        units = 0;
+      for await (const page of rows.batches(0, rows.position, signal))
+        for (const frame of page) {
+          const accepted = frame.value;
+          signal.throwIfAborted();
+          const item = accepted as readonly Value[],
+            row = item[1] as readonly Value[],
+            tag = row[0];
+          if (tag === 'local-stream' || tag === 'local-end' || tag === 'install-context') continue;
+          if (tag === 'install-unit-open') {
+            unitStart = frame.start;
+            unitOperations = 0;
           }
-          batch = batch
-            ? ['batch', batch[1], end, batch[3], rows.position]
-            : ['batch', unitStart, end, unitOffset, rows.position];
-          batchOperations += unitOperations;
+          if (tag === 'install' || tag === 'install-parent') unitOperations++;
+          if (tag === 'install-unit-close') {
+            if (
+              units > 0 &&
+              (operations + unitOperations > targets.operations ||
+                frame.end - start > targets.bytes)
+            ) {
+              await batches.append(['batch', start, unitStart]);
+              start = unitStart;
+              operations = 0;
+              units = 0;
+            }
+            operations += unitOperations;
+            units++;
+          }
         }
-      }
-      if (batch) await batches.append(batch);
-      if (!context || !initial || !end) throw new Error('Missing install context.');
+      if (rows.position > start) await batches.append(['batch', start, rows.position]);
       signal.throwIfAborted();
-      return new InstallProgram(store, plan, readers, rows, batches, context, initial, end);
+      return new InstallProgram(store, plan, readers, rows, batches);
     } catch (error) {
-      await Promise.allSettled([rows.close(), batches?.close()]);
+      await Promise.allSettled([batches?.close()]);
       throw error;
     }
   }
-  async range(start: InstallCursor, end: InstallCursor): Promise<InstallBatch> {
-    let first: number | undefined, last: number | undefined;
-    for await (const value of this.batches.rows(0, this.batches.position)) {
-      const row = value as readonly Value[];
-      if (row[0] !== 'unit-boundary') continue;
-      if (JSON.stringify(row[1]) === JSON.stringify(start)) first = Number(row[3]);
-      if (JSON.stringify(row[2]) === JSON.stringify(end)) last = Number(row[4]);
-    }
-    if (first === undefined || last === undefined || last < first)
-      throw new Error('Intent is not an actual complete-unit plan range.');
-    return ['batch', start, end, first, last];
-  }
   async *batchRows(batch: InstallBatch) {
-    yield ['install-context', this.context] as Value;
-    yield* this.rows.rows(batch[3], batch[4]);
+    yield* this.rows.rows(batch[1], batch[2]);
   }
   async close() {
-    const results = await Promise.allSettled([this.rows.close(), this.batches.close()]);
+    const results = await Promise.allSettled([this.batches.close()]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failures.length)
       throw new AggregateError(

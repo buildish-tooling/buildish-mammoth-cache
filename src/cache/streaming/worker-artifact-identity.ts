@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { GcSurvivorOwner } from './gc-execute';
 import { z } from 'zod';
 import type {
   WorkflowArtifactBackend,
@@ -27,7 +28,6 @@ import {
   nameSchema,
   positiveSchema,
   uintSchema,
-  shaSchema,
   type Context,
 } from './schema';
 import type { ResolvedModel } from './model';
@@ -44,12 +44,23 @@ export function workerArtifactPrefix(model: ResolvedModel, context: Context): st
 export function workerArtifactName(
   model: ResolvedModel,
   context: Context,
-  view: Pick<WorkerSourceView, 'observations' | 'workerSources'>,
+  view: WorkerSourceView,
 ): string {
+  const survivor = view.survivors;
+  GcSurvivorOwner.assertReceipt(survivor);
+  const owner = survivor.index.store.codec.options;
+  if (
+    owner.model.id !== model.id ||
+    owner.model.family !== model.family ||
+    !encodeRecord(owner.context).equals(encodeRecord(context))
+  )
+    throw new Error('Worker artifact source identity mismatch.');
   const decision = H('worker-decision', [
     'decision',
-    shaSchema.parse(view.observations[4]),
-    shaSchema.parse(view.workerSources[4]),
+    survivor.index.reference[4],
+    model.partitions
+      .filter((p) => p[3] === 'single-writer' && p[4] === context[4])
+      .map((p) => p[0]),
   ]);
   return workerArtifactPrefix(model, context) + context[5] + '-d' + decision + '.tar.gz';
 }

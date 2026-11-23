@@ -18,7 +18,6 @@ import { setImmediate as scheduleImmediate, clearImmediate } from 'node:timers';
 import { afterEach, expect, it, vi } from 'vitest';
 import { writeFile, open, rm, type FileHandle } from 'node:fs/promises';
 import { installFixture } from './install-fixture';
-import { native, directory, h } from './local-fixtures';
 import { BufferedWriter } from '../../../src/cache/streaming/buffered-writer';
 import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import { WorkerSpool } from '../../../src/cache/streaming/worker-spool';
@@ -67,25 +66,23 @@ it('finishes immutable local streams with block writes before returning their re
   const f = await fixture(),
     before = f.store.root.work.metadataWriteCalls;
   async function* rows(): AsyncGenerator<Value> {
-    yield ['directory', '', directory];
-    yield ['directory', 'data', directory];
-    for (let n = 0; n < 1024; n++) yield ['file', 'data/f' + String(n).padStart(4, '0'), native, h];
+    yield ['dir-open', ''];
+    yield ['dir-open', 'data'];
+    for (let n = 0; n < 1024; n++) yield ['used', 'f' + String(n).padStart(4, '0'), 'data'];
+    yield ['dir-close', 'data'];
+    yield ['dir-close', ''];
   }
-  const ref = await f.store.writeStream(
-    'native-evidence',
-    { budget: f.budget, partition: 'data' },
-    rows(),
-  );
+  const ref = await f.store.writeStream('activity', { budget: f.budget, partition: null }, rows());
   expect(f.store.root.work.metadataWriteCalls - before).toBeLessThan(10);
   let count = 0;
-  for await (const _row of f.store.rows(ref, 'native-evidence', {
+  for await (const _row of f.store.rows(ref, 'activity', {
     budget: f.budget,
-    partition: 'data',
+    partition: null,
   })) {
     expect(_row.end).toBeGreaterThan(_row.start);
     count++;
   }
-  expect(count).toBe(1028);
+  expect(count).toBe(1030);
   expect(f.budget.retained).toBe(0);
 });
 it('rejects a changed backing file before flushing a sealed spool and releases its buffer', async () => {
@@ -427,27 +424,29 @@ it('checks cancellation between legacy rows of one batch', async () => {
 it('consumes strict local streams in charged byte and row bounded batches', async () => {
   const f = await fixture();
   async function* values(): AsyncGenerator<Value> {
-    yield ['directory', '', directory];
-    yield ['directory', 'data', directory];
-    for (let i = 0; i < 800; i++) yield ['file', 'data/f' + String(i).padStart(4, '0'), native, h];
+    yield ['dir-open', ''];
+    yield ['dir-open', 'data'];
+    for (let i = 0; i < 800; i++) yield ['used', 'f' + String(i).padStart(4, '0'), 'data'];
+    yield ['dir-close', 'data'];
+    yield ['dir-close', ''];
   }
   const ref = await f.store.writeStream(
-    'native-evidence',
-    { budget: f.budget, partition: 'data' },
+    'activity',
+    { budget: f.budget, partition: null },
     values(),
   );
   let count = 0,
     batches = 0;
-  for await (const batch of f.store.rowBatches(ref, 'native-evidence', {
+  for await (const batch of f.store.rowBatches(ref, 'activity', {
     budget: f.budget,
-    partition: 'data',
+    partition: null,
   })) {
     batches++;
     expect(batch.length).toBeLessThanOrEqual(256);
     expect(batch.reduce((sum, row) => sum + row.end - row.start, 0)).toBeLessThanOrEqual(65536);
     count += batch.length;
   }
-  expect(count).toBe(804);
+  expect(count).toBe(806);
   expect(batches).toBeLessThan(12);
   expect(f.budget.retained).toBe(0);
 });

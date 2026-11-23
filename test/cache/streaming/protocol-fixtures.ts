@@ -35,7 +35,7 @@ export const modelVector = [
 ] as const;
 export const modelId = '7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c';
 export const familyId =
-  'mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef';
+  'mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23';
 export const context = ['github', 'example/repo', 'ci', '42', 'A', 1, 'rev-1', 'maven'] as const;
 export function workerTrace(example: 'W0' | 'W1'): Value[][] {
   let section = vectors.split('## ' + example + ':')[1].split('\n## ')[0];

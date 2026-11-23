@@ -14,23 +14,27 @@
  * limitations under the License.
  */
 
-import type { ObservationIndex } from './observation-index';
+import type { Value } from './encoding';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
-import { reconcileInvocation, type RecoveryOptions } from './recovery';
-import { PrepareFacts, type PrepareBindings } from './prepare-state';
+import type { LifecycleOptions } from './lifecycle-options';
+import { PostAttempt } from './lifecycle-attempt';
 import { ExclusiveWindow } from './quiescence';
-import { assertLifecycleWindow } from './post-admission';
-import { BaselineMetadata, type BaseMetadata } from './baseline-metadata';
-import { baselineGeneration } from './base-publication';
 import { captureObservations } from './observation-capture';
-import { LiveBaseInputs } from './live-base-inputs';
-import { FrozenMovingPublication } from './base-moving-publication';
-import { MovingBasePublication } from './moving-publication';
+import type { ObservationIndex } from './observation-index';
+import { GcSurvivorOwner } from './gc-execute';
+import { MetadataPublicationSource, MetadataPublicationSet } from './metadata-publication-source';
+import { MetadataSnapshot } from './metadata-snapshot';
+import { publishMetadataBase, type MetadataPublicationChoice } from './metadata-publication';
+import { metadataSummaryProfile } from './partition-metadata';
+import { H, encodeRecord } from './encoding';
+import { lineageId } from './model';
+import { policyId } from './local-schema';
+import { settleNativeCleanup } from './native-operation';
 import type { BaseCacheBackend } from '../backend';
 import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore } from './owned-store';
 
-export interface BasePostRequest extends RecoveryOptions {
+export interface BasePostRequest extends LifecycleOptions {
   readonly anchor: InvocationAnchor;
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   /** Known hook removal only, before observation timestamps/native evidence freeze. */
@@ -45,186 +49,238 @@ export interface BasePostResult {
   readonly key: string | null;
   readonly message?: string;
 }
-async function completed(
-  store: OwnedStore,
-  bindings: PrepareBindings,
-  options: RecoveryOptions,
-  outcome: 'published' | 'no-change' | 'skipped-not-quiescent' | 'feature-unavailable',
-) {
-  await store.assertNoIntents();
-  await assertLifecycleWindow(store, bindings, options);
-  const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-  state[3]++;
-  state[4] = 'completed';
-  state[14] = outcome;
-  await store.updateState(state);
-  await assertLifecycleWindow(store, bindings, options);
-}
-// Protocol: docs/dev/cache-lifecycle-protocol.md#moving-source-publication-handoff.
-// Provider factories are deferred until recovery, exclusivity and observation freeze.
+const same = (a: Value, b: Value) => encodeRecord(a).equals(encodeRecord(b));
+/** Fresh post consumes the successful compact handoff and the actual GC survivor owner. */
 export async function postStreamingBase(input: BasePostRequest): Promise<BasePostResult> {
-  const caller = Object.freeze({ ...input }),
-    opened = await OpenedInvocation.open(caller.anchor, caller.budget, caller.cleanupSignal),
-    request = Object.freeze({ ...caller, maxDirectoryEntries: opened.bindings[8][9] }),
-    store = await reconcileInvocation(opened, 'resume', request),
-    facts = await PrepareFacts.open(store, request);
-  let capturedIndex: ObservationIndex | undefined;
+  const opened = await OpenedInvocation.open(input.anchor, input.budget, input.cleanupSignal),
+    request = Object.freeze({ ...input, maxDirectoryEntries: opened.bindings[8][9] }),
+    attempt = await PostAttempt.open(opened, request),
+    store = attempt.store;
   let window: ExclusiveWindow | undefined,
-    live: LiveBaseInputs | undefined,
-    frozen: FrozenMovingPublication | undefined,
-    publisher: MovingBasePublication | undefined;
-  let failure: unknown, result: BasePostResult | undefined;
+    captured: ObservationIndex | undefined,
+    owner: GcSurvivorOwner | undefined;
+  const sources: MetadataPublicationSource[] = [],
+    snapshots: MetadataSnapshot[] = [];
+  let failure: unknown, answer: BasePostResult | undefined;
   try {
-    try {
-      const { role, access } = store.codec.options;
-      if (access !== 'writable' || role === 'distributed-worker')
-        throw new Error('Base post requires writable base role.');
-      if (!facts.selection) throw new Error('Missing frozen prepare selection.');
-      if (facts.state[4] === 'completed') {
-        const outcome = facts.state[14];
-        if (
-          ![
-            'published',
-            'no-change',
-            'skipped-not-quiescent',
-            'feature-unavailable',
-            'abandoned',
-          ].includes(outcome!)
-        )
-          throw new Error('Invalid base completion.');
-        await assertLifecycleWindow(store, facts.bindings, request);
-        const publication = facts.state[8]
-          ? store.codec.schemas.documents.publication.parse(
-              await store.readDocument(facts.state[8], 'publication'),
-            )
-          : null;
-        await assertLifecycleWindow(store, facts.bindings, request);
-        return {
-          outcome: outcome as BasePostResult['outcome'],
-          key: outcome === 'no-change' ? facts.bindings[9]![1] : (publication?.[8] ?? null),
-        };
-      }
-      if (facts.state[4] === 'prepare-pending') {
-        await reconcileInvocation(
-          await OpenedInvocation.open(request.anchor, request.budget),
-          'abandon',
-          request,
-        );
-        throw new Error('Base post cannot publish failed prepare.');
-      }
+    const { role, access, model, context, invocation } = store.codec.options;
+    if (access !== 'writable' || role === 'distributed-worker')
+      throw new Error('Base post requires writable base role.');
+    if (attempt.state[4] === 'completed') {
+      const terminal = attempt.state[7]!;
+      if (
+        ![
+          'published',
+          'no-change',
+          'skipped-not-quiescent',
+          'feature-unavailable',
+          'abandoned',
+        ].includes(terminal[1])
+      )
+        throw new Error('Invalid base completion.');
+      await attempt.guard();
+      answer = { outcome: terminal[1] as BasePostResult['outcome'], key: terminal[2] };
+    } else {
       const gate = await ExclusiveWindow.establish(store, request.budget, request);
       if (gate.status !== 'ready') {
-        if (facts.state[6] || request.required || role === 'distributed-aggregator')
+        if (request.required || role === 'distributed-aggregator')
           throw new Error('Required base post is not quiescent: ' + gate.message);
-        await completed(store, facts.bindings, request, 'skipped-not-quiescent');
-        return { outcome: gate.status, key: null, message: gate.message };
-      }
-      window = gate.window;
-      const options = { ...request, signal: window.signal, assertCurrent: window.assertCurrent };
-      let baseline: readonly BaseMetadata[] | undefined;
-      const getBaseline = async () => {
-        if (baseline) return baseline;
-        const prior = await baselineGeneration(store, facts.bindings),
-          rows: BaseMetadata[] = [],
-          cold = new Set(facts.selection![7] ?? []);
-        for (const e of prior?.[8] ?? [])
-          if (e[0] === 'object' && !cold.has(e[1]))
-            rows.push(await BaselineMetadata.open(store, e[2], options));
-        return (baseline = Object.freeze(rows));
-      };
-      if (!facts.state[6]) {
+        const retained = [
+          ...attempt.handoff.entries
+            .filter((entry) => entry[4] !== null)
+            .map((entry) => store.root.resolve(entry[4]![1])),
+          store.root.resolve(attempt.handoff.header[9][2]),
+        ];
+        const message =
+          gate.message +
+          (retained.length
+            ? '; owned snapshots/activity retained for manual handling: ' + retained.join(', ')
+            : '');
+        if (retained.length) request.onWarning?.(message);
+        await attempt.finish(['outcome', 'skipped-not-quiescent', null, null, null]);
+        answer = { outcome: 'skipped-not-quiescent', key: null, message };
+      } else {
+        window = gate.window;
+        attempt.attachWindow(window);
+        const options = {
+          ...request,
+          signal: attempt.signal,
+          assertCurrent: () => {
+            attempt.assert();
+            return undefined;
+          },
+          attempt,
+        };
         await request.removeHooks(store);
-        await assertLifecycleWindow(store, facts.bindings, options);
-        const captured = await captureObservations(store, {
-          retainIndex: true,
+        await attempt.guard();
+        const observation = await captureObservations(store, {
           ...options,
-          baseline: await getBaseline(),
+          retainIndex: true,
           summaries: request.summaries,
-          purgeWindow: facts.selection[4][4] === 'enabled' ? window.purgeWindow : undefined,
+          purgeWindow: attempt.handoff.header[6] === 'enabled' ? window.purgeWindow : undefined,
         });
-        capturedIndex = captured.index;
-      }
-      await assertLifecycleWindow(store, facts.bindings, options);
-      let state = store.codec.schemas.documents['local-state'].parse(await store.state());
-      // No backend or source traversal until a frozen observation has been committed.
-      const backend = await request.cacheBackend();
-      if (!backend.isFeatureAvailable()) {
-        // Only optional, pre-publication work may finish without a cache receipt.
-        if (
-          role === 'standalone' &&
-          !request.required &&
-          ['observations-frozen', 'gc-complete'].includes(state[4]) &&
-          state[8] === null
-        ) {
-          await completed(store, facts.bindings, options, 'feature-unavailable');
-          return { outcome: 'feature-unavailable', key: null };
+        captured = observation.index!;
+        // Provider/confirmation admission precedes actual GC, source plans and evacuation.
+        let backend: BaseCacheBackend | undefined,
+          confirmation = true,
+          available = false;
+        try {
+          backend = await request.cacheBackend();
+          confirmation = backend.canConfirmSave?.() !== false;
+          available =
+            backend.isFeatureAvailable() &&
+            backend.capabilities.supportsExplicitSave &&
+            confirmation;
+        } catch {
+          confirmation = false;
         }
-        throw new Error('Native base backend cannot publish.');
+        if (!available) {
+          const outcome =
+            role === 'standalone' && !request.required && confirmation
+              ? 'feature-unavailable'
+              : 'abandoned';
+          request.onWarning?.(
+            outcome === 'feature-unavailable'
+              ? 'Cache save skipped: cache backend is unavailable.'
+              : 'Cache publication abandoned: outgoing cache confirmation unavailable.',
+          );
+          for (const entry of attempt.handoff.entries)
+            if (entry[4]) await MetadataSnapshot.retireHandoff(store, entry[4], options);
+          await captured.dispose();
+          captured = undefined;
+          await attempt.finish(['outcome', outcome, null, null, null]);
+          answer = { outcome, key: null };
+        } else {
+          owner = await GcSurvivorOwner.execute(captured, options);
+          captured = undefined;
+          const live = await MetadataPublicationSource.survivors(owner);
+          sources.push(live);
+          const overrides: [string, MetadataPublicationSource][] = [];
+          for (const entry of attempt.handoff.entries)
+            if (entry[4]) {
+              const partition = model.partitions.find((p) => p[0] === entry[1])!;
+              if (
+                partition[3] !== 'single-writer' ||
+                partition[4] === null ||
+                partition[4] === context[4]
+              )
+                throw new Error('Unexpected retained snapshot source selection.');
+              const snapshot = await MetadataSnapshot.admit(store, entry[4], options);
+              snapshots.push(snapshot);
+              const source = await MetadataPublicationSource.snapshot(snapshot);
+              sources.push(source);
+              overrides.push([entry[1], source]);
+            }
+          for (const partition of model.partitions)
+            if (
+              partition[3] === 'single-writer' &&
+              partition[4] !== null &&
+              partition[4] !== context[4] &&
+              !overrides.some(([p]) => p === partition[0])
+            )
+              throw new Error('Missing independent authoritative snapshot root.');
+          let set = MetadataPublicationSet.select(live, overrides);
+          const choices: MetadataPublicationChoice[] = [];
+          for (const entry of attempt.handoff.entries) {
+            const partition = entry[1],
+              summary = set.summary(partition),
+              pin = entry[3],
+              descriptor = entry[4];
+            const compatibleOrigin =
+              !descriptor ||
+              (descriptor[4][0] === 'base' && pin !== null && same(descriptor[4][1], pin[7])) ||
+              (descriptor[4][0] === 'empty' &&
+                descriptor[4][1] === 'generation' &&
+                pin?.[7] === null);
+            const reuse =
+              pin !== null &&
+              compatibleOrigin &&
+              same(pin[8], metadataSummaryProfile()) &&
+              same(pin[9], summary);
+            if (reuse)
+              choices.push(pin[7] === null ? ['empty', partition] : ['reuse', partition, pin[7]]);
+            else
+              choices.push(
+                summary[3] === 0 && summary[4] === 0 ? ['empty', partition] : ['new', partition],
+              );
+          }
+          for (const choice of choices) request.summaries?.choice(choice[1], choice[0]);
+          const prior = attempt.generation,
+            entries = choices.map((choice) =>
+              choice[0] === 'reuse' ? ['object', choice[1], choice[2]] : choice,
+            );
+          const unchanged = prior !== null && same(entries, prior[8]),
+            lineage = lineageId(attempt.handoff.header[2]);
+          // This exit precedes candidate groups/root plans/layouts/generation and output-only copies.
+          if (unchanged && prior[5] === lineage) answer = { outcome: 'no-change', key: prior[11] };
+          else {
+            for (const choice of choices)
+              if (choice[0] === 'new') {
+                const partition = model.partitions.find((p) => p[0] === choice[1])!;
+                if (
+                  partition[3] === 'single-writer' &&
+                  (partition[4] === null || partition[4] === context[4])
+                ) {
+                  const snapshot = await MetadataSnapshot.copy(
+                    live,
+                    partition[0],
+                    ['local', invocation],
+                    options,
+                  );
+                  snapshots.push(snapshot);
+                  const source = await MetadataPublicationSource.snapshot(snapshot);
+                  sources.push(source);
+                  overrides.push([partition[0], source]);
+                }
+              }
+            set = MetadataPublicationSet.select(live, overrides);
+            const result = await publishMetadataBase(set, backend!, {
+              lineage,
+              writer: invocation,
+              decision: H('metadata-publication', [
+                invocation,
+                model.id,
+                model.family,
+                policyId(attempt.bindings[8]),
+                choices,
+              ]),
+              choices,
+              summaries: request.summaries,
+              ...(unchanged && prior ? { groups: prior[9] } : {}),
+              onWarning: request.onWarning,
+            });
+            answer = { outcome: result.outcome, key: result.generation?.[11] ?? null };
+          }
+          await settleNativeCleanup([
+            ...sources
+              .splice(0)
+              .reverse()
+              .map((source) => () => source.dispose()),
+            ...snapshots.splice(0).map((snapshot) => () => snapshot.retire()),
+            () => owner?.dispose(),
+          ]);
+          owner = undefined;
+          await attempt.finish(['outcome', answer.outcome, answer.key, null, null]);
+        }
       }
-      if (!backend.capabilities.supportsExplicitSave)
-        throw new Error('Native base backend cannot publish.');
-      if (['observations-frozen', 'gc-complete'].includes(state[4])) {
-        live = await LiveBaseInputs.capture(store, options, facts, capturedIndex);
-        capturedIndex = undefined;
-        await assertLifecycleWindow(store, facts.bindings, options);
-        frozen = await FrozenMovingPublication.freeze(
-          live,
-          facts.selection[2],
-          await getBaseline(),
-          request.summaries,
-        );
-      } else frozen = await FrozenMovingPublication.resume(store, options);
-      publisher = MovingBasePublication.open(frozen, { cleanupSignal: request.cleanupSignal });
-      await assertLifecycleWindow(store, facts.bindings, options);
-      await publisher.saveObjects(backend);
-      await assertLifecycleWindow(store, facts.bindings, options);
-      if (await publisher.verifyUnchanged())
-        result = { outcome: 'no-change', key: facts.bindings[9]![1] };
-      else {
-        await publisher.publish(backend);
-        result = { outcome: 'published', key: frozen.generation[11] };
-      }
-      // Close readers before terminal state; source return never depends on foreground cancellation.
-      await publisher.close();
-      publisher = undefined;
-      frozen.dispose();
-      frozen = undefined;
-      await live?.dispose();
-      live = undefined;
-      await completed(
-        store,
-        facts.bindings,
-        options,
-        result.outcome === 'published' ? 'published' : 'no-change',
-      );
-    } catch (e) {
-      failure = e;
     }
-    const errors: unknown[] = failure === undefined ? [] : [failure];
-    for (const close of [
-      () => publisher?.close(),
-      () => frozen?.dispose(),
-      () => live?.dispose(),
-      () => {
-        const held = capturedIndex;
-        capturedIndex = undefined;
-        return held?.dispose();
-      },
-    ])
-      try {
-        await close();
-      } catch (e) {
-        errors.push(e);
-      }
-    if (errors.length === 1) throw errors[0];
-    if (errors.length) throw new AggregateError(errors, 'Base post cleanup failed.');
-    return result!;
-  } finally {
-    try {
-      await capturedIndex?.dispose();
-    } finally {
-      window?.close();
-      facts.close();
-    }
+  } catch (error) {
+    failure = error;
   }
+  try {
+    await settleNativeCleanup(
+      [
+        ...sources.reverse().map((source) => () => source.dispose()),
+        ...snapshots.map((snapshot) => () => snapshot.dispose()),
+        () => owner?.dispose(),
+        () => captured?.dispose(),
+      ],
+      failure,
+    );
+  } finally {
+    window?.close();
+    attempt.close();
+  }
+  if (failure !== undefined) throw failure;
+  return answer!;
 }

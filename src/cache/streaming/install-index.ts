@@ -15,7 +15,7 @@
  */
 
 import { abortableValues } from './abort';
-import type { NativeIdentity } from './native';
+import { sameObject, type NativeIdentity } from './native';
 import type { Value } from './encoding';
 import type { LocalRow } from './local-stream';
 import { baseName, parentPath, compareName } from './tree-state';
@@ -68,6 +68,19 @@ export async function buildInstallIndex(
   model: ResolvedModel,
   partition: string | null,
   signal = new AbortController().signal,
+): Promise<number> {
+  return buildObservedInstallIndex(scratch, model, partition, signal, async (accept) => {
+    for await (const row of abortableValues(source, signal)) await accept(row);
+  });
+}
+
+/** Feed provisional rows directly from their acceptance pass; expose no index before EOF. */
+export async function buildObservedInstallIndex(
+  scratch: InstallScratch,
+  model: ResolvedModel,
+  partition: string | null,
+  signal: AbortSignal,
+  produce: (accept: (row: LocalRow) => Promise<void>) => Promise<void>,
 ): Promise<number> {
   signal.throwIfAborted();
   scratch.store.root.work.indexBuilds++;
@@ -156,16 +169,16 @@ export async function buildInstallIndex(
     }
   }
   try {
-    for await (const record of abortableValues(source, signal)) {
+    await produce(async (record) => {
       signal.throwIfAborted();
       const row = record.value as readonly Value[],
         tag = row[0];
-      if (tag === 'local-stream') continue;
+      if (tag === 'local-stream') return;
       if (tag === 'local-end') {
         if (partition !== null) while (frames.length) await close(record.start);
-        continue;
+        return;
       }
-      if (partition !== null) {
+      if (partition !== null && tag !== 'dir-close') {
         const path = String(row[1]);
         while (frames.length && path !== '' && frames[frames.length - 1].path !== parentPath(path))
           await close(record.start);
@@ -183,8 +196,17 @@ export async function buildInstallIndex(
           protectedCount: 0,
           release,
         });
-      } else if (tag === 'dir-close') await close(record.end);
-      else if (tag === 'file') {
+      } else if (tag === 'dir-close') {
+        const frame = frames[frames.length - 1];
+        if (!frame || frame.path !== row[1]) throw new Error('Unbalanced index directory close.');
+        if (row[2] !== undefined) {
+          const native = row[2] as NativeIdentity;
+          if (!sameObject(frame.native, native))
+            throw new Error('Indexed directory replaced during production.');
+          frame.native = native;
+        }
+        await close(record.end);
+      } else if (tag === 'file') {
         const mask =
           partition === null ? ownerBit(model, String(row[1])) : partitionBit(model, partition);
         const node: IndexedNode = [
@@ -192,7 +214,7 @@ export async function buildInstallIndex(
           'file',
           String(row[1]),
           row[2],
-          partition === null ? null : String(row[3]),
+          row.length === 4 ? String(row[3]) : null,
           mask.toString(16),
           mask ? 0 : 1,
           0,
@@ -218,7 +240,7 @@ export async function buildInstallIndex(
         ];
         await child(await scratch.append(node, claim.token), node);
       } else throw new Error('Unexpected index row.');
-    }
+    });
     if (frames.length || root === undefined) throw new Error('Incomplete index root.');
     signal.throwIfAborted();
     return root;

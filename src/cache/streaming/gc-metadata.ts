@@ -15,8 +15,7 @@
  */
 
 import { ObservationIndex } from './observation-index';
-import type { Reference } from './owned-store';
-import { equal, tuple, type Value } from './encoding';
+import { equal, type Value } from './encoding';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
 import { isWorkspaceScaffolding, parentPath } from './tree-state';
@@ -25,76 +24,6 @@ interface Member {
   row: Value;
   optional: boolean;
   accept?: () => void;
-}
-
-// Protocol: docs/dev/cache-lifecycle-protocol.md#shared-gc-parent-projections.
-// Exact ORIGINAL metadata membership, not current native/deletion/return authority.
-export async function checkSharedGcMetadata(
-  index: ObservationIndex,
-  evidence: Reference,
-): Promise<{ units: number; targets: number }> {
-  ObservationIndex.assert(index);
-  const store = index.store,
-    options = index.options,
-    signal = options.signal ?? new AbortController().signal;
-  let context = false,
-    expected: AsyncIterator<Member> | undefined,
-    head: IteratorResult<Member> | undefined,
-    units = 0,
-    targets = 0;
-  const begin = async (r: readonly Value[]) => {
-    if (expected) throw new Error('Nested shared GC metadata unit.');
-    expected = originalGcMembers(index, r)[Symbol.asyncIterator]();
-    head = await expected.next();
-    units++;
-  };
-  try {
-    await store.readStream(
-      evidence,
-      'gc-evidence',
-      { ...options, partition: null, gcMode: 'shared' },
-      async (v) => {
-        const r = tuple(v);
-        if (r[0] === 'local-stream' || r[0] === 'local-end') return;
-        if (r[0] === 'gc-context') {
-          equal(r[1], index.reference, 'exact shared GC context');
-          context = true;
-          return;
-        }
-        if (!context) throw new Error('Missing shared GC context.');
-        if (r[0] === 'gc-unit-open') {
-          await begin(r);
-          return;
-        }
-        if (!expected || !head) throw new Error('Missing GC metadata unit.');
-        if (r[0] === 'gc-unit-close') {
-          while (!head.done && head.value.optional) head = await expected.next();
-          if (!head.done) throw new Error('Incomplete original GC membership.');
-          await expected.return?.();
-          expected = undefined;
-          head = undefined;
-          return;
-        }
-        while (
-          !head.done &&
-          head.value.optional &&
-          !(tuple(head.value.row)[0] === r[0] && tuple(head.value.row)[1] === r[1])
-        )
-          head = await expected.next();
-        if (head.done) throw new Error('Extra GC member.');
-        equal(v, head.value.row, 'original GC member/projection');
-        head.value.accept?.();
-        if (r[0] === 'target') targets++;
-        head = await expected.next();
-      },
-      signal,
-    );
-    if (expected) throw new Error('Incomplete GC metadata unit.');
-    signal.throwIfAborted();
-    return { units, targets };
-  } finally {
-    await expected?.return?.();
-  }
 }
 
 /** Provisional original-unit metadata. Complete consumption/stream sealing is required. */
@@ -107,7 +36,7 @@ export async function* originalGcMembers(
   if (r[1] === 'file') {
     const file = await index.file(String(r[2]));
     try {
-      if (file.node[6] !== 'delete') throw new Error('GC unit was retained.');
+      if (file.node[5] !== 'delete') throw new Error('GC unit was retained.');
     } finally {
       file.release();
     }
@@ -169,7 +98,7 @@ export async function* originalGcMembers(
         try {
           if (child.node[0] === 'observed-file') {
             const f = child.node;
-            if (f[6] !== 'delete') throw new Error('Partial GC selection in original unit.');
+            if (f[5] !== 'delete') throw new Error('Partial GC selection in original unit.');
             yield { row: ['target', f[1], f[3], f[2]], optional: false };
             if (owner !== null && owner !== f[3]) cleanup = false;
             owner ??= f[3];

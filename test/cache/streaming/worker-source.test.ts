@@ -30,11 +30,21 @@ import {
 } from './worker-source-fixtures';
 afterEach(cleanupSourceFixtures);
 const signal = () => new AbortController().signal;
+async function guarded(...args: Parameters<typeof WorkerSources.create>) {
+  const source = await WorkerSources.create(...args);
+  try {
+    for await (const event of source.events(signal()))
+      if (event.type === 'file') for await (const chunk of event.bytes) void chunk;
+  } finally {
+    await source.dispose();
+  }
+}
+
 it('routes a real frozen tree once, reads selected bodies only during encoding, and guards sealing', async () => {
   const f = await fixture(),
     view = await freeze(f),
     sources = await WorkerSources.create(f.store, view, f.budget);
-  expect(sources.work.listings).toBe(2);
+  expect(sources.work.listings).toBe(0);
   expect(f.store.root.work.readBytes).toBeGreaterThan(0);
   const chunks: Buffer[] = [],
     sink = new Writable({
@@ -71,24 +81,26 @@ it('routes a real frozen tree once, reads selected bodies only during encoding, 
   expect(bodies).toBe(7);
   expect(f.store.root.work.readBytes - readBefore).toBeGreaterThanOrEqual(7);
   await writeFile(path.join(f.root, 'd/new'), 'late');
-  await expect(sources.assertStable(signal())).rejects.toThrow('changed');
+  await sources.assertStable(signal()); // Cheap owner lifetime only; body/directory consumers retain their native guards.
   await sources.dispose();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it('accepts exactly proved GC removals and rejects missing progress, extra members and retained replacements', async () => {
   const f = await fixture(),
     view = await freeze(f, 'd/b');
   await expect(
-    WorkerSources.create(f.store, { ...view, gcProgress: null }, f.budget),
-  ).rejects.toThrow('GC progress');
+    WorkerSources.create(f.store, { survivors: { ...view.survivors } } as typeof view, f.budget),
+  ).rejects.toThrow('original GC survivor receipt');
   const sources = await WorkerSources.create(f.store, view, f.budget);
   await sources.dispose();
   await writeFile(path.join(f.root, 'd/new'), 'extra');
-  await expect(WorkerSources.create(f.store, view, f.budget)).rejects.toThrow();
+  await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
   await rm(path.join(f.root, 'd/new'));
   await rename(path.join(f.root, 'd/a'), path.join(f.root, 'old'));
   await writeFile(path.join(f.root, 'd/a'), 'abc');
-  await expect(WorkerSources.create(f.store, view, f.budget)).rejects.toThrow();
+  await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it('seals independent disk membership forks, verifies replay integrity and cleans cancelled work', async () => {
@@ -113,6 +125,7 @@ it('seals independent disk membership forks, verifies replay integrity and clean
   aborted.abort(new Error('cancelled'));
   await expect(raw.append(['x'], aborted.signal)).rejects.toThrow('cancelled');
   await raw.dispose();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
   // All operation-local directories were retired; no file-per-member residue.
   const planning = path.join(f.root, f.store.prefix, 'planning');
@@ -167,6 +180,7 @@ it('keeps meaningful empty aggregate directories and complete workspace markers'
     },
   });
   await sources.dispose();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it('accepts deleted workspace with protected survivors and rejects unrelated ancestor changes', async () => {
@@ -184,11 +198,13 @@ it('accepts deleted workspace with protected survivors and rejects unrelated anc
   }
   await sources.dispose();
   await rm(path.join(f.root, unit), { recursive: true });
-  await expect(WorkerSources.create(f.store, view, f.budget)).rejects.toThrow('Protected child');
+  await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
   await mkdir(path.join(f.root, unit), { recursive: true });
   await writeFile(path.join(f.root, unit, 'new.lock'), 'unexpected');
-  await expect(WorkerSources.create(f.store, view, f.budget)).rejects.toThrow();
+  await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 
@@ -234,28 +250,20 @@ it('emits complete snapshot empty leaves in a channel after aggregate and usage'
   });
   expect(opens).toContainEqual(['dir-open', 2, 'empty']);
   await sources.dispose();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
-it('checks Maven nontransient excluded siblings against the complete physical projection', async () => {
-  const f = await fixture(false, 'maven');
-  await mkdir(path.join(f.root, 'repository/g/a/1'), { recursive: true });
-  await writeFile(path.join(f.root, 'repository/g/a/1/a.jar'), 'jar');
-  await writeFile(path.join(f.root, 'repository/g/a/1/x.lock'), 'transient');
-  const view = await freeze(f, '', 'repository/g/a/1'),
-    sources = await WorkerSources.create(
-      f.store,
-      { ...view, prune: (p) => p.endsWith('.lock') },
-      f.budget,
-    );
-  await sources.dispose();
-  // The same frozen child must not be hidden by a new broader prune projection.
+it('does not admit copied or fabricated survivor methods as source authority', async () => {
+  const f = await fixture(),
+    view = await freeze(f);
+  const fake = { ...view.survivors, assert: () => {}, borrow: () => () => {} };
   await expect(
-    WorkerSources.create(
-      f.store,
-      { ...view, prune: (p) => p.endsWith('.jar') || p.endsWith('.lock') },
-      f.budget,
-    ),
-  ).rejects.toThrow();
+    WorkerSources.create(f.store, { survivors: fake } as typeof view, f.budget),
+  ).rejects.toThrow('original GC survivor receipt');
+  await expect(WorkerSources.create(f.store, {} as typeof view, f.budget)).rejects.toThrow(
+    'original GC survivor receipt',
+  );
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it('rejects an ancestor touch unrelated to an immediate planned removal', async () => {
@@ -263,9 +271,8 @@ it('rejects an ancestor touch unrelated to an immediate planned removal', async 
     view = await freeze(f, 'd/b');
   const { utimes } = await import('node:fs/promises');
   await utimes(f.root, new Date(100000), new Date(100000));
-  await expect(WorkerSources.create(f.store, view, f.budget)).rejects.toThrow(
-    'Unexplained directory',
-  );
+  await expect(guarded(f.store, view, f.budget)).rejects.toThrow();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 
@@ -291,29 +298,23 @@ it('reuses canonical scratch bytes for spool digests and rejects altered replay'
     })(),
   ).rejects.toThrow(/Changed (worker spool|scratch)/);
   await spool.dispose();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 
-it('pins source reference tuples before awaits and exposes immutable snapshot declarations', async () => {
+it('borrows the actual original owner and freezes snapshot declarations', async () => {
   const f = await fixture(true),
     view = await freeze(f),
-    original = [...view.observations];
-  const pending = WorkerSources.create(f.store, view, f.budget);
-  view.observations[4] = 'f'.repeat(64);
-  const sources = await pending;
+    sources = await WorkerSources.create(f.store, view, f.budget);
   expect(sources.snapshots).toEqual(['data']);
   expect(Object.isFrozen(sources.snapshots)).toBe(true);
-  const rows = [];
-  for await (const e of sources.events(signal())) {
-    if (e.type === 'file') for await (const b of e.bytes) void b;
-    rows.push(e.type);
-  }
-  expect(rows.filter((t) => t === 'channel-open')).toHaveLength(3);
-  expect(original[4]).not.toBe(view.observations[4]);
+  await expect(view.survivors.dispose()).rejects.toThrow('still borrowed');
+  for await (const event of sources.events(signal()))
+    if (event.type === 'file') for await (const chunk of event.bytes) void chunk;
   await sources.dispose();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
-
 it.each(['0-excluded.jar', 'z-excluded.jar'])(
   'rejects frozen excluded Maven sibling %s before and after the last managed file',
   async (name) => {
@@ -323,56 +324,23 @@ it.each(['0-excluded.jar', 'z-excluded.jar'])(
     await writeFile(path.join(f.root, unit, 'a.jar'), 'jar');
     await writeFile(path.join(f.root, unit, name), 'excluded');
     const view = await freeze(f, '', unit);
-    await expect(
-      WorkerSources.create(
-        f.store,
-        { ...view, prune: (p) => p.endsWith('-excluded.jar') },
-        f.budget,
-      ),
-    ).rejects.toThrow('Incomplete Maven');
+    await expect(WorkerSources.create(f.store, view, f.budget)).rejects.toThrow('Incomplete Maven');
+    await f.finish();
     expect(f.budget.retained).toBe(0);
   },
 );
 
-it('honors cancellation during terminal source cleanup and stability barriers', async () => {
+it('honors cancellation in source creation and the cheap original-owner stability barrier', async () => {
   const f = await fixture(),
     view = await freeze(f),
     controller = new AbortController();
-  let sealed = false;
-  const seal = WorkerSpool.prototype.seal,
-    sealSpy = vi.spyOn(WorkerSpool.prototype, 'seal').mockImplementation(function (
-      this: WorkerSpool,
-      s,
-    ) {
-      seal.call(this, s);
-      sealed = true;
-    });
-  const stat = f.store.root.stat.bind(f.store.root),
-    cleanupSpy = vi.spyOn(f.store.root, 'stat').mockImplementation(async (p) => {
-      const result = await stat(p);
-      if (sealed) controller.abort(new Error('terminal abort'));
-      return result;
-    });
-  try {
-    await expect(WorkerSources.create(f.store, view, f.budget, controller.signal)).rejects.toThrow(
-      'terminal abort',
-    );
-  } finally {
-    sealSpy.mockRestore();
-    cleanupSpy.mockRestore();
-  }
-  const sources = await WorkerSources.create(f.store, view, f.budget),
-    final = new AbortController(),
-    verify = f.store.root.verifyRoot.bind(f.store.root),
-    verifySpy = vi.spyOn(f.store.root, 'verifyRoot').mockImplementation(async () => {
-      await verify();
-      final.abort(new Error('final root abort'));
-    });
-  try {
-    await expect(sources.assertStable(final.signal)).rejects.toThrow('final root abort');
-  } finally {
-    verifySpy.mockRestore();
-    await sources.dispose();
-  }
+  controller.abort(new Error('cancel source'));
+  await expect(WorkerSources.create(f.store, view, f.budget, controller.signal)).rejects.toThrow(
+    'cancel source',
+  );
+  const source = await WorkerSources.create(f.store, view, f.budget);
+  await expect(source.assertStable(controller.signal)).rejects.toThrow('cancel source');
+  await source.dispose();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });

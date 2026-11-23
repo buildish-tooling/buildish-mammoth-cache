@@ -29,9 +29,8 @@ import {
 } from '../../../src/cache/streaming/passive-lifecycle';
 import { FrozenWorkerArchive } from '../../../src/cache/streaming/worker-package';
 import { WorkerSources } from '../../../src/cache/streaming/worker-walk';
-import { LocalBaseSnapshot } from '../../../src/cache/streaming/live-base-inputs';
+import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot';
 import { readWorkerArchive } from '../../../src/cache/streaming/worker-codec';
-import { localRecords } from '../../../src/cache/streaming/prepare-state';
 import { DiskMembership } from '../../../src/cache/streaming/worker-spool';
 import { Readable } from 'node:stream';
 const fixtures: Awaited<ReturnType<typeof composedFixture>>[] = [];
@@ -68,88 +67,87 @@ it.each([false, true])(
   'uploads a real direct worker artifact including empty completion=%s, without a snapshot shadow',
   async (empty) => {
     const f = await fixture(),
-      copy = vi.spyOn(LocalBaseSnapshot, 'captureAll');
+      copy = vi.spyOn(MetadataSnapshot, 'copy');
     if (!empty) await f.files('', { 'data/new': 'body', 'state/mine': 'snapshot' });
     const result = await f.post();
     expect(result.outcome).toBe('worker-uploaded');
     expect(copy).not.toHaveBeenCalled();
-    expect(((await f.ready.store.state()) as unknown[])[14]).toBe('worker-uploaded');
+    const uploadedState = f.ready.store.codec.schemas.documents['local-state'].parse(
+      await f.ready.store.state(),
+    );
+    expect(uploadedState[7]?.[1]).toBe('worker-uploaded');
+    expect(uploadedState).toHaveLength(8);
+    await expect(readFile(f.artifacts.upload.mock.calls[0][1][0])).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
     const bytes = [...f.artifacts.objects.values()][0].bytes,
       files: string[] = [];
-    await readWorkerArchive(Readable.from([bytes], { objectMode: false, highWaterMark: 65536 }), {
-      model: f.model,
-      context: f.request.context,
-      authorizedSnapshots: ['state'],
-      budget: f.budget,
-      membership: await DiskMembership.create(f.ready.store, f.budget),
-      consumeFile: async (file) => {
-        files.push(file.path);
-        for await (const _ of file.body) void _;
+    const summary = await readWorkerArchive(
+      Readable.from([bytes], { objectMode: false, highWaterMark: 65536 }),
+      {
+        model: f.model,
+        context: f.request.context,
+        authorizedSnapshots: ['state'],
+        budget: f.budget,
+        membership: await DiskMembership.create(f.ready.store, f.budget),
+        consumeFile: async (file) => {
+          files.push(file.path);
+          for await (const _ of file.body) void _;
+        },
       },
-    });
+    );
+    expect(summary.identity.at(-1)).toEqual(['state']);
     expect(files.sort()).toEqual(empty ? [] : ['data/new', 'state/mine']);
     const before = f.artifacts.upload.mock.calls.length;
     expect(await f.post()).toEqual(result);
     expect(f.artifacts.upload).toHaveBeenCalledTimes(before);
   },
 );
-it('denies an unsupported raw backend after freeze and before GC or source/package traversal', async () => {
+it('abandons an unsupported outgoing backend after freeze and before GC or source/package traversal', async () => {
   const f = await fixture(),
     sources = vi.spyOn(WorkerSources, 'create');
   await f.files('', { 'data/new': 'body' });
-  await expect(
-    f.post({
+  expect(
+    await f.post({
       ...f.artifacts.api,
       capabilities: { ...f.artifacts.api.capabilities, supportsRawWorkerArchives: false },
     }),
-  ).rejects.toThrow('raw worker');
+  ).toEqual({ outcome: 'abandoned' });
   const state = (await f.ready.store.state()) as unknown[];
-  expect(state[4]).toBe('observations-frozen');
-  expect(state[7]).toBeNull();
-  expect(state[12]).toBeNull();
+  expect(state[4]).toBe('completed');
+  expect((state[7] as unknown[])[1]).toBe('abandoned');
+  expect(state).toHaveLength(8);
+  expect(state[7]).toEqual(['outcome', 'abandoned', null, null, null]);
   expect(sources).not.toHaveBeenCalled();
-  expect((await f.post()).outcome).toBe('worker-uploaded');
+  expect(await f.post()).toEqual({ outcome: 'abandoned' });
 });
-it('cold reopens exact committed bytes after sources disappear and rejects altered package name/hash', async () => {
+it('abandons failed upload without retry while retaining only the current immutable package', async () => {
   const f = await fixture();
   await f.files('', { 'data/new': 'body', 'state/mine': 'snapshot' });
+  let packagePath = '';
   const failed = {
     ...f.artifacts.api,
-    uploadArtifact: vi.fn(async () => {
+    uploadArtifact: vi.fn(async (_name: string, files: readonly string[]) => {
+      packagePath = files[0];
       throw new Error('offline');
     }),
   };
-  await expect(f.post(failed)).rejects.toThrow();
+  expect(await f.post(failed)).toEqual({ outcome: 'abandoned' });
   const state = f.ready.store.codec.schemas.documents['local-state'].parse(
     await f.ready.store.state(),
   );
-  expect(state[4]).toBe('package-frozen');
-  const ref = state[12]![0],
-    original = await readFile(f.ready.store.root.resolve(ref[2]));
+  expect(state[4]).toBe('completed');
+  expect((state[7] as unknown[])[1]).toBe('abandoned');
+  expect(state).toHaveLength(8);
+  const original = await readFile(packagePath);
   await rm(f.ready.store.root.resolve('data'), { recursive: true });
   await rm(f.ready.store.root.resolve('state'), { recursive: true });
   const packageSpy = vi.spyOn(FrozenWorkerArchive, 'package');
-  expect((await f.post()).outcome).toBe('worker-uploaded');
+  expect(await f.post()).toEqual({ outcome: 'abandoned' });
+  expect(failed.uploadArtifact).toHaveBeenCalledTimes(1);
   expect(packageSpy).not.toHaveBeenCalled();
-  expect([...f.artifacts.objects.values()][0].bytes).toEqual(original);
-  // Re-enter the genuine committed package checkpoint to exercise its cold admission.
-  const current = f.ready.store.codec.schemas.documents['local-state'].parse(
-    await f.ready.store.state(),
-  );
-  current[3]++;
-  current[4] = 'package-frozen';
-  current[14] = null;
-  current[12]![3] = null;
-  await f.ready.store.updateState(current);
-  const valid = structuredClone(current);
-  current[3]++;
-  current[12]![1] = 'wrong.tar.gz';
-  await f.ready.store.updateState(current);
-  await expect(FrozenWorkerArchive.reopen(f.ready.store, f.budget)).rejects.toThrow('name');
-  valid[3] = current[3] + 1;
-  await f.ready.store.updateState(valid);
-  await writeFile(f.ready.store.root.resolve(ref[2]), Buffer.alloc(original.length));
-  await expect(FrozenWorkerArchive.reopen(f.ready.store, f.budget)).rejects.toThrow();
+  expect(f.artifacts.objects.size).toBe(0);
+  expect(await readFile(packagePath)).toEqual(original);
 });
 it('read-only post has no cache traversal, daemon inspection, GC or upload and disable preserves old recovery ownership', async () => {
   const f = await fixture(true);
@@ -168,10 +166,16 @@ it('read-only post has no cache traversal, daemon inspection, GC or upload and d
   expect(walks).not.toHaveBeenCalled();
   expect(f.artifacts.upload).not.toHaveBeenCalled();
   await reconcileDisabledRoot(f.root, { budget: f.budget, assertCurrent: (): undefined => {} });
-  expect(((await f.ready.store.state()) as unknown[])[14]).toBe('read-only');
+  expect(((await f.ready.store.state()) as unknown[])[7]).toEqual([
+    'outcome',
+    'read-only',
+    null,
+    null,
+    null,
+  ]);
 });
 
-it('confirms an upload whose acknowledgement was lost through exact service readback', async () => {
+it('abandons a lost acknowledgement without service readback or retry', async () => {
   const f = await fixture();
   await f.files('', { 'data/new': 'body' });
   const backend = {
@@ -181,36 +185,11 @@ it('confirms an upload whose acknowledgement was lost through exact service read
       throw new Error('lost acknowledgement');
     },
   };
-  expect((await f.post(backend)).outcome).toBe('worker-uploaded');
-  expect(f.artifacts.get).toHaveBeenCalledTimes(1);
-});
-
-it('rejects a completely valid same-context archive omitting a frozen snapshot channel', async () => {
-  const f = await fixture();
-  await f.files('', { 'data/new': 'body', 'state/mine': 'snapshot' });
-  const pack = FrozenWorkerArchive.package;
-  vi.spyOn(FrozenWorkerArchive, 'package').mockImplementation(
-    async (store, view, name, budget, options) => {
-      const empty = await store.writeStream(
-        'worker-sources',
-        { budget, partition: null },
-        localRecords([]),
-      );
-      return pack(store, { ...view, workerSources: empty }, name, budget, options);
-    },
-  );
-  await expect(
-    f.post({
-      ...f.artifacts.api,
-      uploadArtifact: async () => {
-        throw new Error('offline');
-      },
-    }),
-  ).rejects.toThrow();
-  vi.restoreAllMocks();
-  await expect(FrozenWorkerArchive.reopen(f.ready.store, f.budget)).rejects.toThrow(
-    'exact frozen worker snapshot scope',
-  );
+  expect((await f.post(backend)).outcome).toBe('abandoned');
+  expect((await f.post(backend)).outcome).toBe('abandoned');
+  expect(f.artifacts.upload).toHaveBeenCalledTimes(1);
+  expect(f.artifacts.get).not.toHaveBeenCalled();
+  expect(f.artifacts.download).not.toHaveBeenCalled();
 });
 
 it('disabled reconciliation accepts an absent root without creating it and blocks corrupt existing ownership', async () => {
@@ -224,18 +203,18 @@ it('disabled reconciliation accepts an absent root without creating it and block
   ).rejects.toThrow();
 });
 
-it('worker capture and archive retry use the original nondefault directory allowance', async () => {
+it('worker capture uses the original nondefault allowance and upload failure remains terminal', async () => {
   const f = await fixture(false, 11);
   await f.files('', { 'data/new': 'body' });
-  await expect(
-    f.post({
+  expect(
+    await f.post({
       ...f.artifacts.api,
       uploadArtifact: async () => {
         throw new Error('offline');
       },
     }),
-  ).rejects.toThrow();
-  expect((await f.post()).outcome).toBe('worker-uploaded');
+  ).toEqual({ outcome: 'abandoned' });
+  expect(await f.post()).toEqual({ outcome: 'abandoned' });
 });
 
 it('disabled prepare without a new owner cannot ignore legacy destructive intent', async () => {
@@ -250,4 +229,15 @@ it('disabled prepare without a new owner cannot ignore legacy destructive intent
   await expect(
     reconcileDisabledRoot(f.root, { budget: f.budget, assertCurrent: (): undefined => {} }),
   ).rejects.toThrow('legacy');
+});
+
+it('propagates local confirmed-package cleanup failures instead of warning and abandoning them', async () => {
+  const f = await fixture();
+  await f.files('', { 'data/new': 'body' });
+  vi.spyOn(FrozenWorkerArchive.prototype, 'retireUploaded').mockRejectedValue(
+    new Error('local package cleanup failed'),
+  );
+  await expect(f.post()).rejects.toThrow('local package cleanup failed');
+  expect(f.artifacts.upload).toHaveBeenCalledTimes(1);
+  expect(f.artifacts.get).not.toHaveBeenCalled();
 });

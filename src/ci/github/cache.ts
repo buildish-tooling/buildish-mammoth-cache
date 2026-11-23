@@ -33,6 +33,17 @@ import {
 const NO_CACHE_PATHS_FOUND_ERROR_FRAGMENT =
   'Path Validation Error: Path(s) specified in the action for caching do(es) not exist';
 
+/** Installed @actions/cache 6.3.0 internal/config selector, mirrored because it is not exported. */
+export function githubCacheFinalizesSave(env: NodeJS.ProcessEnv = process.env): boolean {
+  const host = new URL(env.GITHUB_SERVER_URL || 'https://github.com').hostname
+    .trimEnd()
+    .toUpperCase();
+  return (
+    (host === 'GITHUB.COM' || host.endsWith('.GHE.COM') || host.endsWith('.LOCALHOST')) &&
+    !!env.ACTIONS_CACHE_SERVICE_V2
+  );
+}
+
 /**
  * Creates a {@link BaseCacheBackend} backed by the `@actions/cache` toolkit package.
  *
@@ -48,6 +59,7 @@ export function createGitHubBaseCacheBackend(
   > = toolkitCache,
   cacheRoot?: string,
   warn: (message: string) => void = warning,
+  finalizesSave: () => boolean = githubCacheFinalizesSave,
 ): BaseCacheBackend {
   const root = cacheRoot === undefined ? undefined : path.resolve(cacheRoot);
   let warned = false;
@@ -62,7 +74,9 @@ export function createGitHubBaseCacheBackend(
     }
     return true;
   };
+  const canConfirmSave = () => supportsRoot() && finalizesSave();
   return {
+    canConfirmSave,
     capabilities: STANDARD_BASE_CACHE_BACKEND_CAPABILITIES,
     isFeatureAvailable(): boolean {
       return supportsRoot() && cacheBackend.isFeatureAvailable();
@@ -88,6 +102,14 @@ export function createGitHubBaseCacheBackend(
     async saveCache(paths: string[], key: string, options?: BaseCacheOperationOptions) {
       const operationRoot = options?.archiveRoot ?? root;
       if (!supportsRoot(operationRoot)) return -1;
+      if (!canConfirmSave()) {
+        if (!warned)
+          warn(
+            'Base cache save unavailable: finalized direct confirmation requires GitHub cache service V2. Restore remains available.',
+          );
+        warned = true;
+        return -1;
+      }
       return await withCacheRoot(operationRoot, paths, (relativePaths) =>
         cacheBackend.saveCache(relativePaths, key, undefined, true),
       );

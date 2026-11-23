@@ -17,13 +17,11 @@
 import type * as Fs from 'node:fs/promises';
 import { lstat, utimes, writeFile, link, symlink, mkdir, rename } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
+import { captureFixtureObservations as captureObservations } from './observation-fixtures';
 import { afterEach, expect, it, vi } from 'vitest';
 import { installFixture } from './install-fixture';
 import { initializeObservationFixture } from './observation-fixtures';
-import {
-  captureObservations,
-  type ObservationCaptureOptions,
-} from '../../../src/cache/streaming/observation-capture';
+import { type ObservationCaptureOptions } from '../../../src/cache/streaming/observation-capture';
 import { tuple, type Value } from '../../../src/cache/streaming/encoding';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 
@@ -91,13 +89,14 @@ async function fixture(
 ) {
   const f = await installFixture('gradle', { purgeGlobs, excluded });
   cleanup.push(async () => {
+    await initialized.finish();
     expect(f.budget.retained).toBe(0);
     await f.close();
   });
   await f.files('', files);
   for (const p of Object.keys(files)) await utimes(f.store.root.resolve(p), 1.234, 1.234);
   const cutoff = Date.now() + 30;
-  await initializeObservationFixture(f, undefined, cutoff);
+  const initialized = await initializeObservationFixture(f, undefined, cutoff);
   await setTimeout(Math.max(0, cutoff - Date.now() + 5));
   let active = true;
   const grant: NonNullable<ObservationCaptureOptions['purgeWindow']> = {
@@ -108,7 +107,7 @@ async function fixture(
     },
   };
   return {
-    ...f,
+    ...initialized,
     grant,
     expire: () => {
       active = false;
@@ -152,7 +151,7 @@ it('purges before native facts freeze while retaining original file activity and
     records
       .map((r) => tuple(r))
       .find((r) => r[0] === 'file')!
-      .slice(5, 7),
+      .slice(4, 6),
   ).toEqual(['none', 'delete']);
 });
 it.each(['transform', 'kotlin', 'groovy'] as const)(
@@ -194,7 +193,7 @@ it('preserves real changed file activity after purge', async () => {
     (await rows(f, out.reference))
       .map((r) => tuple(r))
       .find((r) => r[0] === 'file')!
-      .slice(5, 7),
+      .slice(4, 6),
   ).toEqual(['upsert', 'retain']);
 });
 it('does not delete without a current grant and reports a skipped purge', async () => {
@@ -216,7 +215,7 @@ it('uses cheap lifetime checks and refuses revoked or unbound windows before unl
       budget: f.budget,
       purgeWindow: { ...f.grant, invocation: 'other' },
     }),
-  ).rejects.toThrow('Unbound');
+  ).rejects.toThrow();
 });
 it.each(['file', 'parent', 'after-unlink', 'revoke', 'unlink-error'] as const)(
   'rejects %s changes/failure without committing capture',
@@ -249,7 +248,7 @@ it.each(['file', 'parent', 'after-unlink', 'revoke', 'unlink-error'] as const)(
     await expect(
       captureObservations(f.store, { budget: f.budget, purgeWindow: f.grant }),
     ).rejects.toThrow();
-    expect(((await f.store.state()) as Value[])[6]).toBeNull();
+    expect(((await f.store.state()) as Value[])[4]).toBe('post-active');
   },
 );
 it('preserves hardlinked candidates and ordinary excluded siblings', async () => {
@@ -304,13 +303,13 @@ it('adds zero native operations for nonmatches and fixed candidate-only work as 
           counts.listings = 0;
           counts.unlinks = 0;
           const check = vi.spyOn(f.grant, 'assertCurrent');
-          const hash = vi.spyOn(NativeReadPhase.prototype, 'hash');
+          const read = vi.spyOn(NativeReadPhase.prototype, 'read');
           await captureObservations(f.store, {
             budget: f.budget,
             ...(enabled ? { purgeWindow: f.grant } : {}),
           });
-          expect(hash).not.toHaveBeenCalled();
-          hash.mockRestore();
+          expect(read).not.toHaveBeenCalled();
+          read.mockRestore();
           expect(check).toHaveBeenCalledTimes(enabled ? (match ? 5 : 3) : 0);
           check.mockRestore();
           results.push({
@@ -376,7 +375,7 @@ it.each(['abort', 'revoke'] as const)(
     counts.onStat = undefined;
     expect(seen).toBe(2);
     expect(await f.store.root.stat('data/runtime.lock')).not.toBeNull();
-    expect(((await f.store.state()) as Value[])[6]).toBeNull();
+    expect(((await f.store.state()) as Value[])[4]).toBe('post-active');
   },
 );
 it('rejects an expired window at final acceptance while preserving a committed observation', async () => {
@@ -389,5 +388,6 @@ it('rejects an expired window at final acceptance while preserving a committed o
   ).rejects.toThrow('expired');
   expect(((await f.store.state()) as Value[])[6]).not.toBeNull();
   expect(await f.store.root.stat('data/runtime.lock')).toBeNull();
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });

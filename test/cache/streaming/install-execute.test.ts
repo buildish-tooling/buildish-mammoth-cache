@@ -14,16 +14,12 @@
  * limitations under the License.
  */
 
-import { afterEach, beforeAll, afterAll, expect, it, vi } from 'vitest';
-import { readFile, writeFile, mkdtemp, rm, unlink } from 'node:fs/promises';
-import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { build } from 'esbuild';
-import { mixedDirectoryFixture } from './mixed-directory-fixture';
+import { afterEach, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { installFixture } from './install-fixture';
-import { freezeInstallPlan } from '../../../src/cache/streaming/install-plan';
-import { executeInstall, recoverInstall } from '../../../src/cache/streaming/install-execute';
-import { OwnedStore } from '../../../src/cache/streaming/owned-store';
+import { freezeInstallPlan } from './install-plan-fixture';
+import { executeInstall } from '../../../src/cache/streaming/install-execute';
+import type { InstallScratch as InstallScratchType } from '../../../src/cache/streaming/install-scratch';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -50,129 +46,11 @@ it('installs native files through cold parents and complete units', async () => 
   );
   await executeInstall(f.store, plan, f.budget);
   expect(await readFile(f.store.root.resolve('data/sub/c'), 'utf8')).toBe('c');
-  expect(((await f.store.state()) as readonly unknown[])[11]).toBeNull();
+  expect((await f.store.state()) as readonly unknown[]).toHaveLength(8);
   await f.store.assertNoIntents();
   expect(f.budget.retained).toBe(0);
 });
-it.each([
-  'install-evidence-published',
-  'install-intent-published',
-  'install-parent-renamed',
-  'install-source-renamed',
-  'install-progress-pointer',
-  'install-intent-retired',
-])('recovers insert interruption at %s', async (point) => {
-  const mixed = point === 'install-parent-renamed' ? await mixedDirectoryFixture() : null;
-  const f = mixed ?? (await fixture());
-  if (mixed) fixtures.push(mixed);
-  const plan = await freezeInstallPlan(
-    f.store,
-    mixed
-      ? mixed.inputs
-      : [await f.incoming('data', { 'data/a': 'a', 'data/b': 'b', 'data/sub/c': 'c' })],
-    f.budget,
-  );
-  let calls = 0;
-  const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === point && ++calls === (point === 'install-progress-pointer' ? 2 : 1))
-      throw new Error('interrupted');
-  });
-  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-  mock.mockRestore();
-  const reopened = await OwnedStore.bind(f.root, f.store.codec);
-  await recoverInstall(reopened, f.budget);
-  await reopened.assertNoIntents();
-  expect(f.budget.retained).toBe(0);
-  if (point !== 'install-evidence-published') {
-    expect(await readFile(f.store.root.resolve('data/a'), 'utf8')).toBe('a');
-    // Recovery reconciles the whole active batch, including unattempted ordinary units.
-    expect(await readFile(f.store.root.resolve('data/sub/c'), 'utf8')).toBe('c');
-  }
-});
-it('rejects unknown children in a populated created parent after restart', async () => {
-  const f = await fixture(),
-    plan = await freezeInstallPlan(
-      f.store,
-      [await f.incoming('data', { 'data/a': 'a', 'data/b': 'b' })],
-      f.budget,
-    );
-  const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-source-renamed') throw new Error('interrupted');
-  });
-  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-  mock.mockRestore();
-  await writeFile(f.store.root.resolve('data/unknown'), 'unknown');
-  await expect(
-    recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget),
-  ).rejects.toThrow();
-  expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).not.toBeNull();
-  expect(f.budget.retained).toBe(0);
-});
-
-let processDir: string, processBundle: string;
-beforeAll(async () => {
-  processDir = await mkdtemp(path.resolve('build/install-child-'));
-  processBundle = path.join(processDir, 'fixture.mjs');
-  await build({
-    entryPoints: ['test/cache/streaming/install-process-fixture.ts'],
-    outfile: processBundle,
-    bundle: true,
-    platform: 'node',
-    format: 'esm',
-    target: 'node24',
-  });
-});
-afterAll(async () => {
-  await rm(processDir, { recursive: true, force: true });
-});
-it.each([
-  ['install-intent-published', 1],
-  ['install-parent-renamed', 1],
-  ['install-parent-renamed', 2],
-  ['install-source-renamed', 1],
-  ['install-progress-candidate', 2],
-  ['install-progress-pointer', 2],
-  ['install-intent-retired', 1],
-] as const)('reopens an abruptly terminated process at %s/%s', async (point, nth) => {
-  const f = await installFixture();
-  fixtures.push(f);
-  let status: unknown;
-  try {
-    execFileSync(
-      process.execPath,
-      [
-        processBundle,
-        point === 'install-parent-renamed' ? 'start-mixed' : 'start',
-        f.root,
-        point,
-        String(nth),
-      ],
-      {
-        stdio: 'pipe',
-      },
-    );
-  } catch (error) {
-    status = (error as { status: unknown }).status;
-  }
-  expect(status).toBe(73);
-  execFileSync(
-    process.execPath,
-    [
-      processBundle,
-      point === 'install-parent-renamed' ? 'recover-mixed' : 'recover',
-      f.root,
-      'unused',
-      '1',
-    ],
-    {
-      stdio: 'pipe',
-    },
-  );
-  await f.store.assertNoIntents();
-  expect(await readFile(f.store.root.resolve('data/sub/c'), 'utf8')).toBe('c');
-});
-
-it('rejects a mixed unsupported plan before any live mutation or progress', async () => {
+it('requires admitted operations before constructing an executable program', async () => {
   const f = await fixture();
   await f.files('', { 'state/old': 'old' });
   const plan = await freezeInstallPlan(
@@ -185,41 +63,25 @@ it('rejects a mixed unsupported plan before any live mutation or progress', asyn
   );
   const { InstallProgram, InstallReaders } =
     await import('../../../src/cache/streaming/install-program');
-  const readers = new InstallReaders(f.store, f.budget, 100000);
+  const { InstallAdmission } = await import('../../../src/cache/streaming/install-admission');
+  const admission = await InstallAdmission.create(f.store, plan, f.budget);
+  const readers = new InstallReaders(f.store, f.budget, 100000, admission);
   try {
     await expect(
       InstallProgram.create(f.store, plan.plan, readers, new AbortController().signal),
-    ).rejects.toThrow('slice not enabled');
+    ).rejects.toThrow('requires admitted operations');
   } finally {
     await readers.close();
+    await admission.close();
+    await plan.metadata.dispose();
   }
   expect(await f.store.root.stat('data')).toBeNull();
   expect(await readFile(f.store.root.resolve('state/old'), 'utf8')).toBe('old');
-  expect(((await f.store.state()) as readonly unknown[])[11]).toBeNull();
+  expect((await f.store.state()) as readonly unknown[]).toHaveLength(8);
   await f.store.assertNoIntents();
   expect(f.budget.retained).toBe(0);
 });
-it('verifies a retired-intent committed prefix before abandoning its suffix', async () => {
-  const f = await installFixture();
-  fixtures.push(f);
-  try {
-    execFileSync(
-      process.execPath,
-      [processBundle, 'start', f.root, 'install-intent-retired', '1'],
-      { stdio: 'pipe' },
-    );
-  } catch (error) {
-    expect((error as { status: number }).status).toBe(73);
-  }
-  await writeFile(f.store.root.resolve('data/unknown'), 'unknown');
-  expect(() =>
-    execFileSync(process.execPath, [processBundle, 'recover', f.root, 'unused', '1'], {
-      stdio: 'pipe',
-    }),
-  ).toThrow();
-  expect(((await f.store.state()) as readonly unknown[])[11]).not.toBeNull();
-});
-it('reconciles only the active batch after earlier complete batches', async () => {
+it('keeps completed units and abandons an unstarted suffix after later failure', async () => {
   const f = await fixture();
   await f.files('', { data: null }); // Exercise the required fine merge into an existing directory.
   const plan = await freezeInstallPlan(
@@ -235,51 +97,12 @@ it('reconciles only the active batch after earlier complete batches', async () =
     'interrupted',
   );
   mock.mockRestore();
-  await recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget);
   expect(await readFile(f.store.root.resolve('data/a'), 'utf8')).toBe('a');
   expect(await readFile(f.store.root.resolve('data/b'), 'utf8')).toBe('b');
   expect(await f.store.root.stat('data/sub')).toBeNull();
   await f.store.assertNoIntents();
   expect(f.budget.retained).toBe(0);
 });
-it('blocks a lost source and target without discarding the intent', async () => {
-  const f = await fixture();
-  await f.files('', { data: null }); // Exercise the required fine merge into an existing directory.
-  const plan = await freezeInstallPlan(
-    f.store,
-    [await f.incoming('data', { 'data/a': 'a' })],
-    f.budget,
-  );
-  const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-source-renamed') throw new Error('interrupted');
-  });
-  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-  mock.mockRestore();
-  await unlink(f.store.root.resolve('data/a'));
-  await expect(
-    recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget),
-  ).rejects.toThrow('Lost insert');
-  expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).not.toBeNull();
-  expect(f.budget.retained).toBe(0);
-});
-it('preserves intent ownership on cancellation after a parent rename', async () => {
-  const f = await mixedDirectoryFixture();
-  fixtures.push(f);
-  const controller = new AbortController();
-  const plan = await freezeInstallPlan(f.store, f.inputs, f.budget);
-  const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-parent-renamed') controller.abort(new Error('cancelled'));
-  });
-  await expect(
-    executeInstall(f.store, plan, f.budget, { signal: controller.signal }),
-  ).rejects.toThrow('cancelled');
-  mock.mockRestore();
-  expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).not.toBeNull();
-  await recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget);
-  expect(await readFile(f.store.root.resolve('data/a'), 'utf8')).toBe('a');
-  expect(f.budget.retained).toBe(0);
-});
-
 it('cancels during endpoint checks before initiating another rename', async () => {
   const f = await fixture(),
     controller = new AbortController();
@@ -294,7 +117,7 @@ it('cancels during endpoint checks before initiating another rename', async () =
     path,
   ) {
     const value = await stat.call(this, path);
-    if (path === input.nativeRoot + '/data/a' && ++n === 3)
+    if (path === input.nativeRoot + '/data/a' && ++n === 1)
       controller.abort(new Error('endpoint cancellation'));
     return value;
   });
@@ -302,10 +125,9 @@ it('cancels during endpoint checks before initiating another rename', async () =
     executeInstall(f.store, plan, f.budget, { signal: controller.signal }),
   ).rejects.toThrow('endpoint cancellation');
   mock.mockRestore();
-  expect(n).toBe(3);
+  expect(n).toBe(1);
   expect(await f.store.root.stat('data/a')).toBeNull();
   expect(await f.store.root.stat(input.nativeRoot + '/data/a')).not.toBeNull();
-  await recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget);
   expect(f.budget.retained).toBe(0);
 });
 it('releases all later owners when an earlier cleanup reports failure', async () => {
@@ -369,15 +191,13 @@ it('amortizes shared-parent traversal and durable cycles across ordinary units',
       ancestry.push(relative);
       await parents(relative);
     });
-    const hash = vi.spyOn(f.store.root, 'hash');
     await executeInstall(f.store, plan, f.budget);
-    expect(hash).not.toHaveBeenCalled();
+    expect(f.store.root.work.bodyHashBytes).toBe(0);
     expect(ancestry.some((relative) => Object.hasOwn(entries, relative))).toBe(false);
-    expect(names.filter((n) => n === 'install-intent-published')).toHaveLength(1);
-    expect(names.filter((n) => n === 'install-progress-pointer')).toHaveLength(2);
+    expect(names.filter((n) => n === 'install-intent-published')).toHaveLength(0);
+    expect(names.filter((n) => n === 'install-progress-pointer')).toHaveLength(0);
     fail.mockRestore();
     ancestrySpy.mockRestore();
-    hash.mockRestore();
     expect(f.budget.retained).toBe(0);
     expect(f.store.root.work.readBytes - before.readBytes).toBeLessThan(count * 512 * 1024);
     return {
@@ -394,30 +214,6 @@ it('amortizes shared-parent traversal and durable cycles across ordinary units',
   expect(d.stats - c.stats).toBe(b.stats - a.stats);
   expect(b.reads).toBeLessThan(a.reads * 4);
   expect(d.reads).toBeLessThan(c.reads * 4);
-});
-
-it('reconciles completed active rename parents before committing the recovered cursor', async () => {
-  const f = await fixture();
-  await f.files('', { data: null }); // Exercise the required fine merge into an existing directory.
-  const input = await f.incoming('data', { 'data/a': 'a', 'data/b': 'b' });
-  const plan = await freezeInstallPlan(f.store, [input], f.budget);
-  let moves = 0;
-  const crash = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-source-renamed' && ++moves === 2) throw new Error('interrupted');
-  });
-  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-  crash.mockRestore();
-  const reopened = await OwnedStore.bind(f.root, f.store.codec, async (name) => {
-    if (name === 'install-progress-pointer') {
-      expect(await f.store.root.stat('data/a')).not.toBeNull();
-      expect(await f.store.root.stat('data/b')).not.toBeNull();
-      expect(await f.store.root.stat(input.nativeRoot + '/data/a')).toBeNull();
-      expect(await f.store.root.stat(input.nativeRoot + '/data/b')).toBeNull();
-    }
-  });
-  await recoverInstall(reopened, f.budget);
-  await reopened.assertNoIntents();
-  expect(f.budget.retained).toBe(0);
 });
 
 it('replaces opposite file/directory kinds and removes stale snapshot files beside an excluded lock', async () => {
@@ -441,120 +237,159 @@ it('replaces opposite file/directory kinds and removes stale snapshot files besi
   await f.store.assertNoIntents();
   expect(f.budget.retained).toBe(0);
 });
-it.each([
-  'install-old-backed-up',
-  'install-source-renamed',
-  'install-progress-pointer',
-  'install-backup-member-retired',
-  'install-backups-retired',
-])('reconciles replacement interrupted at %s', async (point) => {
+it.each(['install-old-backed-up', 'install-source-renamed', 'install-rename-before-stat'])(
+  'cleans the current replacement in process after %s without completing an unstarted suffix',
+  async (point) => {
+    const f = await fixture();
+    await f.files('', { 'state/old': 'old', 'state/sub/old': 'old-sub' });
+    const plan = await freezeInstallPlan(
+      f.store,
+      [await f.incoming('state', { 'state/new': 'new' })],
+      f.budget,
+    );
+    let once = false;
+    vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+      if (name === point && !once) {
+        once = true;
+        throw new Error('interrupted');
+      }
+    });
+    const before = f.store.root.work.renames;
+    await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
+    const old = await f.store.root.stat('state/old'),
+      next = await f.store.root.stat('state/new');
+    expect(!!old !== !!next).toBe(true);
+    expect(await f.store.root.stat(f.store.prefix + 'backups/1')).toBeNull();
+    expect(f.store.root.work.renames).toBeGreaterThan(before);
+    expect(f.budget.retained).toBe(0);
+  },
+);
+it('restores a parked old root after cancellation before placing the replacement', async () => {
   const f = await fixture();
-  await f.files('', { 'state/old': 'old', 'state/sub/old': 'old-sub' });
+  await f.files('', { 'state/old': 'old' });
   const plan = await freezeInstallPlan(
     f.store,
     [await f.incoming('state', { 'state/new': 'new' })],
     f.budget,
   );
-  let n = 0;
-  const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === point && ++n === (point === 'install-progress-pointer' ? 2 : 1))
-      throw new Error('interrupted');
+  const abort = new AbortController();
+  vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+    if (name === 'install-old-backed-up') abort.abort(new Error('cancelled'));
   });
-  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-  mock.mockRestore();
-  await recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget);
-  expect(await readFile(f.store.root.resolve('state/new'), 'utf8')).toBe('new');
-  expect(await f.store.root.stat('state/old')).toBeNull();
-  await f.store.assertNoIntents();
+  await expect(executeInstall(f.store, plan, f.budget, { signal: abort.signal })).rejects.toThrow(
+    'cancelled',
+  );
+  expect(await readFile(f.store.root.resolve('state/old'), 'utf8')).toBe('old');
+  expect(await f.store.root.stat('state/new')).toBeNull();
+  expect(await f.store.root.stat(f.store.prefix + 'backups/1')).toBeNull();
   expect(f.budget.retained).toBe(0);
 });
-it.each(['install-delete-backed-up', 'install-progress-pointer', 'install-backup-member-retired'])(
-  'reconciles authoritative empty snapshot deletion interrupted at %s',
-  async (point) => {
-    const f = await fixture();
-    await f.files('', { 'state/a': 'a', 'state/sub/b': 'b', 'state/keep.lock': 'keep' });
-    const plan = await freezeInstallPlan(f.store, [await f.incoming('state', {})], f.budget);
-    let n = 0;
-    const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-      if (name === point && ++n === (point === 'install-progress-pointer' ? 2 : 1))
-        throw new Error('interrupted');
-    });
-    await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-    mock.mockRestore();
-    await recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget);
-    expect(await f.store.root.stat('state/a')).toBeNull();
-    expect(await f.store.root.stat('state/sub')).toBeNull();
-    expect(await readFile(f.store.root.resolve('state/keep.lock'), 'utf8')).toBe('keep');
-    await f.store.assertNoIntents();
-    expect(f.budget.retained).toBe(0);
-  },
-);
-
-it.each([
-  ['start-replace', 'install-old-backed-up'],
-  ['start-replace', 'install-source-renamed'],
-  ['start-replace', 'install-backup-member-retired'],
-  ['start-delete', 'install-delete-backed-up'],
-  ['start-delete', 'install-backup-member-retired'],
-] as const)('recovers an abruptly terminated %s process at %s', async (mode, point) => {
-  const f = await installFixture();
-  fixtures.push(f);
-  let status: unknown;
-  try {
-    execFileSync(process.execPath, [processBundle, mode, f.root, point, '1'], { stdio: 'pipe' });
-  } catch (error) {
-    status = (error as { status: unknown }).status;
-  }
-  expect(status).toBe(73);
-  execFileSync(process.execPath, [processBundle, 'recover', f.root, 'unused', '1'], {
-    stdio: 'pipe',
-  });
-  await f.store.assertNoIntents();
-  if (mode === 'start-replace')
-    expect(await readFile(f.store.root.resolve('state/new'), 'utf8')).toBe('new');
-  else expect(await f.store.root.stat('state')).toBeNull();
-});
-it.each(['unknown', 'changed-survivor', 'recreated-target'] as const)(
-  'blocks %s during partial committed backup cleanup',
-  async (damage) => {
-    const f = await fixture();
-    await f.files('', { 'state/a': 'a', 'state/sub/b': 'b' });
-    const input = await f.incoming(
-      'state',
-      damage === 'recreated-target' ? {} : { 'state/new': 'new' },
-    );
-    const plan = await freezeInstallPlan(f.store, [input], f.budget);
-    const crash = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-      if (name === 'install-backup-member-retired') throw new Error('interrupted');
-    });
-    await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-    crash.mockRestore();
-    const backup = f.store.prefix + 'backups/1';
-    if (damage === 'unknown') await writeFile(f.store.root.resolve(backup + '/unknown'), 'unknown');
-    if (damage === 'changed-survivor')
-      await writeFile(f.store.root.resolve(backup + '/sub/b'), 'changed');
-    if (damage === 'recreated-target') await f.files('', { 'state/recreated': 'recreated' });
-    await expect(
-      recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget),
-    ).rejects.toThrow();
-    expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).not.toBeNull();
-    expect(f.budget.retained).toBe(0);
-  },
-);
-it('does not accept a lost delete preimage before its cursor commits', async () => {
+it('preserves a parked original when a return target is occupied', async () => {
   const f = await fixture();
-  await f.files('', { 'state/a': 'a' });
-  const plan = await freezeInstallPlan(f.store, [await f.incoming('state', {})], f.budget);
-  const crash = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-delete-backed-up') throw new Error('interrupted');
+  await f.files('', { 'state/old': 'old' });
+  const plan = await freezeInstallPlan(
+    f.store,
+    [await f.incoming('state', { 'state/new': 'new' })],
+    f.budget,
+  );
+  vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+    if (name === 'install-old-backed-up') {
+      await f.files('', { 'state/foreign': 'foreign' });
+      throw new Error('interrupted');
+    }
   });
-  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('interrupted');
-  crash.mockRestore();
-  await rm(f.store.root.resolve(f.store.prefix + 'backups/1'), { recursive: true });
-  await expect(
-    recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget),
-  ).rejects.toThrow('lost delete preimage');
-  expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).not.toBeNull();
+  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('retained backup roots');
+  expect(await readFile(f.store.root.resolve(f.store.prefix + 'backups/1/old'), 'utf8')).toBe(
+    'old',
+  );
+  expect(await readFile(f.store.root.resolve('state/foreign'), 'utf8')).toBe('foreign');
+  expect(f.budget.retained).toBe(0);
+});
+it('retains a partially retired backup without replaying deletion', async () => {
+  const f = await fixture();
+  await f.files('', { 'state/a': 'a', 'state/sub/b': 'b' });
+  const plan = await freezeInstallPlan(
+    f.store,
+    [await f.incoming('state', { 'state/new': 'new' })],
+    f.budget,
+  );
+  let retirements = 0;
+  vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+    if (name === 'install-backup-member-retired') {
+      retirements++;
+      throw new Error('retire failed');
+    }
+  });
+  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('retire failed');
+  expect(retirements).toBe(1);
+  expect(await readFile(f.store.root.resolve('state/new'), 'utf8')).toBe('new');
+  expect(await f.store.root.stat(f.store.prefix + 'backups/1')).not.toBeNull();
+  expect(f.budget.retained).toBe(0);
+});
+
+it('owns an incoming placement whose post-rename observation fails', async () => {
+  const f = await fixture();
+  await f.files('', { 'state/old': 'old' });
+  const plan = await freezeInstallPlan(
+    f.store,
+    [await f.incoming('state', { 'state/new': 'new' })],
+    f.budget,
+  );
+  let moves = 0;
+  vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+    if (name === 'install-rename-before-stat' && ++moves === 2)
+      throw new Error('incoming observation failed');
+  });
+  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow(
+    'incoming observation failed',
+  );
+  expect(await readFile(f.store.root.resolve('state/new'), 'utf8')).toBe('new');
+  expect(await f.store.root.stat(f.store.prefix + 'backups/1')).toBeNull();
+  expect(f.budget.retained).toBe(0);
+});
+it('retains ownership when recording the completed backup fails', async () => {
+  const { InstallScratch } = await import('../../../src/cache/streaming/install-scratch');
+  const f = await fixture();
+  await f.files('', { 'state/old': 'old' });
+  const plan = await freezeInstallPlan(
+    f.store,
+    [await f.incoming('state', { 'state/new': 'new' })],
+    f.budget,
+  );
+  const append = InstallScratch.prototype.append;
+  vi.spyOn(InstallScratch.prototype, 'append').mockImplementation(async function (
+    this: InstallScratchType,
+    value,
+    ...rest
+  ) {
+    if (Array.isArray(value) && value[0] === 'backup') throw new Error('backup record failed');
+    return append.call(this, value, ...rest);
+  });
+  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('backup record failed');
+  expect(await readFile(f.store.root.resolve('state/new'), 'utf8')).toBe('new');
+  expect(await f.store.root.stat(f.store.prefix + 'backups/1')).toBeNull();
+  expect(f.budget.retained).toBe(0);
+});
+it('reports retained endpoints when reverse cleanup rename succeeds before its observation fails', async () => {
+  const f = await fixture();
+  await f.files('', { 'state/old': 'old' });
+  const plan = await freezeInstallPlan(
+    f.store,
+    [await f.incoming('state', { 'state/new': 'new' })],
+    f.budget,
+  );
+  let restoring = false;
+  vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+    if (name === 'install-old-backed-up') {
+      restoring = true;
+      throw new Error('place failed');
+    }
+    if (name === 'install-rename-before-stat' && restoring)
+      throw new Error('return observation failed');
+  });
+  await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('retained backup roots');
+  expect(await readFile(f.store.root.resolve('state/old'), 'utf8')).toBe('old');
+  expect(await f.store.root.stat(f.store.prefix + 'backups/1')).toBeNull();
   expect(f.budget.retained).toBe(0);
 });
 
@@ -562,7 +397,6 @@ it.each(['file-backups', 'directory-backup'] as const)(
   'keeps %s retirement work linear with fixed scratch and durable cycles',
   async (shape) => {
     const { InstallScratch } = await import('../../../src/cache/streaming/install-scratch');
-    const { NativeReadPhase } = await import('../../../src/cache/streaming/native-read-phase');
     async function measure(count: number) {
       const f = await fixture();
       const old = Object.fromEntries(
@@ -579,8 +413,7 @@ it.each(['file-backups', 'directory-backup'] as const)(
         f.budget,
       );
       const before = { ...f.store.root.work };
-      const scratch = vi.spyOn(InstallScratch, 'create'),
-        hash = vi.spyOn(NativeReadPhase.prototype, 'hash');
+      const scratch = vi.spyOn(InstallScratch, 'create');
       let intents = 0,
         pointers = 0;
       const hook = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
@@ -588,9 +421,9 @@ it.each(['file-backups', 'directory-backup'] as const)(
         if (name === 'install-progress-pointer') pointers++;
       });
       await executeInstall(f.store, plan, f.budget);
-      expect(hash).not.toHaveBeenCalled();
-      expect(intents).toBe(1);
-      expect(pointers).toBe(2);
+      expect(f.store.root.work.bodyHashBytes).toBe(0);
+      expect(intents).toBe(0);
+      expect(pointers).toBe(0);
       const result = {
         scratch: scratch.mock.calls.length,
         stats: f.store.root.work.stats - before.stats,
@@ -598,7 +431,6 @@ it.each(['file-backups', 'directory-backup'] as const)(
         unlinks: f.store.root.work.unlinks - before.unlinks,
       };
       scratch.mockRestore();
-      hash.mockRestore();
       hook.mockRestore();
       expect(f.budget.retained).toBe(0);
       return result;
@@ -627,33 +459,28 @@ it('retires a native read-only preimage without copying or changing the installe
   await f.store.assertNoIntents();
   expect(f.budget.retained).toBe(0);
 });
-it.each(['worker', 'trusted-base'] as const)(
-  'consumes %s verification through the same isolated installer in read-only prepare',
-  async (origin) => {
-    const f = await installFixture('gradle', { access: 'read-only' });
-    fixtures.push(f);
-    await f.store.initialize(f.bindings);
-    const input = await f.incoming('state', { 'state/body': 'verified' }, origin);
-    // The retained authoritative snapshot is independent of disposable install staging.
-    await f.files(f.store.prefix + 'snapshots/state', { 'state/body': 'retained' });
-    const plan = await freezeInstallPlan(f.store, [input], f.budget);
-    const hash = vi.spyOn(f.store.root, 'hash');
-    await executeInstall(f.store, plan, f.budget);
-    expect(hash).not.toHaveBeenCalled();
-    hash.mockRestore();
-    expect(await readFile(f.store.root.resolve('state/body'), 'utf8')).toBe('verified');
+it('consumes an admitted metadata source through the isolated installer in read-only prepare', async () => {
+  const f = await installFixture('gradle', { access: 'read-only' });
+  fixtures.push(f);
+  await f.store.initialize(f.bindings);
+  const input = await f.incoming('state', { 'state/body': 'verified' });
+  // The retained authoritative snapshot is independent of disposable install staging.
+  await f.files(f.store.prefix + 'snapshots/state', { 'state/body': 'retained' });
+  const plan = await freezeInstallPlan(f.store, [input], f.budget);
+  await executeInstall(f.store, plan, f.budget);
+  expect(f.store.root.work.bodyHashBytes).toBe(0);
+  expect(await readFile(f.store.root.resolve('state/body'), 'utf8')).toBe('verified');
+  expect(
+    await readFile(f.store.root.resolve(f.store.prefix + 'snapshots/state/state/body'), 'utf8'),
+  ).toBe('retained');
+  expect(await f.store.root.stat(plan.plan[2])).toBeNull();
+  expect(() => plan.metadata.assert(f.store)).toThrow('closed');
+  expect(await f.store.root.stat(input.objectRoot + '/envelope.json')).not.toBeNull();
+  for (const directory of ['planning', 'admission', 'mutation'])
     expect(
-      await readFile(f.store.root.resolve(f.store.prefix + 'snapshots/state/state/body'), 'utf8'),
-    ).toBe('retained');
-    expect(await f.store.root.stat(plan.plan[2])).toBeNull();
-    expect(await f.store.root.stat(plan.current[2])).toBeNull();
-    expect(await f.store.root.stat(input.evidence[2])).not.toBeNull();
-    for (const directory of ['planning', 'admission', 'mutation'])
-      expect(
-        await (
-          await import('node:fs/promises')
-        ).readdir(f.store.root.resolve(f.store.prefix + directory)),
-      ).toEqual([]);
-    expect(f.budget.retained).toBe(0);
-  },
-);
+      await (
+        await import('node:fs/promises')
+      ).readdir(f.store.root.resolve(f.store.prefix + directory)),
+    ).toEqual([]);
+  expect(f.budget.retained).toBe(0);
+});

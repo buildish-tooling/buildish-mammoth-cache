@@ -32,6 +32,7 @@ interface WindowOptions {
   readonly exitGraceMs?: number;
   readonly lifecycle?: LifecycleResolver;
 }
+const windows = new WeakSet<ExclusiveWindow>();
 export class ExclusiveWindow {
   private readonly lifetime = new AbortController();
   readonly signal: AbortSignal;
@@ -40,7 +41,13 @@ export class ExclusiveWindow {
     private readonly assertion: () => undefined,
     signal: AbortSignal,
   ) {
+    windows.add(this);
     this.signal = AbortSignal.any([signal, this.lifetime.signal]);
+  }
+  static assertReceipt(window: ExclusiveWindow, store: OwnedStore): void {
+    if (!windows.has(window) || window.store !== store)
+      throw new Error('Unavailable exclusive window.');
+    window.assertCurrent();
   }
   assertCurrent = (): undefined => {
     this.signal.throwIfAborted();
@@ -95,8 +102,8 @@ export class ExclusiveWindow {
       );
     };
     await checkRoot();
-    if (initial[4] === 'prepare-pending' || initial[4] === 'completed')
-      throw new Error('Exclusive window outside post/recovery lifecycle.');
+    if (['prepare-pending', 'prepare-failed', 'completed'].includes(initial[4]))
+      throw new Error('Exclusive window outside active post lifecycle.');
     const timeout = input.timeoutMs ?? 180000,
       clientTimeout = input.clientTimeoutMs ?? 60000,
       exitGrace = input.exitGraceMs ?? 5000;
@@ -114,18 +121,13 @@ export class ExclusiveWindow {
     let installations: Reference | undefined;
     try {
       const tool = store.codec.options.context[7],
-        prior = initial[13]
-          ? store.codec.schemas.documents.quiescence.parse(
-              await store.readDocument(initial[13], 'quiescence'),
-            )[3]
-          : undefined,
         lifecycle = await resolveLifecycle(tool, input.lifecycle);
       assert();
       installations = await lifecycle.quiesce({
         store,
         budget,
-        installations: prior,
-        sourcesFrozen: !!initial[6],
+        installations: undefined,
+        sourcesFrozen: false,
         signal: limited,
         assertCurrent: assert,
         deadline,
@@ -133,11 +135,9 @@ export class ExclusiveWindow {
         exitGrace,
       });
       // Tool operations cannot omit/replace the owner's required inventory or mint a grant.
-      if (tool === 'gradle')
-        installations = store.codec.schemas.ref('installations').parse(installations);
+      if (tool === 'gradle') store.codec.schemas.ref('installations').parse(installations);
       else if (installations !== undefined)
         throw new Error('Unexpected Maven installation inventory.');
-      if (prior) equal(installations!, prior, 'quiescence installation inventory');
       limited.throwIfAborted();
       assert();
       const current = store.codec.schemas.documents['local-state'].parse(await store.state());
@@ -145,26 +145,7 @@ export class ExclusiveWindow {
       await checkRoot();
       limited.throwIfAborted();
       assert();
-      const old = current[13];
-      if (installations && !initial[6])
-        current[13] = store.codec.schemas
-          .ref('quiescence')
-          .parse(
-            await store.writeDocument([
-              'quiescence',
-              1,
-              store.codec.options.invocation,
-              installations,
-              'all-exited',
-              Date.now(),
-            ]),
-          );
-      if (current[4] === 'build-ready') current[4] = 'quiescent';
-      if (!initial[6]) {
-        current[3]++;
-        await store.updateState(current);
-        if (old) await store.retireReplacedDocument(old);
-      }
+      if (installations) await store.retireProducedMetadata(installations);
       assert();
       limited.throwIfAborted();
       return { status: 'ready', window: new ExclusiveWindow(store, input.assertCurrent, signal) };

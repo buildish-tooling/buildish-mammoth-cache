@@ -15,36 +15,31 @@
  */
 
 import { NativeRoot } from './native';
-import { assertNoRootIntents } from './owned-store';
+import { assertNoRootIntents, completedPreviousOwner } from './owned-store';
 import { lstat } from 'node:fs/promises';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
-import { reconcileInvocation, type RecoveryOptions } from './recovery';
-import { assertLifecycleWindow } from './post-admission';
+import type { LifecycleOptions } from './lifecycle-options';
+import { PostAttempt } from './lifecycle-attempt';
 
 /** Read-only post reads owned metadata, never managed content or a provider backend. */
-export async function postStreamingReadOnly(anchor: InvocationAnchor, options: RecoveryOptions) {
+export async function postStreamingReadOnly(anchor: InvocationAnchor, options: LifecycleOptions) {
   const opened = await OpenedInvocation.open(anchor, options.budget, options.cleanupSignal),
-    store = await reconcileInvocation(opened, 'resume', options),
-    state = store.codec.schemas.documents['local-state'].parse(await store.state()),
-    bindings = store.codec.schemas.documents.bindings.parse(
-      await store.readDocument(state[5], 'bindings'),
-    );
-  if (store.codec.options.access !== 'read-only')
-    throw new Error('Read-only post requires frozen read-only access.');
-  if (state[4] !== 'build-ready' && !(state[4] === 'completed' && state[14] === 'read-only'))
-    throw new Error('Read-only prepare did not complete.');
-  await assertLifecycleWindow(store, bindings, options);
-  if (state[4] !== 'completed') {
-    state[3]++;
-    state[4] = 'completed';
-    state[14] = 'read-only';
-    await store.updateState(state);
+    attempt = await PostAttempt.open(opened, options);
+  try {
+    if (attempt.store.codec.options.access !== 'read-only')
+      throw new Error('Read-only post requires frozen read-only access.');
+    if (attempt.state[4] === 'completed' && attempt.state[7]?.[1] !== 'read-only')
+      throw new Error('Invalid read-only terminal outcome.');
+    if (attempt.state[4] !== 'completed')
+      await attempt.finish(['outcome', 'read-only', null, null, null]);
+    await attempt.guard();
+    return { outcome: 'read-only' as const };
+  } finally {
+    attempt.close();
   }
-  await assertLifecycleWindow(store, bindings, options);
-  return { outcome: 'read-only' as const };
 }
 /** Disabling a cache cannot hide an old destructive owner before provisioning. */
-export async function reconcileDisabledRoot(root: string, options: RecoveryOptions) {
+export async function reconcileDisabledRoot(root: string, options: LifecycleOptions) {
   options.cleanupSignal?.throwIfAborted();
   let present = true;
   try {
@@ -53,11 +48,11 @@ export async function reconcileDisabledRoot(root: string, options: RecoveryOptio
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
     present = false;
   }
-  const previous = present
-    ? await OpenedInvocation.current(root, options.budget, options.cleanupSignal)
-    : null;
-  if (previous) await reconcileInvocation(previous, 'abandon', options);
-  else if (present) await assertNoRootIntents(await NativeRoot.bind(root));
+  if (present) {
+    const native = await NativeRoot.bind(root);
+    await completedPreviousOwner(native);
+    await assertNoRootIntents(native);
+  }
   options.cleanupSignal?.throwIfAborted();
   options.signal?.throwIfAborted();
   if (options.assertCurrent() !== undefined)

@@ -25,7 +25,7 @@ limitations under the License.
 **Draft specification for an incompatible, unreleased format.** Streaming
 prepare/build/post composition is implemented, including worker processing,
 native-base/generation acquisition, GC, rename-only relocation/return, publication
-and recovery, and Gradle invocation capture/shutdown with provider integration.
+and same-operation return, and Gradle invocation capture/shutdown with provider integration.
 The unreleased Gradle/Maven Action source delegates now select this lifecycle.
 Existing release tags retain their published implementation; incompatible release
 exposure remains separate work.
@@ -66,11 +66,11 @@ and [threat model](../../threat-model/).
 
 ## Profiles and common rules
 
-| Profile           | Transport and source of truth                                                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `worker-tar-v1`   | One gzip-compressed TAR artifact; effective entry headers and bounded Mammoth controls are authoritative. No trailing per-file manifest. |
-| `native-tree-v1`  | Cache SDK archive of literal `envelope.json`, `tree.ndjson`, and native `payload/` paths from one isolated root.                         |
-| Generation record | A small immutable record referencing complete partition objects; published last. No per-file or workspace-root inventory.                |
+| Profile              | Transport and source of truth                                                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `worker-tar-v2`      | One gzip-compressed TAR artifact; effective entry headers and bounded Mammoth controls are authoritative. No trailing per-file manifest. |
+| `native-metadata-v2` | Cache SDK archive of the bounded identity descriptor `envelope.json` and literal native `payload/`; no per-file catalogue.               |
+| Generation record    | A small immutable record referencing complete partition objects; published last. No per-file or workspace-root inventory.                |
 
 A reader is supplied an independently validated model, expected cache-family
 identity, producer selection and CI context. Model/family identifiers are opaque
@@ -158,9 +158,9 @@ may differ: accept exactly one owned regular file in isolated download staging,
 then bind its native identity; do not trust a response-supplied basename as identity.
 
 A transport download/digest pass is separate from archive parsing. Aggregation reads
-and decompresses each downloaded archive **once**, forward only. A failed operation
-may restart from immutable inputs; that is exceptional recovery, not a normal second
-archive pass. Upload still reads the completed compressed file.
+and decompresses each downloaded archive **once**, forward only. A failed current
+operation grants no replay/retry authority. Upload still reads the completed
+compressed file.
 
 ### Worker artifact names and discovery
 
@@ -295,7 +295,7 @@ contract; passing a permissive library finish event is not a replacement.
 The first effective member is `.mammoth-meta/identity.json`, containing:
 
 ```text
-["identity",1,"worker-tar-v1","gzip",context,modelId,familyId,snapshotPartitions]
+["identity",1,"worker-tar-v2","gzip",context,modelId,familyId,snapshotPartitions]
 context = [provider,repository,workflow,runId,jobName,attempt,revision,buildTool]
 ```
 
@@ -327,7 +327,7 @@ binding and digests are defined below.
 | `["dir-open",cid,path]`                                         | Open a directory; payload channels require its directory TAR header immediately before this control. Usage has no TAR payload header.       |
 | `["dir-close",cid,path]`                                        | Close the current directory after its files and subdirectories.                                                                             |
 | `["unit-open",cid,kind,root,scope]`                             | Begin a path/model-recognized complete unit. Scope is `direct` for Maven direct files, otherwise `subtree`.                                 |
-| `["file-meta",cid,ordinal,headerSha,contentSha,partition]`      | Verify precisely the immediately preceding regular payload file. Ordinal is archive-wide, starts at 1 and increments once per payload file. |
+| `["file-meta",cid,ordinal,contentSha,partition]`                | Verify precisely the immediately preceding regular payload file. Ordinal is archive-wide, starts at 1 and increments once per payload file. |
 | `["unit-close",cid,kind,root,counts,semanticSha,comparisonSha]` | Close an upsert unit, validating independently accumulated structure and hashes.                                                            |
 | `["used",cid,name,partition]`                                   | One usage-only direct file name under the current usage directory; no body or hash.                                                         |
 | `["used-unit-open",cid,kind,root,scope]`                        | Open a membership-only usage unit; cannot select a payload winner.                                                                          |
@@ -353,6 +353,11 @@ for completeness validation; their channel itself is the complete partition.
 
 ### File metadata pairing
 
+The `worker-tar-v2` profile rejects `worker-tar-v1` identities and the former
+six-field file-meta tuple. There is no compatibility reader or nullable header hash.
+Identity keeps structural numeric version 1; the explicit profile selects this grammar.
+The worker profile also participates in family, cache-key and artifact-name identities.
+
 For every regular payload member, the next effective member **must** be its numbered
 `file-meta` control, including for empty files and losing contributions. No other
 payload, directory/unit close or EOF may intervene. Approved preceding PAX is part
@@ -365,15 +370,16 @@ The canonical effective header tuple is:
 ["header",cid,path,type,size,mode,mtimeMs]
 ```
 
-`type` is `file` or `directory`; `size` is the effective body length. Compute
-`headerSha` using the digest framing below. Check `contentSha` against SHA-256 of
+`type` is `file` or `directory`; `size` is the effective body length. Feed this
+validated tuple to both channel and archive event accumulators; there is no
+standalone header hash. Check `contentSha` against SHA-256 of
 exactly the body bytes, excluding TAR padding. Derive partition ownership and unit
 scope from the expected model/path before selection; metadata must agree and cannot
 redirect a staged body or introduce a late policy choice.
 
 A reader validates the effective header, streams/hashes provisionally, then checks
 its next metadata against observed header/body/ordinal/channel/ownership before
-advancing. Keep only the current header binding, hash and bounded parser buffers.
+advancing. Keep only current scalar file facts, its body hash and bounded parser buffers.
 A missing, duplicate, reordered, orphan or mismatched pair invalidates the entire
 contribution. Do not skip an invalid losing pair. No trailing per-file worker
 manifest or observed-file hash/header comparison transcript is emitted or consumed.
@@ -393,7 +399,6 @@ is lowercase hex. Raw file SHA-256 has no framing or domain prefix.
 
 | Domain             | Tuples appended, in order                                                                                                                                                    |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `header`           | The single canonical effective header tuple.                                                                                                                                 |
 | `worker-events`    | Identity tuple, every effective payload header tuple and every numbered control tuple. No raw bodies or completion tuple. A file's verified SHA is bound by its `file-meta`. |
 | `channel-events`   | Current channel-open, payload header tuples and controls belonging to that channel, excluding its own channel-close. Includes nested unit closes.                            |
 | `unit-semantic`    | Normalized unit identity, descendant/direct directory and verified file facts, then a closing structure fact as described below. Excludes unit-close itself.                 |
@@ -604,61 +609,21 @@ archive pass. The winner policies above need neither.
 
 ## Native base and generation contract
 
-A base object contains `envelope.json`, `tree.ndjson` and `payload/`. The cache SDK
-receives those **three literal paths** from an isolated object root, with no
-per-descendant glob/list. Native TAR transport recurses into payload. Base metadata
-is a bounded-record hierarchical tree, with file hash/size/mode/time facts, explicit
-meaningful directories, complete-unit structure and exact metadata digest/counts.
-It is not the worker's removed manifest. Preserve trusted-base byte policy: base
-restore validates structure/membership but does not rehash all base file bytes.
-
-The envelope must bind profile/version, model/family/partition, exact tree bytes/hash
-and integrity counts. The generation record binds object keys and envelope digests,
-partition ownership and complete recovery groups. A generation references no per-file
-or workspace-root list. Validate available objects/groups before live installation;
-missing objects start cold by group, malformed available objects reject prepare.
-Apply complete workspace and authoritative snapshot semantics under guarded native
-moves. Publish a new immutable generation record only after every referenced object
-is confirmed and every relocated source has been returned. Unchanged objects may
-be reused; partial object upload is not a published generation.
-
-The exact [native-base and generation schemas](../native-base-protocol/) define tree
-records, envelopes, partition references, recovery groups and acyclic family/key
-projections. The [local lifecycle schemas](../cache-lifecycle-protocol/) define
-bindings, observations, stream refs, cursors, GC/install intents, partition-wide
-relocation, snapshot source timing, identity adjustments, receipts and crash recovery.
-These are part of this contract; do not infer their serialized fields from worker
-TAR tuples. Later implementation comments must cite the applicable source file and
-heading. No old-journal production bridge or mixed-format reinterpretation is implied.
+The [metadata-only native-base contract](../native-base-protocol/) defines the
+active `native-metadata-v2`, `generation-v2` and `local-v2` family cut. SDK objects
+contain only the bounded identity descriptor and literal native payload. Original
+metadata discovery feeds one active hierarchy and local metadata summary; no base
+body hashes, archived file lists or main/post per-file replay recipes survive.
+The strict worker v1 body/header hashes, conflicts, every losing contribution,
+late seals and clean archive EOF remain mandatory.
 
 ### Save and restore lifecycle boundaries
 
-Native lifecycle metadata, extraction/staging, invocation inventory and recovery
-markers live under each actual managed root's `.mammoth/`. This native directory
-is distinct from the archive-only `.mammoth-meta/` namespace. Native handoffs use
-same-filesystem rename only. EXDEV is an unsupported-layout error; return already
-moved sources when possible, otherwise preserve recovery state and block prepare.
-There is no fallback-copy mode or copy-fallback recovery machinery. Intentional
-selected-worker materialization and independent snapshot copies remain ordinary I/O.
-
-For writable Gradle base saves, capture actual installation/user-home/Java-runtime
-locations from every invocation independently of summary filtering, including test
-children and early failures. Before freezing observations or moving anything, call
-the captured existing launchers with `--stop`, wait and verify daemon exit. Keep
-wrapper distributions and required Java/Gradle installations accessible until all
-stop clients exit and verification finishes. Unknown remaining daemons or inability
-to establish quiescence skip the relocating save. Do not download launchers or add
-an OS-kill fallback. Read-only execution does not stop daemons.
-
-Shutdown assumes an exclusive end-of-job window; it is not a filesystem lock and
-cannot prevent a later build from restarting Gradle. Frozen selected membership and
-source identity checks still apply. A durable partition-wide relocation intent must
-cover the full moved prefix across batches, with independent outbound/return cursors.
-Return sources on success and failure, before receipt, next partition or generation
-publication. Fresh prepare recovers pending relocation before retiring scratch or
-replacing its journal. A failed return cannot be reported as a harmless cache miss.
-Exact records, pointer ordering, identity transitions and recovery examples are in
-the [local lifecycle specification](../cache-lifecycle-protocol/).
+See the [local lifecycle contract](../cache-lifecycle-protocol/) for the minimal
+successful-main handoff and fresh post admission. An interrupted main/post does
+not resume. Same-operation native cleanup and independent source return remain
+mandatory, including after cancellation. Unknown/replaced endpoints and failed
+returns are local errors with retained locations, never warning-only cache misses.
 
 ## Resource accounting
 
@@ -746,3 +711,28 @@ projections, required completeness or compatibility semantics requires an explic
 protocol/version-family decision and matching documentation/tests. Update the spec
 before or with code; do not silently accept an undocumented alternate grammar.
 This draft is documentation only, not evidence that these checks have passed.
+
+## Worker acceptance and native producer evidence
+
+A completed worker merge still validates every required archive and contributed body,
+including losers, per-file hashes/metadata, unit comparisons, final seals and EOF before
+installation. Final selected mode/time materialization and native path/type/link/device
+checks precede install authority. The implementation may reuse a genuine process-local
+receipt from that final native discovery, provided it also binds the original completed
+merge and exact original published install partition. A generic writer receipt or serialized
+flag never substitutes for worker input authorization. The detailed receipt lifetime and
+unchanged independent-snapshot boundary are specified in the
+[worker native producer contract](../cache-lifecycle-protocol/#final-worker-native-producer-capability).
+This changes neither the worker TAR grammar nor mandatory body hashing.
+
+## Outgoing worker single-attempt confirmation
+
+Outgoing raw worker uploads accept only a valid direct service descriptor matching
+the immutable package's name, positive ID, size and any reported digest. Thrown,
+missing, malformed or lost responses warn and abandon without discovery, download,
+readback or retry. Retain the current immutable package and report its path when
+confirmation is unavailable; SDK rejection does not establish reader closure.
+Confirmed uploads permit known-file identity-checked package cleanup after SDK
+settlement. Local package, filesystem and cleanup errors still fail the operation.
+Required incoming workers remain fatal when missing or invalid, and all delta body
+hashes, losing contributors, complete-unit checks, seals and EOF gates are unchanged.

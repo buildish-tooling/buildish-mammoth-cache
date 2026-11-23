@@ -16,7 +16,6 @@
 
 import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, realpath, rename, type FileHandle } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { z } from 'zod';
 import type { nativeIdentitySchema } from './local-schema';
@@ -38,17 +37,27 @@ export interface NativeWork {
   scratchReadCalls: number;
   scratchWriteCalls: number;
   scratchDecoderAllocations: number;
+  scratchRowReuses: number;
+  evidenceMemberVisits: number;
+  cleanupListings: number;
+  cleanupEntries: number;
+  cleanupFiles: number;
+  cleanupDirectories: number;
   bodyHashCalls: number;
   bodyHashBytes: number;
   bodyHashStreams: number;
   metadataBatches: number;
 
+  directoryCreations: number;
+  modeChanges: number;
+  controlWriteCalls: number;
   stats: number;
   opens: number;
   readBytes: number;
   writeBytes: number;
   scratchReadBytes: number;
   scratchWriteBytes: number;
+  scratchLogicalWriteBytes: number;
   renames: number;
   unlinks: number;
   directoryRemovals: number;
@@ -64,17 +73,27 @@ export const nativeWork = (): NativeWork => ({
   scratchReadCalls: 0,
   scratchWriteCalls: 0,
   scratchDecoderAllocations: 0,
+  scratchRowReuses: 0,
+  evidenceMemberVisits: 0,
+  cleanupListings: 0,
+  cleanupEntries: 0,
+  cleanupFiles: 0,
+  cleanupDirectories: 0,
   bodyHashCalls: 0,
   bodyHashBytes: 0,
   bodyHashStreams: 0,
   metadataBatches: 0,
 
+  directoryCreations: 0,
+  modeChanges: 0,
+  controlWriteCalls: 0,
   stats: 0,
   opens: 0,
   readBytes: 0,
   writeBytes: 0,
   scratchReadBytes: 0,
   scratchWriteBytes: 0,
+  scratchLogicalWriteBytes: 0,
   renames: 0,
   unlinks: 0,
   directoryRemovals: 0,
@@ -224,30 +243,30 @@ export class NativeRoot {
       throw error;
     }
   }
-  async *read(relative: string, expected?: NativeIdentity): AsyncGenerator<Buffer> {
+  async *read(
+    relative: string,
+    expected?: NativeIdentity,
+    accepted?: (native: NativeIdentity) => void,
+  ): AsyncGenerator<Buffer> {
     const { handle, identity } = await this.openRead(relative, expected);
     try {
       for await (const chunk of handle.createReadStream({
         autoClose: false,
         highWaterMark: 65536,
       })) {
-        const bytes = Buffer.from(chunk);
-        this.work.readBytes = add(this.work.readBytes, bytes.length);
-        yield bytes;
+        if (!Buffer.isBuffer(chunk)) throw new Error('Native read returned a non-Buffer chunk.');
+        this.work.readBytes = add(this.work.readBytes, chunk.length);
+        yield chunk;
       }
       this.work.stats++;
       const after = nativeIdentity(await handle.stat({ bigint: true }));
       if (!sameNative(identity, after, true)) throw new Error('Native file changed during read.');
       const named = await this.stat(relative);
       if (!named || !sameNative(after, named, true)) throw new Error('Native source name changed.');
+      accepted?.(after);
     } finally {
       await handle.close();
     }
-  }
-  async hash(relative: string, expected?: NativeIdentity): Promise<string> {
-    const hash = createHash('sha256');
-    for await (const chunk of this.read(relative, expected)) hash.update(chunk);
-    return hash.digest('hex');
   }
   async renameAbsent(
     source: string,

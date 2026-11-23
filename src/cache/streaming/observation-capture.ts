@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
-import { assertBaseMetadata, type BaseMetadata } from './baseline-metadata';
+import type { PostAttempt } from './lifecycle-attempt';
 import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore, Reference } from './owned-store';
 import { InstallScratch } from './install-scratch';
-import { decodeRecords, Digest, equal, tuple, type Value } from './encoding';
+import { Digest, equal, tuple, type Value } from './encoding';
 import { ObservationIndex } from './observation-index';
-import { lstat } from 'node:fs/promises';
 import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-walk';
-import { sameObject, nativeIdentity, sameNative, type NativeIdentity } from './native';
+import { type NativeIdentity } from './native';
 import { createCacheGlobMatcher } from '../manifest';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
@@ -35,9 +34,7 @@ import {
   isWorkspaceRoot,
   isWorkspaceScaffolding,
 } from './tree-state';
-import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
-import { baseFileBytes } from './base-layout';
-import { decodeGeneration } from './native-records';
+import { settleNativeCleanup, type NativeOperationOptions } from './native-operation';
 import type { Unit } from './schema';
 
 type Activity = 'none' | 'used' | 'upsert';
@@ -48,7 +45,6 @@ type Node = [
   string,
   NativeIdentity,
   string | null,
-  Value,
   Activity,
   Decision,
   number,
@@ -79,11 +75,10 @@ const markerNames = new Set([
   'sources',
 ]);
 
-export interface ObservationCaptureOptions extends BaseObjectOptions {
+export interface ObservationCaptureOptions extends NativeOperationOptions {
   /** Operation-local index returned only to the base post owner, never serialized. */
   readonly retainIndex?: boolean;
-  /** Genuine pinned metadata retained through prepare; never a caller-supplied hash table. */
-  readonly baseline?: readonly BaseMetadata[];
+  readonly attempt: PostAttempt;
   readonly summaries?: PartitionSummaries;
   /** Verified by the trusted lifecycle caller, not by persisted quiescence. Synchronous lifetime assertions only. */
   readonly purgeWindow?: {
@@ -109,15 +104,33 @@ export interface FrozenObservation {
   };
 }
 
+const capturedIndexes = new WeakMap<ObservationIndex, PostAttempt>();
+/** Same-process original native capture only; serialized observations cannot recreate this loan. */
+export function claimCapturedObservationIndex(
+  index: ObservationIndex,
+  store: OwnedStore,
+): PostAttempt {
+  ObservationIndex.assert(index, store);
+  const attempt = capturedIndexes.get(index);
+  if (!attempt) throw new Error('Absent/consumed original observation capture.');
+  attempt.assert();
+  capturedIndexes.delete(index);
+  return attempt;
+}
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas.
 // The caller owns a current exclusive cache window. This does not stop Gradle/V5.
 export async function captureObservations(
   store: OwnedStore,
   input: ObservationCaptureOptions,
 ): Promise<FrozenObservation> {
-  if (input.baseline && input.baseline.length > 64)
-    throw new Error('Observation baseline frontier exceeded.');
-  const options = Object.freeze({ ...input, baseline: Object.freeze([...(input.baseline ?? [])]) }),
+  input.attempt.assert();
+  if (input.attempt.store !== store) throw new Error('Observation attempt/store mismatch.');
+  input.attempt.claimCapture();
+  const options = Object.freeze({
+      ...input,
+      signal: AbortSignal.any([input.attempt.signal, ...(input.signal ? [input.signal] : [])]),
+    }),
     signal = options.signal ?? new AbortController().signal,
     codec = store.codec,
     model = codec.options.model;
@@ -149,88 +162,19 @@ export async function captureObservations(
   if (configured && options.purgeWindow) assertWindow();
   signal.throwIfAborted();
   await store.assertNoIntents();
-  const initial = codec.schemas.documents['local-state'].parse(await store.state()),
-    bindings = codec.schemas.documents.bindings.parse(
-      await store.readDocument(initial[5], 'bindings'),
-    );
-  codec.checkStateBindings(initial, bindings);
-  if (
-    bindings[5][0] !== store.root.path ||
-    !sameObject(bindings[5][1], store.root.binding) ||
-    bindings[5][1][6] !== store.root.binding[6]
-  )
-    throw new Error('Observation root binding changed.');
-  if (
-    codec.options.access !== 'writable' ||
-    initial[4] !== (worker ? 'build-ready' : 'quiescent') ||
-    initial[6] !== null
-  )
-    throw new Error(
-      'Observation capture requires writable quiescent base or build-ready worker state.',
-    );
+  const initial = options.attempt.state,
+    bindings = options.attempt.bindings;
   if ((options.maxDirectoryEntries ?? 100000) !== bindings[8][9])
     throw new Error('Observation allowance differs from frozen policy.');
-  await store.readStream(bindings[6], 'model', { ...options, partition: null }, undefined, signal);
-  await store.readStream(
-    bindings[10],
-    'producers',
-    { ...options, partition: null },
-    undefined,
-    signal,
-  );
-  await store.readStream(
-    bindings[11],
-    'prepare-sources',
-    { ...options, partition: null },
-    undefined,
-    signal,
-  );
-  await store.readStream(
-    bindings[12]!,
-    'activity',
-    { ...options, partition: null },
-    undefined,
-    signal,
-  );
-  if (initial[13]) {
-    const q = codec.schemas.documents.quiescence.parse(
-      await store.readDocument(initial[13], 'quiescence'),
-    );
-    await store.readStream(
-      q[3],
-      'installations',
-      { ...options, partition: null },
-      undefined,
-      signal,
-    );
-  }
-  const baseline = bindings[9]
-    ? decodeGeneration(await baseFileBytes(store, bindings[9][2]), model, bindings[9][1])
-    : null;
-  const seen = new Set<string>();
-  for (const object of options.baseline) {
-    assertBaseMetadata(object, store);
-    const p = object.reference[1][2],
-      old = baseline?.[8].find((e) => e[1] === p);
-    if (seen.has(p) || old?.[0] !== 'object')
-      throw new Error('Unbound/duplicate observation baseline.');
-    equal(object.reference, old[2], 'observation pinned baseline');
-    seen.add(p);
-  }
-  const activity = new ActivityCursor(activityFacts(store, bindings[12]!, options)),
+  await options.attempt.guard();
+  const importedActivity = options.attempt.handoff.header[9];
+  const activity = new ActivityCursor(activityFacts(store, importedActivity, options)),
     tree = await InstallScratch.create(store, options.budget),
     frames: Frame[] = [],
     work = walkWork(),
     hard = createCacheGlobMatcher(model.tuple[3]),
     cutoff = BigInt(bindings[8][7]!) * 1000000n,
     gcCutoff = bindings[8][6] === null ? null : BigInt(bindings[8][6]) * 1000000n;
-  let bases: BaselineCursor;
-  try {
-    bases = await BaselineCursor.open(store, options.baseline, options);
-  } catch (error) {
-    await settleBaseCleanup([() => tree.close()], error);
-    throw error;
-  }
   type Entry = {
     name: string;
     type: NativeChild['type'];
@@ -395,14 +339,12 @@ export async function captureObservations(
           BigInt(e.identity[8]) < gcCutoff
             ? 'delete'
             : 'retain';
-        const previous = await bases.take(e.path);
         attach(
           await tree.append([
             'file',
             e.path,
             e.identity,
             p[0],
-            previous,
             act,
             decision,
             0,
@@ -433,13 +375,13 @@ export async function captureObservations(
               const lease = await tree.record(entry.offset);
               try {
                 const n = lease.value as Node;
-                act = maxActivity(act, n[5]);
-                files += n[10];
-                allDelete &&= n[6] === 'delete';
+                act = maxActivity(act, n[4]);
+                files += n[9];
+                allDelete &&= n[5] === 'delete';
                 if (n[0] === 'file') {
-                  direct = maxActivity(direct, n[5]);
+                  direct = maxActivity(direct, n[4]);
                   directFiles++;
-                  directDelete &&= n[6] === 'delete';
+                  directDelete &&= n[5] === 'delete';
                   const pi = model.partitions.findIndex((p) => p[0] === n[3]);
                   mask |= 1n << BigInt(pi);
                   single ||= model.partitions[pi][3] === 'single-writer';
@@ -507,7 +449,6 @@ export async function captureObservations(
             e.path,
             e.identity,
             null,
-            null,
             act,
             files > 0 && allDelete ? 'delete' : 'retain',
             start,
@@ -526,7 +467,6 @@ export async function captureObservations(
       }
     }
     await activity.finish();
-    await bases.finish();
     if (root === undefined) throw new Error('Missing observation root.');
     const rendered = renderObservations(tree, root, signal);
     if (options.retainIndex) capturedIndex = await ObservationIndex.write(store, rendered, options);
@@ -534,26 +474,12 @@ export async function captureObservations(
       capturedIndex?.reference ??
       (await store.writeStream('observations', { ...options, partition: null }, rendered, signal));
     await store.fail('observations-candidate');
-    const progress = await store.writeDocument([
-      'gc-progress',
-      1,
-      codec.options.invocation,
-      reference,
-      ['cursor', reference[4], 0, 0, 0, null],
-      null,
-    ]);
-    await store.fail('observations-progress-candidate');
-    await assertCaptureStable(store, tree, root, signal);
     const state = codec.schemas.documents['local-state'].parse(await store.state());
     equal(state, initial, 'observation capture state');
     await store.assertNoIntents();
     signal.throwIfAborted();
     if (configured && options.purgeWindow) assertWindow();
-    state[3]++;
-    state[4] = 'observations-frozen';
-    state[6] = codec.schemas.ref('observations').parse(reference);
-    state[10] = codec.schemas.ref('gc-progress').parse(progress);
-    await store.updateState(state);
+    await options.attempt.guard();
     await store.fail('observations-pointer');
     signal.throwIfAborted();
     completed = Object.freeze({
@@ -568,26 +494,26 @@ export async function captureObservations(
   } finally {
     await pending?.catch(() => {});
     for (const frame of frames) options.budget.release(frame.charge);
-    await settleBaseCleanup(
+    await settleNativeCleanup(
       [
         () => walk.return(undefined),
         () => activity.close(),
-        () => bases.close(),
         () => tree.close(),
         () => (failure === undefined ? undefined : capturedIndex?.dispose()),
       ],
       failure,
     ).catch(async (error) => {
-      await settleBaseCleanup([() => capturedIndex?.dispose()], error);
+      await settleNativeCleanup([() => capturedIndex?.dispose()], error);
       throw error;
     });
   }
   try {
     signal.throwIfAborted();
     if (configured && options.purgeWindow) assertWindow();
+    if (capturedIndex) capturedIndexes.set(capturedIndex, options.attempt);
     return completed!;
   } catch (error) {
-    await settleBaseCleanup([() => capturedIndex?.dispose()], error);
+    await settleNativeCleanup([() => capturedIndex?.dispose()], error);
     throw error;
   }
 }
@@ -598,7 +524,7 @@ async function* renderObservations(
   signal: AbortSignal,
 ): AsyncGenerator<Value> {
   async function* edges(n: Node): AsyncGenerator<Edge> {
-    for await (const r of tree.rows(n[7], n[8])) {
+    for await (const r of tree.rows(n[6], n[7])) {
       signal.throwIfAborted();
       yield r as Edge;
     }
@@ -608,7 +534,7 @@ async function* renderObservations(
       n = lease.value as Node;
     try {
       if (n[0] === 'file') {
-        yield ['file', n[1], n[3], n[2], n[4]];
+        yield ['file', n[1], n[3], n[2]];
         return;
       }
       yield ['directory', n[1], n[2]];
@@ -628,38 +554,30 @@ async function* renderObservations(
       n = lease.value as Node;
     try {
       if (n[0] === 'file') {
-        yield [
-          'file',
-          baseName(n[1]),
-          n[3],
-          n[2],
-          n[4],
-          override?.[0] ?? n[5],
-          override?.[1] ?? n[6],
-        ];
+        yield ['file', baseName(n[1]), n[3], n[2], override?.[0] ?? n[4], override?.[1] ?? n[5]];
         return;
       }
       yield ['dir-open', n[1], n[2]];
       for await (const e of edges(n)) yield ['child', e[1], e[2], e[3], e[4]];
-      const unit = n[9] !== null && !override,
-        direct = n[9] === 'maven-directory';
+      const unit = n[8] !== null && !override,
+        direct = n[8] === 'maven-directory';
       let selected = override,
         sha: string | undefined;
       if (unit) {
         const digest = new Digest('observation-unit');
         for await (const f of facts(offset, direct)) digest.update(f);
         sha = digest.digest();
-        const act = direct ? n[12] : n[5],
+        const act = direct ? n[11] : n[4],
           deletion =
-            (direct ? n[13] : n[6]) === 'delete' && act === 'none' && n[11] === 1
+            (direct ? n[12] : n[5]) === 'delete' && act === 'none' && n[10] === 1
               ? 'delete'
               : 'retain';
         selected = [act, deletion];
-        yield ['unit-open', n[9], n[1], direct ? 'direct' : 'subtree', act, deletion, sha];
+        yield ['unit-open', n[8], n[1], direct ? 'direct' : 'subtree', act, deletion, sha];
       }
       for await (const e of edges(n))
         if (e[5] !== null && (e[2] === 'file' || !direct)) yield* visit(e[5], selected);
-      if (unit) yield ['unit-close', n[9], n[1], sha!];
+      if (unit) yield ['unit-close', n[8], n[1], sha!];
       if (direct)
         for await (const e of edges(n))
           if (e[5] !== null && e[2] === 'directory') yield* visit(e[5], override);
@@ -674,22 +592,22 @@ async function* renderObservations(
 async function* activityFacts(
   store: OwnedStore,
   ref: Reference,
-  options: BaseObjectOptions,
+  options: NativeOperationOptions,
 ): AsyncGenerator<readonly [string, 'file' | 'unit', Activity]> {
   let path = '';
-  for await (const record of decodeRecords(store.read(ref, 'activity'))) {
+  for await (const record of store.rows(
+    ref,
+    'activity',
+    { ...options, partition: null },
+    options.signal,
+  )) {
     options.signal?.throwIfAborted();
-    const release = options.budget.holdRecord(record.raw.length);
-    try {
-      const r = tuple(record.value);
-      if (r[0] === 'dir-open') path = String(r[1]);
-      else if (r[0] === 'dir-close') path = parentPath(path);
-      else if (r[0] === 'unit-open') yield [String(r[2]), 'unit', r[4] as Activity];
-      else if (r[0] === 'upsert' || r[0] === 'used')
-        yield [path ? path + '/' + r[1] : String(r[1]), 'file', r[0]];
-    } finally {
-      release();
-    }
+    const row = tuple(record.value);
+    if (row[0] === 'dir-open') path = String(row[1]);
+    else if (row[0] === 'dir-close') path = parentPath(path);
+    else if (row[0] === 'unit-open') yield [String(row[2]), 'unit', row[4] as Activity];
+    else if (row[0] === 'upsert' || row[0] === 'used')
+      yield [path ? path + '/' + row[1] : String(row[1]), 'file', row[0]];
   }
 }
 class ActivityCursor {
@@ -717,101 +635,4 @@ class ActivityCursor {
   async close() {
     await this.iterator.return?.();
   }
-}
-class BaselineCursor {
-  private constructor(
-    private readonly cursors: {
-      iterator: AsyncIterator<readonly [string, Value]>;
-      head: IteratorResult<readonly [string, Value]>;
-    }[],
-  ) {}
-  static async open(
-    store: OwnedStore,
-    objects: readonly BaseMetadata[],
-    options: BaseObjectOptions,
-  ): Promise<BaselineCursor> {
-    const cursors: BaselineCursor['cursors'] = [];
-    async function* files(object: BaseMetadata): AsyncGenerator<readonly [string, Value]> {
-      let path = '';
-      for await (const row of decodeRecords(store.read(object.tree, 'native-tree'))) {
-        options.signal?.throwIfAborted();
-        const release = options.budget.holdRecord(row.raw.length);
-        try {
-          const r = tuple(row.value);
-          if (r[0] === 'dir-open') path = String(r[1]);
-          else if (r[0] === 'dir-close') path = parentPath(path);
-          else if (r[0] === 'file')
-            yield [path ? path + '/' + r[1] : String(r[1]), ['portable', ...r.slice(2, 6)]];
-        } finally {
-          release();
-        }
-      }
-    }
-    try {
-      for (const object of objects) {
-        const iterator = files(object)[Symbol.asyncIterator]();
-        cursors.push({ iterator, head: await iterator.next() });
-      }
-      return new BaselineCursor(cursors);
-    } catch (e) {
-      await settleBaseCleanup(
-        cursors.map((c) => () => c.iterator.return?.()),
-        e,
-      );
-      throw e;
-    }
-  }
-  async take(path: string): Promise<Value> {
-    let found: Value = null;
-    for (const c of this.cursors) {
-      while (!c.head.done && compare(c.head.value[0], path) < 0) c.head = await c.iterator.next();
-      if (!c.head.done && c.head.value[0] === path) {
-        if (found !== null) throw new Error('Overlapping baseline projections.');
-        found = c.head.value[1];
-        c.head = await c.iterator.next();
-      }
-    }
-    return found;
-  }
-  async finish() {
-    for (const c of this.cursors) while (!c.head.done) c.head = await c.iterator.next();
-  }
-  async close() {
-    await settleBaseCleanup(this.cursors.map((c) => () => c.iterator.return?.()));
-  }
-}
-
-async function assertCaptureStable(
-  store: OwnedStore,
-  tree: InstallScratch,
-  root: number,
-  signal: AbortSignal,
-): Promise<void> {
-  const visit = async (offset: number): Promise<void> => {
-    signal.throwIfAborted();
-    const r = await tree.record(offset),
-      n = r.value as Node;
-    try {
-      if (n[0] === 'file') return;
-      store.root.work.stats++;
-      const before = nativeIdentity(await lstat(store.root.resolve(n[1]), { bigint: true }));
-      if (!before || !sameNative(n[2], before, true))
-        throw new Error('Observation source changed before pointer commit.');
-      if (n[0] === 'directory') {
-        for await (const value of tree.rows(n[7], n[8])) {
-          signal.throwIfAborted();
-          const edge = value as Edge;
-          if (edge[5] !== null && edge[2] === 'directory') await visit(edge[5]);
-        }
-        store.root.work.stats++;
-        const after = nativeIdentity(await lstat(store.root.resolve(n[1]), { bigint: true }));
-        if (!after || !sameNative(n[2], after, true))
-          throw new Error('Observation directory changed before pointer commit.');
-      }
-    } finally {
-      r.release();
-    }
-  };
-  await visit(root);
-  signal.throwIfAborted();
 }

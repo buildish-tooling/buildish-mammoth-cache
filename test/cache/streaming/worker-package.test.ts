@@ -22,7 +22,6 @@ import { sourceFixture, freezeSources, cleanupSourceFixtures } from './worker-so
 import { FrozenWorkerArchive } from '../../../src/cache/streaming/worker-package';
 import { WorkerSources } from '../../../src/cache/streaming/worker-walk';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
-import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { DiskMembership } from '../../../src/cache/streaming/worker-spool';
 import { withAbort } from '../../../src/cache/streaming/abort';
 import { readWorkerArchive } from '../../../src/cache/streaming/worker-codec';
@@ -82,6 +81,7 @@ it.each([false, true])(
     );
     await archive.assertStable(new AbortController().signal);
     expect(await readFile(archive.file)).toEqual(bytes);
+    await f.finish();
     expect(f.budget.retained).toBe(0);
   },
 );
@@ -104,19 +104,22 @@ it('rejects a mutated live source without exposing a completed package', async (
   } finally {
     spy.mockRestore();
   }
+  await f.finish();
   expect(f.budget.retained).toBe(0);
   expect(await readdir(f.store.root.resolve(f.store.prefix + 'planning'))).toEqual([]);
 });
 it('does not expose a Q after failed final named publication, preserving sources', async () => {
   const f = await sourceFixture(),
     view = await freezeSources(f),
-    store = await OwnedStore.bind(f.root, f.store.codec, async (event) => {
-      if (event === 'immutable-publication-barrier') throw new Error('publication failed');
-    });
+    store = f.store;
+  vi.spyOn(store, 'fail').mockImplementation(async (event) => {
+    if (event === 'immutable-publication-barrier') throw new Error('publication failed');
+  });
   await expect(
     FrozenWorkerArchive.package(store, view, 'worker-A.tar.gz', f.budget),
   ).rejects.toThrow('did not freeze');
   expect(await readFile(path.join(f.root, 'd/a'), 'utf8')).toBe('abc');
+  await f.finish();
   expect(f.budget.retained).toBe(0);
   for (const dir of await readdir(store.root.resolve(store.prefix + 'archives')))
     expect(await readdir(store.root.resolve(store.prefix + 'archives/' + dir))).toEqual([]);
@@ -132,6 +135,7 @@ it('rejects unsafe names before capture and rejects changed frozen archive ident
   const archive = await FrozenWorkerArchive.package(f.store, view, 'worker-A.tar.gz', f.budget);
   await writeFile(archive.file, 'tampered');
   await expect(archive.assertStable(new AbortController().signal)).rejects.toThrow('changed');
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 
@@ -170,6 +174,7 @@ it.each(['external-abort', 'sink-failure'])(
       await entered;
       if (failure === 'external-abort') controller.abort(new Error('cancelled blocked source'));
       await expect(pending).rejects.toThrow('did not freeze');
+      await f.finish();
       expect(f.budget.retained).toBe(0);
       expect(await readdir(f.store.root.resolve(f.store.prefix + 'planning'))).toEqual([]);
     } finally {

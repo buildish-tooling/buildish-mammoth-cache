@@ -16,25 +16,9 @@
 
 import type { Value } from './encoding';
 import { walkNative, type WalkOptions, type WalkWork } from './native-walk';
-import type { OwnedStore, Reference } from './owned-store';
+import type { OwnedStore } from './owned-store';
 
-// Protocol: docs/dev/cache-lifecycle-protocol.md#install-batches-and-recovery.
-// One shared current-root scan; no untouched body hashes or per-partition cache walks.
-export async function captureInstallCurrent(
-  store: OwnedStore,
-  options: Pick<WalkOptions, 'budget' | 'maxDirectoryEntries' | 'signal'>,
-  work?: WalkWork,
-): Promise<Reference> {
-  // All metadata parents must exist before freezing the live root directory facts.
-  await store.makeParents(store.prefix + 'files/pending');
-  return store.writeStream(
-    'install-current',
-    { budget: options.budget, partition: null, maxDirectoryEntries: options.maxDirectoryEntries },
-    installCurrentRows(store, options, work),
-    options.signal,
-  );
-}
-
+// One current-root admission feeds the original operation index directly; no persisted stream.
 export async function* installCurrentRows(
   store: OwnedStore,
   options: Pick<WalkOptions, 'budget' | 'maxDirectoryEntries' | 'signal'>,
@@ -47,7 +31,13 @@ export async function* installCurrentRows(
       ...options,
       metadata: 'exclude',
       inspectChild: async (child) => {
-        if (child.pruned || child.type === 'symlink' || child.type === 'other') return 'prune';
+        if (
+          child.pruned ||
+          child.type === 'symlink' ||
+          child.type === 'other' ||
+          child.device !== store.root.binding[3]
+        )
+          return 'prune';
       },
     },
     work,
@@ -56,8 +46,19 @@ export async function* installCurrentRows(
       yield ['parent-child', event.parent, event.name, event.type, event.device, event.fileId];
       continue;
     }
-    if (event.tag === 'file') yield ['file', event.path, event.identity];
-    else
+    if (event.tag === 'file') {
+      if (event.links !== '1') {
+        let managed = false;
+        try {
+          store.codec.options.model.owner(event.path);
+          managed = true;
+        } catch {
+          /* protected/unowned payload */
+        }
+        if (managed) throw new Error('Aliased managed current file is unsupported.');
+      }
+      yield ['file', event.path, event.identity];
+    } else
       yield [event.tag === 'directory-open' ? 'dir-open' : 'dir-close', event.path, event.identity];
   }
 }

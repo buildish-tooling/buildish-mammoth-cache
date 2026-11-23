@@ -262,23 +262,14 @@ export class UnitProjection {
     readonly model: ResolvedModel,
     readonly unit: Unit,
     readonly usage = false,
-    readonly projection: string | null = null,
   ) {
     validateUnit(model, unit);
     const [kind, root, scope] = unit;
     this.counts[2] = 1;
-    this.semantic = new Digest(
-      usage ? 'usage-membership' : projection === null ? 'unit-semantic' : 'base-unit-semantic',
-    );
-    this.comparison = new Digest(projection === null ? 'unit-compare' : 'base-unit-compare');
-    this.semantic.update(
-      projection === null
-        ? ['unit', ...unit]
-        : ['unit', ...unit, 'partition-projection', projection],
-    );
-    this.comparison.update(
-      projection === null ? ['unit', kind] : ['unit', kind, 'partition-projection', projection],
-    );
+    this.semantic = new Digest(usage ? 'usage-membership' : 'unit-semantic');
+    this.comparison = new Digest('unit-compare');
+    this.semantic.update(['unit', ...unit]);
+    this.comparison.update(['unit', kind]);
     this.markers = new UnitMarkers(unit);
     if (scope === 'subtree') this.directory(root, 'open');
   }
@@ -326,8 +317,6 @@ export class UnitProjection {
     }
   }
   ownership(partition: string): void {
-    if (this.projection !== null && this.projection !== partition)
-      throw new Error('Wrong unit projection owner.');
     if (this.unit[0] !== 'maven-directory') {
       if (this.owner !== null && this.owner !== partition)
         throw new Error('Split workspace ownership.');

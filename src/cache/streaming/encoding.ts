@@ -97,6 +97,7 @@ function* fragments(value: Value): Generator<string> {
   }
 }
 export function canonical(value: Value, maxBytes = RECORD_BYTES): Buffer {
+  recordEncodingWork.canonicalCalls++;
   const parts: string[] = [];
   let bytes = 0;
   for (const part of fragments(value)) {
@@ -104,12 +105,28 @@ export function canonical(value: Value, maxBytes = RECORD_BYTES): Buffer {
     if (bytes > maxBytes) throw new Error('Record exceeds byte bound.');
     parts.push(part);
   }
-  return Buffer.from(parts.join(''));
+  const result = Buffer.from(parts.join(''));
+  recordEncodingWork.canonicalBytes += result.length;
+  return result;
 }
+/** Cumulative work only; callers measure deltas, never content or decoded record state. */
+export const recordEncodingWork = {
+  encodes: 0,
+  decodes: 0,
+  encodedBytes: 0,
+  decodedBytes: 0,
+  canonicalCalls: 0,
+  canonicalBytes: 0,
+};
 export function encodeRecord(value: Value): Buffer {
-  return Buffer.concat([canonical(value, RECORD_BYTES - 1), Buffer.from('\n')]);
+  recordEncodingWork.encodes++;
+  const result = Buffer.concat([canonical(value, RECORD_BYTES - 1), Buffer.from('\n')]);
+  recordEncodingWork.encodedBytes += result.length;
+  return result;
 }
 export function decodeRecord(bytes: Uint8Array): Value {
+  recordEncodingWork.decodes++;
+  recordEncodingWork.decodedBytes += bytes.byteLength;
   if (bytes.byteLength > RECORD_BYTES || !bytes.byteLength || bytes[bytes.byteLength - 1] !== 10)
     throw new Error('Invalid bounded record framing.');
   const value = JSON.parse(utf8.decode(bytes)) as Value;

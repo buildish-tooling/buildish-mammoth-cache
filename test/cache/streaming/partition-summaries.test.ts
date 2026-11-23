@@ -19,11 +19,10 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { PartitionSummaries } from '../../../src/cache/streaming/partition-summaries';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
-import { captureObservations } from '../../../src/cache/streaming/observation-capture';
-import { executeGc } from '../../../src/cache/streaming/gc-execute';
-import { LiveBaseInputs } from '../../../src/cache/streaming/live-base-inputs';
-import { FrozenMovingPublication } from '../../../src/cache/streaming/base-moving-publication';
-import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
+import { captureFixtureObservations as captureObservations } from './observation-fixtures';
+import { executeFixtureGc as executeGc } from './observation-fixtures';
+import { MetadataPublicationSource } from '../../../src/cache/streaming/metadata-publication-source';
+import { publishMetadataBase } from '../../../src/cache/streaming/metadata-publication';
 import { observationFixture } from './observation-fixtures';
 const counts = vi.hoisted(() => ({ listings: 0, stats: 0 }));
 vi.mock('node:fs/promises', async (original) => {
@@ -40,6 +39,13 @@ vi.mock('node:fs/promises', async (original) => {
     },
   };
 });
+const summaryBackend = {
+  capabilities: { supportsExplicitSave: true, supportsNewestPrefixRestore: true },
+  isFeatureAvailable: () => true,
+  saveCache: async () => 1,
+  restoreCache: async () => undefined,
+  isMissingPathsError: () => false,
+};
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -163,6 +169,7 @@ it('does not double count shared purge claims or attach split hints to unrelated
     out = new PartitionSummaries(model, f.budget);
   cleanup.push(async () => {
     out.dispose();
+    await f.finish();
     expect(f.budget.retained).toBe(0);
     await f.close();
   });
@@ -190,6 +197,7 @@ it.each([4, 16])(
         out = reporting ? new PartitionSummaries(f.model, f.budget) : undefined;
       cleanup.push(async () => {
         out?.dispose();
+        await f.finish();
         expect(f.budget.retained).toBe(0);
         await f.close();
       });
@@ -200,8 +208,7 @@ it.each([4, 16])(
       for (let i = 0; i < n; i++) files['data/f' + i] = 'body';
       await f.files('', files);
       counts.listings = counts.stats = 0;
-      const initial = { ...f.store.root.work },
-        hash = vi.spyOn(NativeReadPhase.prototype, 'hash');
+      const initial = { ...f.store.root.work };
       await captureObservations(f.store, {
         budget: f.budget,
         summaries: out,
@@ -211,11 +218,15 @@ it.each([4, 16])(
           assertCurrent: (): undefined => {},
         },
       });
-      await executeGc(f.store, { budget: f.budget });
-      const input = await LiveBaseInputs.capture(f.store, { budget: f.budget });
+      const result = await executeGc(f.store, { budget: f.budget });
+      const input = await MetadataPublicationSource.survivors(result.owner);
       cleanup.push(() => input.dispose());
-      const pub = await FrozenMovingPublication.freeze(input, 'main', [], out);
-      cleanup.push(() => pub.dispose());
+      await publishMetadataBase(input, summaryBackend, {
+        lineage: 'a'.repeat(64),
+        writer: 'b'.repeat(64),
+        decision: 'c'.repeat(64),
+        summaries: out,
+      });
       const beforeEmit = { ...f.store.root.work },
         beforeListings = counts.listings,
         beforeStats = counts.stats;
@@ -237,9 +248,8 @@ it.each([4, 16])(
         opens: w.opens - initial.opens,
         renames: w.renames - initial.renames,
         unlinks: w.unlinks - initial.unlinks,
-        hashes: hash.mock.calls.length,
+        hashes: w.bodyHashCalls - initial.bodyHashCalls,
       });
-      hash.mockRestore();
     }
     expect(results[1]).toEqual(results[0]);
     process.stdout.write('V4D_REPORT_COST ' + JSON.stringify(results) + '\n');
@@ -252,6 +262,7 @@ it('keeps rejected capture admission skipped when diagnostics are emitted after 
     out = new PartitionSummaries(f.model, f.budget);
   cleanup.push(async () => {
     out.dispose();
+    await f.finish();
     expect(f.budget.retained).toBe(0);
     await f.close();
   });
@@ -279,6 +290,7 @@ it('retains actual deletion counts after an admitted capture fails part way thro
     out = new PartitionSummaries(f.model, f.budget);
   cleanup.push(async () => {
     out.dispose();
+    await f.finish();
     expect(f.budget.retained).toBe(0);
     await f.close();
   });

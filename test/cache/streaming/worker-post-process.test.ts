@@ -47,8 +47,8 @@ afterEach(async () => {
   }
 });
 
-it.each(['worker-package-before-pointer', 'worker-package-pointer', 'worker-receipt-pointer'])(
-  'cold worker retry after process exit at %s',
+it.each(['upload-opened', 'upload-written'])(
+  'rejects an interrupted worker post after process exit at %s without changing retained payload',
   async (point) => {
     const f = await installFixture('maven');
     fixtures.push(f);
@@ -56,25 +56,46 @@ it.each(['worker-package-before-pointer', 'worker-package-pointer', 'worker-rece
     let status: unknown;
     try {
       execFileSync(process.execPath, [bundle, 'start', f.root, sink, point], { stdio: 'pipe' });
-    } catch (e) {
-      status = (e as { status: unknown }).status;
-      if (status !== 73) process.stderr.write(String((e as { stderr?: Buffer }).stderr));
+    } catch (error) {
+      status = (error as { status: unknown }).status;
+      if (status !== 73) process.stderr.write(String((error as { stderr?: Buffer }).stderr));
     }
     expect(status).toBe(73);
-    const opened = await OpenedInvocation.current(f.root, f.budget);
-    expect(opened).not.toBeNull();
-    const state = opened!.store.codec.schemas.documents['local-state'].parse(
-      await opened!.store.state(),
+    const opened = (await OpenedInvocation.current(f.root, f.budget))!,
+      state = opened.store.codec.schemas.documents['local-state'].parse(await opened.store.state());
+    expect(state[4]).toBe('post-active');
+    expect(state).toHaveLength(8);
+    expect(state[7]).toBeNull();
+    const packagePath = await readFile(sink + '.package-path', 'utf8'),
+      body = await readFile(packagePath),
+      before = await readFile(opened.store.root.resolve(opened.store.prefix + 'state.json'));
+    expect(() =>
+      execFileSync(process.execPath, [bundle, 'retry', f.root, sink, 'unused'], { stdio: 'pipe' }),
+    ).toThrow();
+    expect(await readFile(opened.store.root.resolve(opened.store.prefix + 'state.json'))).toEqual(
+      before,
     );
-    const frozen = state[12] ? await readFile(opened!.store.root.resolve(state[12][0][2])) : null;
-    if (frozen) {
-      await rm(opened!.store.root.resolve('data'), { recursive: true });
-      await rm(opened!.store.root.resolve('state'), { recursive: true });
-    }
-    if (point === 'worker-receipt-pointer') await rm(opened!.store.root.resolve(state[12]![0][2]));
-    execFileSync(process.execPath, [bundle, 'retry', f.root, sink, 'unused'], { stdio: 'pipe' });
-    const done = await OpenedInvocation.current(f.root, f.budget);
-    expect(done!.state[14]).toBe('worker-uploaded');
-    if (frozen) expect(await readFile(sink)).toEqual(frozen);
+    expect(await readFile(packagePath)).toEqual(body);
   },
 );
+it('reads a completed worker terminal in a later process without another upload', async () => {
+  const f = await installFixture('maven');
+  fixtures.push(f);
+  const sink = directory + '/completed.tar.gz';
+  let status: unknown;
+  try {
+    execFileSync(process.execPath, [bundle, 'start', f.root, sink, 'terminal-completed'], {
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    status = (error as { status: unknown }).status;
+  }
+  expect(status).toBe(73);
+  const opened = (await OpenedInvocation.current(f.root, f.budget))!;
+  expect(opened.state[7]?.[1]).toBe('worker-uploaded');
+  const before = await readFile(sink);
+  execFileSync(process.execPath, [bundle, 'retry', f.root, sink, 'unused'], { stdio: 'pipe' });
+  expect(await readFile(sink)).toEqual(before);
+  const packagePath = await readFile(sink + '.package-path', 'utf8');
+  await expect(readFile(packagePath)).rejects.toMatchObject({ code: 'ENOENT' });
+});

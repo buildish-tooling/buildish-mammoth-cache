@@ -21,16 +21,27 @@ import {
 import { mavenLifecycle } from '../../../src/build-tool/maven/lifecycle';
 import type { LifecycleResolver } from '../../../src/build-tool/lifecycle-types';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { observationFixture } from './observation-fixtures';
+import { composedFixture } from './composed-fixture';
+import { prepareStreaming } from '../../../src/cache/streaming/prepare';
 import { registrationDirectory } from '../../../src/build-tool/gradle/registrations';
 import { H, encodeRecord } from '../../../src/cache/streaming/encoding';
-export async function quiescenceFixture(options: Parameters<typeof observationFixture>[1] = {}) {
-  const f = await observationFixture('gradle', options);
-  const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
-  state[3]++;
-  state[4] = 'build-ready';
-  state[13] = null;
-  await f.store.updateState(state);
+export async function quiescenceFixture(options: Parameters<typeof composedFixture>[2] = {}) {
+  const f = await composedFixture({}, undefined, options, 'gradle');
+  const ready = await prepareStreaming({
+    ...f.request,
+    policy: {
+      ...f.request.policy,
+      role: f.store.codec.options.role,
+      access: f.store.codec.options.access,
+    },
+  });
+  f.store = ready.store;
+  f.bindings = f.store.codec.schemas.documents.bindings.parse(
+    await f.store.readDocument(
+      f.store.codec.schemas.documents['local-state'].parse(await f.store.state())[5],
+      'bindings',
+    ),
+  );
   await f.store.makeParents(registrationDirectory(f.store) + '/placeholder');
   async function register(version: string) {
     const home = f.root + '/Gradle ' + version;

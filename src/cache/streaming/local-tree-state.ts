@@ -199,9 +199,9 @@ export class LocalTreeState {
         partition = row[2];
         const path = joinPath(this.tree.path, name);
         this.bind(name, row[3], 'file');
-        if (this.active && (row[5] !== this.active.activity || row[6] !== this.active.decision))
+        if (this.active && (row[4] !== this.active.activity || row[5] !== this.active.decision))
           throw new Error('Mixed local unit decisions.');
-        this.active?.digest?.update(['file', path, partition, row[3], row[4]]);
+        this.active?.digest?.update(['file', path, partition, row[3]]);
       } else {
         const row = z
           .tuple([z.enum(['upsert', 'used']), componentSchema, this.schemas.partition])

@@ -28,7 +28,7 @@ import {
   claimSingleRunPrepareExecution,
   JOB_PREPARE_FAILED_STATE,
 } from '../../guard/job-single-run';
-import type { RecoveryOptions } from '../../cache/streaming/recovery';
+import type { LifecycleOptions } from '../../cache/streaming/lifecycle-options';
 import type { BuildToolAdapter, BuildToolProvisioning } from '../../build-tool/types';
 import type { CiPlatformAdapter } from '../../ci';
 import type { NormalizedActionConfig } from '../../config/types';
@@ -38,7 +38,7 @@ import type { WorkflowArtifactBackend } from '../../delta/backend';
 
 import { STREAMING_INVOCATION_STATE } from './state';
 export { STREAMING_INVOCATION_STATE } from './state';
-export interface StreamingPrepareDependencies extends Omit<RecoveryOptions, 'budget'> {
+export interface StreamingPrepareDependencies extends Omit<LifecycleOptions, 'budget'> {
   readonly budget?: WorkingBudget;
   readonly providerId: string;
   readonly runtimeHost: HostStateStore & HostOutputSink & HostReporter;

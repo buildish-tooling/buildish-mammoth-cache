@@ -16,10 +16,10 @@
 
 // Protocol: docs/dev/native-base-protocol.md#model-family-and-key-identities
 export const STREAMING_PROFILES = {
-  worker: 'worker-tar-v1',
-  native: 'native-tree-v1',
-  generation: 'generation-v1',
-  local: 'local-v1',
+  worker: 'worker-tar-v2',
+  native: 'native-metadata-v2',
+  generation: 'generation-v2',
+  local: 'local-v2',
   path: 'path-policy-v1',
   unit: 'unit-policy-v1',
   glob: 'glob-policy-v1',

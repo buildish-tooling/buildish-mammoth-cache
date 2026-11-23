@@ -27,13 +27,11 @@ import {
   acceptWorkerMerge,
   installWorkerMerge,
 } from '../../../src/cache/streaming/worker-incoming';
-import { recoverInstall } from '../../../src/cache/streaming/install-execute';
 import { tuple, type Value } from '../../../src/cache/streaming/encoding';
 import { WorkerStage } from '../../../src/cache/streaming/worker-stage';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { resolveModel } from '../../../src/cache/streaming/model';
-import { NativeRoot } from '../../../src/cache/streaming/native';
 const results: Awaited<ReturnType<typeof mergeWorkerArchives>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -65,18 +63,18 @@ it('unions usage, suppresses selected upserts and installs through actual V4a wi
       ordinaryOrder: ['A', 'B'],
       ordinaryPolicy: 'strict',
     }),
-    hash = vi.spyOn(NativeRoot.prototype, 'hash'),
+    hashBefore = f.store.root.work.bodyHashCalls,
     accepted = await acceptWorkerMerge(f.store, result, f.budget);
   expect(accepted.incoming[0].nativeRoot).toBe(f.store.prefix + 'install/data');
-  expect(accepted.work.activityDirectoryListings).toBe(2);
+  expect(accepted.work.activityDirectoryListings).toBe(0);
+  expect(accepted.work.activityIndexDirectories).toBe(2);
   expect(await f.store.root.stat('data/x')).toBe(null);
   const rows = await activity(f, accepted.activity);
   expect(rows).toContainEqual(['upsert', 'x', 'data']);
   expect(rows).toContainEqual(['upsert', 'hit', 'data']);
   expect(rows.filter((r) => tuple(r)[0] === 'used' && tuple(r)[1] === 'read')).toHaveLength(1);
   expect(rows).not.toContainEqual(['used', 'hit', 'data']);
-  expect(hash).not.toHaveBeenCalled();
-  hash.mockRestore();
+  expect(f.store.root.work.bodyHashCalls).toBe(hashBefore);
   await installWorkerMerge(f.store, accepted, f.budget);
   expect(await readFile(f.store.root.resolve('data/x'), 'utf8')).toBe('same');
   expect(await readFile(f.store.root.resolve('data/hit'), 'utf8')).toBe('hit');
@@ -144,6 +142,7 @@ it('retains independent snapshot copies across authoritative installation includ
   expect(await readFile(f.store.root.resolve('state/x'), 'utf8')).toBe('x');
   expect(await readFile(f.store.root.resolve(retained.nativeRoot + '/state/x'), 'utf8')).toBe('x');
   await retained.verify(signal());
+  await accepted.dispose();
   expect(f.budget.retained).toBe(0);
 });
 it.each(['file', 'directory'])(
@@ -170,7 +169,7 @@ it.each(['file', 'directory'])(
     expect(f.budget.retained).toBe(0);
   },
 );
-it('preserves adopted source ownership when V4a is interrupted and recovers its recorded batch', async () => {
+it('preserves valid partial installation without creating replay authority', async () => {
   const f = await completeFixture();
   await initializeCompleteFixture(f, ['A']);
   const a = await completeArchive(f, 'A', { 'data/a': 'a', 'data/b': 'b' }),
@@ -185,9 +184,9 @@ it('preserves adopted source ownership when V4a is interrupted and recovers its 
   });
   await expect(installWorkerMerge(f.store, accepted, f.budget)).rejects.toThrow('interrupted');
   spy.mockRestore();
-  expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).not.toBe(null);
+  expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).toBe(null);
   await result.dispose();
-  await recoverInstall(f.store, f.budget);
+  await expect(installWorkerMerge(f.store, accepted, f.budget)).rejects.toThrow();
   expect(await readFile(f.store.root.resolve('data/a'), 'utf8')).toBe('a');
   expect(await readFile(f.store.root.resolve('data/b'), 'utf8')).toBe('b');
   expect(f.budget.retained).toBe(0);
@@ -250,7 +249,7 @@ it('suppresses direct Maven usage without suppressing independent descendant coo
   expect(await readFile(f.store.root.resolve(base + 'a.jar'), 'utf8')).toBe('jar');
   expect(f.budget.retained).toBe(0);
 });
-it('rejects cross-channel Maven publication claims before any incoming namespace is published', async () => {
+it('rejects cross-channel Maven publication claims before incoming install authority', async () => {
   const f = await completeFixture('maven'),
     hard = ['.mammoth/**'];
   f.model = resolveModel(
@@ -286,7 +285,7 @@ it('rejects cross-channel Maven publication claims before any incoming namespace
   await expect(acceptWorkerMerge(f.store, result, f.budget)).rejects.toThrow(
     'Mixed Maven publication',
   );
-  expect(await f.store.root.stat(f.store.prefix + 'install')).toBe(null);
+  expect(await f.store.root.stat(f.store.prefix + 'install/data')).toBe(null);
   expect(f.budget.retained).toBe(0);
 });
 it('rejects unexplained root ctime changes before attributing its own publication rename', async () => {
@@ -301,12 +300,14 @@ it('rejects unexplained root ctime changes before attributing its own publicatio
     part = result.partitions[0],
     original = part.rootNative!;
   let changed = false;
-  const spy = vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-    if (point === 'immutable-publication-barrier' && !changed) {
+  const publish = result.stage.publish.bind(result.stage);
+  const spy = vi.spyOn(result.stage, 'publish').mockImplementation(async (...args) => {
+    if (args[0] === 'install' && !changed) {
       changed = true;
       await chmod(f.store.root.resolve(part.nativeRoot), 0o555);
       await chmod(f.store.root.resolve(part.nativeRoot), original[6] & 0o777);
     }
+    return publish(...args);
   });
   try {
     await expect(acceptWorkerMerge(f.store, result, f.budget)).rejects.toThrow(
@@ -373,7 +374,7 @@ it('returns no accepted result after post-adopt cleanup failure and preserves un
   for (const id of await readdir(f.store.root.resolve(f.store.prefix + 'snapshots')))
     if (await f.store.root.stat(f.store.prefix + 'snapshots/' + id + '/state/state/y'))
       retained = true;
-  expect(retained).toBe(true);
+  expect(retained).toBe(false); // unused independent copies remain owned and are retired before authority
   expect(f.budget.retained).toBe(0);
 });
 
@@ -389,10 +390,10 @@ it('rejects opposing usage-only shapes with no selected payload authority before
       ordinaryPolicy: 'strict',
     });
   await expect(acceptWorkerMerge(f.store, result, f.budget)).rejects.toThrow(/colliding/);
-  expect(await f.store.root.stat(f.store.prefix + 'install')).toBe(null);
+  expect(await f.store.root.stat(f.store.prefix + 'install/data')).toBe(null);
   expect(f.budget.retained).toBe(0);
 });
-it('counts one topology listing per selected physical directory as input units grow', async () => {
+it('borrows one original index directory for activity with no native listings as input units grow', async () => {
   for (const count of [2, 8]) {
     const f = await completeFixture();
     await initializeCompleteFixture(f, ['A']);
@@ -406,7 +407,9 @@ it('counts one topology listing per selected physical directory as input units g
         ordinaryPolicy: 'strict',
       }),
       accepted = await acceptWorkerMerge(f.store, result, f.budget);
-    expect(accepted.work.activityDirectoryListings).toBe(count + 2);
+    expect(accepted.work.activityDirectoryListings).toBe(0);
+    expect(accepted.work.activityIndexDirectories).toBe(count + 2);
+    await accepted.dispose();
     expect(f.budget.retained).toBe(0);
   }
 });

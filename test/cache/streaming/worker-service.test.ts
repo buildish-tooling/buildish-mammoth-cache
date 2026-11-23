@@ -175,14 +175,6 @@ it('round trips actual source/package through raw backend/native download and th
     skipDecompress: true,
     expectedHash: 'sha256:' + f.archive.sha,
   });
-  const producer = await p.store.writeStream(
-    'producers',
-    { budget: p.budget, partition: null },
-    (async function* () {
-      yield acquired[0].producer();
-    })(),
-  );
-  await p.store.readStream(producer, 'producers', { budget: p.budget, partition: null });
   const result = await mergeWorkerArchives(
     p.store,
     acquired.map((d) => d.input()),
@@ -229,43 +221,48 @@ it.each(['0'.repeat(64), 'sha1:unsupported'])(
     const f = await fixture(),
       upload = f.b.upload.getMockImplementation()!;
     f.b.upload.mockImplementation(async (...args) => ({ ...(await upload(...args)), digest }));
-    await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow(/digest/);
+    await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow(/unconfirmed/);
     expect(f.b.get).not.toHaveBeenCalled();
   },
 );
 it.each([true, false])(
-  'confirms an ambiguous upload using frozen identity (reported digest=%s)',
+  'abandons a lost response without service discovery/readback (reported digest=%s)',
   async (reported) => {
     const f = await fixture(),
       upload = f.b.upload.getMockImplementation()!,
       read = vi.spyOn(NativeReadPhase.prototype, 'read');
     f.b.upload.mockImplementation(async (...args) => {
       const artifact = await upload(...args);
-      if (!reported) {
-        f.b.objects.get(artifact.id)!.artifact = { ...artifact, digest: null };
-      }
+      if (!reported) f.b.objects.get(artifact.id)!.artifact = { ...artifact, digest: null };
       throw new Error('ambiguous RPC outcome');
     });
-    await writeFile(path.join(f.root, 'd/a'), 'later source changes');
-    const receipt = await uploadWorkerArtifact(f.b.api, f.archive);
-    expect(receipt.artifact.name).toBe(f.archive.name);
-    expect(f.b.get).toHaveBeenCalledWith(f.archive.name, { scope: undefined });
-    expect(f.b.download).toHaveBeenCalledTimes(reported ? 0 : 1);
+    const before = await readFile(f.archive.file);
+    await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow(
+      'retain immutable package at ' + f.archive.file,
+    );
+    expect(await readFile(f.archive.file)).toEqual(before);
+    expect(f.b.get).not.toHaveBeenCalled();
+    expect(f.b.list).not.toHaveBeenCalled();
+    expect(f.b.download).not.toHaveBeenCalled();
+    expect(f.b.upload).toHaveBeenCalledTimes(1);
     expect(read).not.toHaveBeenCalled();
   },
 );
-it('rejects ambiguous readback with different frozen compressed bytes', async () => {
-  const f = await fixture(),
-    upload = f.b.upload.getMockImplementation()!;
-  f.b.upload.mockImplementation(async (...args) => {
-    const artifact = await upload(...args),
-      entry = f.b.objects.get(artifact.id)!;
-    entry.artifact = { ...artifact, digest: null };
-    entry.bytes = Buffer.from(entry.bytes);
-    entry.bytes[entry.bytes.length - 1] ^= 1;
-    throw new Error('ambiguous');
+it('retains immutable package after raw SDK rejection while an inaccessible reader remains live', async () => {
+  const f = await fixture();
+  let release!: () => void;
+  let reader!: Promise<Buffer>;
+  f.b.upload.mockImplementation(async () => {
+    reader = new Promise<void>((r) => {
+      release = r;
+    }).then(() => readFile(f.archive.file));
+    throw new Error('SDK rejected before reader closed');
   });
-  await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow('readback differs');
+  await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow('unconfirmed');
+  release();
+  expect(await reader).toEqual(await readFile(f.archive.file));
+  expect(f.b.get).not.toHaveBeenCalled();
+  expect(f.b.download).not.toHaveBeenCalled();
 });
 it('discovers latest eligible attempts deterministically without legacy total-byte admission', async () => {
   const f = await fixture(),
@@ -274,7 +271,12 @@ it('discovers latest eligible attempts deterministically without legacy total-by
   const descriptor = (attempt: number, id: number, digest: string | null = 'a'.repeat(64)) => {
     const c = [...execution] as typeof execution;
     c[5] = attempt;
-    return { id, name: workerArtifactName(f.model, c, f.view), size: 4 * 1024 ** 3, digest };
+    return {
+      id,
+      name: f.archive.name.replace(/-a[1-9][0-9]*-d/, '-a' + attempt + '-d'),
+      size: 4 * 1024 ** 3,
+      digest,
+    };
   };
   const old = descriptor(1, 1, 'unsupported-old'),
     current = descriptor(2, 2),
@@ -389,18 +391,36 @@ it('waits for an uncancellable backend download to settle before cancellation cl
   expect(await readdir(p.store.root.resolve(p.store.prefix + 'worker'))).toEqual([]);
 });
 
-it('matches independent N0 full digest and basename literals', () => {
-  const f = localFixtures(),
-    q = (purpose: string, sha: string) =>
-      f.codec.schemas.ref(purpose).parse(['ref', purpose, f.prefix + 'files/reference', 1, sha]);
-  expect(
-    workerArtifactName(f.codec.options.model, f.codec.options.context, {
-      observations: q('observations', 'a'.repeat(64)),
-      workerSources: q('worker-sources', 'b'.repeat(64)),
-    }),
-  ).toBe(
-    'mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef-w7bc0bf858d916f802423c244043963037a23be107d90ccbebeeed37f091cebb5-a1-d44e8f670cbc573497679d42c1f998c5a159a84f7c161d086f972f500065d2190.tar.gz',
+it('binds the exact genuine survivor once before outgoing identity reads', async () => {
+  const f = await sourceFixture(),
+    view = await freezeSources(f);
+  let reads = 0;
+  const changing = {
+    get survivors() {
+      reads++;
+      return reads === 1
+        ? view.survivors
+        : ({
+            ...view.survivors,
+            index: { reference: ['foreign'] },
+          } as unknown as typeof view.survivors);
+    },
+  };
+  expect(workerArtifactName(f.model, f.store.codec.options.context, changing)).toBe(
+    workerArtifactName(f.model, f.store.codec.options.context, view),
   );
+  expect(reads).toBe(1);
+  await f.finish();
+  expect(f.budget.retained).toBe(0);
+});
+
+it('rejects serialized source tuples before they can mint an outgoing artifact identity', () => {
+  const f = localFixtures();
+  expect(() =>
+    workerArtifactName(f.codec.options.model, f.codec.options.context, {
+      survivors: { assert: () => {} },
+    } as never),
+  ).toThrow('original GC survivor receipt');
 });
 
 it('installs real multi-worker packages, whole workspace winners and independent empty/nonempty snapshots', async () => {
@@ -515,6 +535,7 @@ it('installs real multi-worker packages, whole workspace winners and independent
   expect(await readFile(p.store.root.resolve('state/value'), 'utf8')).toBe('snapshot');
   for (const snapshot of accepted.snapshots) await snapshot.verify(new AbortController().signal);
   expect(tuple(await p.store.state())[4]).toBe('prepare-pending');
+  await accepted.dispose();
   expect(p.budget.retained).toBe(0);
 });
 
@@ -621,5 +642,21 @@ it('installs real Maven direct-unit packages with strict portable metadata repai
     if (process.platform !== 'win32') expect(n[6] & 0o777).toBe(0o755);
     expect(await readFile(p.store.root.resolve(root + '/a.jar'), 'utf8')).toBe('jar');
   }
+  await accepted.dispose();
   expect(p.budget.retained).toBe(0);
 });
+
+it.each([null, undefined, { id: 0, name: 'invalid', size: 0, digest: null }])(
+  'retains package without receipt/discovery on invalid direct response %s',
+  async (response) => {
+    const f = await fixture();
+    f.b.upload.mockResolvedValue(response as unknown as Awaited<ReturnType<typeof f.b.upload>>);
+    const before = await readFile(f.archive.file);
+    await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow('unconfirmed');
+    await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow('already attempted');
+    expect(f.b.upload).toHaveBeenCalledTimes(1);
+    expect(f.b.get).not.toHaveBeenCalled();
+    expect(f.b.download).not.toHaveBeenCalled();
+    expect(await readFile(f.archive.file)).toEqual(before);
+  },
+);

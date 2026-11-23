@@ -16,8 +16,8 @@
 
 import { symlink, utimes, writeFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
-import { executeGc } from '../../../src/cache/streaming/gc-execute';
-import { captureObservations } from '../../../src/cache/streaming/observation-capture';
+import { executeFixtureGc as executeGc } from './observation-fixtures';
+import { captureFixtureObservations as captureObservations } from './observation-fixtures';
 import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 import { tuple, type Value } from '../../../src/cache/streaming/encoding';
@@ -41,8 +41,7 @@ it('captures once with complete protected projections, frozen decisions and no b
   await old(f, 'data/a');
   await old(f, 'data/b');
   await old(f, 'data/kept.lock');
-  const hash = vi.spyOn(NativeReadPhase.prototype, 'hash'),
-    read = vi.spyOn(NativeReadPhase.prototype, 'read'),
+  const read = vi.spyOn(NativeReadPhase.prototype, 'read'),
     before = await f.store.root.stat('data/a');
   const out = await captureObservations(f.store, { budget: f.budget }),
     values: Value[] = [];
@@ -55,7 +54,6 @@ it('captures once with complete protected projections, frozen decisions and no b
     },
   );
   expect(out.work.listings).toBe(2);
-  expect(hash).not.toHaveBeenCalled();
   expect(read).not.toHaveBeenCalled();
   expect(await f.store.root.stat('data/a')).toEqual(before);
   expect(await f.store.root.stat('data/b')).not.toBeNull();
@@ -70,13 +68,13 @@ it('captures once with complete protected projections, frozen decisions and no b
     ['a', 'data'],
     ['b', 'data'],
   ]);
-  expect(values.filter((v) => tuple(v)[0] === 'file').every((v) => tuple(v)[6] === 'delete')).toBe(
+  expect(values.filter((v) => tuple(v)[0] === 'file').every((v) => tuple(v)[5] === 'delete')).toBe(
     true,
   );
   const state = tuple(await f.store.state());
-  expect(state[4]).toBe('observations-frozen');
-  expect(state[6]).toEqual(out.reference);
-  expect(state[10]).not.toBeNull();
+  expect(state[4]).toBe('post-active');
+  expect(state[6]).not.toEqual(out.reference);
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it('promotes direct Maven siblings together while keeping nested coordinate decisions independent', async () => {
@@ -117,6 +115,7 @@ it('promotes direct Maven siblings together while keeping nested coordinate deci
     ['maven-directory', 'repository/g/a/1', 'direct', 'used', 'retain'],
     ['maven-directory', 'repository/g/a/1/child', 'direct', 'none', 'delete'],
   ]);
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it.each([true, false])(
@@ -141,6 +140,7 @@ it.each([true, false])(
     );
     expect(units).toHaveLength(1);
     expect(tuple(units[0])[5]).toBe(complete ? 'delete' : 'retain');
+    await f.finish();
     expect(f.budget.retained).toBe(0);
   },
 );
@@ -175,8 +175,11 @@ it.each(['policy', 'phase', 'abort', 'mutation'] as const)(
       await expect(executeGc(f.store, options)).rejects.toThrow();
     } else {
       await expect(captureObservations(f.store, options)).rejects.toThrow();
-      expect(tuple(await f.store.state())[6]).toBeNull();
+      expect(tuple(await f.store.state())[4]).toBe(
+        what === 'phase' ? 'build-ready' : 'post-active',
+      );
     }
+    await f.finish();
     expect(f.budget.retained).toBe(0);
   },
 );
@@ -192,6 +195,7 @@ it('does not follow an excluded symlink or accept a managed one', async () => {
   await expect(captureObservations(other.store, { budget: other.budget })).rejects.toThrow(
     'Unsupported',
   );
+  await other.finish();
   expect(other.budget.retained).toBe(0);
 });
 it('captures a growing hot directory with linear listings/rows and stable policy cutoff', async () => {
@@ -215,6 +219,7 @@ it('captures a growing hot directory with linear listings/rows and stable policy
     counts.push(records);
     expect(out.work.listings).toBe(2);
     expect(out.work.entries).toBe(count + 2);
+    await f.finish();
     expect(f.budget.retained).toBe(0);
     const after = f.store.codec.schemas.documents.bindings.parse(
       await f.store.readDocument(tuple(await f.store.state())[5], 'bindings'),
@@ -247,7 +252,8 @@ it('ignores prepare-time activity for removed files and replaced file/directory 
     },
   );
   expect(files).toHaveLength(2);
-  expect(files.every((v) => tuple(v)[5] === 'none')).toBe(true);
+  expect(files.every((v) => tuple(v)[4] === 'none')).toBe(true);
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it('retains whole imported activity on the surviving post-build workspace view', async () => {
@@ -279,7 +285,8 @@ it('retains whole imported activity on the surviving post-build workspace view',
     },
   );
   expect(files).toHaveLength(3);
-  expect(files.every((v) => tuple(v)[5] === 'upsert' && tuple(v)[6] === 'retain')).toBe(true);
+  expect(files.every((v) => tuple(v)[4] === 'upsert' && tuple(v)[5] === 'retain')).toBe(true);
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });
 it('rejects cancellation during final cleanup after durable observation commitment', async () => {
@@ -297,6 +304,7 @@ it('rejects cancellation during final cleanup after durable observation commitme
   await expect(
     captureObservations(f.store, { budget: f.budget, signal: abort.signal }),
   ).rejects.toBe(reason);
-  expect(tuple(await f.store.state())[4]).toBe('observations-frozen');
+  expect(tuple(await f.store.state())[4]).toBe('post-active');
+  await f.finish();
   expect(f.budget.retained).toBe(0);
 });

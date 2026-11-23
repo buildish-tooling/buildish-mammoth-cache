@@ -15,7 +15,8 @@
  */
 
 import { z } from 'zod';
-import { add, Digest, equal, H, tuple, type Value } from './encoding';
+import { add, Digest, equal, tuple, type Value } from './encoding';
+import { STREAMING_PROFILES } from './profiles';
 import type { ResolvedModel } from './model';
 import {
   componentSchema,
@@ -70,7 +71,7 @@ export interface WorkerContext {
 const identitySchema = z.tuple([
   z.literal('identity'),
   z.literal(1),
-  z.literal('worker-tar-v1'),
+  z.literal(STREAMING_PROFILES.worker),
   z.literal('gzip'),
   contextSchema,
   shaSchema,
@@ -111,7 +112,6 @@ const controls = {
     z.literal('file-meta'),
     uintSchema,
     positiveSchema,
-    shaSchema,
     shaSchema,
     partitionSchema,
   ]),
@@ -160,7 +160,6 @@ interface Channel {
   counts: Counts;
 }
 interface FileBinding {
-  header: Value[];
   partition: string;
   ordinal: number;
   path: string;
@@ -266,7 +265,7 @@ export class WorkerState {
     return [
       'identity',
       1,
-      'worker-tar-v1',
+      STREAMING_PROFILES.worker,
       'gzip',
       this.options.context,
       this.options.model.id,
@@ -292,7 +291,7 @@ export class WorkerState {
   fileMetaTuple(): Value[] {
     const f = this.file;
     if (f.sha === undefined) throw new Error('Body not hashed.');
-    return ['file-meta', this.cid, f.ordinal, H('header', f.header), f.sha, f.partition];
+    return ['file-meta', this.cid, f.ordinal, f.sha, f.partition];
   }
   completeTuple(): Value[] {
     return [
@@ -381,7 +380,6 @@ export class WorkerState {
       c.tree.file(path);
       this.requireFileUnit(path);
       this.pendingFile = {
-        header: fact,
         partition: this.ownership(path),
         ordinal: (this.ordinal = add(this.ordinal)),
         path,

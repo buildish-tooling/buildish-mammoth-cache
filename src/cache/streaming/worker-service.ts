@@ -45,7 +45,7 @@ export interface WorkerRequest {
   readonly required: boolean;
   readonly authorizedSnapshots: readonly string[];
 }
-/** Check backend support BEFORE traversing a large live cache. V5 persists package-frozen before upload. */
+/** Check backend support before creating the current operation’s immutable upload package. */
 export async function freezeWorkerArtifact(
   backend: WorkflowArtifactBackend,
   store: OwnedStore,
@@ -176,7 +176,13 @@ export interface WorkerUploadReceipt {
   readonly artifact: Readonly<WorkflowArtifactDescriptor>;
   readonly receipt: Value;
 }
-/** Upload/retry consumes ONLY the immutable package. Ambiguous outcomes require exact readback. */
+/** Only SDK/direct-response failures use this type; local source/cleanup failures remain hard. */
+export class WorkerUploadUnconfirmed extends Error {
+  constructor(readonly retainedPath: string) {
+    super('Raw worker upload unconfirmed; retain immutable package at ' + retainedPath);
+  }
+}
+/** One direct attempt consumes ONLY the immutable package; no discovery or readback. */
 export async function uploadWorkerArtifact(
   backend: WorkflowArtifactBackend,
   archive: FrozenWorkerArchive,
@@ -204,56 +210,30 @@ export async function uploadWorkerArtifact(
   )
     throw new Error('Frozen raw archive has noncanonical producer naming.');
   await archive.assertStable(signal);
-  let artifact: Readonly<WorkflowArtifactDescriptor> | undefined,
-    readback = false;
-  let response: WorkflowArtifactDescriptor | undefined;
+  const file = archive.file,
+    root = path.dirname(file);
+  archive.claimUpload();
+  let artifact: Readonly<WorkflowArtifactDescriptor>;
   try {
-    response = await backend.uploadArtifact(
-      archive.name,
-      [archive.file],
-      path.dirname(archive.file),
-      {
-        skipArchive: true,
-        compressionLevel: 0,
-        ...(options.retentionDays === undefined ? {} : { retentionDays: options.retentionDays }),
-      },
-    );
-  } catch (uploadError) {
-    signal.throwIfAborted();
-    try {
-      artifact = workerDescriptor(await backend.getArtifact(archive.name, { scope }), archive.name);
-      readback = true;
-    } catch (error) {
-      throw new AggregateError(
-        [uploadError, error],
-        'Raw worker upload outcome unconfirmed; retain frozen package.',
-        { cause: error },
-      );
-    }
+    const response = await backend.uploadArtifact(archive.name, [file], root, {
+      skipArchive: true,
+      compressionLevel: 0,
+      ...(options.retentionDays === undefined ? {} : { retentionDays: options.retentionDays }),
+    });
+    artifact = workerDescriptor(response, archive.name);
+    if (
+      artifact.size !== archive.bytes ||
+      (workerDigest(artifact.digest) !== null && workerDigest(artifact.digest) !== archive.sha)
+    )
+      throw new Error('Worker service size/digest differs from frozen package.');
+  } catch {
+    // SDK rejection does not expose closure of inaccessible readers. Keep this exact package.
+    archive.settleUpload(false);
+    throw new WorkerUploadUnconfirmed(file);
   }
   signal.throwIfAborted();
-  if (response !== undefined) artifact = workerDescriptor(response, archive.name);
-  if (!artifact) throw new Error('Worker upload returned no artifact descriptor.');
-  if (artifact.size !== archive.bytes)
-    throw new Error('Worker artifact service size differs from frozen package.');
-  const digest = workerDigest(artifact.digest);
-  if (digest !== null && digest !== archive.sha)
-    throw new Error('Worker artifact service digest differs from frozen package.');
-  if (readback && digest === null) {
-    const downloaded = await DownloadedWorkerArchive.download(
-      archive.store,
-      backend,
-      { artifact: artifact, context, authorizedSnapshots: archive.summary.identity[7] },
-      { scope, signal },
-    );
-    try {
-      if (downloaded.reference[4] !== archive.sha)
-        throw new Error('Ambiguous worker upload readback differs from frozen package.');
-    } finally {
-      await downloaded.dispose();
-    }
-  }
   await archive.assertStable(signal);
+  archive.settleUpload(true);
   return Object.freeze({
     artifact: artifact,
     receipt: Object.freeze(['artifact-receipt', String(artifact.id), artifact.name, archive.sha]),

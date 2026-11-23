@@ -17,11 +17,14 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { writeFile, link, rename, mkdir } from 'node:fs/promises';
 import { installFixture } from './install-fixture';
-import { freezeInstallPlan } from '../../../src/cache/streaming/install-plan';
+import { freezeInstallPlan } from './install-plan-fixture';
+import { takeInstallIndexes } from '../../../src/cache/streaming/install-plan';
+import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import type { Value } from '../../../src/cache/streaming/encoding';
 import { InstallAdmission } from '../../../src/cache/streaming/install-admission';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const f of fixtures.splice(0)) await f.close();
 });
 async function fixture() {
@@ -48,18 +51,20 @@ it('admits a complete frozen cold-root plan without modifying live data', async 
   expect(await f.store.root.stat('data')).toBeNull();
   expect(f.budget.retained).toBe(0);
 });
-it.each(['current-extra', 'current-body', 'source-body'] as const)(
-  'rejects %s changed after freezing before any live mutation',
+it.each(['directory', 'file'] as const)(
+  'rejects changed selected current %s root after freezing before any live mutation',
   async (kind) => {
     const f = await fixture();
-    await f.files('', { 'state/old': 'old' });
-    const input = await f.incoming('state', { 'state/new': 'new' }),
+    const snapshot = kind === 'directory';
+    await f.files('', snapshot ? { 'state/old': 'old' } : { 'data/old': 'old' });
+    const input = await f.incoming(
+        snapshot ? 'state' : 'data',
+        snapshot ? { 'state/new': 'new' } : { 'data/old': 'new' },
+      ),
       plan = await freezeInstallPlan(f.store, [input], f.budget),
       renames = f.store.root.work.renames;
-    if (kind === 'current-extra') await f.files('', { 'state/unexpected': 'unexpected' });
-    if (kind === 'current-body') await writeFile(f.store.root.resolve('state/old'), 'changed-body');
-    if (kind === 'source-body')
-      await writeFile(f.store.root.resolve(input.nativeRoot + '/state/new'), 'changed-body');
+    if (snapshot) await f.files('', { 'state/unexpected': 'unexpected' });
+    else await writeFile(f.store.root.resolve('data/old'), 'changed-selected-file');
     await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow();
     expect(f.store.root.work.renames).toBe(renames);
     expect(f.budget.retained).toBe(0);
@@ -74,7 +79,7 @@ it('rejects source-parent changes and non-idle invocation state', async () => {
     );
   const state = (await f.store.state()) as Value[];
   state[3] = Number(state[3]) + 1;
-  state[4] = 'build-ready';
+  state[4] = 'prepare-failed';
   await f.store.updateState(state);
   await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow(
     'idle prepare-pending',
@@ -118,13 +123,32 @@ it('rejects a hardlinked disposable source changed after its producer receipt', 
   expect(await f.store.root.stat('data')).toBeNull();
   expect(f.budget.retained).toBe(0);
 });
-it('rejects selected hardlinked preimages before publishing a plan', async () => {
+it('rejects a selected directory containing a hardlinked managed descendant during capture', async () => {
   const f = await fixture();
   await f.files('', { 'state/old': 'old', data: null });
   await link(f.store.root.resolve('state/old'), f.store.root.resolve('data/alias'));
+  const renames = f.store.root.work.renames;
   await expect(
     freezeInstallPlan(f.store, [await f.incoming('state', {})], f.budget),
-  ).rejects.toThrow('Aliased selected preimage');
+  ).rejects.toThrow(/alias/i);
+  expect(f.store.root.work.renames).toBe(renames);
+  expect(f.budget.retained).toBe(0);
+});
+it('rejects a selected hardlinked current file before any live mutation', async () => {
+  const f = await fixture();
+  await f.files('', { 'data/old': 'old' });
+  const plan = await freezeInstallPlan(
+      f.store,
+      [await f.incoming('data', { 'data/old': 'new' })],
+      f.budget,
+    ),
+    renames = f.store.root.work.renames;
+  await link(f.store.root.resolve('data/old'), f.store.root.resolve(f.store.prefix + 'alias'));
+  await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow(
+    'Aliased selected install endpoint',
+  );
+  expect(f.store.root.work.renames).toBe(renames);
+  expect(await f.store.root.stat('data/old')).not.toBeNull();
   expect(f.budget.retained).toBe(0);
 });
 it('checks excluded nontransient Maven artifacts once per changed coordinate', async () => {
@@ -162,27 +186,76 @@ it('binds the frozen directory limit to persisted policy', async () => {
   );
   expect(f.budget.retained).toBe(0);
 });
-it('rejects an existing parent replaced during source admission', async () => {
+it('rejects an existing parent replaced after freeze before source admission', async () => {
   const f = await fixture();
   await f.files('', { data: null });
-  const input = await f.incoming('data', { 'data/a': 'a' });
-  const plan = await freezeInstallPlan(f.store, [input], f.budget);
-  const { EvidenceFile } = await import('../../../src/cache/streaming/evidence-file');
-  const open = EvidenceFile.open;
-  const mock = vi.spyOn(EvidenceFile, 'open').mockImplementation(async (...args) => {
-    const value = await open(...args);
-    if (args[1] === input.evidence || JSON.stringify(args[1]) === JSON.stringify(input.evidence)) {
-      await rename(f.store.root.resolve('data'), f.store.root.resolve('retired'));
-      await mkdir(f.store.root.resolve('data'));
-    }
-    return value;
-  });
-  try {
-    await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow(
-      'ancestor changed',
-    );
-  } finally {
-    mock.mockRestore();
-  }
+  const plan = await freezeInstallPlan(
+    f.store,
+    [await f.incoming('data', { 'data/a': 'a' })],
+    f.budget,
+  );
+  await rename(f.store.root.resolve('data'), f.store.root.resolve('retired'));
+  await mkdir(f.store.root.resolve('data'));
+  await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow(
+    /ancestor changed|parent changed/i,
+  );
+  await plan.metadata.dispose();
   expect(f.budget.retained).toBe(0);
+});
+
+it('borrows the original current index with no native recapture or frozen-current replay', async () => {
+  const f = await fixture();
+  await f.files('', { 'data/shared/existing': 'old' });
+  const plan = await freezeInstallPlan(
+    f.store,
+    [await f.incoming('data', { 'data/shared/new': 'new' })],
+    f.budget,
+  );
+  const before = { ...f.store.root.work };
+  const admission = await InstallAdmission.create(f.store, plan, f.budget);
+  expect(f.store.root.work.nativeWalks - before.nativeWalks).toBe(0);
+  expect(f.store.root.work.indexBuilds - before.indexBuilds).toBe(0);
+  await admission.close();
+  expect(f.budget.retained).toBe(0);
+  await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow(
+    /consumed|missing|closed/i,
+  );
+  expect(f.budget.retained).toBe(0);
+});
+it('rejects copied plans and explicitly revoked current provenance without reconstruction', async () => {
+  const f = await fixture(),
+    plan = await freezeInstallPlan(f.store, [], f.budget);
+  await expect(InstallAdmission.create(f.store, { ...plan }, f.budget)).rejects.toThrow(
+    'process-owned',
+  );
+  const original = await takeInstallIndexes(f.store, plan);
+  expect(original).toBeDefined();
+  await original!.scratch.close();
+  const walks = f.store.root.work.nativeWalks;
+  await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow(
+    /consumed|missing|closed/i,
+  );
+  expect(f.store.root.work.nativeWalks).toBe(walks);
+  expect(f.budget.retained).toBe(0);
+});
+it('revokes the taken current index on cancellation while reopening without a second walk', async () => {
+  const f = await fixture(),
+    plan = await freezeInstallPlan(f.store, [], f.budget),
+    controller = new AbortController();
+  const reopen = InstallScratch.prototype.reopen;
+  vi.spyOn(InstallScratch.prototype, 'reopen').mockImplementationOnce(async function (
+    this: InstallScratch,
+  ) {
+    await reopen.call(this);
+    controller.abort(new Error('cancel current borrowing'));
+  });
+  const walks = f.store.root.work.nativeWalks;
+  await expect(InstallAdmission.create(f.store, plan, f.budget, controller.signal)).rejects.toThrow(
+    'cancel current borrowing',
+  );
+  expect(f.store.root.work.nativeWalks).toBe(walks);
+  expect(f.budget.retained).toBe(0);
+  await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow(
+    /consumed|missing|closed/i,
+  );
 });

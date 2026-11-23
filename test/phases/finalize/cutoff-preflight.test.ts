@@ -102,8 +102,16 @@ it.each([
     });
     const locator = JSON.parse(await readFile(job.home + '/.mammoth/v1/current.json', 'utf8'));
     const state = JSON.parse(await readFile(job.home + '/' + locator[3], 'utf8'));
+    expect(state).toHaveLength(8);
+    expect(state.slice(0, 2)).toEqual(['local-state', 2]);
     expect(state[4]).toBe('completed');
-    expect(state[14]).toBe(readOnly ? 'read-only' : 'published');
+    expect(state[7]).toEqual([
+      'outcome',
+      readOnly ? 'read-only' : 'published',
+      readOnly ? null : expect.any(String),
+      null,
+      null,
+    ]);
     expect((await job.trace()).some(([name]) => name === 'cache-save')).toBe(!readOnly);
     await job.clearTrace();
     const skip = await job.run('post', {

@@ -17,8 +17,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { writeFile, appendFile, readdir } from 'node:fs/promises';
 import { installFixture } from './install-fixture';
-import { native, directory, h } from './local-fixtures';
-import { freezeInstallPlan } from '../../../src/cache/streaming/install-plan';
+import { freezeInstallPlan } from './install-plan-fixture';
 import { executeInstall } from '../../../src/cache/streaming/install-execute';
 import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import type { Value } from '../../../src/cache/streaming/encoding';
@@ -45,11 +44,12 @@ it.each([4, 16])(
       before = f.store.root.work.indexBuilds;
     const frozen = await freezeInstallPlan(f.store, [input], f.budget);
     expect(f.store.root.work.indexBuilds - before).toBe(2);
+    frozen.metadata.scratch.releaseReadCache();
     expect(f.budget.retained).toBe(0);
     const walks = f.store.root.work.nativeWalks;
     await executeInstall(f.store, frozen, f.budget);
     expect(f.store.root.work.indexBuilds - before).toBe(2);
-    expect(f.store.root.work.nativeWalks - walks).toBe(1); // current admission; ordinary roots have scoped endpoint guards
+    expect(f.store.root.work.nativeWalks - walks).toBe(0); // borrow original current/source indexes
     expect(f.budget.retained).toBe(0);
   },
 );
@@ -74,37 +74,39 @@ it('rejects a modified parked index before any live operation', async () => {
   expect(await f.store.root.stat('data')).toBeNull();
   expect(f.budget.retained).toBe(0);
 });
-it('reuses completed writer proof but fully validates cloned/cold references', async () => {
+it('validates activity streams regardless of caller reference identity', async () => {
   const f = await fixture();
   const ref = await f.store.writeStream(
-    'native-evidence',
-    { budget: f.budget, partition: 'data' },
+    'activity',
+    { budget: f.budget, partition: null },
     (async function* (): AsyncGenerator<Value> {
-      yield ['directory', '', directory];
-      yield ['directory', 'data', directory];
-      yield ['file', 'data/a', native, h];
+      yield ['dir-open', ''];
+      yield ['dir-open', 'data'];
+      yield ['used', 'a', 'data'];
+      yield ['dir-close', 'data'];
+      yield ['dir-close', ''];
     })(),
   );
   const validations = f.store.root.work.metadataValidations;
   for (let i = 0; i < 2; i++)
-    for await (const row of f.store.rows(ref, 'native-evidence', {
+    for await (const row of f.store.rows(ref, 'activity', {
       budget: f.budget,
-      partition: 'data',
+      partition: null,
     }))
       void row;
-  expect(f.store.root.work.metadataValidations).toBe(validations);
-  for await (const row of f.store.rows(structuredClone(ref), 'native-evidence', {
+  expect(f.store.root.work.metadataValidations).toBe(validations + 2);
+  for await (const row of f.store.rows(structuredClone(ref), 'activity', {
     budget: f.budget,
-    partition: 'data',
+    partition: null,
   }))
     void row;
-  expect(f.store.root.work.metadataValidations).toBe(validations + 1);
+  expect(f.store.root.work.metadataValidations).toBe(validations + 3);
   await writeFile(f.store.root.resolve(ref[2]), 'changed bytes');
   await expect(
     (async () => {
-      for await (const row of f.store.rows(ref, 'native-evidence', {
+      for await (const row of f.store.rows(ref, 'activity', {
         budget: f.budget,
-        partition: 'data',
+        partition: null,
       }))
         void row;
     })(),
@@ -116,10 +118,11 @@ it('cancels a genuine completed-reference read while its real beforeAccept callb
   const f = await fixture(),
     controller = new AbortController();
   const ref = await f.store.writeStream(
-    'native-evidence',
-    { budget: f.budget, partition: 'data' },
+    'activity',
+    { budget: f.budget, partition: null },
     (async function* (): AsyncGenerator<Value> {
-      yield ['directory', '', directory];
+      yield ['dir-open', ''];
+      yield ['dir-close', ''];
     })(),
   );
   let entered!: () => void;
@@ -129,8 +132,8 @@ it('cancels a genuine completed-reference read while its real beforeAccept callb
   const work = (async () => {
     for await (const row of f.store.rows(
       ref,
-      'native-evidence',
-      { budget: f.budget, partition: 'data' },
+      'activity',
+      { budget: f.budget, partition: null },
       controller.signal,
       async () => {
         entered();
@@ -155,23 +158,26 @@ it.each(['same-size', 'appended-row'])(
       altered = true;
       const folder = f.store.root.resolve(f.store.prefix + 'files');
       const name = (await readdir(folder)).find((n) => n.endsWith('.tmp'))!;
-      if (kind === 'appended-row')
-        await appendFile(folder + '/' + name, '["directory","extra",[]]\n');
+      if (kind === 'appended-row') await appendFile(folder + '/' + name, '["used","z","data"]\n');
       else {
         const { readFile } = await import('node:fs/promises');
         const bytes = await readFile(folder + '/' + name);
-        bytes[bytes.indexOf(Buffer.from('data/a')) + 5] = 'b'.charCodeAt(0);
+        const at = bytes.indexOf(Buffer.from('["used","a"'));
+        expect(at).toBeGreaterThanOrEqual(0);
+        bytes[at + 9] = 'b'.charCodeAt(0);
         await writeFile(folder + '/' + name, bytes);
       }
     });
     await expect(
       f.store.writeStream(
-        'native-evidence',
-        { budget: f.budget, partition: 'data' },
+        'activity',
+        { budget: f.budget, partition: null },
         (async function* (): AsyncGenerator<Value> {
-          yield ['directory', '', directory];
-          yield ['directory', 'data', directory];
-          yield ['file', 'data/a', native, h];
+          yield ['dir-open', ''];
+          yield ['dir-open', 'data'];
+          yield ['used', 'a', 'data'];
+          yield ['dir-close', 'data'];
+          yield ['dir-close', ''];
         })(),
       ),
     ).rejects.toThrow('candidate changed');

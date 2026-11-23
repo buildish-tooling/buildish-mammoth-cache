@@ -16,7 +16,7 @@
 
 import { resolveLifecycle } from '../../../src/build-tool/lifecycle';
 import type { LifecycleResolver } from '../../../src/build-tool/lifecycle-types';
-import { rm, writeFile, readFile, chmod } from 'node:fs/promises';
+import { writeFile, readFile, chmod } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ExclusiveWindow } from '../../../src/cache/streaming/quiescence';
@@ -34,6 +34,8 @@ import {
 } from '../../../src/cache/streaming/encoding';
 import { observationFixture } from './observation-fixtures';
 import { quiescenceFixture, gradleResolver } from './quiescence-fixture';
+import { PostAttempt } from '../../../src/cache/streaming/lifecycle-attempt';
+import { OpenedInvocation } from '../../../src/cache/streaming/invocation';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
 import {
   gradleDaemonArguments,
@@ -71,6 +73,13 @@ it('seals actual registrations once, runs compatible clients sequentially and is
     a = await f.register('8.5');
   await f.register('9.9');
   await f.register('8.5');
+  const opened = (await OpenedInvocation.current(f.root, f.budget))!;
+  f.store = opened.store;
+  const attempt = await PostAttempt.open(opened, {
+    budget: f.budget,
+    assertCurrent: (): undefined => {},
+  });
+  cleanup.push(() => attempt.close());
   await f.files('', { 'data/body': 'body' });
   const opts = options();
   let active = 0,
@@ -99,11 +108,14 @@ it('seals actual registrations once, runs compatible clients sequentially and is
   const work = { ...f.store.root.work };
   for (let i = 0; i < 1000; i++) gate.window.assertCurrent();
   expect(f.store.root.work).toEqual(work);
-  await captureObservations(f.store, {
+  attempt.attachWindow(gate.window);
+  const captured = await captureObservations(f.store, {
+    attempt,
     budget: f.budget,
     purgeWindow: gate.window.purgeWindow,
     signal: gate.window.signal,
   });
+  await captured.index?.dispose();
   gate.window.close();
   expect(() => gate.window.assertCurrent()).toThrow('closed');
 });
@@ -182,7 +194,7 @@ it('awaits a launched client on cancellation before returning, and starts no lat
   settle();
   await rejected;
   expect(opts.stop).toHaveBeenCalledTimes(1);
-  expect(tuple(await f.store.state())[13]).toBeNull();
+  expect(tuple(await f.store.state())).toHaveLength(8);
 });
 it('waits client settlement on the overall deadline and fails without a window', async () => {
   const f = await fixture();
@@ -325,6 +337,7 @@ it('matches independent Unicode registration/failure canonical bytes and framed 
 it('uses the caller consumer lifetime for Maven without Gradle registration or process shutdown', async () => {
   const f = await observationFixture('maven');
   cleanup.push(async () => {
+    await f.finish();
     expect(f.budget.retained).toBe(0);
     await f.close();
   });
@@ -338,7 +351,7 @@ it('uses the caller consumer lifetime for Maven without Gradle registration or p
   expect(opts.inspect).not.toHaveBeenCalled();
   if (gate.status !== 'ready') throw new Error(gate.message);
   gate.window.close();
-  expect(tuple(await f.store.state())[13]).toBeNull();
+  expect(tuple(await f.store.state())).toHaveLength(8);
 });
 
 it.each(['path', 'identity', 'mode'] as const)(
@@ -416,53 +429,12 @@ it.skipIf(process.platform === 'win32').each(['stop', 'inspect'] as const)(
   },
 );
 
-it('renews a frozen window without touching a GC-deleted launcher or changing publication anchors', async () => {
-  const f = await fixture(),
-    registration = await f.register('8.5'),
-    o = options();
-  const gate = await ExclusiveWindow.establish(f.store, f.budget, o);
-  if (gate.status !== 'ready') throw new Error(gate.message);
-  await captureObservations(f.store, { budget: f.budget });
-  gate.window.close();
-  const before = await f.store.state();
-  await rm(registration[3], { recursive: true });
-  o.stop.mockClear();
-  o.inspect.mockClear();
-  const resolver = vi.fn(o.lifecycle),
-    streams = vi.spyOn(f.store, 'writeStream'),
-    reads = vi.spyOn(f.store.root, 'read'),
-    q = f.store.codec.schemas.documents.quiescence.parse(
-      await f.store.readDocument(
-        f.store.codec.schemas.documents['local-state'].parse(before)[13]!,
-        'quiescence',
-      ),
-    );
-  const next = await ExclusiveWindow.establish(f.store, f.budget, { ...o, lifecycle: resolver });
-  expect(resolver).toHaveBeenCalledExactlyOnceWith('gradle');
-  expect(streams.mock.calls.filter(([purpose]) => purpose === 'installations')).toHaveLength(0);
-  expect(reads.mock.calls.filter(([file]) => file === q[3][2])).toHaveLength(1);
-  expect(next.status).toBe('ready');
-  expect(o.stop).not.toHaveBeenCalled();
-  expect(o.inspect).toHaveBeenCalledTimes(1);
-  expect(await f.store.state()).toEqual(before);
-  if (next.status === 'ready') next.window.close();
-  o.inspect.mockResolvedValue({ remaining: true, uncertain: false });
-  expect((await ExclusiveWindow.establish(f.store, f.budget, o)).status).toBe(
-    'skipped-not-quiescent',
-  );
-});
-
-it.each(['missing', 'wrong-purpose', 'replaced-prior'] as const)(
+it.each(['missing', 'wrong-purpose'] as const)(
   'rejects %s tool inventory before shared state/grant commitment',
   async (kind) => {
     const f = await fixture();
     await f.register('8.5');
     const opts = options();
-    if (kind === 'replaced-prior') {
-      const first = await ExclusiveWindow.establish(f.store, f.budget, opts);
-      if (first.status !== 'ready') throw new Error(first.message);
-      first.window.close();
-    }
     const before = await f.store.state();
     const lifecycle: LifecycleResolver = async (tool) => ({
       ...(await resolveLifecycle(tool)),

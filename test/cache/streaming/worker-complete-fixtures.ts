@@ -33,7 +33,7 @@ import type { Value } from '../../../src/cache/streaming/encoding';
 import type { Unit, Context } from '../../../src/cache/streaming/schema';
 import { localFixtures, localOptions, nonce } from './local-fixtures';
 import { byteSource } from './protocol-fixtures';
-import { PreparedWorkerSnapshot } from '../../../src/cache/streaming/worker-snapshot';
+import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot';
 import type { WorkerMergeInput } from '../../../src/cache/streaming/worker-merge';
 const roots: string[] = [];
 export async function cleanupCompleteFixtures() {
@@ -197,28 +197,8 @@ export async function completeArchive(
 export async function preparedSnapshotFixture(
   f: Awaited<ReturnType<typeof completeFixture>>,
   partition: string,
-): Promise<PreparedWorkerSnapshot> {
-  const nativeRoot = f.store.prefix + 'baseline/' + partition;
-  await f.store.makeParents(nativeRoot + '/placeholder');
-  const native = (await f.store.root.stat(nativeRoot))!,
-    evidence = await f.store.writeStream(
-      'native-evidence',
-      { budget: f.budget, partition },
-      (async function* () {
-        yield ['directory', '', native] as Value;
-      })(),
-    );
-  return PreparedWorkerSnapshot.verify(
-    f.store,
-    {
-      partition,
-      nativeRoot,
-      evidence,
-      provenance: 'fixture-' + partition,
-      finishVerification: async (binding) => binding,
-    },
-    f.budget,
-  );
+): Promise<MetadataSnapshot> {
+  return MetadataSnapshot.empty(f.store, partition, ['empty', 'miss'], { budget: f.budget });
 }
 
 export async function initializeCompleteFixture(

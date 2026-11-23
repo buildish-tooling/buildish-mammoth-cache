@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { Digest, encodeRecord, equal, tuple, type Value } from './encoding';
+import { encodeRecord, tuple, type Value } from './encoding';
 import { InstallScratch } from './install-scratch';
 import { originalGcMembers } from './gc-metadata';
 import type { ObservationIndex } from './observation-index';
@@ -30,21 +30,19 @@ type Frame = [
   string | null,
   Value,
 ];
-export type GcBatch = ['gc-batch', number, number, number, number, number, number, number];
+export type GcBatch = ['gc-batch', number, number];
 // Batch cells: unit-spool start/end, observation nextByte/nextRecord/boundary,
-// frame-spool start/end. Ephemeral metadata; only sealed evidence grants authority.
+// frame-spool start/end. Ephemeral work bound to the original process-owned index.
 export class GcProgram {
   private constructor(
     readonly index: ObservationIndex,
     readonly units: InstallScratch,
     readonly batches: InstallScratch,
-    readonly stacks: InstallScratch,
     readonly final: GcCursor,
   ) {}
   static async create(
     index: ObservationIndex,
     limits: { operations?: number; bytes?: number } = {},
-    checkpoints: readonly GcCursor[] = [],
   ): Promise<GcProgram> {
     const operations = limits.operations ?? 16384,
       bytes = limits.bytes ?? 8 * 1024 * 1024;
@@ -54,7 +52,7 @@ export class GcProgram {
       options = index.options,
       signal = options.signal,
       units = await InstallScratch.create(store, options.budget);
-    let batches: InstallScratch | undefined, stacks: InstallScratch | undefined;
+    let batches: InstallScratch | undefined;
     const frames: { row: Frame; release: () => void }[] = [];
     let start = 0,
       count = 0,
@@ -63,58 +61,10 @@ export class GcProgram {
       final: GcCursor | undefined,
       unit: readonly Value[] | null = null,
       unitDelete = false;
-    const checked = checkpoints.map(() => false);
     try {
       batches = await InstallScratch.create(store, options.budget);
-      stacks = await InstallScratch.create(store, options.budget);
-      const check = async (end: number, record: number) => {
-        for (let i = 0; i < checkpoints.length; i++) {
-          const c = checkpoints[i];
-          if (c[2] !== end) continue;
-          equal(
-            c.slice(0, 5),
-            ['cursor', index.reference[4], end, record, boundary],
-            'original GC cursor boundary',
-          );
-          if (!frames.length) {
-            if (c[5] !== null) throw new Error('Unexpected GC cursor stack.');
-          } else {
-            if (c[5] === null) throw new Error('Missing GC cursor stack.');
-            let n = 0;
-            for await (const item of store.rows(
-              c[5],
-              'cursor-stack',
-              { ...options, partition: null },
-              signal,
-            )) {
-              const r = tuple(item.value);
-              if (r[0] === 'local-stream' || r[0] === 'local-end') continue;
-              if (!frames[n]) throw new Error('Extra GC cursor frame.');
-              equal(r, frames[n++].row, 'original GC cursor frame');
-            }
-            if (n !== frames.length) throw new Error('Missing GC cursor frame.');
-          }
-          checked[i] = true;
-        }
-      };
-      for (let i = 0; i < checkpoints.length; i++)
-        if (checkpoints[i][2] === 0) {
-          equal(checkpoints[i], ['cursor', index.reference[4], 0, 0, 0, null], 'initial GC cursor');
-          checked[i] = true;
-        }
-      const flush = async (end: number, record: number) => {
-        const a = stacks!.position;
-        for (const f of frames) await stacks!.append(f.row);
-        await batches!.append([
-          'gc-batch',
-          start,
-          units.position,
-          end,
-          record,
-          boundary,
-          a,
-          stacks!.position,
-        ]);
+      const flush = async (_end: number, _record: number) => {
+        await batches!.append(['gc-batch', start, units.position]);
         start = units.position;
         count = 0;
         encoded = 0;
@@ -138,7 +88,6 @@ export class GcProgram {
           count += targets;
           encoded += size;
         }
-        await check(end, record);
         // Close only AFTER complete units: one oversized unit remains indivisible.
         if (count >= operations || encoded >= bytes) await flush(end, record);
       };
@@ -176,7 +125,7 @@ export class GcProgram {
               const path = f.row[2] ? f.row[2] + '/' + r[1] : String(r[1]);
               await finishUnit(
                 ['gc-unit-open', 'file', path, 'file'],
-                r[6] === 'delete',
+                r[5] === 'delete',
                 item.end,
                 item.record + 1,
               );
@@ -194,59 +143,36 @@ export class GcProgram {
             if (!frames.length) {
               boundary++;
               final = ['cursor', index.reference[4], item.end, item.record + 1, boundary, null];
-              await check(item.end, item.record + 1);
               // Includes an empty/retained suffix and the final root boundary.
               await flush(item.end, item.record + 1);
             }
             break;
         }
       }
-      if (!final || checked.some((x) => !x))
-        throw new Error('GC cursor is not an original semantic boundary.');
-      return new GcProgram(index, units, batches, stacks, final);
+      if (!final) throw new Error('GC cursor is not an original semantic boundary.');
+      return new GcProgram(index, units, batches, final);
     } catch (e) {
-      await Promise.allSettled([units.close(), batches?.close(), stacks?.close()]);
+      await Promise.allSettled([units.close(), batches?.close()]);
       throw e;
     } finally {
       for (const f of frames) f.release();
     }
   }
-  get initial(): GcCursor {
-    return ['cursor', this.index.reference[4], 0, 0, 0, null];
-  }
-  async cursor(batch: GcBatch): Promise<GcCursor> {
-    let stack: Reference | null = null;
-    if (batch[6] !== batch[7])
-      stack = await this.index.store.writeStream(
-        'cursor-stack',
-        { ...this.index.options, partition: null },
-        this.stacks.rows(batch[6], batch[7]),
-        this.index.options.signal,
-      );
-    return ['cursor', this.index.reference[4], batch[3], batch[4], batch[5], stack];
-  }
   async *evidence(start: number, end: number): AsyncGenerator<Value> {
     yield ['gc-context', this.index.reference];
     for await (const v of this.units.rows(start, end)) {
       const r = tuple(v),
-        header = tuple(r[1]),
-        digest = new Digest('gc-unit');
-      digest.update(header);
+        header = tuple(r[1]);
       yield header;
       for await (const m of originalGcMembers(this.index, header)) {
         m.accept?.();
-        digest.update(m.row);
         yield m.row;
       }
-      yield ['gc-unit-close', header[1], header[2], digest.digest()];
+      yield ['gc-unit-close', header[1], header[2]];
     }
   }
   async close() {
-    const results = await Promise.allSettled([
-      this.units.close(),
-      this.batches.close(),
-      this.stacks.close(),
-    ]);
+    const results = await Promise.allSettled([this.units.close(), this.batches.close()]);
     const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (errors.length)
       throw new AggregateError(

@@ -24,12 +24,13 @@ import {
   runStreamingPrepare,
   STREAMING_INVOCATION_STATE,
 } from '../../../src/phases/streaming/prepare';
+import * as basePost from '../../../src/cache/streaming/base-post';
 import {
   runStreamingPost,
   type StreamingPostDependencies,
 } from '../../../src/phases/streaming/post';
 import { decodeInvocationAnchor, OpenedInvocation } from '../../../src/cache/streaming/invocation';
-import { PrepareFacts } from '../../../src/cache/streaming/prepare-state';
+import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 import {
   installGradleBuildResultCapture,
   cleanupGradleBuildResultCapture,
@@ -193,7 +194,7 @@ it.each(['maven', 'gradle'] as const)(
       const a = decodeInvocationAnchor(raw);
       if (a[0] !== 'streaming-lifecycle') throw new Error('anchor');
       const opened = await OpenedInvocation.open(a, f.budget);
-      expect(opened.state[14]).toBe('published');
+      expect(opened.state[7]?.[1]).toBe('published');
       return { anyBuildFailed: false, warnings: [], summaryLines: [], logLines: [], builds: [] };
     });
     expect((await runStreamingPost(f.post)).outcome).toBe('published');
@@ -242,14 +243,12 @@ it('canonicalizes repeated configured producers before freezing and requests the
   const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
   if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
   const opened = await OpenedInvocation.open(anchor, f.budget),
-    facts = await PrepareFacts.open(opened.store, { budget: f.budget });
+    handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
   try {
-    expect(facts.bindings[8][10]).toEqual(['B', 'A']);
-    expect(
-      (facts.selection![6] as ['selected', Array<unknown[]>])[1].map((r) => (r[4] as string[])[4]),
-    ).toEqual(['B', 'A']);
+    expect(opened.bindings[8][10]).toEqual(['B', 'A']);
+    expect(handoff.header[11]).toBe(2);
   } finally {
-    facts.close();
+    handoff.close();
   }
   expect(service.list).toHaveBeenCalledTimes(1);
   expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
@@ -266,7 +265,7 @@ it('duplicate and missing prepare stop before anchor, backends, reports or defer
   expect((await runStreamingPost(f.post)).outcome).toBe('skipped');
   expect(f.backend).not.toHaveBeenCalled();
 });
-it('failed prepare reconciles its owned state without reading reports or publishing a required worker success', async () => {
+it('failed prepare cleans only known hooks without reading reports or publishing a required worker success', async () => {
   const f = await fixture('maven', { 'job-mode': 'distributed-worker' });
   f.hooks.mockRejectedValue(new Error('hook failure'));
   await expect(runStreamingPrepare(f.deps)).rejects.toThrow('hook failure');
@@ -276,7 +275,10 @@ it('failed prepare reconciles its owned state without reading reports or publish
   expect(f.loadReport).not.toHaveBeenCalled();
   const a = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
   if (a[0] !== 'streaming-lifecycle') throw new Error('anchor');
-  expect((await OpenedInvocation.open(a, f.budget)).state[14]).toBe('abandoned');
+  const state = (await OpenedInvocation.open(a, f.budget)).state;
+  expect(state[4]).toBe('prepare-failed');
+  expect(state[7]).toBeNull();
+  expect(f.removeHooks).toHaveBeenCalledExactlyOnceWith(a[2], a[4][7]);
 });
 it.each(['disabled', 'read-only'] as const)(
   '%s preserves provisioning/report behavior without a post backend',
@@ -369,11 +371,11 @@ it('rounds fractional configured GC age conservatively once and freezes that sca
   const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
   if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
   const opened = await OpenedInvocation.open(anchor, f.budget),
-    facts = await PrepareFacts.open(opened.store, { budget: f.budget });
+    handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
   try {
-    expect(facts.selection![4][5]).toBe(202666657);
+    expect(handoff.header[7]).toBe(202666657);
   } finally {
-    facts.close();
+    handoff.close();
   }
 });
 it.each([true, false])(
@@ -455,3 +457,103 @@ it.each([
     expect(f.state.get(STREAMING_INVOCATION_STATE)).toBeTruthy();
   },
 );
+
+it('keeps an unrelated source warning and adds the exact unavailable warning once', async () => {
+  const f = await fixture('maven');
+  await runStreamingPrepare(f.deps);
+  const warning = vi.spyOn(f.host, 'warning');
+  vi.spyOn(basePost, 'postStreamingBase').mockImplementation(async (request) => {
+    request.onWarning?.('Unrelated source-layout warning.');
+    return { outcome: 'feature-unavailable', key: null };
+  });
+  expect((await runStreamingPost(f.post)).outcome).toBe('feature-unavailable');
+  expect(warning.mock.calls.map(([message]) => message)).toEqual([
+    'Unrelated source-layout warning.',
+    'Cache save skipped: cache backend is unavailable.',
+  ]);
+});
+
+it.each(['unavailable', 'unconfirmed'] as const)(
+  'reports actual base %s once without a publication receipt',
+  async (kind) => {
+    const f = await fixture('maven');
+    await runStreamingPrepare(f.deps);
+    await mkdir(f.home + '/data');
+    await writeFile(f.home + '/data/a', 'body');
+    const warning = vi.spyOn(f.host, 'warning'),
+      api = {
+        ...f.sdk.backend,
+        isFeatureAvailable: () => kind !== 'unavailable',
+        saveCache: async () => -1,
+      };
+    const result = await runStreamingPost({ ...f.post, cacheBackend: async () => api });
+    expect(result.outcome).toBe(kind === 'unavailable' ? 'feature-unavailable' : 'abandoned');
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(f.sdk.calls.filter((c) => c.kind === 'save')).toEqual([]);
+    const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
+    if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+    const opened = await OpenedInvocation.open(anchor, f.budget);
+    expect(opened.state[7]).toEqual(['outcome', result.outcome, null, null, null]);
+    expect(await readFile(f.home + '/data/a', 'utf8')).toBe('body');
+  },
+);
+it('reports an actual outgoing worker rejection without discovery or a success receipt', async () => {
+  const f = await fixture('maven', { 'job-mode': 'distributed-worker' });
+  await runStreamingPrepare(f.deps);
+  await mkdir(f.home + '/data');
+  await writeFile(f.home + '/data/a', 'body');
+  const warning = vi.spyOn(f.host, 'warning');
+  f.artifacts.upload.mockRejectedValueOnce(new Error('upload response lost'));
+  expect((await runStreamingPost(f.post)).outcome).toBe('abandoned');
+  expect(warning).toHaveBeenCalledTimes(1);
+  expect(f.artifacts.upload).toHaveBeenCalledTimes(1);
+  expect(f.artifacts.list).not.toHaveBeenCalled();
+  expect(f.artifacts.get).not.toHaveBeenCalled();
+  expect(f.artifacts.download).not.toHaveBeenCalled();
+  const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
+  if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  expect((await OpenedInvocation.open(anchor, f.budget)).state[7]).toEqual([
+    'outcome',
+    'abandoned',
+    null,
+    null,
+    null,
+  ]);
+});
+
+it('routes an actual local return failure through the GitHub entrypoint to setFailed', async () => {
+  const f = await fixture('maven');
+  await runStreamingPrepare(f.deps);
+  await mkdir(f.home + '/data');
+  await writeFile(f.home + '/data/a', 'body');
+  const { NativeRoot } = await import('../../../src/cache/streaming/native'),
+    rename = NativeRoot.prototype.renameAbsent;
+  vi.spyOn(NativeRoot.prototype, 'renameAbsent').mockImplementation(async function (
+    this: (typeof NativeRoot)['prototype'],
+    ...args
+  ) {
+    if (args[1] === 'data') throw new Error('return destination unavailable');
+    return rename.apply(this, args);
+  });
+  let complete!: (message: string) => void;
+  const finished = new Promise<string>((resolve) => {
+    complete = resolve;
+  });
+  const failed = vi.spyOn(f.host, 'setFailed').mockImplementation((message) => {
+    complete(String(message));
+  });
+  const warning = vi.spyOn(f.host, 'warning');
+  vi.doMock('../../../src/ci/github/host', () => ({ createGitHubHost: () => f.host }));
+  vi.doMock('../../../src/ci/github/streaming', () => ({ gitHubStreamingFactories: () => f.post }));
+  try {
+    await import('../../../src/ci/github/maven/post');
+    expect(await finished).toMatch(/return|retained/i);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(warning).not.toHaveBeenCalled();
+    expect(f.loadReport).not.toHaveBeenCalled();
+    expect(f.sdk.calls.filter((c) => c.kind === 'save')).toHaveLength(1);
+  } finally {
+    vi.doUnmock('../../../src/ci/github/host');
+    vi.doUnmock('../../../src/ci/github/streaming');
+  }
+});

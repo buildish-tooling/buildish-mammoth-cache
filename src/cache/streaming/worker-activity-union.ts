@@ -14,16 +14,12 @@
  * limitations under the License.
  */
 
-import { opendir, lstat } from 'node:fs/promises';
-import { NativeReadPhase } from './native-read-phase';
-import { nativeIdentity, type NativeIdentity } from './native';
-import { pathSchema } from './schema';
-import type { StagedPartition } from './worker-stage';
+import { WorkerNativeIndex } from './worker-native';
 import type { ActivityProjection } from './worker-activity';
 import type { OwnedStore, Reference } from './owned-store';
 import type { WorkingBudget } from './tree-state';
 import { baseName, compareName, joinPath } from './tree-state';
-import { add, tuple, equal, type Value } from './encoding';
+import { tuple, equal, type Value } from './encoding';
 interface Cursor {
   reader: AsyncIterator<Value>;
   head: readonly Value[] | null;
@@ -35,11 +31,11 @@ interface Cursor {
 export async function writeSelectedActivity(
   store: OwnedStore,
   projections: readonly ActivityProjection[],
-  selected: readonly StagedPartition[],
+  selected: WorkerNativeIndex,
   budget: WorkingBudget,
   signal: AbortSignal,
   maxDirectoryEntries = 100000,
-  work = { listings: 0 },
+  work = { listings: 0, indexDirectories: 0 },
 ): Promise<Reference> {
   const cursors: Cursor[] = projections.map((p) => ({
     reader: p.spool.rows(signal)[Symbol.asyncIterator](),
@@ -47,9 +43,7 @@ export async function writeSelectedActivity(
     selected: p.kind === 'upsert',
   }));
   interface Root {
-    path: string;
-    identity: NativeIdentity;
-    phase: NativeReadPhase;
+    offset: number;
   }
   interface Entry {
     kind: 'file' | 'directory';
@@ -59,41 +53,45 @@ export async function writeSelectedActivity(
   async function shape(roots: readonly Root[], path: string) {
     const names = new Map<string, Entry>();
     let charge = 0;
-    const release = budget.holdRecord(
-      roots.reduce((n, r) => n + 512 + Buffer.byteLength(r.path), 0),
-    );
+    const release = budget.holdRecord(roots.length * 512);
     try {
       for (const root of roots) {
-        await root.phase.enter(root.path, root.identity);
-        const directory = await opendir(store.root.resolve(root.path), { bufferSize: 32 });
-        work.listings = add(work.listings);
-        let count = 0;
-        // A closed immediate listing only. File IDs/hashes are checked by the later
-        // native-evidence phase; active parents guard this topology/usage join.
-        for await (const entry of directory) {
-          signal.throwIfAborted();
-          if (++count > maxDirectoryEntries) throw new Error('Managed directory breadth exceeded.');
-          pathSchema.parse(joinPath(path, entry.name));
-          const kind = entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : null;
-          if (!kind) throw new Error('Unsupported selected native child.');
-          let value = names.get(entry.name);
-          if (value) {
-            if (value.kind !== kind || kind === 'file')
-              throw new Error('Conflicting selected native topology.');
-          } else {
-            if (names.size === maxDirectoryEntries)
+        WorkerNativeIndex.assert(selected, store);
+        const lease = await selected.node(root.offset);
+        try {
+          if (lease.node[1] !== 'directory' || lease.node[2] !== path)
+            throw new Error('Selected activity index directory mismatch.');
+          work.indexDirectories++;
+          let count = 0;
+          for await (const edge of selected.children(lease.node)) {
+            signal.throwIfAborted();
+            if (++count > maxDirectoryEntries)
               throw new Error('Managed directory breadth exceeded.');
-            const bytes = 128 + 4 * Buffer.byteLength(entry.name);
-            budget.retain(bytes);
-            charge += bytes;
-            value = { kind, parents: [], seen: false };
-            names.set(Buffer.from(entry.name).toString('utf8'), value);
+            const entry = { name: edge[0] },
+              kind = edge[1];
+            if (kind !== 'file' && kind !== 'directory')
+              throw new Error('Unsupported selected indexed child.');
+            let value = names.get(entry.name);
+            if (value) {
+              if (value.kind !== kind || kind === 'file')
+                throw new Error('Conflicting selected native topology.');
+            } else {
+              if (names.size === maxDirectoryEntries)
+                throw new Error('Managed directory breadth exceeded.');
+              const bytes = 128 + 4 * Buffer.byteLength(entry.name);
+              budget.retain(bytes);
+              charge += bytes;
+              value = { kind, parents: [], seen: false };
+              names.set(Buffer.from(entry.name).toString('utf8'), value);
+            }
+            if (kind === 'directory') {
+              budget.retain(16);
+              charge += 16;
+              value.parents.push({ offset: edge[2] });
+            }
           }
-          if (kind === 'directory') {
-            budget.retain(16);
-            charge += 16;
-            value.parents.push(root);
-          }
+        } finally {
+          lease.release();
         }
       }
       return {
@@ -229,16 +227,7 @@ export async function writeSelectedActivity(
           if (!same.some((c) => c.selected))
             throw new Error('Missing selected activity directory.');
           entry.seen = true;
-          for (const parent of entry.parents) {
-            const path = joinPath(parent.path, name);
-            store.root.work.stats++;
-            const identity = nativeIdentity(
-              await lstat(store.root.resolve(path), { bigint: true }),
-            );
-            if (identity[2] !== 'directory')
-              throw new Error('Selected activity directory changed.');
-            children.push({ path, identity, phase: parent.phase });
-          }
+          children.push(...entry.parents);
         }
         yield* directory(same, child, children);
       }
@@ -252,7 +241,6 @@ export async function writeSelectedActivity(
       }
       for (const entry of native.names.values())
         if (!entry.seen) throw new Error('Missing selected native activity member.');
-      for (const root of roots) await root.phase.leave(root.path, root.identity);
       for (const c of group) check(c, 'dir-close', path);
       yield ['dir-close', path];
       for (const c of group) await advance(c);
@@ -268,15 +256,10 @@ export async function writeSelectedActivity(
       return;
     }
     const roots: Root[] = [];
-    for (const part of selected) {
-      if (!part.rootNative) throw new Error('Missing sealed native activity root.');
-      await store.root.parents(part.nativeRoot);
-      roots.push({
-        path: part.nativeRoot,
-        identity: part.rootNative,
-        phase: new NativeReadPhase(store.root, part.nativeRoot),
-      });
-    }
+    WorkerNativeIndex.assert(selected, store);
+    if (selected.budget !== budget || selected.maxDirectoryEntries !== maxDirectoryEntries)
+      throw new Error('Selected activity index budget/policy mismatch.');
+    for (const partition of selected.partitions) roots.push({ offset: selected.root(partition) });
     yield* directory(cursors, '', roots);
     if (cursors.some((c) => c.head)) throw new Error('Trailing activity projection.');
   }

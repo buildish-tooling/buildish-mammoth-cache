@@ -33,15 +33,6 @@ export interface GcProjectionObserver {
   protected(parent: string, child: ObservedChild): Promise<void>;
   close(directory: ObservedDirectory, native: NativeIdentity): Promise<void>;
 }
-/** A relocation join must prove every skipped root and each changed directory itself. */
-export interface GcRelocationProjection {
-  member(path: string, present: boolean): Promise<boolean>;
-  directory(
-    directory: ObservedDirectory,
-    actual: NativeIdentity,
-    gcChanged: boolean,
-  ): Promise<void>;
-}
 export interface GcProjectionWork {
   directories: number;
   entries: number;
@@ -56,7 +47,6 @@ export async function checkGcProjection(
   phase?: InstallParentPhase,
   work: GcProjectionWork = { directories: 0, entries: 0 },
   observer?: GcProjectionObserver,
-  relocation?: GcRelocationProjection,
 ): Promise<GcProjectionWork> {
   ObservationIndex.assert(index);
   if (active < completed) throw new Error('GC high-water precedes completion.');
@@ -75,7 +65,7 @@ export async function checkGcProjection(
         if (lease.node[0] === 'observed-directory')
           childOwner = await absentTree(lease.node, unitEnd);
         else {
-          if (lease.node[6] !== 'delete')
+          if (lease.node[5] !== 'delete')
             throw new Error('Retained file omitted with GC directory.');
           childOwner = lease.node[3];
         }
@@ -175,33 +165,12 @@ export async function checkGcProjection(
           await observer?.protected(path, e);
           continue;
         }
-        if (relocation && (await relocation.member(path ? path + '/' + e[1] : e[1], !!actual))) {
-          if (actual) {
-            store.root.work.stats++;
-            const raw = await lstat(store.root.resolve(path ? path + '/' + e[1] : e[1]), {
-              bigint: true,
-            });
-            const kind = raw.isFile()
-              ? 'file'
-              : raw.isDirectory()
-                ? 'directory'
-                : raw.isSymbolicLink()
-                  ? 'symlink'
-                  : 'other';
-            equal([kind, ...nativeIds(raw)], e.slice(2, 5), 'relocated original child identity');
-            if (raw.isFile() && raw.nlink !== 1n)
-              throw new Error('Aliased relocated original child.');
-          }
-          affected ||= !actual;
-          cleanup = false;
-          continue;
-        }
         const child = await index.node(e[5]);
         try {
           if (child.node[0] === 'observed-file') {
             const f = child.node,
-              end = subtreeEnd || (u?.[3] === 'direct' ? u[8] : f[8]),
-              selected = f[6] === 'delete';
+              end = subtreeEnd || (u?.[3] === 'direct' ? u[8] : f[7]),
+              selected = f[5] === 'delete';
             cleanup &&= selected;
             combine(f[3]);
             if (!actual) {
@@ -235,8 +204,7 @@ export async function checkGcProjection(
       const after = nativeIdentity(await lstat(store.root.resolve(path), { bigint: true }));
       if (!after || !sameNative(before, after, true))
         throw new Error('GC directory changed during projection check.');
-      if (relocation) await relocation.directory(d, before, affected);
-      else if (!affected && !sameNative(d[2], before, true))
+      if (!affected && !sameNative(d[2], before, true))
         throw new Error('Unexplained GC directory change.');
       signal?.throwIfAborted();
       if (owner === null) {

@@ -25,17 +25,10 @@ import {
 } from '../../../src/cache/streaming/prepare';
 import { resolveModel, type ResolvedModel } from '../../../src/cache/streaming/model';
 import { OpenedInvocation, decodeInvocationAnchor } from '../../../src/cache/streaming/invocation';
-import { ExclusiveWindow } from '../../../src/cache/streaming/quiescence';
-import { captureObservations } from '../../../src/cache/streaming/observation-capture';
-import { PrepareFacts } from '../../../src/cache/streaming/prepare-state';
+import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
+import { metadataFixture, type MetadataFixture } from './base-publication-fixtures';
 import type { BaseCacheBackend } from '../../../src/cache/backend';
-import {
-  nativeCacheBackend,
-  baseFixture,
-  preparedBase,
-  seedBaseGeneration,
-  cleanupBaseFixtures,
-} from './base-fixtures';
+import { cleanupBaseFixtures } from './base-fixtures';
 import { memoryArtifacts } from './memory-artifact-fixture';
 import {
   sourceFixture,
@@ -47,11 +40,15 @@ import {
   uploadWorkerArtifact,
 } from '../../../src/cache/streaming/worker-service';
 import * as workerMerge from '../../../src/cache/streaming/worker-merge';
-import { NativeObjectSave } from '../../../src/cache/streaming/base-transport';
+const metadataFixtures: MetadataFixture[] = [];
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const f of fixtures.splice(0)) {
+    expect(f.budget.retained).toBe(0);
+    await f.close();
+  }
+  for (const f of metadataFixtures.splice(0)) {
     expect(f.budget.retained).toBe(0);
     await f.close();
   }
@@ -129,112 +126,35 @@ it('prepares a genuine cold invocation, clears stale snapshots, preserves ordina
   expect(anchor[0]).toBe('streaming-lifecycle');
   const reopened = await OpenedInvocation.open(ready.anchor, f.budget);
   expect(reopened.state[4]).toBe('build-ready');
-  const facts = await PrepareFacts.open(ready.store, { budget: f.budget });
-  try {
-    expect(facts.selection![5]).toEqual(['miss']);
-    expect(facts.selection![6]).toEqual(['selected', []]);
-    expect(facts.selection![9]).toBe('workers-installed');
-    expect(facts.sources).toHaveLength(1);
-  } finally {
-    facts.close();
-  }
-  const window = await ExclusiveWindow.establish(ready.store, f.budget, {
-    assertCurrent: (): undefined => {},
-  });
-  if (window.status !== 'ready') throw new Error(window.message);
-  try {
-    await captureObservations(ready.store, {
-      budget: f.budget,
-      signal: window.window.signal,
-      purgeWindow: window.window.purgeWindow,
-    });
-  } finally {
-    window.window.close();
-  }
-  expect(((await ready.store.state()) as unknown[])[4]).toBe('observations-frozen');
-  expect(f.budget.retained).toBe(0);
-});
-it('retry after a hook failure uses frozen miss/GC cutoff without rediscovery or moving final cutoff', async () => {
-  let now = 1000000,
-    fail = true;
-  const f = await fixture({ now: () => now });
-  const request = {
-    ...f.request,
-    policy: { ...f.request.policy, gcAgeMs: 1000 },
-    installHooks: async () => {
-      if (fail) throw new Error('hook failed');
-    },
-  };
-  await expect(prepareStreaming(request)).rejects.toThrow('hook failed');
-  let facts = await PrepareFacts.open((await OpenedInvocation.current(f.root, f.budget))!.store, {
+  const handoff = await LifecycleHandoff.read(ready.store, reopened.state[6]!, {
     budget: f.budget,
   });
   try {
-    expect(facts.bindings[8][6]).toBe(999000);
-    expect(facts.bindings[8][7]).toBeNull();
-    expect(facts.selection![9]).toBe('workers-installed');
+    expect(handoff.entries.map((entry) => entry[2])).toEqual(['miss', 'miss']);
+    expect(handoff.header[10]).toBe(42);
+    expect(handoff.header[11]).toBe(0);
   } finally {
-    facts.close();
+    handoff.close();
   }
-  expect(f.backend.restoreCache).toHaveBeenCalledTimes(1);
-  fail = false;
-  now = 2000000;
-  const ready = await prepareStreaming(request);
-  expect(ready.cutoff).toBe(2000000);
-  expect(f.backend.restoreCache).toHaveBeenCalledTimes(1);
-  facts = await PrepareFacts.open(ready.store, { budget: f.budget });
-  try {
-    expect(facts.bindings[8][6]).toBe(999000);
-  } finally {
-    facts.close();
-  }
-  now = 3000000;
-  expect((await prepareStreaming(request)).cutoff).toBe(2000000);
-  expect(f.backend.restoreCache).toHaveBeenCalledTimes(1);
-  await expect(
-    prepareStreaming({ ...request, policy: { ...request.policy, gcAgeMs: 2000 } }),
-  ).rejects.toThrow('execution configuration');
+  expect(f.budget.retained).toBe(0);
 });
-it('uses real native SDK archives for accepted base restore and retains independent snapshot authority', async () => {
-  const f = await fixture(),
-    source = await baseFixture(f.model),
-    sdk = await nativeCacheBackend();
-  const data = await preparedBase(source, { 'data/new': 'from-base' }, 'data'),
-    state = await preparedBase(source, { 'state/new': 'snapshot' }, 'state');
-  await NativeObjectSave.save(sdk.backend, data, { budget: source.budget });
-  await NativeObjectSave.save(sdk.backend, state, { budget: source.budget });
-  const generation = await seedBaseGeneration(source, sdk, [
-    ['object', 'data', data.reference],
-    ['object', 'state', state.reference],
-  ]);
-  await f.files('', { 'data/old': 'prune', 'state/old': 'replace' });
-  const ready = await prepareStreaming({
-    ...f.request,
-    cacheBackend: async () => sdk.backend,
-    currentRef: 'refs/heads/feature',
-    defaultRef: 'refs/heads/main',
-    policy: { ...f.request.policy, restoreCleanup: 'prune-managed' },
+it('rejects a failed main on retry before rediscovery or hooks and retains original activity cutoff', async () => {
+  let now = 1000000;
+  const f = await fixture({ now: () => now });
+  const installHooks = vi.fn(async () => {
+    throw new Error('hook failed');
   });
-  expect(ready.restoredKey).toBe(generation[11]);
-  expect(ready.restoreStatus).toBe('fallback-lineage-hit');
-  expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('from-base');
-  expect(await readFile(f.store.root.resolve('state/new'), 'utf8')).toBe('snapshot');
-  expect(await f.store.root.stat('data/old')).toBeNull();
-  expect(await f.store.root.stat('state/old')).toBeNull();
-  const facts = await PrepareFacts.open(ready.store, { budget: f.budget });
-  try {
-    expect(facts.sources).toHaveLength(1);
-    expect(facts.sources[0][4]).not.toContain('/install/');
-    expect(
-      await readFile(ready.store.root.resolve(facts.sources[0][4] + '/state/new'), 'utf8'),
-    ).toBe('snapshot');
-  } finally {
-    facts.close();
-  }
-  expect(source.budget.retained).toBe(0);
-  expect(sdk.calls.filter((c) => c.kind === 'restore').every((c) => c.paths.length <= 3)).toBe(
-    true,
-  );
+  const request = { ...f.request, policy: { ...f.request.policy, gcAgeMs: 1000 }, installHooks };
+  await expect(prepareStreaming(request)).rejects.toThrow('hook failed');
+  const opened = (await OpenedInvocation.current(f.root, f.budget))!;
+  expect(opened.bindings[8][6]).toBe(999000);
+  expect(opened.bindings[8][7]).toBeNull();
+  expect(opened.state[4]).toBe('prepare-failed');
+  expect(opened.state[6]).toBeNull();
+  now = 2000000;
+  await expect(prepareStreaming(request)).rejects.toThrow('fresh dedicated root');
+  expect(installHooks).toHaveBeenCalledTimes(1);
+  expect(f.backend.restoreCache).toHaveBeenCalledTimes(1);
 });
 
 async function workerArtifacts(
@@ -260,7 +180,11 @@ async function workerArtifacts(
         job === 'A' ? ['state'] : [],
       ),
       archive = await freezeWorkerArtifact(service.api, source.store, view, source.budget);
-    await uploadWorkerArtifact(service.api, archive);
+    try {
+      await uploadWorkerArtifact(service.api, archive);
+    } finally {
+      await source.finish();
+    }
     expect(source.budget.retained).toBe(0);
   }
   const context = [...f.request.context] as typeof f.request.context;
@@ -300,20 +224,18 @@ it('composes two real worker archives in configured order, installing complete s
   expect(ready.workerCount).toBe(2);
   expect(service.list).toHaveBeenCalledTimes(1);
   expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
-  const facts = await PrepareFacts.open(ready.store, { budget: f.budget });
+  const opened = await OpenedInvocation.open(ready.anchor, f.budget),
+    handoff = await LifecycleHandoff.read(ready.store, opened.state[6]!, { budget: f.budget });
   try {
-    expect(facts.bindings[8][10]).toEqual(['B', 'A']);
-    expect(facts.selection![6][0]).toBe('selected');
-    expect(
-      (facts.selection![6] as ['selected', Array<unknown[]>])[1].map((r) => (r[4] as string[])[4]),
-    ).toEqual(['B', 'A']);
-    expect(facts.producers.map((p) => p[3][4])).toEqual(['A', 'B']);
-    expect(facts.sources[0][1]).toBe('worker-writer');
-    expect(
-      await readFile(ready.store.root.resolve(facts.sources[0][4] + '/state/from-A'), 'utf8'),
-    ).toBe('complete snapshot');
+    expect(opened.bindings[8][10]).toEqual(['B', 'A']);
+    expect(handoff.header[11]).toBe(2);
+    const snapshot = handoff.entries.find((entry) => entry[1] === 'state')![4]!;
+    expect(snapshot[4][0]).toBe('worker');
+    expect(await readFile(ready.store.root.resolve(snapshot[1] + '/state/from-A'), 'utf8')).toBe(
+      'complete snapshot',
+    );
   } finally {
-    facts.close();
+    handoff.close();
   }
 });
 it.each([
@@ -326,7 +248,7 @@ it.each([
     ['B', 'A', 'B'],
   ],
 ])(
-  'retry with equivalent ordinary order %j → %j preserves frozen selection',
+  'rejects failed-main retry with equivalent ordinary order %j → %j',
   async (initial, equivalent) => {
     const f = await fixture(),
       { service, request } = await workerArtifacts(f);
@@ -341,10 +263,12 @@ it.each([
     await expect(prepareStreaming(retry)).rejects.toThrow('hook failed');
     await f.files('', { 'data/only-A': 'later local change' });
     fail = false;
-    await prepareStreaming({
-      ...retry,
-      policy: { ...retry.policy, ordinaryOrder: equivalent },
-    });
+    await expect(
+      prepareStreaming({
+        ...retry,
+        policy: { ...retry.policy, ordinaryOrder: equivalent },
+      }),
+    ).rejects.toThrow('fresh dedicated root');
     expect(await readFile(f.store.root.resolve('data/only-A'), 'utf8')).toBe('later local change');
     expect(service.list).toHaveBeenCalledTimes(1);
     expect(service.download).toHaveBeenCalledTimes(2);
@@ -357,9 +281,9 @@ it('admits seventeen repetitions of one ordinary producer as a single request', 
       ...request,
       policy: { ...request.policy, ordinaryOrder: Array(17).fill('A') },
     }),
-    facts = await PrepareFacts.open(ready.store, { budget: f.budget });
+    opened = await OpenedInvocation.open(ready.anchor, f.budget);
   try {
-    expect(facts.bindings[8][10]).toEqual(['A']);
+    expect(opened.bindings[8][10]).toEqual(['A']);
     expect(ready.workerCount).toBe(1);
     expect(service.list).toHaveBeenCalledTimes(1);
     expect(service.download.mock.calls.map(([id]) => id)).toEqual([1]);
@@ -367,7 +291,7 @@ it('admits seventeen repetitions of one ordinary producer as a single request', 
       'complete snapshot',
     );
   } finally {
-    facts.close();
+    expect(f.budget.retained).toBe(0);
   }
 });
 it('keeps a snapshot-only writer outside the deduplicated ordinary order', async () => {
@@ -377,9 +301,9 @@ it('keeps a snapshot-only writer outside the deduplicated ordinary order', async
       ...request,
       policy: { ...request.policy, ordinaryOrder: ['B', 'B'] },
     }),
-    facts = await PrepareFacts.open(ready.store, { budget: f.budget });
+    opened = await OpenedInvocation.open(ready.anchor, f.budget);
   try {
-    expect(facts.bindings[8][10]).toEqual(['B']);
+    expect(opened.bindings[8][10]).toEqual(['B']);
     expect(ready.workerCount).toBe(2);
     expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
     expect(await ready.store.root.stat('data/only-A')).toBeNull();
@@ -388,7 +312,7 @@ it('keeps a snapshot-only writer outside the deduplicated ordinary order', async
       'complete snapshot',
     );
   } finally {
-    facts.close();
+    expect(f.budget.retained).toBe(0);
   }
 });
 it('rejects seventeen distinct ordinary producers before provisioning or backend work', async () => {
@@ -520,86 +444,6 @@ it('restores read-only without discovering dependent artifacts', async () => {
   expect(await f.store.root.stat('state/stale')).toBeNull();
 });
 
-it.each([false, true])(
-  'rejects accepted base availability drift on retry, initiallyAvailable=%s',
-  async (available) => {
-    const hard = ['.mammoth/**'],
-      model = resolveModel(
-        ['model', 1, 'maven', hard, [['data', ['data/**'], hard, 'single-writer', 'A', 'default']]],
-        'frozen-availability-',
-        1,
-      );
-    const f = await fixture({}, model),
-      source = await baseFixture(model),
-      sdk = await nativeCacheBackend(),
-      object = await preparedBase(source, { 'data/new': 'selected' }, 'data');
-    await NativeObjectSave.save(sdk.backend, object, { budget: source.budget });
-    const saved = sdk.objects.get(object.reference[2])!;
-    expect(saved).toBeDefined();
-    await seedBaseGeneration(source, sdk, [['object', 'data', object.reference]]);
-    if (!available) sdk.objects.delete(object.reference[2]);
-    await f.files('', { 'data/old': 'old' });
-    let first = true;
-    const request = {
-      ...f.request,
-      cacheBackend: async () => sdk.backend,
-      fail: async (name: string) => {
-        if (name === 'install-intent-published' && first) {
-          first = false;
-          throw new Error('install interrupted');
-        }
-      },
-    };
-    await expect(prepareStreaming(request)).rejects.toThrow('install interrupted');
-    const current = (await OpenedInvocation.current(f.root, f.budget))!,
-      facts = await PrepareFacts.open(current.store, { budget: f.budget });
-    try {
-      expect(facts.selection![7]).toEqual(available ? [] : ['data']);
-      expect(facts.selection![9]).toBe('selected');
-      expect(facts.state[11]).toBeNull();
-    } finally {
-      facts.close();
-    }
-    const read = async (name: string) =>
-      (await f.store.root.stat(name)) ? readFile(f.store.root.resolve(name), 'utf8') : null;
-    const before = [await read('data/new'), await read('data/old')];
-    if (available) sdk.objects.delete(object.reference[2]);
-    else sdk.objects.set(object.reference[2], saved);
-    await expect(prepareStreaming(request)).rejects.toThrow('base availability');
-    expect([await read('data/new'), await read('data/old')]).toEqual(before);
-    expect(
-      sdk.calls.filter(
-        (c) => c.kind === 'restore' && c.paths.some((p) => p.endsWith('record.json')),
-      ),
-    ).toHaveLength(1);
-    expect(source.budget.retained).toBe(0);
-  },
-);
-
-it.each([false, true])(
-  'rejects lifetime revocation during the last ready-state read, retry=%s',
-  async (retry) => {
-    const f = await fixture();
-    if (retry) await prepareStreaming(f.request);
-    let revoked = false;
-    const open = PrepareFacts.open;
-    vi.spyOn(PrepareFacts, 'open').mockImplementation(async (...args) => {
-      const facts = await open(...args);
-      if (facts.state[4] === 'build-ready') revoked = true;
-      return facts;
-    });
-    await expect(
-      prepareStreaming({
-        ...f.request,
-        assertCurrent: () => {
-          if (revoked) throw new Error('ready lifetime revoked');
-        },
-      }),
-    ).rejects.toThrow();
-    expect(revoked).toBe(true);
-    expect(((await f.store.state()) as unknown[])[4]).toBe('build-ready');
-  },
-);
 it.skipIf(process.platform === 'win32')(
   'rejects actual root mode drift after the durable ready commit',
   async () => {
@@ -619,46 +463,13 @@ it.skipIf(process.platform === 'win32')(
         }),
       ).rejects.toThrow();
       expect(changed).toBe(true);
-      expect(((await f.store.state()) as unknown[])[4]).toBe('build-ready');
+      expect(((await f.store.state()) as unknown[])[4]).toBe('prepare-failed');
     } finally {
       await chmod(f.root, mode);
     }
   },
 );
-it('checks the caller lifetime after awaited base acquisition before any live install', async () => {
-  const f = await fixture(),
-    source = await baseFixture(f.model),
-    sdk = await nativeCacheBackend(),
-    object = await preparedBase(source, { 'data/new': 'base' }, 'data');
-  await NativeObjectSave.save(sdk.backend, object, { budget: source.budget });
-  await seedBaseGeneration(source, sdk, [
-    ['object', 'data', object.reference],
-    ['empty', 'state'],
-  ]);
-  let revoked = false;
-  const backend: BaseCacheBackend = {
-    ...sdk.backend,
-    restoreCache: async (...args) => {
-      const result = await sdk.backend.restoreCache(...args);
-      if (args[0].some((p) => p.replaceAll('\\', '/').includes('/payload'))) revoked = true;
-      return result;
-    },
-  };
-  await f.files('', { 'data/old': 'old', 'state/stale': 'stale' });
-  await expect(
-    prepareStreaming({
-      ...f.request,
-      cacheBackend: async () => backend,
-      assertCurrent: () => {
-        if (revoked) throw new Error('base lifetime revoked');
-      },
-    }),
-  ).rejects.toThrow();
-  expect(revoked).toBe(true);
-  expect(await f.store.root.stat('data/new')).toBeNull();
-  expect(await readFile(f.store.root.resolve('data/old'), 'utf8')).toBe('old');
-  expect(await readFile(f.store.root.resolve('state/stale'), 'utf8')).toBe('stale');
-});
+
 it('checks the caller lifetime after complete worker merge before the first base install', async () => {
   const f = await fixture(),
     { request } = await workerArtifacts(f);
@@ -714,7 +525,7 @@ it('preserves bounded differing-contribution diagnostics from the real worker me
   expect(await f.store.root.stat('repository/org/example/lib/1/only-B')).toBeNull();
 });
 
-it('reports fresh feature unavailability but reuses a frozen no-base miss without another backend access', async () => {
+it('reports fresh feature unavailability and rejects a second prepare without backend access', async () => {
   const f = await fixture();
   const available = vi.spyOn(f.backend, 'isFeatureAvailable').mockReturnValue(false),
     backend = vi.fn(async () => f.backend),
@@ -723,37 +534,155 @@ it('reports fresh feature unavailability but reuses a frozen no-base miss withou
   expect(available).toHaveBeenCalledTimes(1);
   backend.mockClear();
   available.mockClear();
-  expect((await prepareStreaming(request)).restoreStatus).toBe('miss');
+  await expect(prepareStreaming(request)).rejects.toThrow('fresh dedicated root');
   expect(backend).not.toHaveBeenCalled();
   expect(available).not.toHaveBeenCalled();
 });
 
+async function seeded(
+  f: Awaited<ReturnType<typeof fixture>>,
+  payloads: Record<string, Record<string, string | null>>,
+) {
+  const source = await metadataFixture(f.model);
+  metadataFixtures.push(source);
+  return { source, ...(await source.seed(payloads)) };
+}
+it('restores v2 native objects with exact fallback lineage and independent selected snapshot ownership', async () => {
+  const hard = ['.mammoth/**', '**/*.lock'],
+    model = resolveModel(
+      [
+        'model',
+        1,
+        'maven',
+        hard,
+        [
+          ['data', ['data/**'], hard, 'aggregate', null, 'default'],
+          ['state', ['state/**'], hard, 'single-writer', 'B', 'default'],
+        ],
+      ],
+      'snapshot-prepare-',
+      1,
+    );
+  const f = await fixture({}, model),
+    { source, generation } = await seeded(f, {
+      data: { 'data/new': 'base' },
+      state: { 'state/new': 'snapshot' },
+    });
+  await f.files('', { 'data/old': 'prune', 'state/old': 'replace' });
+  const ready = await prepareStreaming({
+    ...f.request,
+    cacheBackend: async () => source.api,
+    currentRef: 'refs/heads/feature',
+    defaultRef: 'refs/heads/main',
+    policy: { ...f.request.policy, restoreCleanup: 'prune-managed' },
+  });
+  expect(ready.restoreStatus).toBe('fallback-lineage-hit');
+  expect(ready.restoredKey).toBe(generation[11]);
+  expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('base');
+  expect(await f.store.root.stat('data/old')).toBeNull();
+  expect(await f.store.root.stat('state/old')).toBeNull();
+  const opened = await OpenedInvocation.open(ready.anchor, f.budget),
+    handoff = await LifecycleHandoff.read(ready.store, opened.state[6]!, { budget: f.budget });
+  try {
+    const snapshot = handoff.entries.find((entry) => entry[1] === 'state')![4]!;
+    expect(snapshot[1]).toContain('/snapshots/');
+    expect(snapshot[4][0]).toBe('base');
+    expect(await readFile(f.store.root.resolve(snapshot[1] + '/state/new'), 'utf8')).toBe(
+      'snapshot',
+    );
+  } finally {
+    handoff.close();
+  }
+});
+it.each([false, true])(
+  'refuses interrupted-main retry without reselecting base availability, initiallyAvailable=%s',
+  async (available) => {
+    const f = await fixture(),
+      { source, entries } = await seeded(f, {
+        data: { 'data/new': 'base' },
+        state: { 'state/new': 'snapshot' },
+      }),
+      entry = entries[0];
+    if (entry[0] !== 'object') throw new Error('object');
+    const saved = source.objects.get(entry[2][2])!;
+    if (!available) source.objects.delete(entry[2][2]);
+    const request = {
+      ...f.request,
+      cacheBackend: async () => source.api,
+      fail: async (name: string) => {
+        if (name === 'prepare-base-installed') throw new Error('install interrupted');
+      },
+    };
+    await expect(prepareStreaming(request)).rejects.toThrow('install interrupted');
+    const opened = (await OpenedInvocation.current(f.root, f.budget))!;
+    expect(opened.state[4]).toBe('prepare-failed');
+    expect(opened.state[6]).toBeNull();
+    const restores = source.restore.mock.calls.length;
+    if (available) source.objects.delete(entry[2][2]);
+    else source.objects.set(entry[2][2], saved);
+    await expect(prepareStreaming(request)).rejects.toThrow('fresh dedicated root');
+    expect(source.restore).toHaveBeenCalledTimes(restores);
+  },
+);
+it('checks caller lifetime after awaited v2 base acquisition before live installation', async () => {
+  const f = await fixture(),
+    { source } = await seeded(f, {
+      data: { 'data/new': 'base' },
+      state: { 'state/new': 'snapshot' },
+    });
+  let revoked = false;
+  const restore = source.api.restoreCache;
+  const api: BaseCacheBackend = {
+    ...source.api,
+    restoreCache: async (...args) => {
+      const result = await restore(...args);
+      if (args[0].some((p) => p.replaceAll('\\', '/').includes('/payload'))) revoked = true;
+      return result;
+    },
+  };
+  await f.files('', { 'data/old': 'old', 'state/stale': 'untouched' });
+  await expect(
+    prepareStreaming({
+      ...f.request,
+      cacheBackend: async () => api,
+      assertCurrent: () => {
+        if (revoked) throw new Error('base lifetime revoked');
+      },
+    }),
+  ).rejects.toThrow();
+  expect(revoked).toBe(true);
+  expect(await f.store.root.stat('data/new')).toBeNull();
+  expect(await readFile(f.store.root.resolve('state/stale'), 'utf8')).toBe('untouched');
+});
+it('rejects lifetime revocation after the actual durable ready commit', async () => {
+  const f = await fixture();
+  let revoked = false;
+  await expect(
+    prepareStreaming({
+      ...f.request,
+      fail: async (name) => {
+        if (name === 'prepare-ready') revoked = true;
+      },
+      assertCurrent: () => {
+        if (revoked) throw new Error('ready lifetime revoked');
+      },
+    }),
+  ).rejects.toThrow('ready lifetime revoked');
+  expect(revoked).toBe(true);
+  expect(((await f.store.state()) as unknown[])[4]).toBe('prepare-failed');
+});
 it.each(['cold', 'empty', 'mixed'] as const)(
-  'classifies selected %s base contents without mistaking an all-cold generation for a hit',
+  'classifies v2 %s base without reporting all-cold generation as a hit',
   async (kind) => {
     const f = await fixture(),
-      source = await baseFixture(f.model),
-      sdk = await nativeCacheBackend();
-    const data = await preparedBase(source, { 'data/a': 'a' }, 'data'),
-      state = await preparedBase(source, { 'state/a': 'a' }, 'state');
-    await NativeObjectSave.save(sdk.backend, data, { budget: source.budget });
-    await NativeObjectSave.save(sdk.backend, state, { budget: source.budget });
-    const generation = await seedBaseGeneration(
-      source,
-      sdk,
-      kind === 'empty'
-        ? [
-            ['empty', 'data'],
-            ['empty', 'state'],
-          ]
-        : [
-            ['object', 'data', data.reference],
-            ['object', 'state', state.reference],
-          ],
-    );
-    if (kind !== 'empty') sdk.objects.delete(data.reference[2]);
-    if (kind === 'cold') sdk.objects.delete(state.reference[2]);
-    const ready = await prepareStreaming({ ...f.request, cacheBackend: async () => sdk.backend });
+      { source, generation, entries } = await seeded(
+        f,
+        kind === 'empty' ? {} : { data: { 'data/a': 'a' }, state: { 'state/a': 'a' } },
+      );
+    for (const entry of entries)
+      if (entry[0] === 'object' && (kind === 'cold' || (kind === 'mixed' && entry[1] === 'data')))
+        source.objects.delete(entry[2][2]);
+    const ready = await prepareStreaming({ ...f.request, cacheBackend: async () => source.api });
     expect(ready.restoreStatus).toBe(
       kind === 'cold'
         ? 'miss'
@@ -762,11 +691,5 @@ it.each(['cold', 'empty', 'mixed'] as const)(
           : 'current-lineage-hit',
     );
     expect(ready.restoredKey).toBe(kind === 'cold' ? null : generation[11]);
-    const facts = await PrepareFacts.open(ready.store, { budget: f.budget });
-    try {
-      expect(facts.bindings[9]).not.toBeNull();
-    } finally {
-      facts.close();
-    }
   },
 );

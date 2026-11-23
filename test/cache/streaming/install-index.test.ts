@@ -24,12 +24,12 @@ import {
   indexedNode,
   indexedChildren,
 } from '../../../src/cache/streaming/install-index';
-import { captureInstallCurrent } from '../../../src/cache/streaming/install-current';
+import { installCurrentRows } from '../../../src/cache/streaming/install-current';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
-import { localFixtures, directory, native, h } from './local-fixtures';
+import { localFixtures, directory, native } from './local-fixtures';
 import type { LocalRow } from '../../../src/cache/streaming/local-stream';
-import type { Value } from '../../../src/cache/streaming/encoding';
+import { encodeRecord, type Value } from '../../../src/cache/streaming/encoding';
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
@@ -48,26 +48,19 @@ it('indexes source subtrees with exact spans using name-order immediate pages', 
   const rows: Value[] = [
     ['directory', '', directory],
     ['directory', 'metadata', directory],
-    ['file', 'metadata/z', native, h],
+    ['file', 'metadata/z', native],
     ['directory', 'metadata/a', directory],
-    ['file', 'metadata/a/x', native, h],
+    ['file', 'metadata/a/x', native],
     ['directory', 'metadata/c', directory],
-    ['file', 'metadata/c/y', native, h],
+    ['file', 'metadata/c/y', native],
   ];
-  const q = await f.store.writeStream(
-    'native-evidence',
-    { budget: f.budget, partition: 'metadata' },
+  const q = await provisional(
     (async function* () {
       yield* rows;
     })(),
   );
   try {
-    const index = await buildInstallIndex(
-      scratch,
-      f.store.rows(q, 'native-evidence', { budget: f.budget, partition: 'metadata' }),
-      f.options.model,
-      'metadata',
-    );
+    const index = await buildInstallIndex(scratch, frames(q), f.options.model, 'metadata');
     const rootLease = await indexedNode(scratch, index),
       root = rootLease.node,
       children = [];
@@ -79,16 +72,13 @@ it('indexes source subtrees with exact spans using name-order immediate pages', 
     for await (const child of indexedChildren(scratch, metadata)) childrenMetadata.push(child);
     expect(childrenMetadata.map((c) => c[0])).toEqual(['a', 'c', 'z']);
     const checked: LocalRow[] = [];
-    for await (const row of f.store.rows(q, 'native-evidence', {
-      budget: f.budget,
-      partition: 'metadata',
-    }))
-      checked.push(row);
+    for await (const row of frames(q)) checked.push(row);
     const position = (path: string) =>
       checked.find((row) => Array.isArray(row.value) && row.value[1] === path)!;
     for (const name of ['a', 'z']) {
       const lease = await indexedNode(scratch, childrenMetadata.find((c) => c[0] === name)![1]);
       try {
+        expect(lease.node[4]).toBeNull();
         expect(lease.node.slice(9, 11)).toEqual(
           name === 'a'
             ? [position('metadata/a').start, position('metadata/c').start]
@@ -113,12 +103,11 @@ it('captures complete mixed ownership without hashing current bodies', async () 
   await mkdir(path.join(f.root, 'metadata'));
   await writeFile(path.join(f.root, 'metadata/a'), 'body');
   await writeFile(path.join(f.root, 'unowned'), 'untouched');
-  const q = await captureInstallCurrent(f.store, { budget: f.budget }),
-    scratch = await InstallScratch.create(f.store, f.budget);
+  const scratch = await InstallScratch.create(f.store, f.budget);
   try {
     const offset = await buildInstallIndex(
       scratch,
-      f.store.rows(q, 'install-current', { budget: f.budget, partition: null }),
+      frames(await provisional(installCurrentRows(f.store, { budget: f.budget }))),
       f.options.model,
       null,
     );
@@ -142,21 +131,14 @@ it('does bounded linear metadata work without retaining whole file records', asy
         ['directory', 'metadata', directory],
       ];
     for (let i = 0; i < width; i++)
-      rows.push(['file', 'metadata/' + String(i).padStart(4, '0'), native, h]);
-    const q = await f.store.writeStream(
-      'native-evidence',
-      { budget: f.budget, partition: 'metadata' },
+      rows.push(['file', 'metadata/' + String(i).padStart(4, '0'), native]);
+    const q = await provisional(
       (async function* () {
         yield* rows;
       })(),
     );
     try {
-      await buildInstallIndex(
-        scratch,
-        f.store.rows(q, 'native-evidence', { budget: f.budget, partition: 'metadata' }),
-        f.options.model,
-        'metadata',
-      );
+      await buildInstallIndex(scratch, frames(q), f.options.model, 'metadata');
       counts.push(scratch.work.writes);
       expect(scratch.work.reads).toBeLessThan(width * 3 + 20);
     } finally {
@@ -201,9 +183,7 @@ it('poisons a partial failed append and leases every decoded random-access recor
 it('claims a whole build so concurrent callers cannot interleave directory pages', async () => {
   const f = await fixture(),
     scratch = await InstallScratch.create(f.store, f.budget);
-  const q = await f.store.writeStream(
-    'native-evidence',
-    { budget: f.budget, partition: 'metadata' },
+  const q = await provisional(
     (async function* () {
       yield ['directory', '', directory];
     })(),
@@ -220,20 +200,15 @@ it('claims a whole build so concurrent callers cannot interleave directory pages
     (async function* () {
       enter();
       await gate;
-      yield* f.store.rows(q, 'native-evidence', { budget: f.budget, partition: 'metadata' });
+      yield* frames(q);
     })(),
     f.options.model,
     'metadata',
   );
   await entered;
-  await expect(
-    buildInstallIndex(
-      scratch,
-      f.store.rows(q, 'native-evidence', { budget: f.budget, partition: 'metadata' }),
-      f.options.model,
-      'metadata',
-    ),
-  ).rejects.toThrow('claimed');
+  await expect(buildInstallIndex(scratch, frames(q), f.options.model, 'metadata')).rejects.toThrow(
+    'claimed',
+  );
   await expect(scratch.append(['interleave'])).rejects.toThrow('claimed');
   release();
   await first;
@@ -244,14 +219,11 @@ it('cancels a wide postorder close between bounded scratch reads and retires its
   const f = await fixture(),
     scratch = await InstallScratch.create(f.store, f.budget),
     controller = new AbortController();
-  const q = await f.store.writeStream(
-    'native-evidence',
-    { budget: f.budget, partition: 'metadata' },
+  const q = await provisional(
     (async function* () {
       yield ['directory', '', directory];
       yield ['directory', 'metadata', directory];
-      for (let i = 0; i < 16; i++)
-        yield ['file', 'metadata/' + String(i).padStart(2, '0'), native, h];
+      for (let i = 0; i < 16; i++) yield ['file', 'metadata/' + String(i).padStart(2, '0'), native];
     })(),
   );
   const original = scratch.record.bind(scratch);
@@ -270,7 +242,7 @@ it('cancels a wide postorder close between bounded scratch reads and retires its
       scratch,
       (async function* () {
         try {
-          yield* f.store.rows(q, 'native-evidence', { budget: f.budget, partition: 'metadata' });
+          yield* frames(q);
         } finally {
           retired = true;
           finishRetirement();
@@ -284,7 +256,9 @@ it('cancels a wide postorder close between bounded scratch reads and retires its
   reads.mockRestore();
   await retirement;
   expect(retired).toBe(true);
-  expect(f.budget.retained).toBe(65536); // Only the scratch owner's bounded raw buffer remains.
+  expect(f.budget.retained).toBe(65536 + 20480); // Owner raw buffer plus one bounded typed-row cache.
+  scratch.releaseReadCache();
+  expect(f.budget.retained).toBe(65536); // Cancellation released traversal frames and active reads.
   await scratch.close();
   expect(f.budget.retained).toBe(0);
 });
@@ -321,3 +295,18 @@ it('cancels a pending source read and releases the whole-build claim', async () 
   await scratch.close();
   expect(f.budget.retained).toBe(0);
 });
+
+async function provisional(source: AsyncIterable<Value>): Promise<LocalRow[]> {
+  const result: LocalRow[] = [];
+  let at = 0;
+  for await (const value of source) {
+    const end = at + encodeRecord(value).length;
+    result.push({ value, start: at, end, record: result.length });
+    at = end;
+  }
+  result.push({ value: ['local-end'], start: at, end: at, record: result.length });
+  return result;
+}
+async function* frames(rows: LocalRow[]) {
+  yield* rows;
+}

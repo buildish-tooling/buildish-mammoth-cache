@@ -21,7 +21,6 @@ import {
   canonical,
   decodeRecord,
   decodeRecords,
-  Digest,
   encodeRecord,
   encodeRecords,
   H,
@@ -121,9 +120,6 @@ it('derives the fixed model/family and invocation identity projections', () => {
   expect(model.id).toBe(modelId);
   expect(model.family).toBe(familyId);
   expect(H('model', modelVector)).toBe(modelId);
-  expect(
-    new Digest('header').update(['header', 0, 'repository/g/a', 'file', 0, 420, 0]).digest(),
-  ).toBe('28781eeced9791aec63c8224f52b090049f2a876529fd063c4c48521ada6f328');
   expect(model.owner('repository/g/a')[0]).toBe('data');
   expect(() => model.owner('.mammoth/evil')).toThrow();
   expect(() => resolveModel(['model', 2, ...modelVector.slice(2)], '', 1)).toThrow();

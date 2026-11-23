@@ -51,6 +51,8 @@ export interface BaseCacheBackend {
   readonly capabilities: BaseCacheBackendCapabilities;
   /** Reports whether the active cache backend is usable in the current environment. */
   isFeatureAvailable(): boolean;
+  /** Whether a positive direct save result proves finalized upload (checked before moving sources). */
+  canConfirmSave?(): boolean;
   /** Restores the newest matching entry. Undefined reports unavailability, not proven
    * absence: some SDK adapters suppress download/extraction failures. Native callers
    * reject partial extraction; publication readback then remains unconfirmed. */
@@ -60,7 +62,10 @@ export interface BaseCacheBackend {
     fallbackKeyPrefixes?: string[],
     options?: BaseCacheOperationOptions,
   ): Promise<string | undefined>;
-  /** Attempts to create a new cache entry for the given key. */
+  /** Attempts once to create an immutable cache entry. A valid positive integer must
+   * mean finalized direct confirmation; adapters unable to promise that disable
+   * canConfirmSave before callers evacuate sources. Settlement must release base
+   * source-reading archive consumers even when the result is unconfirmed. */
   saveCache(paths: string[], key: string, options?: BaseCacheOperationOptions): Promise<number>;
   /** Optional version-aware existence check; caller must require exact returned-key equality. */
   lookupCache?(

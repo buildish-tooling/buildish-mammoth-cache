@@ -23,14 +23,12 @@ import { sameNative } from './native';
 import { sameDirectoryObject, checkInstallMember } from './install-member';
 import { InstallScratch } from './install-scratch';
 import { InstallParentPhase } from './install-parent-phase';
-import { buildInstallIndex, IndexDirectories } from './install-index';
 import type { InstallReaders } from './install-program';
-import type { LocalRow } from './local-stream';
 import { parentPath } from './tree-state';
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#install-batches-and-recovery.
-// Called only after the complete-unit cursor/root pointer commit. A fresh process
-// first verifies surviving old members and passes its observed root N, not a flag.
+// Called only for this operation's completed replacement/deletion. Original
+// backup identity and admitted facts remain owned until direct cleanup finishes.
 export async function retireBackup(
   readers: InstallReaders,
   binding: Value,
@@ -52,7 +50,6 @@ export async function retireBackup(
       physical,
       {
         renamed: true,
-        hash: false,
         rootNative: observed,
         stat: (p) => owned.stat(p),
       },
@@ -70,15 +67,23 @@ export async function retireBackup(
   }
   const files: InstallScratch[] = [];
   let ledgerDirectory: { path: string; native: NativeIdentity } | undefined;
-  let directories: IndexDirectories | undefined, phase: InstallParentPhase | undefined;
+  let phase: InstallParentPhase | undefined;
   const frames: { path: string; native: NativeIdentity; release: () => void }[] = [];
   try {
     const selectors = await InstallScratch.create(store, budget);
     files.push(selectors);
-    const facts = await InstallScratch.create(store, budget);
-    files.push(facts);
-    const indexFile = await InstallScratch.create(store, budget);
-    files.push(indexFile);
+    const metadata = await readers.reader(binding, signal);
+    async function createPhase(expected: (path: string) => Promise<NativeIdentity | null>) {
+      const ledger = store.prefix + 'mutation/' + randomUUID() + '/';
+      await store.makeParents(ledger + 'pending');
+      ledgerDirectory = {
+        path: ledger.slice(0, -1),
+        native: (await store.root.stat(ledger.slice(0, -1)))!,
+      };
+      phase = new InstallParentPhase(store, physical, ledger, budget, expected);
+    }
+    await createPhase((path) => metadata.directoryNative(logical + path.slice(physical.length)));
+
     async function closeDirectory() {
       const frame = frames.pop()!;
       try {
@@ -95,58 +100,32 @@ export async function retireBackup(
       {
         renamed: true,
         partial: true,
-        hash: false,
         rootNative: observed,
         observed: async (row, path, native) => {
           const value = row as readonly Value[];
           while (frames.length && frames[frames.length - 1].path !== parentPath(path))
             await closeDirectory();
-          const relative = path === physical ? '' : path.slice(physical.length + 1);
           if (value[0] === 'directory') {
             frames.push({
               path,
               native,
               release: budget.holdRecord(512 + Buffer.byteLength(path)),
             });
-            await facts.append(['directory', relative, native]);
+            {
+              const original = await metadata.directoryNative(
+                logical + path.slice(physical.length),
+              );
+              if (!original || !sameNative(original, native, true))
+                await phase!.created(path, native);
+            }
           } else {
             await selectors.append(['remove-file', path, native]);
-            if (observed[2] === 'directory')
-              await facts.append(['file', relative, native, '0'.repeat(64)]);
           }
         },
       },
       signal,
     );
     while (frames.length) await closeDirectory();
-    if (observed[2] === 'directory') {
-      async function* rows(): AsyncGenerator<LocalRow> {
-        let record = 0;
-        for await (const value of facts.rows(0, facts.position))
-          yield { value, start: record, end: ++record, record };
-        yield { value: ['local-end'], start: record, end: record, record };
-      }
-      const reader = await readers.reader(binding, signal);
-      const index = await buildInstallIndex(
-        indexFile,
-        rows(),
-        store.codec.options.model,
-        reader.partition,
-        signal,
-      );
-      directories = new IndexDirectories(indexFile, index);
-      const ledger = store.prefix + 'mutation/' + randomUUID() + '/';
-      await store.makeParents(ledger + 'pending');
-      ledgerDirectory = {
-        path: ledger.slice(0, -1),
-        native: (await store.root.stat(ledger.slice(0, -1)))!,
-      };
-      const dirs = directories;
-      phase = new InstallParentPhase(store, physical, ledger, budget, async (path) => {
-        const n = await dirs.directory(path === physical ? '' : path.slice(physical.length + 1));
-        return n ? (n[3] as NativeIdentity) : null;
-      });
-    }
     for await (const value of selectors.rows(0, selectors.position)) {
       signal.throwIfAborted();
       const row = value as readonly Value[],
@@ -179,7 +158,6 @@ export async function retireBackup(
   } finally {
     for (const frame of frames) frame.release();
     phase?.release();
-    directories?.close();
     await closeRetirementFiles(
       files,
       ledgerDirectory

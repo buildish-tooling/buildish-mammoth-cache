@@ -17,11 +17,11 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { installFixture } from './install-fixture';
-import { freezeInstallPlan } from '../../../src/cache/streaming/install-plan';
+import { freezeInstallPlan } from './install-plan-fixture';
 import { executeInstall } from '../../../src/cache/streaming/install-execute';
 import * as current from '../../../src/cache/streaming/install-current';
-import { localFixtures } from './local-fixtures';
 import type { Value } from '../../../src/cache/streaming/encoding';
+import { prepareStreaming } from '../../../src/cache/streaming/prepare';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -34,7 +34,6 @@ async function fixture(tool: 'gradle' | 'maven' = 'gradle', shared = false) {
   const f = await installFixture(tool, { shared });
   fixtures.push(f);
   (f.bindings[8] as Value[])[4] = 'prune-managed';
-  f.bindings[9] = ['baseline', 'bound-hit', localFixtures(f.store.codec.options).q('generation')];
   await f.store.initialize(f.bindings);
   return f;
 }
@@ -87,7 +86,7 @@ it.each(['gradle', 'maven'] as const)(
     expect(await readFile(f.store.root.resolve(unit + '/keep.lock'), 'utf8')).toBe('protected');
   },
 );
-it('does not make ordinary worker application authoritative for absent aggregate files', async () => {
+it('does not make ordinary indexed overlay authoritative for absent aggregate files', async () => {
   const f = await fixture();
   await f.files('', { 'data/old': 'keep' });
   const plan = await freezeInstallPlan(
@@ -98,24 +97,51 @@ it('does not make ordinary worker application authoritative for absent aggregate
   await executeInstall(f.store, plan, f.budget);
   expect(await readFile(f.store.root.resolve('data/old'), 'utf8')).toBe('keep');
 });
-it.each(['miss', 'worker', 'incomplete'] as const)(
-  'rejects %s as aggregate pruning authority',
-  async (kind) => {
-    const f = await fixture();
-    if (kind === 'miss') {
-      const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
-      f.bindings[9] = null;
-      state[5] = f.store.codec.schemas
-        .ref('bindings')
-        .parse(await f.store.writeDocument(f.bindings));
-      state[3]++;
-      await f.store.updateState(state);
-    }
-    const inputs = [await f.incoming('data', {}, kind === 'worker' ? 'worker' : 'trusted-base')];
-    if (kind !== 'incomplete') inputs.push(await f.incoming('state', {}, 'trusted-base'));
-    await expect(
-      freezeInstallPlan(f.store, inputs, f.budget, { pruneAggregates: true }),
-    ).rejects.toThrow('bound base hit');
+it('rejects incomplete metadata source coverage as pruning authority', async () => {
+  const f = await fixture(),
+    inputs = [await f.incoming('data', {})];
+  await expect(
+    freezeInstallPlan(f.store, inputs, f.budget, { pruneAggregates: true }),
+  ).rejects.toThrow('incomplete/cold metadata contexts');
+});
+it.each([false, true])(
+  'does not enable aggregate pruning on a real prepare miss (backend available=%s)',
+  async (available) => {
+    const f = await installFixture('maven');
+    fixtures.push(f);
+    await f.files('', { 'data/old': 'preserve' });
+    const ready = await prepareStreaming({
+      root: f.root,
+      model: f.model,
+      context: f.store.codec.options.context,
+      nonce: String(f.bindings[4]),
+      budget: f.budget,
+      policy: {
+        role: 'standalone',
+        access: 'writable',
+        restoreCleanup: 'prune-managed',
+        gcAgeMs: null,
+        ordinaryPolicy: 'strict',
+        ordinaryOrder: [],
+      },
+      currentRef: 'refs/heads/main',
+      captureTempDirectory: null,
+      artifactRetentionDays: 7,
+      cleanupEnabled: true,
+      saveAnchor() {},
+      cacheBackend: async () => ({
+        capabilities: { supportsNewestPrefixRestore: true, supportsExplicitSave: true },
+        isFeatureAvailable: () => available,
+        restoreCache: async () => undefined,
+        saveCache: async () => 1,
+        isMissingPathsError: () => false,
+      }),
+      provision: async () => {},
+      installHooks: async () => {},
+      assertCurrent: (): undefined => {},
+    });
+    expect(ready.restoreStatus).toBe(available ? 'miss' : 'feature-unavailable');
+    expect(await readFile(f.store.root.resolve('data/old'), 'utf8')).toBe('preserve');
   },
 );
 it('uses the existing shared current inventory with linear work at widths4/16', async () => {
@@ -127,7 +153,7 @@ it('uses the existing shared current inventory with linear work at widths4/16', 
       await f.incoming('data', { 'shared/data/group/new': 'new' }, 'trusted-base'),
       await f.incoming('state', {}, 'trusted-base'),
     ];
-    const scan = vi.spyOn(current, 'captureInstallCurrent'),
+    const scan = vi.spyOn(current, 'installCurrentRows'),
       before = { ...f.store.root.work };
     const plan = await freezeInstallPlan(f.store, inputs, f.budget, { pruneAggregates: true });
     await executeInstall(f.store, plan, f.budget);

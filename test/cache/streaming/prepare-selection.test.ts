@@ -15,222 +15,127 @@
  */
 
 import { expect, it } from 'vitest';
-import { LocalCodec } from '../../../src/cache/streaming/local-schema';
-import { writeLocalStream, readLocalStream } from '../../../src/cache/streaming/local-stream';
+import { createHash } from 'node:crypto';
+import {
+  LocalStreamGrammar,
+  writeLocalStream,
+  readLocalStream,
+} from '../../../src/cache/streaming/local-stream';
+import { handoffSchemas } from '../../../src/cache/streaming/lifecycle-handoff';
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
-import { rawSha, type Value } from '../../../src/cache/streaming/encoding';
-import { invocationId, lineageId } from '../../../src/cache/streaming/model';
-import { recordKey } from '../../../src/cache/streaming/native-records';
-import { workerArtifactPrefix } from '../../../src/cache/streaming/worker-artifact-identity';
-import { localOptions, localFixtures, nonce, h, directory } from './local-fixtures';
-const selection: Value[] = [
-  'prepare-selection',
-  1,
-  'refs/heads/main',
-  null,
-  ['execution', 1, '/tmp/mammoth', 7, 'enabled', null],
-  ['miss'],
-  ['selected', []],
-  [],
-  directory,
-  'workers-installed',
-];
-const records = async function* (rows: readonly Value[]) {
-  yield* rows;
-};
-function fixture(aggregator = false) {
-  const options = { ...localOptions() };
-  if (aggregator) {
-    options.role = 'distributed-aggregator';
-    options.context[4] = 'aggregator';
-    options.invocation = invocationId(options.context, nonce);
-  }
-  const codec = new LocalCodec(options),
-    budget = new WorkingBudget();
-  return { ...localFixtures(options), codec, budget, stream: { codec, budget, partition: null } };
+import { encodeRecord, rawSha, type Value } from '../../../src/cache/streaming/encoding';
+import { localFixtures, directory } from './local-fixtures';
+function fixture() {
+  const f = localFixtures(),
+    budget = new WorkingBudget(),
+    rows: Value[] = [
+      [
+        'handoff',
+        2,
+        'refs/heads/main',
+        null,
+        null,
+        7,
+        'enabled',
+        null,
+        null,
+        f.q('activity'),
+        42,
+        0,
+      ],
+      ...f.options.model.partitions.map((p) => ['partition', p[0], 'miss', null, null] as Value),
+    ];
+  return { ...f, budget, rows, options: { codec: f.codec, budget, partition: null } };
 }
-async function encode(
-  f: ReturnType<typeof fixture>,
-  values: readonly Value[],
-  purpose: 'prepare-sources' | 'post-sources' = 'prepare-sources',
-) {
+async function* records(rows: Value[]) {
+  yield* rows;
+}
+async function encode(f: ReturnType<typeof fixture>, rows = f.rows) {
   const chunks = [];
-  for await (const chunk of writeLocalStream(records(values), purpose, f.stream, () => {}))
+  for await (const chunk of writeLocalStream(records(rows), 'handoff', f.options, () => {}))
     chunks.push(chunk);
-  expect(f.budget.retained).toBe(0);
   return Buffer.concat(chunks);
 }
-it('matches normative P0 canonical bytes, local framing, seal and raw hash independently', async () => {
+it('matches compact v2 handoff framing and hash through an independent oracle', async () => {
   const f = fixture(),
-    bytes = await encode(f, [selection]);
-  const expected = [
-    [
+    header: Value = [
       'local-stream',
       1,
-      'prepare-sources',
-      '7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299',
-      '7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c',
-      'mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef',
+      'handoff',
+      f.options.codec.options.invocation,
+      f.options.codec.options.model.id,
+      f.options.codec.options.model.family,
       null,
     ],
-    selection,
-    ['local-end', 1, '9cbcf2341bcc66817c6c5da2c0d701c0c17b3e1a8e1ca55f88ef3b6bd258955c'],
-  ]
-    .map((v) => JSON.stringify(v) + '\n')
-    .join('');
-  expect(bytes.toString()).toBe(expected);
-  expect(bytes.length).toBe(547);
-  expect(rawSha(bytes)).toBe('7328bade01fda3b1b7036c81dcb8df35ab2f3d7aeee5598cedd5ab198acb11fa');
-  const accepted: Value[] = [];
-  await readLocalStream(
-    (async function* () {
-      yield bytes;
-    })(),
-    'prepare-sources',
-    f.stream,
-    [
-      'ref',
-      'prepare-sources',
-      f.prefix + 'selection.ndjson',
-      bytes.length,
-      '7328bade01fda3b1b7036c81dcb8df35ab2f3d7aeee5598cedd5ab198acb11fa',
-    ],
-    async (v) => {
-      accepted.push(v);
-    },
-  );
-  expect(accepted).toEqual([
-    [
-      'local-stream',
-      1,
-      'prepare-sources',
-      '7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299',
-      '7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c',
-      'mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef',
-      null,
-    ],
-    selection,
-    ['local-end', 1, '9cbcf2341bcc66817c6c5da2c0d701c0c17b3e1a8e1ca55f88ef3b6bd258955c'],
-  ]);
+    hash = createHash('sha256').update('mammoth:local-handoff:1\0');
+  for (const row of [header, ...f.rows]) {
+    const bytes = Buffer.from(JSON.stringify(row)),
+      size = Buffer.alloc(8);
+    size.writeBigUInt64BE(BigInt(bytes.length));
+    hash.update(size).update(bytes);
+  }
+  const end: Value = ['local-end', f.rows.length, hash.digest('hex')],
+    expected = Buffer.concat([header, ...f.rows, end].map(encodeRecord)),
+    bytes = await encode(f);
+  expect(bytes).toEqual(expected);
+  expect(
+    await readLocalStream(
+      (async function* () {
+        yield bytes;
+      })(),
+      'handoff',
+      f.options,
+      ['ref', 'handoff', f.prefix + 'handoff', bytes.length, rawSha(bytes)],
+    ),
+  ).toMatchObject({ bytes: bytes.length, records: f.rows.length });
   expect(f.budget.retained).toBe(0);
 });
-it('accepts pending/miss/pinned choices and preserves ordered snapshot rows after the header', async () => {
+it.each([
+  'missing',
+  'duplicate',
+  'order',
+  'old-version',
+  'extra-header',
+  'same-lineage',
+  'invalid-outcome',
+  'pinless-available',
+] as const)('rejects malformed compact handoff %s', async (kind) => {
   const f = fixture(),
-    row = structuredClone(selection),
-    source: Value = [
-      'snapshot-source',
-      [
-        'metadata',
-        'baseline',
-        ['baseline', 'origin'],
-        f.q('native-evidence'),
-        f.prefix + 'snapshots/native',
-      ],
-    ];
-  row[5] = ['pending'];
-  row[6] = ['pending'];
-  row[7] = null;
-  row[9] = 'selected';
-  await encode(f, [row]);
-  row[5] = [
-    'pinned',
-    recordKey(f.options.model.family, lineageId('refs/heads/main'), h, h),
-    f.q('generation'),
-  ];
-  await encode(f, [row, source]);
-  await encode(f, [source]);
-  await expect(encode(f, [source, row])).rejects.toThrow('first');
-  await expect(encode(f, [row, row])).rejects.toThrow('first');
-  await expect(encode(f, [row], 'post-sources')).rejects.toThrow('first');
+    rows = structuredClone(f.rows);
+  if (kind === 'missing') rows.pop();
+  if (kind === 'duplicate') rows.push(rows[1]);
+  if (kind === 'order') [rows[1], rows[2]] = [rows[2], rows[1]];
+  if (kind === 'old-version') (rows[0] as Value[])[1] = 1;
+  if (kind === 'extra-header') (rows[0] as Value[]).push(null);
+  if (kind === 'same-lineage') (rows[0] as Value[])[3] = (rows[0] as Value[])[2];
+  if (kind === 'invalid-outcome') (rows[1] as Value[])[2] = 'pending';
+  if (kind === 'pinless-available') (rows[1] as Value[])[2] = 'available';
+  await expect(encode(f, rows)).rejects.toThrow();
+  expect(f.budget.retained).toBe(0);
 });
-it('binds exact worker descriptor scope, basename, attempt, snapshot owner and producer uniqueness', async () => {
-  const f = fixture(true),
-    context = [...f.options.context];
-  context[4] = 'A';
-  const row = structuredClone(selection),
-    artifact: Value[] = [
-      1,
-      workerArtifactPrefix(f.options.model, context as typeof f.options.context) +
-        '1-d' +
-        h +
-        '.tar.gz',
-      42,
-      'sha256:' + h,
-      context,
-      ['metadata'],
-    ];
-  row[6] = ['selected', [artifact]];
-  await encode(f, [row]);
-  for (const modify of [
-    (r: Value[]) => {
-      (r[6] as Value[])[1] = [artifact, artifact];
-    },
-    (r: Value[]) => {
-      const a = ((r[6] as Value[])[1] as Value[][])[0];
-      (a[4] as Value[])[3] = 'different-run';
-    },
-    (r: Value[]) => {
-      const a = ((r[6] as Value[])[1] as Value[][])[0];
-      a[1] = 'other.tar.gz';
-    },
-    (r: Value[]) => {
-      const a = ((r[6] as Value[])[1] as Value[][])[0];
-      (a[4] as Value[])[5] = 2;
-    },
-    (r: Value[]) => {
-      const a = ((r[6] as Value[])[1] as Value[][])[0];
-      a[5] = ['data'];
-    },
-    (r: Value[]) => {
-      const a = ((r[6] as Value[])[1] as Value[][])[0];
-      a[3] = 'sha256:' + 'A'.repeat(64);
-    },
-  ])
-    await expect(
-      encode(f, [
-        (() => {
-          const bad = structuredClone(row);
-          modify(bad);
-          return bad;
-        })(),
-      ]),
-    ).rejects.toThrow();
-  const standalone = fixture();
-  await expect(encode(standalone, [row])).rejects.toThrow();
-});
-it('rejects unknown fields, premature installed stages, wrong lineage and noncanonical cold projections', async () => {
-  const f = fixture();
-  for (const modify of [
-    (r: Value[]) => {
-      r.push(null);
-    },
-    (r: Value[]) => {
-      r[3] = r[2];
-    },
-    (r: Value[]) => {
-      r[5] = ['pending'];
-    },
-    (r: Value[]) => {
-      r[6] = ['pending'];
-    },
-    (r: Value[]) => {
-      r[7] = null;
-    },
-    (r: Value[]) => {
-      r[7] = ['metadata'];
-    },
-    (r: Value[]) => {
-      r[5] = ['pinned', 'wrong-family', f.q('generation')];
-    },
-    (r: Value[]) => {
-      r[8] = 'unknown';
-    },
-    (r: Value[]) => {
-      (r[4] as Value[])[4] = 'unknown';
-    },
+it('validates snapshot descriptor data separately from executable native ownership', () => {
+  const f = fixture(),
+    schema = handoffSchemas(f.codec),
+    root = f.prefix + 'snapshots/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/metadata',
+    snapshot: Value[] = ['snapshot', root, directory, directory, ['base', null]];
+  expect(schema.snapshot.parse(snapshot)).toEqual(snapshot);
+  for (const path of [
+    f.prefix + 'install/metadata',
+    f.prefix + 'snapshots/metadata',
+    f.prefix + 'snapshots/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/foreign',
   ]) {
-    const bad = structuredClone(selection);
-    modify(bad);
-    await expect(encode(f, [bad])).rejects.toThrow();
+    const bad = [...snapshot];
+    bad[1] = path;
+    expect(() => schema.snapshot.parse(bad)).toThrow();
   }
+  const bad = structuredClone(snapshot);
+  bad[4] = ['local', 'b'.repeat(64)];
+  expect(() => schema.snapshot.parse(bad)).toThrow();
+  const grammar = new LocalStreamGrammar('handoff', f.options);
+  try {
+    expect(() => grammar.accept(['prepare-selection', 1, 'refs/heads/main'])).toThrow();
+  } finally {
+    grammar.dispose();
+  }
+  expect(f.budget.retained).toBe(0);
 });

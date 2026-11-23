@@ -22,9 +22,10 @@ limitations under the License.
 
 ## Recovery boundary
 
-Mammoth targets CI execution with rebuildable local cache data. Its local recovery
-contract covers interruption and restart of a Mammoth process while the operating
-system and filesystem remain running. It does not guarantee local cache contents,
+Mammoth targets CI execution with rebuildable local cache data. A fresh post may
+admit a successful-main handoff while the operating system and filesystem remain
+running. Interrupted main/post is retained and refused, without automatic replay.
+It does not guarantee local cache contents,
 ownership records or directory entries survive an operating-system crash, machine
 reboot, storage failure or power loss. This contract is the same on Linux, macOS
 and Windows, including persistent self-hosted runners. It also applies to original
@@ -39,7 +40,7 @@ is a separate operation governed by that backend's confirmation contract.
 ## Host requirements
 
 - Use a dedicated managed root containing rebuildable cache data. Keep its local
-  lifecycle state available across supported process restarts.
+  successful-main handoff available to fresh post; interrupted operations cannot resume.
 - Complete writes and truncations must be visible to subsequent reads in the same
   running operating system. Same-filesystem renames and metadata replacement must
   provide the atomic namespace behavior used by the lifecycle protocol.
@@ -60,16 +61,64 @@ state while original cache sources may still be temporarily relocated.
 
 Writers await completed writes, handle closure where required, and application
 buffer flushes before handing data to readers. Immutable evidence must be complete
-before its reference is published. A discoverable intent precedes destructive
-moves, and progress pointers follow the changes they describe. Source return and
-its committed evidence precede acceptance of an upload receipt.
+before its reference is published. A genuine process-owned operation captures source ownership before awaited mutation.
+Source return follows actual SDK settlement and precedes record-last publication.
+No completed reference, atomic rename or scalar success flag recreates authority.
 
 Removing storage flushes does not remove atomic replacement, error propagation,
-native checks, cancellation or recovery of ambiguous transitions. In the local
-protocol, committed or durable state means completed publication under this
-process-restart contract; it is not a promise of physical-storage persistence.
-Process-termination tests exercise this contract and do not qualify host-crash or
-power-loss recovery.
+native checks or cancellation cleanup. Interrupted main/post does not resume or
+adopt old source packages; preserve ambiguous original-source locations and use a
+fresh dedicated root or deliberate manual reconciliation. Process-termination tests
+exercise refusal and safe retention, never host-crash or power-loss recovery.
 
 See the [local lifecycle protocol](../../cache-lifecycle-protocol/) for exact
-publication, intent, cursor and recovery ordering.
+successful-main handoff, current-operation ownership and source-return ordering.
+
+## Native metadata materialization
+
+The active incompatible `native-metadata-v2` base format preserves permissions through native archive
+headers only where the current host/filesystem supports them. It has no per-file mode
+catalogue. Arbitrary Unix executable bits lost during Windows materialization cannot
+be reconstructed when the base later returns to Unix. Local metadata comparison uses
+Unix permission bits or the Windows writable/read-only representation, and the actual
+native mtime precision, as specified in the
+[local metadata summary contract](../../native-base-protocol/#metadata-summaries-and-pre-overlay-pins).
+Known model launcher rules remain distinct from arbitrary permission reconstruction.
+Delta archives retain their per-file metadata/content hashes from their actual source
+host. The current source uses this coherent v2 wire cut.
+
+## Native root publication and SDK lifetimes
+
+Metadata-only base publication stages and returns native directories or files under
+the existing exclusive, quiescent filesystem window. Root and parent identities,
+same-filesystem rules and absent destinations are checked at the actual mutations.
+Controlled moves do not trigger repeated descendant verification or copying. Separate
+physical snapshot sources keep their actual identities and parents. Failed returns
+retain payload at the reported staging location and are hard local failures.
+
+Foreground cancellation waits for base SDK settlement before returning sources.
+Unconfirmed raw artifact uploads retain their immutable current package because the
+installed public SDK does not expose closure of inaccessible readers on rejection.
+No later namespace adoption, automatic deletion or retry is implied. Native archive
+permissions remain limited to what the host materializes; no base mode catalogue
+reconstructs Unix executable bits lost through Windows.
+
+Operation counters include instrumented native work, application staging mkdir,
+control writes and mode changes, metadata codec/scratch work and known empty-shell
+cleanup. Native archive resolution, TAR/compression subprocesses and SDK internals
+have additional work; application counters are not every operating-system syscall
+and bounded count fixtures establish no RSS, paging or throughput guarantee.
+
+## Native streaming buffer ownership
+
+`NativeRoot.read` forwards each default FileHandle ReadStream `Buffer` unchanged;
+it does not copy, pool or reuse emitted storage. Its consumer may retain a chunk
+across later reads and must not mutate shared bytes while another consumer still
+uses them. Unexpected encoded/non-Buffer chunks fail rather than introducing a
+fallback copy. Async iteration retains backpressure and counts actual chunk lengths.
+Final handle/name identity checks and handle closure still gate successful EOF.
+
+The downloaded raw worker archive path uses this reader through `OwnedStore.read`.
+Compressed archive length/SHA, delta body hashes, channel/archive seals and strict
+transport EOF remain required. Eliminating one wrapper copy per emitted chunk does
+not eliminate those passes, filesystem/SDK work or establish a throughput/RSS bound.

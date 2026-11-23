@@ -18,7 +18,9 @@ import { Writable } from 'node:stream';
 import { execFileSync } from 'node:child_process';
 import { buildSync } from 'esbuild';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import * as encoding from '../../../src/cache/streaming/encoding';
+import { describe, expect, it, vi } from 'vitest';
 import {
   readWorkerArchive,
   writeWorkerArchive,
@@ -77,8 +79,8 @@ async function write(options: WorkerWriter, events: AsyncIterable<WorkerEvent>) 
 const guard = async () => {};
 describe('independent literal worker vectors', () => {
   for (const [name, sha] of [
-    ['W0', '8c932d181d450c7d7b23415b8ff249237dfc7926bb512a77ed4309377de3e504'],
-    ['W1', '0fd9997e8fd889e25a8a3f063052e24d8bfa8c402bd34f00348e5557197869c4'],
+    ['W0', '41242a473a615380debd674ca50e46067f08bfe2cb96ca22f02493223da2dd11'],
+    ['W1', '939cb143de9965250cc4ad3f7f9170c418a969fd541239928e5f9cc91c780cbc'],
   ] as const) {
     it(
       'reads ' + name + ' literal headers/controls and independently derives all seals',
@@ -112,7 +114,9 @@ describe('independent literal worker vectors', () => {
 it.each([
   'missing-pair',
   'wrong-ordinal',
-  'wrong-header',
+  'wrong-content',
+  'old-arity',
+  'old-profile',
   'body-tamper',
   'unit-count',
   'final-seal',
@@ -128,8 +132,15 @@ it.each([
     );
   if (mutation === 'wrong-ordinal')
     (trace.find((w) => w[0] === 'control' && w[1] === 6)![2] as Value[])[2] = 2;
-  if (mutation === 'wrong-header')
+  if (mutation === 'wrong-content')
     (trace.find((w) => w[0] === 'control' && w[1] === 6)![2] as Value[])[3] = '0'.repeat(64);
+  if (mutation === 'old-arity')
+    (trace.find((w) => w[0] === 'control' && w[1] === 6)![2] as Value[]).splice(
+      3,
+      0,
+      '0'.repeat(64),
+    );
+  if (mutation === 'old-profile') (trace[0][1] as Value[])[2] = 'worker-tar-v1';
   if (mutation === 'body-tamper') trace.find((w) => w[0] === 'file' && w[1] === 2)![3] = '616264';
   if (mutation === 'unit-count')
     ((trace.find((w) => w[0] === 'control' && w[1] === 8)![2] as Value[])[4] as Value[])[0] = 3;
@@ -790,7 +801,7 @@ it('rejects a missing workspace wrapper on the independent reader path', async (
       [
         'identity',
         1,
-        'worker-tar-v1',
+        'worker-tar-v2',
         'gzip',
         options.context,
         options.model.id,
@@ -919,7 +930,7 @@ it('rejects unknown Gradle layouts in imported archives rather than applying loc
       [
         'identity',
         1,
-        'worker-tar-v1',
+        'worker-tar-v2',
         'gzip',
         [...options.context],
         options.model.id,
@@ -938,4 +949,124 @@ it('rejects unknown Gradle layouts in imported archives rather than applying loc
     'Unsupported workspace-surface contribution',
   );
   expect(options.budget.retained).toBe(0);
+});
+
+// Separate framed-JSON oracle: ordinary vector values contain no control scalars.
+function eventDigest(domain: string, rows: Value[]) {
+  const hash = createHash('sha256').update('mammoth:' + domain + ':1\0');
+  for (const row of rows) {
+    const bytes = Buffer.from(JSON.stringify(row)),
+      size = Buffer.alloc(8);
+    size.writeBigUInt64BE(BigInt(bytes.length));
+    hash.update(size).update(bytes);
+  }
+  return hash.digest('hex');
+}
+it.each(['channel', 'archive'] as const)(
+  'binds a valid-looking changed effective header through the %s seal without a standalone header hash',
+  async (boundary) => {
+    const trace = workerTrace('W1'),
+      files = trace.filter((row) => row[0] === 'file');
+    (files[1][2] as Value[])[6] = 1700000000124;
+    const unitClose = trace.find(
+      (row) => row[0] === 'control' && (row[2] as Value[])[0] === 'unit-close',
+    )![2] as Value[];
+    const facts: Value[] = [['unit', 'maven-directory', 'repository/g', 'direct']];
+    for (const wrapped of files) {
+      const header = wrapped[2] as Value[];
+      facts.push([
+        'file',
+        header[2],
+        'data',
+        header[4],
+        header[5],
+        header[6],
+        createHash('sha256')
+          .update(Buffer.from(String(wrapped[3]), 'hex'))
+          .digest('hex'),
+      ]);
+    }
+    facts.push(['unit-end', 'maven-directory', 'repository/g']);
+    unitClose[5] = eventDigest('unit-semantic', facts);
+    if (boundary === 'archive') {
+      const rows: Value[] = [];
+      let collecting = false,
+        sha = '';
+      for (const wrapped of trace) {
+        if (wrapped[0] === 'control') {
+          const control = wrapped[2] as Value[];
+          if (control[0] === 'channel-open' && control[1] === 0) collecting = true;
+          if (collecting && control[0] === 'channel-close') {
+            sha = eventDigest('channel-events', rows);
+            control[3] = sha;
+            break;
+          }
+          if (collecting) rows.push(control);
+        } else if (collecting && (wrapped[0] === 'file' || wrapped[0] === 'directory'))
+          rows.push(wrapped[0] === 'file' ? wrapped[2] : wrapped[1]);
+      }
+      ((trace.at(-1)![1] as Value[])[5] as Value[][])[0][4] = sha;
+    }
+    const options = expected();
+    await expect(read(traceArchive(trace), options)).rejects.toThrow(
+      boundary === 'channel' ? 'channel summary' : 'final seal',
+    );
+    expect(options.budget.retained).toBe(0);
+  },
+);
+it('writes and reads empty and nonempty files with zero standalone header-domain hashes and unchanged body bytes', async () => {
+  const options = expected(),
+    hash = vi.spyOn(encoding, 'H');
+  let bodyStreamsStarted = 0,
+    bodyBytes = 0;
+  async function* countedEvents(): AsyncGenerator<WorkerEvent> {
+    for await (const event of eventsFromTrace(workerTrace('W1'))) {
+      if (event.type !== 'file') {
+        yield event;
+        continue;
+      }
+      const source = event.bytes;
+      yield {
+        ...event,
+        bytes: (async function* () {
+          bodyStreamsStarted++;
+          for await (const chunk of source) {
+            bodyBytes += chunk.length;
+            yield chunk;
+          }
+        })(),
+      };
+    }
+  }
+  const work = { tarBytes: 0, controlMembers: 0, controlBodyBytes: 0 };
+  try {
+    const output = await write(
+        { ...options, snapshots: ['metadata'], assertStable: guard, work },
+        countedEvents(),
+      ),
+      decoded = await read(output.bytes);
+    expect(bodyStreamsStarted).toBe(2);
+    expect(bodyBytes).toBe(3);
+    const controls = workerTrace('W1')
+      .filter((row) => row[0] !== 'file' && row[0] !== 'directory')
+      .map((row) => (row[0] === 'control' ? row[2] : row[1]));
+    expect(work.controlMembers).toBe(controls.length);
+    expect(work.controlBodyBytes).toBe(
+      controls.reduce<number>((sum, row) => sum + Buffer.byteLength(JSON.stringify(row)) + 1, 0),
+    );
+    expect(decoded.fileBytes).toBe(3);
+    expect(decoded.result.counts[0]).toBe(2);
+    expect(decoded.result.counts[4]).toBe(3);
+    const metadata = workerTrace('W1').find(
+      (row) => row[0] === 'control' && (row[2] as Value[])[0] === 'file-meta',
+    )![2] as Value[];
+    expect(metadata).toHaveLength(5);
+    const old = [...metadata];
+    old.splice(3, 0, '0'.repeat(64));
+    expect(encoding.encodeRecord(old).length - encoding.encodeRecord(metadata).length).toBe(67);
+    expect(hash.mock.calls.filter(([domain]) => domain === 'header')).toEqual([]);
+    expect(options.budget.retained).toBe(0);
+  } finally {
+    hash.mockRestore();
+  }
 });

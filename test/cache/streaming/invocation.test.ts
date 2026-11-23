@@ -30,8 +30,11 @@ import { NativeRoot } from '../../../src/cache/streaming/native';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import { rawSha, tuple } from '../../../src/cache/streaming/encoding';
 import { captureObservations } from '../../../src/cache/streaming/observation-capture';
-import { executeGc } from '../../../src/cache/streaming/gc-execute';
-import { observationFixture } from './observation-fixtures';
+import {
+  observationFixture,
+  captureFixtureObservations,
+  executeFixtureGc,
+} from './observation-fixtures';
 import { installFixture } from './install-fixture';
 const cleanup: (() => unknown)[] = [];
 let directory: string, bundle: string;
@@ -62,6 +65,7 @@ afterEach(async () => {
 async function fixture(options: Parameters<typeof observationFixture>[1] = {}) {
   const f = await observationFixture('gradle', options);
   cleanup.push(async () => {
+    await f.finish();
     expect(f.budget.retained).toBe(0);
     await f.close();
   });
@@ -100,7 +104,7 @@ it('cold reopens a multi-row model larger than the CI state bound without provid
   );
   expect(JSON.parse(execFileSync(process.execPath, [bundle, raw], { encoding: 'utf8' }))).toEqual({
     id: model.id,
-    phase: 'quiescent',
+    phase: 'post-active',
     retained: 0,
   });
 }, 30000);
@@ -108,9 +112,11 @@ it('reopens current ownership and latest mutable progress rather than a CI state
   const f = await fixture(),
     first = await OpenedInvocation.open(f.a, f.budget);
   await f.files('', { 'data/file': 'body' });
-  await captureObservations(f.store, { budget: f.budget });
+  const changed = structuredClone(first.state);
+  changed[3]++;
+  await f.store.updateState(changed);
   const second = await OpenedInvocation.open(f.a, f.budget);
-  expect(second.state[4]).toBe('observations-frozen');
+  expect(second.state[4]).toBe('post-active');
   expect(second.state[3]).toBeGreaterThan(first.state[3]);
   expect((await OpenedInvocation.current(f.root, f.budget))!.anchor[4]).toEqual(f.a[4]);
 });
@@ -159,23 +165,24 @@ it.each(['gradle', 'maven'] as const)(
       purgeGlobs: ['data/*.lock'],
     });
     cleanup.push(async () => {
+      await f.finish();
       expect(f.budget.retained).toBe(0);
       await f.close();
     });
     await f.files('', { 'data/body': 'payload', 'data/runtime.lock': 'keep' });
-    const out = await captureObservations(f.store, { budget: f.budget });
+    const out = await captureFixtureObservations(f.store, { budget: f.budget });
     expect(out.purge.status).toBe('skipped');
     expect(await readFile(f.store.root.resolve('data/runtime.lock'), 'utf8')).toBe('keep');
-    await executeGc(f.store, { budget: f.budget });
+    await executeFixtureGc(f.store, { budget: f.budget });
     const state = tuple(await f.store.state());
-    expect(state[4]).toBe('gc-complete');
-    expect(state[13]).toBeNull();
+    expect(state[4]).toBe('post-active');
+    expect(state).toHaveLength(8);
   },
 );
 it('does not allow worker purge or relax base/read-only admission', async () => {
   const f = await fixture({ role: 'distributed-worker', purgeGlobs: ['data/*.lock'] });
   await expect(
-    captureObservations(f.store, {
+    captureFixtureObservations(f.store, {
       budget: f.budget,
       purgeWindow: {
         root: f.store.root,
@@ -184,17 +191,14 @@ it('does not allow worker purge or relax base/read-only admission', async () => 
       },
     }),
   ).rejects.toThrow('Worker');
-  const base = await fixture(),
-    state = base.store.codec.schemas.documents['local-state'].parse(await base.store.state());
-  state[3]++;
-  state[4] = 'build-ready';
-  state[13] = null;
-  await base.store.updateState(state);
-  await expect(captureObservations(base.store, { budget: base.budget })).rejects.toThrow(
-    'quiescent',
-  );
+  const base = await fixture();
+  await expect(
+    captureObservations(base.store, { budget: base.budget, attempt: undefined as never }),
+  ).rejects.toThrow();
   const ro = await fixture({ access: 'read-only' });
-  await expect(captureObservations(ro.store, { budget: ro.budget })).rejects.toThrow('writable');
+  await expect(captureFixtureObservations(ro.store, { budget: ro.budget })).rejects.toThrow(
+    /writable|capture.*owner/i,
+  );
 });
 
 it('matches independent canonical enabled/disabled anchor vectors', async () => {

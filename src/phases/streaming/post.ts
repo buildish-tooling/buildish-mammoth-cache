@@ -22,8 +22,8 @@ import {
 } from '../../guard/job-single-run';
 import { decodeInvocationAnchor, OpenedInvocation } from '../../cache/streaming/invocation';
 import { WorkingBudget } from '../../cache/streaming/tree-state';
-import { PrepareFacts } from '../../cache/streaming/prepare-state';
-import { reconcileInvocation, type RecoveryOptions } from '../../cache/streaming/recovery';
+import { LifecycleHandoff } from '../../cache/streaming/lifecycle-handoff';
+import { type LifecycleOptions } from '../../cache/streaming/lifecycle-options';
 import { postStreamingBase } from '../../cache/streaming/base-post';
 import { postStreamingWorker } from '../../cache/streaming/worker-post';
 import { postStreamingReadOnly } from '../../cache/streaming/passive-lifecycle';
@@ -34,7 +34,7 @@ import type { BaseCacheBackend } from '../../cache/backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 import type { BuildReport } from '../../build-tool/types';
 import type { Context } from '../../cache/streaming/schema';
-export interface StreamingPostDependencies extends Omit<RecoveryOptions, 'budget'> {
+export interface StreamingPostDependencies extends Omit<LifecycleOptions, 'budget'> {
   readonly budget?: WorkingBudget;
   readonly runtimeHost: HostStateStore & HostReporter;
   readonly cacheBackend: (root: string) => Promise<BaseCacheBackend>;
@@ -69,14 +69,7 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
       if (raw) {
         const anchor = decodeInvocationAnchor(raw);
         if (anchor[0] === 'streaming-lifecycle') {
-          const budget = d.budget ?? new WorkingBudget(),
-            opened = await OpenedInvocation.open(anchor, budget, d.cleanupSignal);
-          await reconcileInvocation(opened, 'abandon', { ...d, budget });
-          for (const warning of await d.removeHooks(
-            opened.store.root.path,
-            opened.store.codec.options.context[7],
-          ))
-            host.warning(warning);
+          for (const warning of await d.removeHooks(anchor[2], anchor[4][7])) host.warning(warning);
         } else {
           for (const warning of await d.removeHooks(anchor[3], anchor[2][7])) host.warning(warning);
         }
@@ -100,8 +93,7 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
     return { outcome: 'disabled' as const };
   }
   const opened = await OpenedInvocation.open(anchor, budget, d.cleanupSignal);
-  await reconcileInvocation(opened, 'resume', options);
-  const facts = await PrepareFacts.open(opened.store, {
+  const facts = await LifecycleHandoff.read(opened.store, opened.state[6]!, {
       ...options,
       maxDirectoryEntries: opened.bindings[8][9],
     }),
@@ -110,8 +102,10 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
         ? undefined
         : new PartitionSummaries(opened.store.codec.options.model, budget);
   const warnings: string[] = [];
+  const onWarning = (message: string) => {
+    warnings.push(message);
+  };
   try {
-    if (!facts.selection) throw new Error('Missing frozen execution configuration.');
     const removeHooks = async () => {
       assertCurrent(d);
       warnings.push(
@@ -128,7 +122,7 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
               anchor,
               artifactBackend: d.artifactBackend,
               summaries,
-              onWarning: (message) => warnings.push(message),
+              onWarning,
               removeHooks,
             })
           : await postStreamingBase({
@@ -136,14 +130,17 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
               anchor,
               cacheBackend: () => d.cacheBackend(opened.store.root.path),
               summaries,
-              onWarning: (message) => warnings.push(message),
+              onWarning,
               removeHooks,
             });
     if (result.outcome === 'skipped-not-quiescent') {
       host.warning('Cache save skipped: ' + (result.message ?? 'consumers remain.'));
       return result;
     }
-    if (result.outcome === 'feature-unavailable')
+    if (
+      result.outcome === 'feature-unavailable' &&
+      !warnings.includes('Cache save skipped: cache backend is unavailable.')
+    )
       warnings.push('Cache save skipped: cache backend is unavailable.');
     if (result.outcome === 'read-only') await removeHooks();
     if (opened.store.codec.options.role === 'distributed-aggregator')
@@ -153,7 +150,7 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
             `Partition '${p[0]}' has no configured snapshot writer; preserving its prepared snapshot.`,
           );
     // Core recovery, observation/purge, source return and receipt precede these content/provider reads.
-    const report = await d.loadReport(opened.store.codec.options.context[7], facts.selection[4][2]);
+    const report = await d.loadReport(opened.store.codec.options.context[7], facts.header[4]);
     const sink = await emit(host, d, report, warnings, result.outcome);
     summaries?.emit(host, sink);
     return result;

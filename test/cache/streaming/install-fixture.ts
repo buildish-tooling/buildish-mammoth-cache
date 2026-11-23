@@ -20,12 +20,13 @@ import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
 import { resolveModel, invocationId, type ResolvedModel } from '../../../src/cache/streaming/model';
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
-import { walkNative } from '../../../src/cache/streaming/native-walk';
-import { VerifiedIncoming } from '../../../src/cache/streaming/install-evidence';
+import { createMetadataDescriptor } from '../../../src/cache/streaming/metadata-base-records';
+import { randomUUID } from 'node:crypto';
+import type { ObjectRef } from '../../../src/cache/streaming/native-records';
+import { closeFixtureInstallPlans } from './install-plan-fixture';
 import { localFixtures, localOptions, nonce } from './local-fixtures';
 import type { Failpoint } from '../../../src/cache/streaming/native';
 import type { Context } from '../../../src/cache/streaming/schema';
-import type { Value } from '../../../src/cache/streaming/encoding';
 export async function installFixture(
   tool: 'gradle' | 'maven' = 'gradle',
   configuration: {
@@ -41,6 +42,7 @@ export async function installFixture(
     access?: 'writable' | 'read-only';
     root?: string;
     nonce?: string;
+    job?: string;
     fail?: Failpoint;
   } = {},
 ) {
@@ -100,6 +102,7 @@ export async function installFixture(
     );
   const context: Context = [...localOptions().context];
   context[7] = tool;
+  if (configuration.job) context[4] = configuration.job;
   const options = {
       ...localOptions(),
       model,
@@ -124,32 +127,22 @@ export async function installFixture(
   async function incoming(
     partition: string,
     entries: Record<string, string | null>,
-    origin: 'worker' | 'trusted-base' = 'worker',
+    _origin: 'worker' | 'trusted-base' = 'worker',
   ) {
-    const nativeRoot = store.prefix + 'install/' + partition;
+    const objectRoot = store.prefix + 'base/' + randomUUID(),
+      nativeRoot = objectRoot + '/payload';
     await mkdir(store.root.resolve(nativeRoot), { recursive: true });
     await files(nativeRoot, entries);
-    async function* records() {
-      for await (const event of walkNative(store.root, nativeRoot, { budget, logicalRoot: '' })) {
-        if (event.tag === 'directory-close') continue;
-        if (event.tag === 'protected-child') throw new Error('Bad fixture child');
-        if (event.tag === 'directory-open')
-          yield ['directory', event.path, event.identity] as Value;
-        else
-          yield [
-            'file',
-            event.path,
-            event.identity,
-            await store.root.hash(event.nativePath, event.identity),
-          ] as Value;
-      }
-    }
-    const evidence = await store.writeStream('native-evidence', { budget, partition }, records());
-    return VerifiedIncoming.verify(
-      store,
-      { partition, nativeRoot, evidence, origin, finishVerification: async (binding) => binding },
-      { budget },
-    );
+    const { bytes, reference } = createMetadataDescriptor(model, [
+      model.family,
+      model.id,
+      partition,
+      'a'.repeat(64),
+      'b'.repeat(64),
+      'c'.repeat(64),
+    ]);
+    await writeFile(store.root.resolve(objectRoot + '/envelope.json'), bytes);
+    return { partition, nativeRoot, objectRoot, reference: reference as ObjectRef };
   }
   const f = localFixtures(options, configuration.nonce ?? nonce),
     bindings = structuredClone(f.bindings);
@@ -163,6 +156,9 @@ export async function installFixture(
     files,
     incoming,
     bindings,
-    close: () => rm(root, { recursive: true, force: true }),
+    close: async () => {
+      await closeFixtureInstallPlans(store);
+      await rm(root, { recursive: true, force: true });
+    },
   };
 }

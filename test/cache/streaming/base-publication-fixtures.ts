@@ -14,130 +14,187 @@
  * limitations under the License.
  */
 
-import { mkdir, writeFile, utimes } from 'node:fs/promises';
-import type { Value } from '../../../src/cache/streaming/encoding';
-import { OwnedStore, type Reference } from '../../../src/cache/streaming/owned-store';
-import { PreparedBaseSource, createBasePayload } from '../../../src/cache/streaming/base-object';
-import { resolveModel } from '../../../src/cache/streaming/model';
-import { localFixtures } from './local-fixtures';
-import { baseFixture } from './base-fixtures';
-export const stream = (rows: readonly Value[]) =>
-  (async function* () {
-    yield* rows;
-  })();
-export async function publicationFixture(
-  files: Record<string, string> = { a: 'abc' },
-  single = false,
-) {
-  const hard = ['.mammoth/**'],
-    model = resolveModel(
-      [
-        'model',
-        1,
-        'maven',
-        hard,
-        [['data', ['**'], hard, single ? 'single-writer' : 'aggregate', null, 'default']],
-      ],
-      'pub-',
-      1,
-    ),
-    f = await baseFixture(model),
-    payload = await createBasePayload(f.store, 'data');
-  for (const [name, content] of Object.entries(files)) {
-    const file = f.store.root.resolve(payload + '/' + name);
-    await mkdir(file.slice(0, Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'))), {
-      recursive: true,
-    });
-    await writeFile(file, content, { mode: 0o644 });
-    await utimes(file, 1.234, 1.234);
-  }
-  const source = await PreparedBaseSource.capture(f.store, 'data', { budget: f.budget });
-  await initializePublisher(f, single ? [['snapshot-source', source.snapshotSource()]] : []);
-  return { ...f, source, payload };
-}
-export async function initializePublisher(
-  f: Awaited<ReturnType<typeof baseFixture>>,
-  sources: Value[] = [],
-  baseline?: Value,
-  prepareSources: Value[] = [],
-) {
-  const store = f.store,
-    opts = { budget: f.budget, partition: null },
-    model = await store.writeStream(
+import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { vi } from 'vitest';
+import type { BaseCacheBackend } from '../../../src/cache/backend';
+import { OwnedStore } from '../../../src/cache/streaming/owned-store';
+import { LocalCodec } from '../../../src/cache/streaming/local-schema';
+import {
+  invocationId,
+  lineageId,
+  resolveModel,
+  type ResolvedModel,
+} from '../../../src/cache/streaming/model';
+import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
+import {
+  createMetadataDescriptor,
+  createMetadataGeneration,
+} from '../../../src/cache/streaming/metadata-base-records';
+import { encodeRecord } from '../../../src/cache/streaming/encoding';
+import {
+  prepareStreaming,
+  type StreamingPrepareRequest,
+} from '../../../src/cache/streaming/prepare';
+import type { Context } from '../../../src/cache/streaming/schema';
+import type { GenerationEntry } from '../../../src/cache/streaming/native-records';
+export const h = 'a'.repeat(64),
+  currentRef = 'refs/heads/main';
+/** V2-only test owner and extraction double; no old tree/digest/replay fixtures. */
+export async function metadataFixture(model?: ResolvedModel) {
+  const directory = await mkdtemp(path.resolve('build/metadata-restore-')),
+    root = directory + '/managed',
+    remote = directory + '/remote';
+  await mkdir(root);
+  await mkdir(remote);
+  const hard = ['.mammoth/**', '**/*.lock'];
+  model ??= resolveModel(
+    [
       'model',
-      opts,
-      stream([
-        ['model-header', f.model.tuple[2], f.model.tuple[3]],
-        ...f.model.partitions.map((p) => ['partition', ...p] as Value),
-      ]),
-    ),
-    producers = await store.writeStream('producers', opts, stream([])),
-    prepare = await store.writeStream('prepare-sources', opts, stream(prepareSources)),
-    activity = await store.writeStream(
-      'activity',
-      opts,
-      stream([
-        ['dir-open', ''],
-        ['dir-close', ''],
-      ]),
-    ),
-    b = localFixtures(store.codec.options).bindings;
-  b[5] = [f.root, store.root.binding];
-  b[6] = model;
-  b[9] = baseline ?? null;
-  b[10] = producers;
-  b[11] = prepare;
-  b[12] = activity;
-  await store.initialize(b);
-  const root = (await store.root.stat(''))!,
-    own = (await store.root.stat('.mammoth'))!,
-    observations = await store.writeStream(
-      'observations',
-      opts,
-      stream([
-        ['dir-open', '', root],
-        ['child', '.mammoth', 'directory', own[3], own[4]],
-        ['dir-close', ''],
-      ]),
-    ),
-    post = await store.writeStream('post-sources', opts, stream(sources));
-  let end = 0,
-    record = 0;
-  for await (const r of store.rows(observations, 'observations', opts))
-    if ((r.value as Value[])[0] === 'dir-close') {
-      end = r.end;
-      record = r.record;
-    }
-  const gc = await store.writeDocument([
-      'gc-progress',
       1,
-      store.codec.options.invocation,
-      observations,
-      ['cursor', observations[4], end, record, 0, null],
-      null,
-    ]),
-    state = store.codec.schemas.documents['local-state'].parse(await store.state());
-  state[3]++;
-  state[4] = 'gc-complete';
-  state[6] = store.codec.schemas.ref('observations').parse(observations);
-  state[7] = store.codec.schemas.ref('post-sources').parse(post);
-  state[10] = store.codec.schemas.ref('gc-progress').parse(gc);
-  await store.updateState(state);
-}
-export async function restartPublisher(store: OwnedStore): Promise<OwnedStore> {
-  return OwnedStore.bind(store.root.path, store.codec);
-}
-export type PublicationFixture = Awaited<ReturnType<typeof publicationFixture>>;
-export async function receipts(f: PublicationFixture): Promise<Value[]> {
-  const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state()),
-    values: Value[] = [];
-  await f.store.readStream(
-    state[9] as Reference,
-    'partition-state',
-    { budget: f.budget, partition: null },
-    async (v) => {
-      if ((v as Value[])[0] === 'partition-state') values.push(v);
+      'maven',
+      hard,
+      [
+        ['data', ['data/**', 'repository/**'], hard, 'aggregate', null, 'default'],
+        ['state', ['state/**'], hard, 'single-writer', 'A', 'default'],
+      ],
+    ],
+    'metadata-restore-',
+    1,
+  );
+  const context: Context = ['github', 'example/repo', 'ci', '42', 'A', 1, 'rev-1', model.tuple[2]],
+    nonce = 'a'.repeat(32),
+    budget = new WorkingBudget();
+  const store = await OwnedStore.bind(
+    root,
+    new LocalCodec({
+      model,
+      context,
+      invocation: invocationId(context, nonce),
+      role: 'standalone',
+      access: 'writable',
+    }),
+  );
+  const objects = new Map<string, string>();
+  let sequence = 0;
+  async function files(base: string, entries: Record<string, string | null>) {
+    for (const [name, body] of Object.entries(entries)) {
+      const file = path.join(base, ...name.split('/'));
+      await mkdir(body === null ? file : path.dirname(file), { recursive: true });
+      if (body !== null) await writeFile(file, body);
+    }
+  }
+  const save = vi.fn<BaseCacheBackend['saveCache']>(async (paths, key) => {
+    const target = remote + '/save-' + String(++sequence);
+    await mkdir(target);
+    for (const original of paths) {
+      const source = original.replace(/[\\/]$/, '');
+      await cp(source, path.join(target, path.basename(source)), {
+        recursive: true,
+        preserveTimestamps: true,
+      });
+    }
+    objects.set(key, target);
+    return sequence;
+  });
+  const restore = vi.fn<BaseCacheBackend['restoreCache']>(
+    async (_paths, prefix, fallback, options) => {
+      const key = [prefix, ...(fallback ?? [])]
+        .map((p) => [...objects.keys()].reverse().find((k) => k.startsWith(p)))
+        .find(Boolean);
+      if (key)
+        for (const member of await readdir(objects.get(key)!))
+          await cp(path.join(objects.get(key)!, member), path.join(options!.archiveRoot!, member), {
+            recursive: true,
+            preserveTimestamps: true,
+          });
+      return key;
     },
   );
-  return values;
+  const api: BaseCacheBackend = {
+    capabilities: { supportsNewestPrefixRestore: true, supportsExplicitSave: true },
+    isFeatureAvailable: () => true,
+    saveCache: save,
+    restoreCache: restore,
+    isMissingPathsError: () => false,
+  };
+  async function seed(
+    payloads: Record<string, Record<string, string | null>>,
+    groups = model!.partitions.map((p) => [p[0]]),
+    ref = currentRef,
+  ) {
+    const entries: GenerationEntry[] = [],
+      lineage = lineageId(ref),
+      number = ++sequence;
+    for (const p of model!.partitions) {
+      const payload = payloads[p[0]];
+      if (payload === undefined) {
+        entries.push(['empty', p[0]]);
+        continue;
+      }
+      const descriptor = createMetadataDescriptor(model!, [
+          model!.family,
+          model!.id,
+          p[0],
+          lineage,
+          h,
+          h,
+        ]),
+        target = remote + '/seed-' + number + '-' + p[0];
+      await mkdir(target + '/payload', { recursive: true });
+      await writeFile(target + '/envelope.json', descriptor.bytes);
+      await files(target + '/payload', payload);
+      objects.set(descriptor.reference[2], target);
+      entries.push(['object', p[0], descriptor.reference]);
+    }
+    const generation = createMetadataGeneration(model!, lineage, h, h, entries, groups),
+      target = remote + '/record-' + number;
+    await mkdir(target);
+    await writeFile(target + '/record.json', encodeRecord(generation));
+    objects.set(generation[11], target);
+    return { generation, entries, target };
+  }
+  const request: StreamingPrepareRequest = {
+    root,
+    model,
+    context,
+    nonce,
+    budget,
+    policy: {
+      role: 'standalone',
+      access: 'writable',
+      restoreCleanup: 'none',
+      gcAgeMs: null,
+      ordinaryPolicy: 'strict',
+      ordinaryOrder: [],
+    },
+    currentRef,
+    captureTempDirectory: null,
+    artifactRetentionDays: 7,
+    cleanupEnabled: true,
+    saveAnchor() {},
+    cacheBackend: async () => api,
+    provision: async () => {},
+    installHooks: async () => {},
+    assertCurrent: (): undefined => {},
+  };
+  return {
+    directory,
+    root,
+    remote,
+    store,
+    model,
+    budget,
+    api,
+    save,
+    restore,
+    objects,
+    files,
+    seed,
+    request,
+    prepare: (overrides: Partial<StreamingPrepareRequest> = {}) =>
+      prepareStreaming({ ...request, ...overrides }),
+    close: () => rm(directory, { recursive: true, force: true }),
+  };
 }
+export type MetadataFixture = Awaited<ReturnType<typeof metadataFixture>>;

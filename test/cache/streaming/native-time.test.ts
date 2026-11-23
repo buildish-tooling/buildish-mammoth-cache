@@ -19,8 +19,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { baseFixture, cleanupBaseFixtures } from './base-fixtures';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import { WorkerStage } from '../../../src/cache/streaming/worker-stage';
-import { writeWorkerNativeEvidence } from '../../../src/cache/streaming/worker-native';
-import { copyBaseSnapshot } from '../../../src/cache/streaming/base-evidence';
+import { WorkerNativeIndex } from '../../../src/cache/streaming/worker-native';
+import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot';
 import * as native from '../../../src/cache/streaming/native';
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -58,7 +58,7 @@ it.each([0, 1000, 1700000000123, 1795305600001])(
   'retains portable millisecond %i through worker staging and native snapshot copy',
   async (ms) => {
     const f = await fixture();
-    let copy: Awaited<ReturnType<typeof copyBaseSnapshot>> | undefined;
+    let copy: MetadataSnapshot | undefined, index: WorkerNativeIndex | undefined;
     try {
       const file = await pending(f, ms);
       try {
@@ -71,15 +71,21 @@ it.each([0, 1000, 1700000000123, 1795305600001])(
       const n = await f.store.root.stat(part.nativeRoot + '/a');
       expect(BigInt(n![8]) / 1000000n).toBe(BigInt(ms));
       if (ms % 1000 === 0) expect(BigInt(n![8])).toBe(BigInt(ms) * 1000000n);
-      const evidence = await writeWorkerNativeEvidence(f.store, part, f.budget, f.signal);
-      copy = await copyBaseSnapshot(f.store, part.nativeRoot, evidence, 'data', {
-        budget: f.budget,
-      });
-      const written = await f.store.root.stat(copy.root + '/a');
+      index = await WorkerNativeIndex.capture(f.store, [part], f.budget, f.signal);
+      copy = await MetadataSnapshot.copy(
+        index,
+        'data',
+        ['local', f.store.codec.options.invocation],
+        {
+          budget: f.budget,
+        },
+      );
+      const written = await f.store.root.stat(copy.nativeRoot + '/a');
       expect(BigInt(written![8]) / 1000000n).toBe(BigInt(ms));
       expect(copy.bytes).toBe(1);
     } finally {
       await copy?.dispose();
+      await index?.dispose();
       await f.stage.dispose();
       expect(f.budget.retained).toBe(0);
     }

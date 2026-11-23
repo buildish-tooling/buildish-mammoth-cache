@@ -14,26 +14,16 @@
  * limitations under the License.
  */
 
-import { InstallDigests } from './prepare-digests';
-import type { DigestHandoff } from './prepare-state';
 import { rename, opendir } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
-import { equal, canonical, type Value } from './encoding';
+import { canonical, type Value } from './encoding';
 import { sameNative, sameRename, type NativeIdentity } from './native';
 import { InstallAdmission } from './install-admission';
 import type { FrozenInstall } from './install-plan';
 import { InstallProgram, InstallReaders, type InstallBatch } from './install-program';
 import { InstallParentPhase } from './install-parent-phase';
-import { checkInstallMember } from './install-member';
 import { InstallScratch } from './install-scratch';
-import { buildChangeIndex } from './install-changes';
-import { checkInstallProjection, type ChangeOutcome } from './install-projection';
-import { buildInstallIndex, IndexDirectories, type IndexedNode } from './install-index';
-import { installCurrentRows } from './install-current';
-import { walkNative } from './native-walk';
-import type { LocalRow } from './local-stream';
-import type { InstallCursor } from './install-batches';
-import type { OwnedStore, Reference } from './owned-store';
+import type { OwnedStore } from './owned-store';
 import type { WorkingBudget } from './tree-state';
 import { retireOwnedDirectory } from './owned-retirement';
 import { retireBackup } from './install-retire';
@@ -42,34 +32,6 @@ type InstallRow = ReturnType<OwnedStore['codec']['schemas']['rows']['install']['
 type ParentRow = ReturnType<OwnedStore['codec']['schemas']['rows']['installParent']['parse']>;
 const signalDefault = () => new AbortController().signal;
 
-async function progress(store: OwnedStore, plan: Reference, cursor: InstallCursor) {
-  const ref = await store.writeDocument([
-    'install-progress',
-    1,
-    store.codec.options.invocation,
-    plan,
-    cursor,
-    null,
-  ]);
-  await store.fail('install-progress-candidate');
-  const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-  if (state[4] !== 'prepare-pending') throw new Error('Install phase changed during execution.');
-  const old = state[11];
-  state[3]++;
-  state[11] = store.codec.schemas.ref('install-progress').parse(ref);
-  await store.updateState(state);
-  await store.fail('install-progress-pointer');
-  if (old) await store.retireReplacedDocument(old);
-}
-async function finish(store: OwnedStore) {
-  const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-  const old = state[11];
-  state[3]++;
-  state[11] = null;
-  await store.updateState(state);
-  await store.fail('install-finished');
-  if (old) await store.retireReplacedDocument(old);
-}
 async function emptyParent(store: OwnedStore, row: ParentRow) {
   const source = await store.root.stat(row[3]);
   if (!source || !sameNative(source, row[4], true) || source[3] !== store.root.binding[3])
@@ -99,26 +61,31 @@ async function emptyParent(store: OwnedStore, row: ParentRow) {
 
 /** Process-local native execution; no serialized row is sufficient to call this. */
 class Mutations {
+  private pending: {
+    source: string;
+    target: string;
+    before: NativeIdentity;
+    from: InstallParentPhase;
+    to: InstallParentPhase;
+  } | null = null;
+  retiringBackups = false;
+  private activeBackup: {
+    row: InstallRow;
+    before: NativeIdentity;
+    after?: NativeIdentity;
+    incoming?: NativeIdentity;
+  } | null = null;
   private readonly phases: InstallParentPhase[] = [];
   private readonly source = new Map<string, InstallParentPhase>();
-  private readonly directories: IndexDirectories[] = [];
-  private scratch: InstallScratch | null = null;
   backups!: InstallScratch;
   backupCursor = 0;
-  digests?: InstallDigests;
   private mutablePrefix: string | null = null;
   private mutableNative: NativeIdentity | null = null;
   private ownsBackups = false;
   live!: InstallParentPhase;
   owned!: InstallParentPhase;
   private constructor(readonly program: InstallProgram) {}
-  static async create(
-    program: InstallProgram,
-    admission: InstallAdmission | null,
-    signal: AbortSignal,
-    current?: IndexDirectories,
-    backups?: InstallScratch,
-  ) {
+  static async create(program: InstallProgram, admission: InstallAdmission, _signal: AbortSignal) {
     const self = new Mutations(program),
       store = program.store,
       budget = program.readers.budget;
@@ -127,9 +94,8 @@ class Mutations {
       await store.makeParents(prefix + 'pending');
       self.mutablePrefix = prefix.slice(0, -1);
       self.mutableNative = await store.root.stat(self.mutablePrefix);
-      self.scratch = await InstallScratch.create(store, budget);
-      self.backups = backups ?? (await InstallScratch.create(store, budget));
-      self.ownsBackups = !backups;
+      self.backups = await InstallScratch.create(store, budget);
+      self.ownsBackups = true;
       async function phase(
         anchor: string,
         expected: (path: string) => Promise<NativeIdentity | null>,
@@ -140,71 +106,20 @@ class Mutations {
         self.phases.push(p);
         return p;
       }
-      if (current)
-        self.live = await phase('', async (p) => {
-          const n = await current.directory(p);
-          return n ? (n[3] as NativeIdentity) : null;
-        });
-      else if (admission) self.live = await phase('', (p) => admission.currentDirectory(p));
-      else {
-        const index = await buildInstallIndex(
-          self.scratch,
-          self.currentRows(signal),
-          store.codec.options.model,
-          null,
-          signal,
-        );
-        const dirs = new IndexDirectories(self.scratch, index);
-        self.directories.push(dirs);
-        self.live = await phase('', async (p) => {
-          const n = await dirs.directory(p);
-          return n ? (n[3] as NativeIdentity) : null;
-        });
-      }
-      self.owned = await phase(store.prefix.slice(0, -1), (p) => store.root.stat(p));
-      for (let i = 0; i < store.codec.options.model.partitions.length; i++) {
-        const partition = store.codec.options.model.partitions[i][0],
-          anchor = store.prefix + 'install/' + partition;
-        if (!(await store.root.stat(anchor))) continue;
-        let dirs = admission?.sourceDirectories[i] ?? null;
-        if (!dirs) {
-          let record = 0;
-          async function* rows(): AsyncGenerator<LocalRow> {
-            for await (const event of walkNative(store.root, anchor, {
-              budget,
-              logicalRoot: '',
-              metadata: 'reject',
-              signal,
-              maxDirectoryEntries: program.readers.maxDirectoryEntries,
-            })) {
-              if (event.tag === 'directory-close') continue;
-              if (event.tag === 'protected-child')
-                throw new Error('Unsupported source directory child.');
-              const value: Value =
-                event.tag === 'file'
-                  ? ['file', event.path, event.identity, '0'.repeat(64)]
-                  : ['directory', event.path, event.identity];
-              yield { value, start: record, end: ++record, record };
-            }
-            yield { value: ['local-end'], start: record, end: record, record };
-          }
-          const index = await buildInstallIndex(
-            self.scratch,
-            rows(),
-            store.codec.options.model,
-            partition,
-            signal,
-          );
-          dirs = new IndexDirectories(self.scratch, index);
-          self.directories.push(dirs);
-        }
-        const directory = dirs;
+      self.live = await phase('', (path) => admission.currentDirectory(path));
+      self.owned = await phase(store.prefix.slice(0, -1), (path) => store.root.stat(path));
+      for (const input of admission.frozen.inputs) {
+        const partition = input.partition,
+          anchor = input.nativeRoot,
+          ordinal = store.codec.options.model.partitions.findIndex((p) => p[0] === partition),
+          directory = admission.sourceDirectories[ordinal];
+        if (!directory) throw new Error('Missing original admitted source hierarchy.');
         self.source.set(
           partition,
-          await phase(anchor, async (p) => {
-            const logical = p === anchor ? '' : p.slice(anchor.length + 1),
-              n = await directory.directory(logical);
-            return n ? (n[3] as NativeIdentity) : null;
+          await phase(anchor, async (path) => {
+            const logical = path === anchor ? '' : path.slice(anchor.length + 1),
+              node = await directory.directory(logical);
+            return node ? (node[3] as NativeIdentity) : null;
           }),
         );
       }
@@ -213,15 +128,6 @@ class Mutations {
       await self.close();
       throw error;
     }
-  }
-  private async *currentRows(signal: AbortSignal): AsyncGenerator<LocalRow> {
-    let record = 0;
-    for await (const value of installCurrentRows(this.program.store, {
-      budget: this.program.readers.budget,
-      signal,
-      maxDirectoryEntries: this.program.readers.maxDirectoryEntries,
-    }))
-      yield { value, start: record, end: ++record, record };
   }
   private async move(
     source: string,
@@ -237,12 +143,15 @@ class Mutations {
     if (!before || !sameNative(before, expected, true) || (await to.stat(target)))
       throw new Error('Unexpected native rename endpoints.');
     signal.throwIfAborted();
+    this.pending = { source, target, before, from, to };
     await rename(this.program.store.root.resolve(source), this.program.store.root.resolve(target));
     this.program.store.root.work.renames++;
+    await this.program.store.fail('install-rename-before-stat');
     const after = await to.stat(target);
     if (!after || !sameRename(before, after)) throw new Error('Native rename identity changed.');
     await from.changed(source);
     await to.changed(target);
+    this.pending = null;
     return after;
   }
   async parent(row: ParentRow, signal: AbortSignal) {
@@ -253,85 +162,110 @@ class Mutations {
     await this.live.created(row[2], observed);
     await this.program.store.fail('install-parent-renamed');
   }
-  async apply(row: InstallRow, signal: AbortSignal, parked = false) {
-    if (row[5] && !parked) {
+  async apply(
+    row: InstallRow,
+    signal: AbortSignal,
+    admittedSource: NativeIdentity | null,
+    admittedOld: NativeIdentity | null,
+  ) {
+    if (row[5]) {
       await this.live.parents(row[2]);
       await this.owned.parents(row[7]!);
-      const old = await checkInstallMember(
-        this.program.readers,
-        row[5],
-        row[2],
-        row[2],
-        {
-          renamed: false,
-          hash: false,
-          stat: (p) => this.live.stat(p),
-        },
-        signal,
-      );
+      const old = admittedOld;
+      if (!old) throw new Error('Missing admitted preimage.');
+      this.activeBackup = { row, before: old };
       const observed = await this.move(row[2], row[7]!, old, this.live, this.owned, signal);
-      await this.backups.append(['backup', row, observed]);
-      if (row[3] === null && this.digests) {
-        const reader = await this.program.readers.reader(row[5]!, signal);
-        await this.digests.record(reader.partition, row[2], old[2], null, null);
-      }
+      this.activeBackup.after = observed;
       await this.program.store.fail(
         row[6] === 'delete' ? 'install-delete-backed-up' : 'install-old-backed-up',
       );
-    } else if (parked) await this.reconciledOld(row);
-    if (row[3] === null) return;
+    }
+    if (row[3] === null) {
+      if (this.activeBackup) {
+        await this.backups.append(['backup', row, this.activeBackup.after!]);
+        this.activeBackup = null;
+      }
+      return;
+    }
     const reader = await this.program.readers.reader(row[4]!, signal),
       source = this.source.get(reader.partition);
     if (!source) throw new Error('Missing source parent phase.');
     await source.parents(row[3]);
     await this.live.parents(row[2]);
-    const native = await checkInstallMember(
-      this.program.readers,
-      row[4]!,
-      row[2],
-      row[3],
-      {
-        renamed: false,
-        hash: false,
-        stat: (p) => source.stat(p),
-      },
-      signal,
-    );
-    const after = await this.move(row[3], row[2], native, source, this.live, signal);
-    await this.digests?.record(reader.partition, row[2], native[2], row[4]!, after);
+    const native = admittedSource;
+    if (!native) throw new Error('Missing admitted source.');
+    if (this.activeBackup) this.activeBackup.incoming = native;
+    await this.move(row[3], row[2], native, source, this.live, signal);
     await this.program.store.fail('install-source-renamed');
-  }
-  private async reconciledOld(row: InstallRow) {
-    await this.owned.parents(row[7]!);
-    await this.live.parents(row[2]);
-    await this.owned.changed(row[7]!);
-    await this.live.changed(row[2]);
-  }
-  async reconciled(value: Value, signal: AbortSignal) {
-    const row = value as readonly Value[];
-    if (row[0] === 'install' && row[5] !== null)
-      await this.reconciledOld(this.program.store.codec.schemas.rows.install.parse(row));
-    if (row[3] === null) return;
-    const sourcePath = String(row[3]),
-      target = String(row[2]);
-    const source =
-      row[0] === 'install-parent'
-        ? this.owned
-        : this.source.get((await this.program.readers.reader(row[4], signal)).partition);
-    if (!source) throw new Error('Missing reconciled source phase.');
-    await source.parents(sourcePath);
-    await this.live.parents(target);
-    await source.changed(sourcePath);
-    await this.live.changed(target);
+    if (this.activeBackup) {
+      await this.backups.append(['backup', row, this.activeBackup.after!]);
+      this.activeBackup = null;
+    }
   }
   async barrier() {
     for (const p of this.phases) await p.barrier();
   }
+  /** Called while original readers and parent scopes still exist, never from persisted state. */
+  async cleanupFailed(): Promise<void> {
+    const signal = signalDefault(),
+      store = this.program.store;
+    if (this.pending) {
+      const move = this.pending,
+        source = await store.root.stat(move.source),
+        target = await store.root.stat(move.target);
+      if (source && sameNative(move.before, source, true) && !target) {
+        this.pending = null;
+      } else if (!source && target && sameRename(move.before, target)) {
+        await move.from.changed(move.source);
+        await move.to.changed(move.target);
+        this.pending = null;
+      } else
+        throw new Error(
+          'Install cleanup endpoints ambiguous; retained at ' + move.source + ' and ' + move.target,
+        );
+    }
+    const active = this.activeBackup;
+    if (active) {
+      const row = active.row,
+        backup = await store.root.stat(row[7]!),
+        live = await store.root.stat(row[2]);
+      if (!backup && live && sameNative(active.before, live, true)) {
+        this.activeBackup = null;
+      } else {
+        if (
+          !backup ||
+          !(active.after
+            ? sameNative(active.after, backup, true)
+            : sameRename(active.before, backup))
+        )
+          throw new Error('Install backup cleanup blocked; retained at ' + row[7]);
+        if (row[6] !== 'delete' && !live) {
+          await this.move(row[7]!, row[2], backup, this.owned, this.live, signal);
+        } else if (
+          (row[6] === 'delete' && !live) ||
+          (live && active.incoming && sameRename(active.incoming, live))
+        ) {
+          await retireBackup(
+            this.program.readers,
+            row[5]!,
+            row[2],
+            row[7]!,
+            backup,
+            this.owned,
+            signal,
+          );
+        } else
+          throw new Error(
+            'Install return destination occupied; retained at ' + row[7] + ' and ' + row[2],
+          );
+        this.activeBackup = null;
+      }
+    }
+    if (!this.retiringBackups) await retireInstallBackups(this.program, this, signal);
+  }
   async close() {
     for (const p of this.phases) p.release();
-    for (const d of this.directories) d.close();
     await closeInstallResources([
-      this.scratch?.close(),
       this.ownsBackups ? this.backups?.close() : undefined,
       this.mutablePrefix && this.mutableNative
         ? retireOwnedDirectory(
@@ -345,50 +279,24 @@ class Mutations {
   }
 }
 
-async function evidence(program: InstallProgram, batch: InstallBatch, signal: AbortSignal) {
-  async function* rows() {
-    for await (const row of program.batchRows(batch)) {
-      await program.readers.before(row, signal);
-      yield row;
-    }
-  }
-  const ref = await program.store.writeStream(
-    'install-evidence',
-    {
-      budget: program.readers.budget,
-      partition: null,
-      maxDirectoryEntries: program.readers.maxDirectoryEntries,
-      installKind: () => program.readers.kind,
-    },
-    rows(),
-    signal,
-  );
-  await program.store.fail('install-evidence-published');
-  return ref;
-}
 async function runRows(
   program: InstallProgram,
   batch: InstallBatch,
   mutations: Mutations,
   signal: AbortSignal,
-  completed?: (row: Value) => Promise<boolean | 'parked'>,
 ) {
   for await (const value of program.batchRows(batch)) {
     signal.throwIfAborted();
-    const row = value as readonly Value[];
-    if (row[0] !== 'install' && row[0] !== 'install-parent') continue;
-    const state = completed ? await completed(value) : false;
-    if (state === true) {
-      await mutations.reconciled(value, signal);
-      continue;
-    }
+    const accepted = value as readonly Value[],
+      row = accepted[1] as readonly Value[];
     if (row[0] === 'install-parent')
-      await mutations.parent(program.store.codec.schemas.rows.installParent.parse(value), signal);
-    else
+      await mutations.parent(program.store.codec.schemas.rows.installParent.parse(row), signal);
+    else if (row[0] === 'install')
       await mutations.apply(
-        program.store.codec.schemas.rows.install.parse(value),
+        program.store.codec.schemas.rows.install.parse(row),
         signal,
-        state === 'parked',
+        accepted[2] as NativeIdentity | null,
+        accepted[3] as NativeIdentity | null,
       );
   }
   await mutations.barrier();
@@ -399,288 +307,102 @@ export async function executeInstall(
   store: OwnedStore,
   frozen: FrozenInstall,
   budget: WorkingBudget,
+  options: Parameters<typeof executeInstallAttempt>[3] = {},
+) {
+  let failure: unknown, result: Awaited<ReturnType<typeof executeInstallAttempt>> | undefined;
+  try {
+    result = await executeInstallAttempt(store, frozen, budget, options);
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    await frozen.metadata?.dispose();
+  } catch (cleanup) {
+    failure =
+      failure === undefined
+        ? cleanup
+        : new AggregateError(
+            [failure, cleanup],
+            'Install/context cleanup failed; owned locations retained under ' +
+              store.root.resolve(store.prefix.slice(0, -1)),
+          );
+  }
+  if (failure !== undefined) throw failure;
+  return result!;
+}
+async function executeInstallAttempt(
+  store: OwnedStore,
+  frozen: FrozenInstall,
+  budget: WorkingBudget,
   options: {
     signal?: AbortSignal;
     batchOperations?: number;
     batchBytes?: number;
-    digestStage?: 0 | 1;
   } = {},
 ) {
   const signal = options.signal ?? signalDefault(),
     admission = await InstallAdmission.create(store, frozen, budget, signal);
-  const readers = new InstallReaders(store, budget, frozen.maxDirectoryEntries, admission, true);
+  const readers = new InstallReaders(store, budget, frozen.maxDirectoryEntries, admission);
   let program: InstallProgram | undefined, mutations: Mutations | undefined;
-  const digests =
-    options.digestStage === undefined
-      ? undefined
-      : InstallDigests.create(store, frozen.inputs, budget, options.digestStage, signal);
-  let handoffs: DigestHandoff[] = [];
+  let failure: unknown;
   try {
-    program = await InstallProgram.create(store, frozen.plan, readers, signal, {
-      operations: options.batchOperations ?? 16384,
-      bytes: options.batchBytes ?? 8 * 1024 * 1024,
-    });
+    program = await InstallProgram.create(
+      store,
+      frozen.plan,
+      readers,
+      signal,
+      {
+        operations: options.batchOperations ?? 16384,
+        bytes: options.batchBytes ?? 8 * 1024 * 1024,
+      },
+      admission,
+    );
     if (!canonical((await store.state())!).equals(canonical(admission.initialState)))
       throw new Error('Install state changed.');
     mutations = await Mutations.create(program, admission, signal);
-    mutations.digests = digests;
-    await progress(store, program.plan, program.initial);
     for await (const value of program.batches.rows(0, program.batches.position)) {
       signal.throwIfAborted();
       if ((value as readonly Value[])[0] !== 'batch') continue;
       const batch = value as InstallBatch;
-      const ref = await evidence(program, batch, signal);
-      const intent: Value = [
-        'install-intent',
-        1,
-        store.codec.options.invocation,
-        program.plan,
-        batch[1],
-        batch[2],
-        ref,
-      ];
-      await store.publishIntent(intent);
-      await store.fail('install-intent-published');
       await runRows(program, batch, mutations, signal);
-      await progress(store, program.plan, batch[2]);
       await retireInstallBackups(program, mutations, signal);
-      await store.clearIntent(intent);
-      await store.fail('install-intent-retired');
-      await store.retireInstallMetadata(ref);
     }
-    await finish(store);
-    if (digests) handoffs = await digests.finish();
+  } catch (error) {
+    failure = error;
+    try {
+      await mutations?.cleanupFailed();
+    } catch (cleanup) {
+      failure = new AggregateError(
+        [error, cleanup],
+        'Install failed and owned cleanup is blocked; retained backup roots under ' +
+          store.root.resolve(store.prefix + 'backups') +
+          '.',
+        { cause: cleanup },
+      );
+    }
   } finally {
-    await closeInstallResources([
-      digests?.close(),
-      mutations?.close(),
-      program?.close(),
-      readers.close(),
-      admission.close(),
-    ]);
-  }
-  for (const q of [frozen.plan, frozen.current, ...frozen.preimages])
-    if (q) await store.retireInstallMetadata(q);
-  return handoffs;
-}
-
-async function verifyBatchEvidence(
-  program: InstallProgram,
-  batch: InstallBatch,
-  reference: Value,
-  signal: AbortSignal,
-) {
-  const expected = program.batchRows(batch);
-  try {
-    for await (const record of program.store.rows(
-      reference,
-      'install-evidence',
-      {
-        budget: program.readers.budget,
-        partition: null,
-        maxDirectoryEntries: program.readers.maxDirectoryEntries,
-        installKind: () => program.readers.kind,
-      },
-      signal,
-      (v) => program.readers.before(v, signal),
-    )) {
-      const row = record.value as readonly Value[];
-      if (row[0] === 'local-stream' || row[0] === 'local-end') continue;
-      const next = await expected.next();
-      if (next.done) throw new Error('Excess batch evidence.');
-      equal(row, next.value, 'exact batch evidence');
-    }
-    if (!(await expected.next()).done) throw new Error('Missing batch evidence.');
-  } finally {
-    await expected.return(undefined as never);
-  }
-}
-
-/** Recover only the active complete batch; an unstarted old-plan suffix is abandoned. */
-export async function recoverInstall(
-  store: OwnedStore,
-  budget: WorkingBudget,
-  signal = signalDefault(),
-): Promise<void> {
-  signal.throwIfAborted();
-  const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-  if (state[4] !== 'prepare-pending') throw new Error('Install recovery requires prepare-pending.');
-  const marker = await store.readFixed(store.prefix + 'install-intent.json');
-  if (!marker && state[11] === null) return;
-  if (state[11] === null) throw new Error('Install intent has no progress owner.');
-  const intent = marker ? store.codec.schemas.documents['install-intent'].parse(marker) : null;
-  const saved = store.codec.schemas.documents['install-progress'].parse(
-    await store.readDocument(state[11], 'install-progress'),
-  );
-  if (intent) equal(saved[3], intent[3], 'intent plan');
-  const committed = !intent || canonical(saved[4]).equals(canonical(intent[5]));
-  if (intent && !committed) equal(saved[4], intent[4], 'uncommitted batch start');
-  const bindings = store.codec.schemas.documents.bindings.parse(
-    await store.readDocument(state[5], 'bindings'),
-  );
-  const readers = new InstallReaders(store, budget, bindings[8][9], undefined, true);
-  let program: InstallProgram | undefined,
-    mutations: Mutations | undefined,
-    scratch: InstallScratch | undefined,
-    backups: InstallScratch | undefined;
-  let completed = false;
-  const garbage: Reference[] = [];
-  const routeFiles: InstallScratch[] = [],
-    directories: IndexDirectories[] = [];
-  try {
-    program = await InstallProgram.create(store, saved[3], readers, signal);
-    if (saved[4][5] !== null || (intent && (intent[4][5] !== null || intent[5][5] !== null)))
-      throw new Error('Install cursor must not have a stack.');
-    if (!intent && canonical(saved[4]).equals(canonical(program.initial))) {
-      await finish(store);
-      completed = true;
-      return;
-    }
-    const batch = await program.range(
-      intent ? (intent[4] as InstallCursor) : program.initial,
-      intent ? (intent[5] as InstallCursor) : (saved[4] as InstallCursor),
-    );
-    if (intent) await verifyBatchEvidence(program, batch, intent[6], signal);
-    scratch = await InstallScratch.create(store, budget);
-    backups = await InstallScratch.create(store, budget);
-    const before = await buildInstallIndex(
-      scratch,
-      store.rows(
-        program.context,
-        'install-current',
-        {
-          budget,
-          partition: null,
-          maxDirectoryEntries: readers.maxDirectoryEntries,
-        },
-        signal,
-      ),
-      store.codec.options.model,
-      null,
-      signal,
-    );
-    let n = 0;
-    async function* actualRows(): AsyncGenerator<LocalRow> {
-      for await (const value of installCurrentRows(store, {
-        budget,
-        signal,
-        maxDirectoryEntries: readers.maxDirectoryEntries,
-      }))
-        yield { value, start: n, end: ++n, record: n };
-    }
-    const actual = await buildInstallIndex(
-      scratch,
-      actualRows(),
-      store.codec.options.model,
-      null,
-      signal,
-    );
-    const current = new IndexDirectories(scratch, actual);
-    directories.push(current);
-    let route = 0;
-    const first = intent ? await firstIndex(program, batch) : Number.MAX_SAFE_INTEGER;
-    for await (const value of program.rows.rows(0, batch[4])) {
-      const row = value as readonly Value[];
-      if (row[0] === 'install-unit-open')
-        route =
-          row[1] === 'snapshot'
-            ? 1 + store.codec.options.model.partitions.findIndex((p) => p[0] === row[2])
-            : 0;
-      if (row[0] !== 'install' && row[0] !== 'install-parent') continue;
-      if (!routeFiles[route]) routeFiles[route] = await InstallScratch.create(store, budget);
-      // The byte offset is derived from the actual plan cursor and exact copied rows.
-      const active = Number(row[1]) >= first;
-      await routeFiles[route].append([
-        String(row[2]),
-        ['effect', active ? 'active' : 'prefix', row],
+    try {
+      await closeInstallResources([
+        mutations?.close(),
+        program?.close(),
+        readers.close(),
+        admission.close(),
       ]);
+    } catch (cleanup) {
+      failure =
+        failure === undefined
+          ? cleanup
+          : new AggregateError(
+              [failure, cleanup],
+              'Install failure and resource close failed; retained payload under ' +
+                store.root.resolve(store.prefix) +
+                '.',
+              { cause: cleanup },
+            );
     }
-    const roots: number[] = [];
-    for (const file of routeFiles)
-      if (file) {
-        async function* changes() {
-          for await (const row of file.rows(0, file.position)) {
-            const r = row as readonly Value[];
-            yield [String(r[0]), r[1]] as const;
-          }
-        }
-        roots.push(await buildChangeIndex(scratch, changes(), signal));
-      }
-    async function inspect(value: Value, node: IndexedNode | null): Promise<ChangeOutcome> {
-      const wrapper = value as readonly Value[],
-        row = wrapper[2] as readonly Value[];
-      const mustComplete = wrapper[1] === 'prefix' || committed;
-      if (row[0] === 'install-parent') {
-        const parent = store.codec.schemas.rows.installParent.parse(row),
-          source = await store.root.stat(parent[3]);
-        if (source) {
-          if (node || mustComplete) throw new Error('Unexpected/pending created parent state.');
-          await emptyParent(store, parent);
-          return { entryChanged: false, opaque: false, parent: null };
-        }
-        if (!node || node[1] !== 'directory') throw new Error('Lost/replaced created parent.');
-        return { entryChanged: true, opaque: false, parent: parent[4] };
-      }
-      const op = store.codec.schemas.rows.install.parse(row);
-      const classification = await classifyInstallOperation(
-        readers,
-        op,
-        mustComplete,
-        wrapper[1] === 'prefix',
-        signal,
-        async (native) => {
-          await backups!.append(['backup', op, native]);
-        },
-      );
-      return { entryChanged: classification !== 'pending', opaque: true };
-    }
-    await checkInstallProjection(scratch, before, actual, roots, inspect, signal);
-    if (!intent) {
-      await finish(store);
-      completed = true;
-      return;
-    }
-    mutations = await Mutations.create(program, null, signal, current, backups);
-    await runRows(program, batch, mutations, signal, async (value) => {
-      const row = value as readonly Value[];
-      if (row[0] === 'install-parent') return !(await store.root.stat(String(row[3])));
-      const state = await classifyInstallOperation(
-        readers,
-        store.codec.schemas.rows.install.parse(row),
-        committed,
-        false,
-        signal,
-      );
-      return state === 'complete' ? true : state === 'parked' ? 'parked' : false;
-    });
-    if (!committed) await progress(store, program.plan, batch[2]);
-    await retireInstallBackups(program, mutations, signal);
-    await store.clearIntent(intent);
-    await store.fail('install-intent-retired');
-    await store.retireInstallMetadata(intent[6]);
-    await finish(store);
-    completed = true;
-  } finally {
-    if (completed && program)
-      garbage.push(program.plan, program.context, ...readers.preimageReferences);
-    for (const d of directories) d.close();
-    await closeInstallResources([
-      mutations?.close(),
-      ...routeFiles.filter(Boolean).map((f) => f.close()),
-      scratch?.close(),
-      backups?.close(),
-      program?.close(),
-      readers.close(),
-    ]);
-    if (completed) for (const ref of garbage) await store.retireInstallMetadata(ref);
   }
-}
-async function firstIndex(program: InstallProgram, batch: InstallBatch): Promise<number> {
-  for await (const value of program.batchRows(batch)) {
-    const row = value as readonly Value[];
-    if (row[0] === 'install' || row[0] === 'install-parent') return Number(row[1]);
-  }
-  return Number.MAX_SAFE_INTEGER;
+  if (failure !== undefined) throw failure;
+  await store.retireInstallMetadata(frozen.plan);
 }
 
 async function closeInstallResources(resources: (Promise<unknown> | undefined)[]) {
@@ -693,105 +415,12 @@ async function closeInstallResources(resources: (Promise<unknown> | undefined)[]
     );
 }
 
-async function classifyInstallOperation(
-  readers: InstallReaders,
-  op: InstallRow,
-  committed: boolean,
-  retired: boolean,
-  signal: AbortSignal,
-  backupObserved?: (native: NativeIdentity) => Promise<void>,
-): Promise<'pending' | 'parked' | 'complete'> {
-  const root = readers.store.root;
-  const target = await root.stat(op[2]),
-    source = op[3] === null ? null : await root.stat(op[3]),
-    backup = op[7] === null ? null : await root.stat(op[7]);
-  if (retired && backup) throw new Error('Unexpected retired-prefix backup.');
-  const checkSource = async () => {
-    await checkInstallMember(
-      readers,
-      op[4]!,
-      op[2],
-      op[3]!,
-      { renamed: false, hash: !!backupObserved },
-      signal,
-    );
-  };
-  const checkDesired = async () => {
-    await checkInstallMember(
-      readers,
-      op[4]!,
-      op[2],
-      op[2],
-      { renamed: true, hash: !!backupObserved },
-      signal,
-    );
-  };
-  const checkOld = async () => {
-    await checkInstallMember(
-      readers,
-      op[5]!,
-      op[2],
-      op[2],
-      { renamed: false, hash: !!backupObserved },
-      signal,
-    );
-  };
-  const checkBackup = async () => {
-    if (!backup) return;
-    const observed = await checkInstallMember(
-      readers,
-      op[5]!,
-      op[2],
-      op[7]!,
-      { renamed: true, hash: !!backupObserved, partial: committed },
-      signal,
-    );
-    if (backupObserved) await backupObserved(observed);
-  };
-  if (op[6] === 'insert') {
-    if (source && !target && !committed) {
-      await checkSource();
-      return 'pending';
-    }
-    if (!source && target) {
-      await checkDesired();
-      return 'complete';
-    }
-    throw new Error('Lost insert or conflicting insert endpoints.');
-  }
-  if (op[6] === 'delete') {
-    if (target && !backup && !committed) {
-      await checkOld();
-      return 'pending';
-    }
-    if (!target && (backup || committed)) {
-      await checkBackup();
-      return 'complete';
-    }
-    throw new Error('Conflicting/lost delete preimage.');
-  }
-  if (source && target && !backup && !committed) {
-    await checkSource();
-    await checkOld();
-    return 'pending';
-  }
-  if (source && !target && backup && !committed) {
-    await checkSource();
-    await checkBackup();
-    return 'parked';
-  }
-  if (!source && target && (backup || committed)) {
-    await checkDesired();
-    await checkBackup();
-    return 'complete';
-  }
-  throw new Error('Conflicting/lost replacement endpoints.');
-}
 async function retireInstallBackups(
   program: InstallProgram,
   mutations: Mutations,
   signal: AbortSignal,
 ) {
+  mutations.retiringBackups = true;
   for await (const value of mutations.backups.rows(
     mutations.backupCursor,
     mutations.backups.position,
@@ -810,5 +439,6 @@ async function retireInstallBackups(
   }
   await mutations.barrier();
   mutations.backupCursor = mutations.backups.position;
+  mutations.retiringBackups = false;
   await program.store.fail('install-backups-retired');
 }

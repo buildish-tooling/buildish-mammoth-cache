@@ -25,7 +25,7 @@ import type { OwnedStore } from './owned-store';
 import { parentPath, type WorkingBudget } from './tree-state';
 
 // Process-local mutable directory facts. Only popped dirty frames are spooled;
-// restart derives authority from the sealed plan/current projection instead.
+// these are same-process mutation bookkeeping, never restart authority.
 export class InstallParentPhase {
   private hasSaved = true;
   private readonly frames: {

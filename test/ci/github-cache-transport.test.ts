@@ -17,7 +17,7 @@
 import { mkdir, mkdtemp, rm, writeFile, readFile, chmod, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createGitHubBaseCacheBackend } from '../../src/ci/github/cache';
 import { restoreDistributionLauncherPermissions } from '../../src/cache/file-permissions';
 import { groovyFixtureModel, writeGroovyWorkspace } from '../support/groovy-cache';
@@ -31,8 +31,13 @@ import {
 import { cutoffFixtureModel } from '../support/cutoff-fixture';
 
 const roots: string[] = [];
+beforeEach(() => {
+  vi.stubEnv('ACTIONS_CACHE_SERVICE_V2', '1');
+  vi.stubEnv('GITHUB_SERVER_URL', 'https://github.com');
+});
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 async function fixture() {

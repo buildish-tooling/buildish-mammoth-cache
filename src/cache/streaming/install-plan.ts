@@ -18,12 +18,13 @@ import type { Value } from './encoding';
 import { canonical } from './encoding';
 import type { OwnedStore, Reference } from './owned-store';
 import { InstallScratch } from './install-scratch';
-import { buildInstallIndex, indexedNode } from './install-index';
+import { buildObservedInstallIndex, indexedNode } from './install-index';
 import { selectInstall, type Selection, type InstallUnit } from './install-selection';
-import { captureInstallPreimages, type CapturedSelection } from './install-preimages';
-import { captureInstallCurrent } from './install-current';
+import { installCurrentRows } from './install-current';
 import { InstallParents } from './install-parents';
-import type { VerifiedIncoming } from './install-evidence';
+import type { IndexedMetadataInput } from './metadata-install-context';
+import { type MetadataInstallContext } from './metadata-install-context';
+export type InstallInput = IndexedMetadataInput;
 import type { WorkingBudget } from './tree-state';
 import { parentPath } from './tree-state';
 import type { NativeIdentity } from './native';
@@ -31,9 +32,8 @@ import type { NativeIdentity } from './native';
 export interface FrozenInstall {
   readonly store: OwnedStore;
   readonly plan: Reference;
-  readonly current: Reference;
-  readonly inputs: readonly VerifiedIncoming[];
-  readonly preimages: readonly (Reference | null)[];
+  readonly inputs: readonly InstallInput[];
+  readonly metadata: MetadataInstallContext;
   readonly parentsPrefix: string;
   readonly maxDirectoryEntries: number;
 }
@@ -48,6 +48,7 @@ export async function takeInstallIndexes(
   frozen: FrozenInstall,
 ): Promise<InstallIndexes | undefined> {
   assertFrozenInstall(store, frozen);
+  frozen.metadata?.assert(store);
   const value = indexes.get(frozen);
   if (!value) return undefined;
   indexes.delete(frozen);
@@ -64,22 +65,47 @@ export function assertFrozenInstall(store: OwnedStore, plan: FrozenInstall): voi
   if (!frozenPlans.has(plan) || plan.store !== store)
     throw new Error('Install requires this process-owned frozen plan.');
 }
-// Protocol: docs/dev/cache-lifecycle-protocol.md#install-batches-and-recovery.
-/** Fully selected sources are producer receipts, never raw serialized verification flags. */
-export async function freezeInstallPlan(
+/** Staged metadata path: the original discovery index remains the sole per-file source. */
+export async function freezeMetadataInstallPlan(
   store: OwnedStore,
-  suppliedInputs: readonly VerifiedIncoming[],
+  context: MetadataInstallContext,
+  budget: WorkingBudget,
+  options: { pruneAggregates?: boolean; signal?: AbortSignal; maxDirectoryEntries?: number } = {},
+): Promise<FrozenInstall> {
+  context.assert(store);
+  if (
+    context.budget !== budget ||
+    (options.maxDirectoryEntries ?? 100000) !== context.maxDirectoryEntries
+  )
+    throw new Error('Metadata install policy/budget mismatch.');
+  try {
+    return await freezePlan(store, context.take(), budget, options, context);
+  } catch (error) {
+    try {
+      await context.dispose();
+    } catch (cleanup) {
+      throw new AggregateError(
+        [error, cleanup],
+        'Metadata freeze/context cleanup failed; owned locations retained under ' +
+          store.root.resolve(store.prefix.slice(0, -1)),
+        { cause: cleanup },
+      );
+    }
+    throw error;
+  }
+}
+async function freezePlan(
+  store: OwnedStore,
+  suppliedInputs: readonly InstallInput[],
   budget: WorkingBudget,
   options: {
-    trustedOld?: readonly VerifiedIncoming[];
-    /** True-hit base restore only; complete incoming contexts include empty cold partitions. */
     pruneAggregates?: boolean;
     signal?: AbortSignal;
     maxDirectoryEntries?: number;
-  } = {},
+  },
+  metadata: MetadataInstallContext,
 ): Promise<FrozenInstall> {
-  const inputs = Object.freeze([...suppliedInputs]),
-    trustedOld = Object.freeze([...(options.trustedOld ?? [])]);
+  const inputs = Object.freeze([...suppliedInputs]);
   const signal = options.signal ?? new AbortController().signal,
     model = store.codec.options.model,
     maxDirectoryEntries = options.maxDirectoryEntries ?? 100000;
@@ -89,24 +115,11 @@ export async function freezeInstallPlan(
     new Set(inputs.map((i) => i.partition)).size !== inputs.length
   )
     throw new Error('Duplicate source partition projection.');
-  for (const input of inputs)
-    input.assertBound(store, input.partition, input.evidence, input.nativeRoot);
+  for (const input of inputs) input.assertBound(store);
   await store.assertNoIntents();
-  if (options.pruneAggregates) {
-    const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-    const bindings = store.codec.schemas.documents.bindings.parse(
-      await store.readDocument(state[5], 'bindings'),
-    );
-    if (
-      state[4] !== 'prepare-pending' ||
-      bindings[8][4] !== 'prune-managed' ||
-      bindings[9] === null ||
-      inputs.length !== model.partitions.length ||
-      inputs.some((i) => i.origin !== 'trusted-base')
-    )
-      throw new Error('Aggregate pruning requires a bound base hit and every partition context.');
-  }
-  const current = await captureInstallCurrent(store, { budget, signal, maxDirectoryEntries });
+  if (options.pruneAggregates && inputs.length !== model.partitions.length)
+    throw new Error('Cannot prune incomplete/cold metadata contexts.');
+  await store.makeParents(store.prefix + 'files/pending');
   const owned: InstallScratch[] = [];
   let retained: InstallScratch | undefined;
   async function spool() {
@@ -118,55 +131,38 @@ export async function freezeInstallPlan(
   const activeParents: { path: string; old: number | null; release: () => void }[] = [];
   let kind: 'file' | 'directory' = 'file';
   try {
-    const scratch = await spool(),
+    const scratch = metadata.scratch,
       aggregate = await spool(),
       parents = await InstallParents.create(store);
-    const currentRoot = await buildInstallIndex(
+    let ordinal = 0;
+    const currentRoot = await buildObservedInstallIndex(
         scratch,
-        store.rows(
-          current,
-          'install-current',
-          { budget, partition: null, maxDirectoryEntries },
-          signal,
-        ),
         model,
         null,
         signal,
-      ),
-      desired = [];
-    for (const input of inputs)
-      desired.push({
-        partition: model.partitions.findIndex((p) => p[0] === input.partition),
-        root: await buildInstallIndex(
-          scratch,
-          store.rows(
-            input.evidence,
-            'native-evidence',
-            { budget, partition: input.partition, maxDirectoryEntries },
+        async (accept) => {
+          for await (const value of installCurrentRows(store, {
+            budget,
             signal,
-          ),
-          model,
-          input.partition,
-          signal,
-        ),
-      });
-    const selected = await selectInstall(
-        scratch,
-        model,
-        currentRoot,
-        desired,
-        signal,
-        maxDirectoryEntries,
-        options.pruneAggregates ?? false,
+            maxDirectoryEntries,
+          }))
+            await accept({ value, start: ordinal, end: ++ordinal, record: ordinal });
+        },
       ),
-      captured = await captureInstallPreimages(
-        store,
-        scratch,
-        selected,
-        trustedOld,
-        signal,
-        maxDirectoryEntries,
-      );
+      desired = inputs.map((input) => ({
+        partition: model.partitions.findIndex((p) => p[0] === input.partition),
+        root: input.index,
+      }));
+    metadata.bindCurrent(currentRoot);
+    const selected = await selectInstall(
+      scratch,
+      model,
+      currentRoot,
+      desired,
+      signal,
+      maxDirectoryEntries,
+      options.pruneAggregates ?? false,
+    );
     async function route(offset: number, ancestor: number | null): Promise<void> {
       signal.throwIfAborted();
       const lease = await scratch.record(offset),
@@ -191,7 +187,7 @@ export async function freezeInstallPlan(
         lease.release();
       }
     }
-    if (captured.root !== null) await route(captured.root, null);
+    if (selected !== null) await route(selected, null);
     let index = 0;
     async function* prepareAncestors(chain: number | null, path: string): AsyncGenerator<Value> {
       const parent = parentPath(path);
@@ -245,7 +241,7 @@ export async function freezeInstallPlan(
     async function* operation(route: readonly Value[]): AsyncGenerator<Value> {
       signal.throwIfAborted();
       const lease = await scratch.record(Number(route[1])),
-        op = lease.value as CapturedSelection;
+        op = lease.value as Selection;
       try {
         yield* prepareAncestors(route[2] as number | null, op[2]);
         const p = op[4],
@@ -257,18 +253,15 @@ export async function freezeInstallPlan(
           const node = await indexedNode(scratch, op[5]);
           try {
             sourcePath = input.nativeRoot + '/' + op[2];
-            sourceEvidence = [
-              'evidence',
-              input.evidence,
-              ['span', input.evidence[4], node.node[9], node.node[10]],
-            ];
+            sourceEvidence = metadata.selector('source', input.partition, op[5]);
           } finally {
             node.release();
           }
         }
-        const old = op[6] === null ? null : captured.references[p];
-        if (op[6] !== null && !old) throw new Error('Missing selected preimage reference.');
-        const destination = old ? ['evidence', old, ['span', old[4], op[10], op[11]]] : null;
+        const old = op[6] !== null;
+        const destination: Value = old
+          ? metadata.selector('current', model.partitions[p][0], op[6]!)
+          : null;
         kind = op[3];
         const number = ++index;
         yield [
@@ -286,7 +279,7 @@ export async function freezeInstallPlan(
       }
     }
     async function* rows(): AsyncGenerator<Value> {
-      yield ['install-context', current];
+      yield ['install-context', metadata.nonce];
       let previous: InstallUnit | null = null;
       for await (const raw of aggregate.rows(0, aggregate.position)) {
         const record = raw as readonly Value[],
@@ -330,12 +323,9 @@ export async function freezeInstallPlan(
     signal.throwIfAborted();
     const frozen: FrozenInstall = Object.freeze({
       store,
+      metadata,
       plan: Object.freeze(plan) as Reference,
-      current: Object.freeze(current) as Reference,
       inputs: Object.freeze([...inputs]),
-      preimages: Object.freeze(
-        captured.references.map((q) => (q ? (Object.freeze(q) as Reference) : null)),
-      ),
       parentsPrefix: parents.prefix,
       maxDirectoryEntries,
     });

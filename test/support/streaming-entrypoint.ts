@@ -110,6 +110,8 @@ export async function entrypointJob(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     GITHUB_ACTION: 'mammoth',
+    GITHUB_SERVER_URL: 'https://github.com',
+    ACTIONS_CACHE_SERVICE_V2: '1',
     GITHUB_ACTION_PATH: process.cwd() + '/actions/github/' + tool,
     GITHUB_EVENT_PATH: event,
     GITHUB_EVENT_NAME: 'push',

@@ -21,8 +21,8 @@ import { InstallScratch } from './install-scratch';
 import { tuple, equal, encodeRecord, add, type Value } from './encoding';
 import { isWorkspaceScaffolding, baseName, compareName, parentPath } from './tree-state';
 import type { NativeIdentity } from './native';
-import type { BaseObjectOptions } from './base-object';
-import { settleBaseCleanup } from './base-object';
+import type { NativeOperationOptions } from './native-operation';
+import { settleNativeCleanup } from './native-operation';
 
 export type ObservedUnit = [
   'observed-unit',
@@ -40,7 +40,6 @@ export type ObservedFile = [
   string,
   NativeIdentity,
   string,
-  Value,
   string,
   string,
   number,
@@ -121,9 +120,10 @@ export class ObservationIndex {
     readonly reference: Reference,
     readonly root: number,
     private readonly scratch: InstallScratch,
-    readonly options: BaseObjectOptions,
+    readonly options: NativeOperationOptions,
     readonly rows: number,
     readonly completed: ['cursor', string, number, number, number, null],
+    private readonly ownsReference: boolean,
   ) {
     this.directories = new ObservationDirectories(this);
     indexes.add(this);
@@ -134,12 +134,12 @@ export class ObservationIndex {
   static assert(index: ObservationIndex, store = index.store): void {
     if (!indexes.has(index) || index.store !== store || index.life.disposed || index.life.retiring)
       throw new Error('Unavailable observation index.');
-    index.options.signal?.throwIfAborted();
   }
-  private static async builder(store: OwnedStore, input: BaseObjectOptions) {
+  private static async builder(store: OwnedStore, input: NativeOperationOptions) {
     const options = Object.freeze({ ...input }),
       signal = options.signal ?? new AbortController().signal;
     signal.throwIfAborted();
+    store.root.work.indexBuilds++;
     const scratch = await InstallScratch.create(store, options.budget),
       frames: Frame[] = [];
     let root: number | undefined,
@@ -213,11 +213,11 @@ export class ObservationIndex {
         const e = edge(frame, String(r[1]), 'file'),
           bit = 1n << BigInt(store.codec.options.model.partitions.findIndex((p) => p[0] === r[2]));
         frame.allOwners |= bit;
-        if (r[6] === 'retain') {
+        if (r[5] === 'retain') {
           frame.retainedFiles |= bit;
           frame.remainingOwners |= bit;
         } else frame.changed = true;
-        e[6] = r[6] === 'delete' ? 1 : 0;
+        e[6] = r[5] === 'delete' ? 1 : 0;
         equal([e[3], e[4]], [n[3], n[4]], 'projected file identity');
         e[5] = await scratch.append([
           'observed-file',
@@ -226,7 +226,6 @@ export class ObservationIndex {
           r[2],
           r[4],
           r[5],
-          r[6],
           item.start,
           item.end,
           item.record,
@@ -354,13 +353,22 @@ export class ObservationIndex {
     };
     return {
       accept,
-      finish(reference: Reference) {
+      finish(reference: Reference, ownsReference = false) {
         if (transferred || root === undefined || frames.length || !completed)
           throw new Error('Incomplete observation index.');
         signal.throwIfAborted();
         completed[1] = reference[4];
         transferred = true;
-        return new ObservationIndex(store, reference, root, scratch, options, count, completed);
+        return new ObservationIndex(
+          store,
+          reference,
+          root,
+          scratch,
+          options,
+          count,
+          completed,
+          ownsReference,
+        );
       },
       async dispose() {
         if (transferred) return;
@@ -373,7 +381,7 @@ export class ObservationIndex {
   static async open(
     store: OwnedStore,
     reference: Reference,
-    input: BaseObjectOptions,
+    input: NativeOperationOptions,
   ): Promise<ObservationIndex> {
     reference = store.codec.schemas.ref('observations').parse(reference);
     const builder = await this.builder(store, input);
@@ -387,7 +395,7 @@ export class ObservationIndex {
         await builder.accept(row);
       return builder.finish(reference);
     } catch (error) {
-      await settleBaseCleanup([() => builder.dispose()], error);
+      await settleNativeCleanup([() => builder.dispose()], error);
       throw error;
     }
   }
@@ -395,7 +403,7 @@ export class ObservationIndex {
   static async write(
     store: OwnedStore,
     records: AsyncIterable<Value>,
-    input: BaseObjectOptions,
+    input: NativeOperationOptions,
   ): Promise<ObservationIndex> {
     const builder = await this.builder(store, input);
     try {
@@ -408,9 +416,9 @@ export class ObservationIndex {
       );
       if (!store.completedStream(reference))
         throw new Error('Missing completed observation writer.');
-      return builder.finish(reference);
+      return builder.finish(reference, true);
     } catch (error) {
-      await settleBaseCleanup([() => builder.dispose()], error);
+      await settleNativeCleanup([() => builder.dispose()], error);
       throw error;
     }
   }
@@ -502,7 +510,7 @@ export class ObservationIndex {
     const lease = await this.file(path);
     try {
       equal([lease.node[3], lease.node[2]], [partition, native], 'original GC target');
-      if (lease.node[6] !== 'delete') throw new Error('GC target was retained.');
+      if (lease.node[5] !== 'delete') throw new Error('GC target was retained.');
     } finally {
       lease.release();
     }
@@ -531,6 +539,7 @@ export class ObservationIndex {
       this.directories.close();
       if (this.life.active) throw new Error('Observation index still has active readers.');
       await this.scratch.close();
+      if (this.ownsReference) await this.store.retireProducedMetadata(this.reference);
       this.life.disposed = true;
     } finally {
       this.life.busy = false;

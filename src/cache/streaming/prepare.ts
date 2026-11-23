@@ -16,46 +16,35 @@
 
 import { mkdir, lstat } from 'node:fs/promises';
 import { lineagePrefix } from './native-records';
-import { LocalCodec, policySchema, type Role, type Access } from './local-schema';
+import { LocalCodec, policySchema } from './local-schema';
+import type { Role, Access } from './local-schema';
 import { invocationId, lineageId, type ResolvedModel } from './model';
 import { contextSchema, type Context } from './schema';
 import { NativeRoot, missing, type Failpoint } from './native';
-import { OwnedStore } from './owned-store';
-import {
-  OpenedInvocation,
-  invocationAnchor,
-  encodeInvocationAnchor,
-  type InvocationAnchor,
-} from './invocation';
-import { reconcileInvocation, admitBootstrapCandidate, type RecoveryOptions } from './recovery';
-import { PrepareFacts, localRecords, type DigestHandoff } from './prepare-state';
-import { equal, uint, type Value } from './encoding';
-import { clearPrepareInstall } from './owned-retirement';
-import { BaselineMetadata } from './baseline-metadata';
+import { OwnedStore, completedPreviousOwner } from './owned-store';
+import { invocationAnchor, encodeInvocationAnchor, type InvocationAnchor } from './invocation';
+import type { LifecycleOptions } from './lifecycle-options';
+import { uint, type Value } from './encoding';
 import { assertLifecycleWindow } from './post-admission';
-import { PinnedBaseGeneration, ProvisionalBaseSet } from './base-generation';
-import { acceptBaseGeneration, type AcceptedBaseGeneration } from './base-incoming';
-import { freezeInstallPlan } from './install-plan';
+import { MetadataBaseRestore } from './metadata-base-restore';
+import { freezeMetadataInstallPlan } from './install-plan';
 import { executeInstall } from './install-execute';
 import { discoverWorkerArtifacts, acquireWorkerArtifacts } from './worker-service';
+import type { DownloadedWorkerArchive } from './worker-download';
 import { mergeWorkerArchives, type WorkerMergeResult } from './worker-merge';
 import { ordinaryOrder } from './reduction';
-import { acceptWorkerMerge, installWorkerMerge } from './worker-incoming';
-import type { PreparedWorkerSnapshot } from './worker-snapshot';
-import {
-  prepareWorkerRequests,
-  selectedWorkers,
-  immutableWorkerInputs,
-  emptyInstallInput,
-  emptyPrepareSnapshot,
-  reopenPrepareSnapshots,
-  snapshotSource,
-  snapshotRequirements,
-} from './prepare-inputs';
+import { acceptWorkerMerge, installWorkerMerge, type AcceptedWorkerMerge } from './worker-incoming';
+import { MetadataSnapshot } from './metadata-snapshot';
+import { MetadataPublicationSource } from './metadata-publication-source';
+import { lifecycleDocuments } from './lifecycle-documents';
+import { handoffSchemas, type HandoffHeader } from './lifecycle-handoff';
+import { metadataWorkerRequests, metadataSnapshotRequirements } from './prepare-inputs';
+import { retireInstallStaging } from './owned-retirement';
+import { settleNativeCleanup } from './native-operation';
 import type { BaseCacheBackend } from '../backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
-export interface StreamingPrepareRequest extends RecoveryOptions {
+export interface StreamingPrepareRequest extends LifecycleOptions {
   readonly root: string;
   readonly model: ResolvedModel;
   readonly context: Context;
@@ -97,91 +86,30 @@ export interface StreamingPrepareResult {
   readonly restoredKey: string | null;
   readonly workerCount: number;
 }
-async function commit(
-  store: OwnedStore,
-  options: RecoveryOptions,
-  change: Parameters<PrepareFacts['commit']>[0],
-) {
-  const facts = await PrepareFacts.open(store, options);
-  try {
-    await facts.commit(change);
-  } finally {
-    facts.close();
-  }
-}
-async function clearInstall(store: OwnedStore, options: RecoveryOptions) {
-  const facts = await PrepareFacts.open(store, options);
-  try {
-    await clearPrepareInstall(facts, options.assertCurrent);
-  } finally {
-    facts.close();
-  }
-}
-function assertRequest(request: StreamingPrepareRequest, facts: PrepareFacts) {
-  const s = facts.selection,
-    b = facts.bindings,
-    p = request.policy;
-  if (!s) throw new Error('Integrated prepare is missing frozen configuration.');
-  equal(
-    [request.model.id, request.model.family, request.context, request.nonce],
-    [facts.store.codec.options.model.id, facts.store.codec.options.model.family, b[3], b[4]],
-    'prepare identity/configuration',
-  );
-  equal(
-    [
-      p.role,
-      p.access,
-      p.restoreCleanup,
-      p.gcAgeMs === null ? 'off' : 'timestamp',
-      p.ordinaryPolicy,
-      request.maxDirectoryEntries ?? 100000,
-      p.ordinaryOrder,
-    ],
-    [b[8][2], b[8][3], b[8][4], b[8][5], b[8][8], b[8][9], b[8][10]],
-    'prepare effective policy',
-  );
-  equal(
-    [
-      request.currentRef,
-      request.defaultRef ?? null,
-      request.captureTempDirectory,
-      request.artifactRetentionDays,
-      request.cleanupEnabled ? 'enabled' : 'disabled',
-      p.gcAgeMs,
-    ],
-    [s[2], s[3], s[4][2], s[4][3], s[4][4], s[4][5]],
-    'prepare frozen execution configuration',
-  );
-  if (s[6][0] === 'selected') selectedWorkers(facts);
-}
-// Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-prepare-selection.
-// Internal composition for R1; released Actions still select their existing lifecycle.
+const rows = async function* (values: readonly Value[]) {
+  yield* values;
+};
+/** One normal prepare attempt. Interrupted namespaces never dispatch a resume operation. */
 export async function prepareStreaming(
   input: StreamingPrepareRequest,
 ): Promise<StreamingPrepareResult> {
-  const order = Object.freeze(ordinaryOrder(input.policy.ordinaryOrder));
-  const request: StreamingPrepareRequest = Object.freeze({
+  const request = Object.freeze({
     ...input,
     context: contextSchema.parse(input.context),
     policy: Object.freeze({
       ...input.policy,
-      ordinaryOrder: order,
+      ordinaryOrder: Object.freeze(ordinaryOrder(input.policy.ordinaryOrder)),
     }),
     defaultRef: input.defaultRef === input.currentRef ? undefined : input.defaultRef,
   });
   const signal = request.signal ?? new AbortController().signal,
-    cleanup = request.cleanupSignal ?? new AbortController().signal,
-    options = {
-      budget: request.budget,
+    options = Object.freeze({
+      ...request,
       signal,
       maxDirectoryEntries: request.maxDirectoryEntries ?? 100000,
-      cleanupSignal: cleanup,
-      assertCurrent: request.assertCurrent,
-      lifecycle: request.lifecycle,
-      onWorkerWarnings: request.onWorkerWarnings,
-    },
+    }),
     id = invocationId(request.context, request.nonce);
-  const assertCurrent = () => {
+  const assertCurrent = (): undefined => {
     signal.throwIfAborted();
     if (request.assertCurrent() !== undefined)
       throw new Error('Prepare lifetime assertion must be synchronous.');
@@ -202,27 +130,9 @@ export async function prepareStreaming(
     signal.throwIfAborted();
     await mkdir(request.root, { recursive: true });
   }
-  const root = await NativeRoot.bind(request.root),
-    old = await OpenedInvocation.current(root.path, request.budget, cleanup);
-  if (old)
-    await reconcileInvocation(
-      old,
-      old.store.codec.options.invocation === id ? 'resume' : 'abandon',
-      options,
-    );
-  signal.throwIfAborted();
+  const root = await NativeRoot.bind(request.root);
+  await completedPreviousOwner(root);
   assertCurrent();
-  if (old?.store.codec.options.invocation === id)
-    equal(
-      [request.model.id, request.model.family, request.policy.role, request.policy.access],
-      [
-        old.store.codec.options.model.id,
-        old.store.codec.options.model.family,
-        old.store.codec.options.role,
-        old.store.codec.options.access,
-      ],
-      'frozen prepare model/role',
-    );
   const codec = new LocalCodec({
       model: request.model,
       context: request.context,
@@ -231,470 +141,287 @@ export async function prepareStreaming(
       access: request.policy.access,
     }),
     store = await OwnedStore.bind(root.path, codec, request.fail),
+    docs = lifecycleDocuments(codec.options),
     anchor = invocationAnchor(store.root, request.context, request.nonce);
   request.saveAnchor(encodeInvocationAnchor(anchor));
-  if (!old || old.store.codec.options.invocation !== id) {
-    await admitBootstrapCandidate(store, options);
-    const start = uint((request.now ?? Date.now)()),
-      age = request.policy.gcAgeMs;
-    const policy = policySchema.parse([
-      'policy',
-      1,
-      request.policy.role,
-      request.policy.access,
-      request.policy.restoreCleanup,
-      age === null ? 'off' : 'timestamp',
-      age === null ? null : Math.max(0, start - age),
-      null,
-      request.policy.ordinaryPolicy,
-      options.maxDirectoryEntries,
-      request.policy.ordinaryOrder,
-    ]);
-    await store.makeParents(store.prefix + 'install/pending');
-    const install = (await store.root.stat(store.prefix + 'install'))!;
-    if (install[3] !== store.root.binding[3]) throw new Error('Cross-filesystem install staging.');
-    const selection = codec.schemas.rows.prepareSelection.parse([
-      'prepare-selection',
-      1,
-      request.currentRef,
-      request.defaultRef ?? null,
-      [
-        'execution',
-        1,
-        request.captureTempDirectory,
-        request.artifactRetentionDays,
-        request.cleanupEnabled ? 'enabled' : 'disabled',
-        age,
-      ],
-      ['pending'],
-      ['pending'],
-      null,
-      install,
-      'selected',
-    ]);
-    const stream = { ...options, partition: null };
-    const model = await store.writeStream(
-        'model',
-        stream,
-        localRecords([
-          ['model-header', request.model.tuple[2], request.model.tuple[3]],
-          ...request.model.partitions.map((p) => ['partition', ...p] as Value),
-        ]),
-        signal,
-      ),
-      producers = await store.writeStream('producers', stream, localRecords([]), signal),
-      sources = await store.writeStream(
-        'prepare-sources',
-        stream,
-        localRecords([selection]),
-        signal,
-      );
-    await store.initialize(
-      [
-        'bindings',
-        1,
-        id,
-        request.context,
-        request.nonce,
-        [store.root.path, store.root.binding],
-        model,
-        request.model.familyProjection,
-        policy,
-        null,
-        producers,
-        sources,
-        null,
-      ],
-      old?.store,
+  if (await store.root.stat(store.prefix.slice(0, -1)))
+    throw new Error(
+      'Existing invocation namespace; use a fresh dedicated root or handle retained data manually.',
     );
-  }
-  let cache: BaseCacheBackend | undefined, artifacts: WorkflowArtifactBackend | undefined;
-  let unavailable = false;
-  const getCache = async () => (cache ??= await request.cacheBackend());
-  const getArtifacts = async () => {
-    if (!request.artifactBackend) throw new Error('Required artifact backend is missing.');
-    return (artifacts ??= await request.artifactBackend());
-  };
+  const start = uint((request.now ?? Date.now)()),
+    age = request.policy.gcAgeMs;
+  const policy = policySchema.parse([
+    'policy',
+    1,
+    request.policy.role,
+    request.policy.access,
+    request.policy.restoreCleanup,
+    age === null ? 'off' : 'timestamp',
+    age === null ? null : Math.max(0, start - age),
+    null,
+    request.policy.ordinaryPolicy,
+    options.maxDirectoryEntries,
+    request.policy.ordinaryOrder,
+  ]);
+  await store.makeParents(store.prefix + 'install/pending');
+  const installOwner = (await store.root.stat(store.prefix + 'install'))!;
+  if (installOwner[3] !== store.root.binding[3])
+    throw new Error('Cross-filesystem install staging.');
+  const model = await store.writeStream(
+    'model',
+    { ...options, partition: null },
+    rows([
+      ['model-header', request.model.tuple[2], request.model.tuple[3]],
+      ...request.model.partitions.map((p) => ['partition', ...p] as Value),
+    ]),
+    signal,
+  );
+  let bindings = docs.bindings.parse([
+    'bindings',
+    2,
+    id,
+    request.context,
+    request.nonce,
+    [store.root.path, store.root.binding],
+    model,
+    request.model.familyProjection,
+    policy,
+  ]);
+  await store.initialize(bindings);
+  let restored: MetadataBaseRestore | undefined,
+    merged: WorkerMergeResult | undefined,
+    accepted: AcceptedWorkerMerge | undefined;
+  const snapshots = new Set<MetadataSnapshot>(),
+    downloads: DownloadedWorkerArchive[] = [];
+  let failure: unknown, answer: StreamingPrepareResult | undefined;
   try {
-    let facts = await PrepareFacts.open(store, options);
-    try {
-      assertRequest(request, facts);
-      if (facts.state[4] === 'build-ready') {
-        await assertLifecycleWindow(store, facts.bindings, options);
-        assertCurrent();
-        return result(facts, anchor);
-      }
-      if (facts.state[4] !== 'prepare-pending')
-        throw new Error('Prepare cannot restart this lifecycle phase.');
-    } finally {
-      facts.close();
-    }
     await request.provision();
-    signal.throwIfAborted();
-    assertCurrent();
-    while (true) {
-      facts = await PrepareFacts.open(store, options);
-      try {
-        assertRequest(request, facts);
-        const s = structuredClone(facts.selection!);
-        if (s[5][0] === 'pending') {
-          const backend = await getCache();
-          unavailable = !backend.isFeatureAvailable();
-          const pin = !unavailable
-            ? await PinnedBaseGeneration.discover(
-                store,
-                backend,
-                { currentRef: s[2], defaultRef: s[3] ?? undefined },
-                options,
-              )
-            : null;
-          const failures: unknown[] = [];
-          try {
-            if (pin) {
-              const ref = await store.write(
-                'generation',
-                store.read(pin.record, 'generation'),
-                signal,
-              );
-              s[5] = ['pinned', pin.key, codec.schemas.ref('generation').parse(ref)];
-            } else s[5] = ['miss'];
-            await facts.commit({ selection: s });
-          } catch (error) {
-            failures.push(error);
-          }
-          try {
-            await pin?.dispose();
-          } catch (error) {
-            failures.push(error);
-          }
-          if (failures.length === 1) throw failures[0];
-          if (failures.length)
-            throw new AggregateError(failures, 'Base selection commitment and cleanup failed.');
-          continue;
-        }
-        if (s[6][0] === 'pending') {
-          const requests = prepareWorkerRequests(facts),
-            selected = requests.length
-              ? await discoverWorkerArtifacts(
-                  await getArtifacts(),
-                  request.model,
-                  request.context,
-                  requests,
-                  { signal },
-                )
-              : [];
-          s[6] = [
-            'selected',
-            selected.map((w) => [
-              w.artifact.id,
-              w.artifact.name,
-              w.artifact.size,
-              w.artifact.digest,
-              w.context,
-              [...w.authorizedSnapshots],
-            ]),
-          ];
-          await facts.commit({ selection: s });
-          continue;
-        }
-        await store.fail('prepare-inputs-selected');
-        const selected = selectedWorkers(facts);
-        if (selected.length && !facts.producers.length) {
-          const downloads = await acquireWorkerArtifacts(store, await getArtifacts(), selected, {
-            signal,
-          });
-          let committed = false;
-          const failures: unknown[] = [];
-          try {
-            await facts.commit({
-              producers: downloads.map((d) =>
-                codec.schemas.rows.producer.parse((d.producer() as readonly Value[])[1]),
-              ),
-            });
-            committed = true;
-          } catch (error) {
-            failures.push(error);
-          }
-          if (!committed)
-            for (const d of downloads)
-              try {
-                await d.dispose();
-              } catch (error) {
-                failures.push(error);
-              }
-          if (failures.length === 1) throw failures[0];
-          if (failures.length)
-            throw new AggregateError(failures, 'Prepare artifact commitment failed.');
-          continue;
-        }
-        if (facts.producers.length !== selected.length)
-          throw new Error('Frozen producer inventory is incomplete.');
-        if (s[9] === 'workers-installed') break;
-        // Only proven private incoming copies are disposable; no live source is removed here.
-        await clearPrepareInstall(facts, request.assertCurrent);
-        await installSelectedPrepare(facts, options, getCache);
-      } finally {
-        facts.close();
-      }
-    }
-    await clearInstall(store, options);
-    await request.installHooks(store);
-    signal.throwIfAborted();
-    assertCurrent();
-    const terminal = await PrepareFacts.open(store, options);
-    try {
-      await assertLifecycleWindow(store, terminal.bindings, options);
-      assertCurrent();
-      await store.fail('prepare-before-build-ready');
-      await terminal.commit({ cutoff: uint((request.now ?? Date.now)()), ready: true });
-      await store.fail('prepare-ready');
-      assertCurrent();
-      signal.throwIfAborted();
-    } finally {
-      terminal.close();
-    }
-    const ready = await PrepareFacts.open(store, options);
-    try {
-      await assertLifecycleWindow(store, ready.bindings, options);
-      assertCurrent();
-      return result(ready, anchor, unavailable);
-    } finally {
-      ready.close();
-    }
-  } catch (primary) {
-    // Close phase consumers before this outer boundary. Ordinary cancellation must
-    // not suppress a discoverable active install's independent reconciliation.
-    try {
-      const current = await OpenedInvocation.current(root.path, request.budget, cleanup);
-      if (current?.store.codec.options.invocation === id)
-        await reconcileInvocation(current, 'resume', {
-          ...options,
-          signal: cleanup,
-          cleanupSignal: cleanup,
-        });
-    } catch (error) {
-      throw new AggregateError(
-        [primary, error],
-        'Prepare failed and root recovery remains blocked.',
-        { cause: error },
+    await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
+    const cache = await request.cacheBackend(),
+      unavailable = !cache.isFeatureAvailable();
+    restored = await MetadataBaseRestore.acquire(
+      store,
+      unavailable ? null : cache,
+      request,
+      options,
+    );
+    const requests = metadataWorkerRequests(store, policy),
+      required = new Set(request.policy.ordinaryOrder);
+    if (requests.length) {
+      if (!request.artifactBackend) throw new Error('Required artifact backend is missing.');
+      const backend = await request.artifactBackend();
+      const selected = await discoverWorkerArtifacts(
+        backend,
+        request.model,
+        request.context,
+        requests,
+        { signal },
       );
+      downloads.push(...(await acquireWorkerArtifacts(store, backend, selected, { signal })));
     }
-    throw primary;
-  }
-}
-function result(
-  facts: PrepareFacts,
-  anchor: InvocationAnchor,
-  unavailable = false,
-): StreamingPrepareResult {
-  if (facts.state[4] !== 'build-ready' || facts.bindings[8][7] === null)
-    throw new Error('Prepare did not finish.');
-  const selection = facts.selection!,
-    allCold = selection[7]?.length === facts.store.codec.options.model.partitions.length,
-    key = allCold ? null : facts.bindings[9]?.[1];
-  let restoreStatus: PrepareRestoreStatus = unavailable ? 'feature-unavailable' : 'miss';
-  if (key) {
-    // The admitted generation key is bound to its validated record/authorized lineage.
-    // Match that protocol prefix, without rereading the generation or guessing a suffix.
-    const family = facts.store.codec.options.model.family,
-      current = key.startsWith(lineagePrefix(family, lineageId(selection[2])));
-    if (
-      !current &&
-      (!selection[3] || !key.startsWith(lineagePrefix(family, lineageId(selection[3]))))
-    )
-      throw new Error('Restored generation is outside frozen lineages.');
-    restoreStatus = selection[7]?.length
-      ? current
-        ? 'current-lineage-partial-hit'
-        : 'fallback-lineage-partial-hit'
-      : current
-        ? 'current-lineage-hit'
-        : 'fallback-lineage-hit';
-  }
-  return {
-    restoreStatus,
-    store: facts.store,
-    anchor,
-    cutoff: facts.bindings[8][7],
-    restoredKey: key ?? null,
-    workerCount: facts.producers.length,
-  };
-}
-
-async function installSelectedPrepare(
-  facts: PrepareFacts,
-  options: RecoveryOptions & Pick<StreamingPrepareRequest, 'onWorkerWarnings'>,
-  getCache: () => Promise<BaseCacheBackend>,
-) {
-  const { store } = facts,
-    s = facts.selection!,
-    signal = options.signal ?? new AbortController().signal;
-  let pin: PinnedBaseGeneration | undefined,
-    set: ProvisionalBaseSet | undefined,
-    accepted: AcceptedBaseGeneration | undefined,
-    merged: WorkerMergeResult | undefined;
-  const failures: unknown[] = [];
-  try {
-    let snapshots: PreparedWorkerSnapshot[];
-    let handoffs: readonly DigestHandoff[] = [];
-    if (s[9] === 'selected') {
-      if (s[5][0] === 'pinned') {
-        pin = await PinnedBaseGeneration.resume(
+    const selectedJobs = new Set(downloads.map((download) => download.context[4]));
+    // Pins already refer to the exact materialized base BEFORE extras or worker overlays.
+    const fallback = new Map<string, MetadataSnapshot>();
+    for (const entry of restored.entries) {
+      const partition = request.model.partitions.find((p) => p[0] === entry[1])!;
+      if (
+        request.policy.role === 'distributed-worker' ||
+        request.policy.access === 'read-only' ||
+        partition[3] !== 'single-writer' ||
+        partition[4] === null ||
+        partition[4] === request.context[4] ||
+        selectedJobs.has(partition[4])
+      )
+        continue;
+      let snapshot: MetadataSnapshot;
+      const source = restored.context!.source(entry[1]);
+      if (entry[2] === 'available' && source) {
+        const publication = MetadataPublicationSource.borrow(source);
+        try {
+          snapshot = await MetadataSnapshot.copy(
+            publication,
+            entry[1],
+            ['base', entry[3]![7]],
+            options,
+          );
+        } finally {
+          await publication.dispose();
+        }
+      } else
+        snapshot = await MetadataSnapshot.empty(
           store,
-          s[5][1],
-          s[5][2],
-          { currentRef: s[2], defaultRef: s[3] ?? undefined },
+          entry[1],
+          ['empty', entry[2] === 'empty' ? 'generation' : entry[2] === 'cold' ? 'cold' : 'miss'],
           options,
         );
-        set = await ProvisionalBaseSet.acquire(pin, await getCache(), options);
-        accepted = await acceptBaseGeneration(store, set, options);
-        const available = new Set(accepted.cold.flat());
-        for (const download of set.downloads)
-          if (download.object && !available.has(download.object.reference[1][2]))
-            await BaselineMetadata.retain(download.object, options);
-      }
-      const cold = accepted ? new Set(accepted.cold.flat()) : new Set<string>();
-      const outcome = store.codec.options.model.partitions
-        .filter((p) => cold.has(p[0]))
-        .map((p) => p[0]);
-      if (s[7] !== null) equal(outcome, s[7], 'frozen base availability outcome');
-      const next = structuredClone(s);
-      next[7] = outcome;
-      await facts.commit({
-        selection: next,
-        baseline: accepted
-          ? store.codec.schemas.documents.bindings.parse([
-              ...facts.bindings.slice(0, 9),
-              accepted.baseline,
-              ...facts.bindings.slice(10),
-            ])[9]
-          : null,
-        sources: accepted?.snapshots.map(snapshotSource) ?? [],
-      });
-      // Accepted incoming roots and retained snapshots are independent now. Drop
-      // unused downloaded group members before worker staging overlaps this phase.
-      await set?.dispose();
-      set = undefined;
-      await pin?.dispose();
-      pin = undefined;
-      // Missing/cold snapshots have a deliberately empty authority, not stale live contents.
-      const selectedFacts = await PrepareFacts.open(store, options);
-      try {
-        snapshots = [...(accepted?.snapshots ?? [])];
-        const present = new Set(snapshots.map((p) => p.partition));
-        for (const p of store.codec.options.model.partitions)
-          if (p[3] === 'single-writer' && !present.has(p[0]))
-            snapshots.push(await emptyPrepareSnapshot(selectedFacts, p[0]));
-        await selectedFacts.commit({ sources: snapshots.map(snapshotSource) });
-      } finally {
-        selectedFacts.close();
-      }
-      const beforeInstall = await PrepareFacts.open(store, options);
-      try {
-        if (
-          store.codec.options.role === 'distributed-aggregator' &&
-          store.codec.options.access === 'writable'
-        )
-          merged = await mergeWorkerArchives(store, immutableWorkerInputs(beforeInstall), {
-            ...options,
-            ordinaryOrder: beforeInstall.bindings[8][10],
-            ordinaryPolicy: beforeInstall.bindings[8][8],
-            snapshots: snapshotRequirements(beforeInstall, snapshots),
-          });
-        if (merged) options.onWorkerWarnings?.(merged.warnings);
-        const incoming = [...(accepted?.incoming ?? [])],
-          present = new Set(incoming.map((i) => i.partition)),
-          prune = beforeInstall.bindings[8][4] === 'prune-managed' && s[5][0] === 'pinned';
-        for (const p of store.codec.options.model.partitions)
-          if (!present.has(p[0]) && (prune || p[3] === 'single-writer'))
-            incoming.push(await emptyInstallInput(store, p[0], options));
-        if (incoming.length) {
-          await assertLifecycleWindow(store, beforeInstall.bindings, options);
-          const plan = await freezeInstallPlan(store, incoming, options.budget, {
-            ...options,
-            pruneAggregates: prune,
-          });
-          await assertLifecycleWindow(store, beforeInstall.bindings, options);
-          handoffs = await executeInstall(store, plan, options.budget, { signal, digestStage: 0 });
-        }
-        const next = structuredClone(beforeInstall.selection!);
-        next[9] = 'base-installed';
-        beforeInstall.close();
-        await commit(store, options, {
-          selection: next,
-          digestHandoffs: [...beforeInstall.digestHandoffs, ...handoffs],
-        });
-        handoffs = [];
-        await store.fail('prepare-base-installed');
-      } finally {
-        beforeInstall.close();
-      }
-      await clearInstall(store, options);
-    } else {
-      snapshots = await reopenPrepareSnapshots(facts);
-      if (
-        store.codec.options.role === 'distributed-aggregator' &&
-        store.codec.options.access === 'writable'
-      )
-        merged = await mergeWorkerArchives(store, immutableWorkerInputs(facts), {
-          ...options,
-          ordinaryOrder: facts.bindings[8][10],
-          ordinaryPolicy: facts.bindings[8][8],
-          snapshots: snapshotRequirements(facts, snapshots),
-        });
+      snapshots.add(snapshot);
+      fallback.set(entry[1], snapshot);
     }
-    if (merged) {
-      const worker = await acceptWorkerMerge(store, merged, options.budget, signal);
-      merged = undefined;
-      await commit(store, options, {
-        sources: worker.snapshots.map(snapshotSource),
-        activity: worker.activity,
+    if (downloads.length) {
+      merged = await mergeWorkerArchives(
+        store,
+        downloads.map((download) => download.input()),
+        {
+          ...options,
+          ordinaryOrder: request.policy.ordinaryOrder,
+          ordinaryPolicy: request.policy.ordinaryPolicy,
+          snapshots: metadataSnapshotRequirements(store, required, fallback),
+        },
+      );
+      request.onWorkerWarnings?.(merged.warnings);
+    }
+    const prune = request.policy.restoreCleanup === 'prune-managed' && restored.generation !== null;
+    for (const entry of restored.entries)
+      if (
+        (entry[2] === 'miss' || entry[2] === 'cold') &&
+        (prune || request.model.partitions.find((p) => p[0] === entry[1])![3] === 'single-writer')
+      )
+        await restored.context!.declareEmpty(entry[1], signal);
+    const cold = new Set(restored.context!.cold.flat());
+    if (
+      request.model.partitions.some((p) => {
+        const source = restored!.context!.source(p[0]);
+        return source && (!cold.has(p[0]) || source.upstream.kind === 'declared-empty');
+      })
+    ) {
+      await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
+      const plan = await freezeMetadataInstallPlan(store, restored.context!, request.budget, {
+        ...options,
+        pruneAggregates: prune,
       });
-      if (worker.incoming.length) {
-        await assertLifecycleWindow(store, facts.bindings, options);
-        handoffs = await installWorkerMerge(
-          store,
-          worker,
-          options.budget,
-          signal,
-          () => assertLifecycleWindow(store, facts.bindings, options),
-          true,
+      await executeInstall(store, plan, request.budget, { signal });
+    }
+    await store.fail('prepare-base-installed');
+    if (merged) {
+      accepted = await acceptWorkerMerge(store, merged, request.budget, signal);
+      merged = undefined;
+      for (const snapshot of accepted.snapshots) snapshots.add(snapshot);
+      for (const snapshot of accepted.snapshots) fallback.set(snapshot.partition, snapshot);
+      if (accepted.incoming.length)
+        await installWorkerMerge(store, accepted, request.budget, signal, () =>
+          assertLifecycleWindow(store, bindings, { signal, assertCurrent }),
         );
-      }
-    } else {
-      const activity = await store.writeStream(
+    }
+    await store.fail('prepare-workers-installed');
+    const activity =
+      accepted?.activity ??
+      (await store.writeStream(
         'activity',
         { ...options, partition: null },
-        localRecords([
+        rows([
           ['dir-open', ''],
           ['dir-close', ''],
         ]),
         signal,
-      );
-      await commit(store, options, { activity });
+      ));
+    for (const entry of restored.entries)
+      entry[4] = fallback.get(entry[1])?.sourceDescriptor() ?? null;
+    await retireInstallStaging(store, installOwner, options, assertCurrent);
+    await request.installHooks(store);
+    await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
+    const cutoff = uint((request.now ?? Date.now)());
+    bindings = docs.bindings.parse(bindings);
+    bindings[8][7] = cutoff;
+    const header: HandoffHeader = handoffSchemas(codec).header.parse([
+      'handoff',
+      2,
+      request.currentRef,
+      request.defaultRef ?? null,
+      request.captureTempDirectory,
+      request.artifactRetentionDays,
+      request.cleanupEnabled ? 'enabled' : 'disabled',
+      age,
+      restored.key && restored.record ? [restored.key, restored.record] : null,
+      activity,
+      cutoff,
+      downloads.length,
+    ]);
+    const handoff = await store.writeStream(
+      'handoff',
+      { ...options, partition: null },
+      rows([header, ...restored.entries]),
+      signal,
+    );
+    // Retire operation-owned metadata before successful main/post handoff; only imported activity crosses per-file.
+    await settleNativeCleanup([
+      () => accepted?.dispose(),
+      () => restored?.dispose(),
+      ...downloads.map((download) => () => download.dispose()),
+      ...[...snapshots].map(
+        (snapshot) => () =>
+          [...fallback.values()].includes(snapshot) ? snapshot.dispose() : snapshot.retire(),
+      ),
+    ]);
+    const state = docs['local-state'].parse(await store.state()),
+      oldBindings = state[5];
+    const nextBindings = await store.writeDocument(bindings);
+    state[3]++;
+    state[4] = 'build-ready';
+    state[5] = codec.schemas.ref('bindings').parse(nextBindings);
+    state[6] = codec.schemas.ref('handoff').parse(handoff);
+    await store.fail('prepare-before-build-ready');
+    await store.updateState(state);
+    await store.retireReplacedDocument(oldBindings);
+    await store.fail('prepare-ready');
+    await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
+    const allCold = restored.entries.every((entry) => entry[2] === 'cold'),
+      key = allCold ? null : restored.key;
+    let restoreStatus: PrepareRestoreStatus = unavailable ? 'feature-unavailable' : 'miss';
+    if (key) {
+      const current = key.startsWith(
+          lineagePrefix(request.model.family, lineageId(request.currentRef)),
+        ),
+        partial = restored.entries.some((entry) => entry[2] === 'cold');
+      restoreStatus = current
+        ? partial
+          ? 'current-lineage-partial-hit'
+          : 'current-lineage-hit'
+        : partial
+          ? 'fallback-lineage-partial-hit'
+          : 'fallback-lineage-hit';
     }
-    const current = await PrepareFacts.open(store, options);
-    try {
-      const next = structuredClone(current.selection!);
-      next[9] = 'workers-installed';
-      await current.commit({
-        selection: next,
-        digestHandoffs: [...current.digestHandoffs, ...handoffs],
-      });
-      await store.fail('prepare-workers-installed');
-    } finally {
-      current.close();
-    }
+    answer = {
+      restoreStatus,
+      store,
+      anchor,
+      cutoff,
+      restoredKey: key,
+      workerCount: downloads.length,
+    };
   } catch (error) {
-    failures.push(error);
+    failure = error;
   }
-  for (const close of [() => merged?.dispose(), () => set?.dispose(), () => pin?.dispose()])
+  try {
+    await settleNativeCleanup(
+      [
+        () => merged?.dispose(),
+        () => accepted?.dispose(),
+        () => restored?.dispose(),
+        ...downloads.map((download) => () => download.dispose()),
+        ...[...snapshots].map(
+          (snapshot) => () => (failure === undefined ? snapshot.dispose() : snapshot.retire()),
+        ),
+      ],
+      failure,
+    );
+  } catch (error) {
+    failure = error;
+  }
+  if (failure !== undefined) {
     try {
-      await close();
-    } catch (error) {
-      failures.push(error);
+      const state = docs['local-state'].parse(await store.state());
+      state[3]++;
+      state[4] = 'prepare-failed';
+      state[7] = null;
+      await store.updateState(state);
+    } catch (status) {
+      throw new AggregateError(
+        [failure, status],
+        'Prepare failed and failure status could not be written.',
+        { cause: status },
+      );
     }
-  if (failures.length === 1) throw failures[0];
-  if (failures.length)
-    throw new AggregateError(failures, 'Prepare stage and resource cleanup failed.');
+    throw failure;
+  }
+  return answer!;
 }

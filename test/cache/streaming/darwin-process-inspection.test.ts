@@ -255,7 +255,7 @@ it.skipIf(process.platform === 'win32').each(['clean', 'remaining', 'uncertain']
       expect(gate.status).toBe('ready');
       if (gate.status !== 'ready') throw new Error(gate.message);
       gate.window.close();
-      expect(((await f.store.state()) as unknown[])[4]).toBe('quiescent');
+      expect(((await f.store.state()) as unknown[])[4]).toBe('build-ready');
     } else {
       expect(gate.status).toBe('skipped-not-quiescent');
       expect(await f.store.state()).toEqual(before);

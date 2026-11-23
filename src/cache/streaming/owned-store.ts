@@ -15,9 +15,9 @@
  */
 
 import type { LocalRow } from './local-stream';
-import { constants, type BigIntStats } from 'node:fs';
-import { mkdir, open, rename, unlink, opendir } from 'node:fs/promises';
-import { randomUUID, createHash, type Hash } from 'node:crypto';
+import { type BigIntStats } from 'node:fs';
+import { opendir, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { randomUUID, createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
   NativeRoot,
@@ -28,7 +28,7 @@ import {
   type Failpoint,
   type NativeIdentity,
 } from './native';
-import type { LocalCodec } from './local-schema';
+import { ownedReferenceSchema, nativeIdentitySchema, type LocalCodec } from './local-schema';
 import {
   decodeRecord,
   decodeRecords,
@@ -36,20 +36,16 @@ import {
   rawSha,
   equal,
   add,
-  Digest,
   type Value,
 } from './encoding';
 import { shaSchema } from './schema';
-import { WorkingBudget } from './tree-state';
-import { retireOwnedDirectory } from './owned-retirement';
+import type { WorkingBudget } from './tree-state';
 import { BufferedWriter } from './buffered-writer';
 import { abortableValues, withAbort } from './abort';
 import {
   readLocalStream,
   readLocalRows,
   readLocalBatches,
-  readLocalPrefix,
-  LocalStreamGrammar,
   writeLocalStream,
   type LocalPurpose,
   type LocalStreamOptions,
@@ -67,11 +63,9 @@ export interface WrittenLocalStream {
   readonly footerStart: number;
 }
 
-export type Prefix = ['prefix', string, string, number, number, string];
 export const locatorSchema = z
   .tuple([z.literal('current'), z.literal(1), shaSchema, z.string()])
   .refine((r) => r[3] === `.mammoth/v1/${r[2]}/state.json`);
-const fixedIntents = ['install-intent.json', 'gc-intent.json'];
 export async function readFixedMetadata(root: NativeRoot, relative: string): Promise<Value | null> {
   const current = await root.stat(relative);
   if (!current) return null;
@@ -86,10 +80,45 @@ export async function readFixedMetadata(root: NativeRoot, relative: string): Pro
   return decodeRecord(Buffer.concat(chunks));
 }
 
+/** Control records only; old payload and plans never become cleanup authority. */
+export async function completedPreviousOwner(root: NativeRoot): Promise<string | null> {
+  const raw = await readFixedMetadata(root, '.mammoth/v1/current.json');
+  if (raw === null) return null;
+  const locator = locatorSchema.parse(raw),
+    state = await readFixedMetadata(root, locator[3]);
+  if (
+    !Array.isArray(state) ||
+    state.length !== 8 ||
+    state[0] !== 'local-state' ||
+    state[1] !== 2 ||
+    state[2] !== locator[2] ||
+    state[4] !== 'completed'
+  )
+    throw new Error(
+      'Interrupted lifecycle; use a fresh dedicated root or handle retained data manually.',
+    );
+  const reference = ownedReferenceSchema(locator[2], 'bindings').parse(state[5]);
+  const binding = await readFixedMetadata(root, reference[2]);
+  if (
+    !Array.isArray(binding) ||
+    binding.length !== 9 ||
+    binding[1] !== 2 ||
+    !Array.isArray(binding[5])
+  )
+    throw new Error('Missing previous root binding.');
+  const bytes = encodeRecord(binding);
+  equal([bytes.length, rawSha(bytes)], [reference[3], reference[4]], 'previous bindings');
+  const anchor = binding[5];
+  if (anchor[0] !== root.path || !sameObject(nativeIdentitySchema.parse(anchor[1]), root.binding))
+    throw new Error('Previous root binding changed.');
+  return locator[2];
+}
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#durable-replacement-and-cursors
 export class OwnedStore {
   private readonly writtenReferences = new WeakMap<object, Reference>();
   private readonly writtenNative = new WeakMap<object, NativeIdentity>();
+  private readonly admittedNative = new WeakMap<object, NativeIdentity>();
   private readonly writtenStreams = new WeakMap<object, WrittenLocalStream>();
   /** Only the exact reference returned by this writer can transfer its original N. */
   completedFile(reference: Reference): NativeIdentity | undefined {
@@ -130,6 +159,7 @@ export class OwnedStore {
         continue;
       }
       await mkdir(this.root.resolve(current));
+      this.root.work.directoryCreations++;
     }
   }
   async write(
@@ -158,16 +188,15 @@ export class OwnedStore {
   /** Native SDK metadata has fixed basenames before its immutable Q is exposed. */
   async writeNativeMetadata(
     root: string,
-    name: 'tree.ndjson' | 'envelope.json' | 'record.json',
+    name: 'envelope.json' | 'record.json',
     source: AsyncIterable<Uint8Array>,
     signal = new AbortController().signal,
     budget?: WorkingBudget,
   ): Promise<Reference> {
     this.codec.schemas.owned.parse(root);
-    if (!['tree.ndjson', 'envelope.json', 'record.json'].includes(name))
+    if (!['envelope.json', 'record.json'].includes(name))
       throw new Error('Unknown native metadata name.');
     const purpose = {
-      'tree.ndjson': 'native-tree',
       'envelope.json': 'envelope',
       'record.json': 'generation',
     }[name];
@@ -283,11 +312,6 @@ export class OwnedStore {
               : !sameObject(created, current)
           )
             throw new Error('Unpublished candidate ownership is ambiguous.', { cause: error });
-          if (
-            name === target &&
-            (await this.root.hash(name, current)) !== hash.copy().digest('hex')
-          )
-            throw new Error('Unpublished candidate bytes changed.', { cause: error });
           await unlink(this.root.resolve(name));
         }
       } catch (cleanup) {
@@ -357,11 +381,7 @@ export class OwnedStore {
       profile.budget,
     );
     // Only context-independent stream grammars participate in this producer handoff.
-    if (
-      purpose === 'native-evidence' ||
-      purpose === 'install-current' ||
-      purpose === 'observations'
-    ) {
+    if (purpose === 'observations') {
       if (!seal || seal.sha !== reference[4] || seal.bytes !== reference[3])
         throw new Error('Incomplete local writer seal.');
       const header = [
@@ -464,8 +484,6 @@ export class OwnedStore {
     const proof = this.completedStream(reference);
     if (
       proof &&
-      options.moveMode === undefined &&
-      options.gcMode === undefined &&
       options.installKind === undefined &&
       proof.purpose === purpose &&
       proof.partition === options.partition &&
@@ -497,8 +515,11 @@ export class OwnedStore {
     }
     signal.throwIfAborted();
     this.root.work.metadataValidations++;
+    let acceptedNative: NativeIdentity | undefined;
     for await (const row of readLocalRows(
-      this.root.read(ref[2]),
+      this.root.read(ref[2], undefined, (native) => {
+        acceptedNative = native;
+      }),
       purpose,
       { ...options, codec: this.codec },
       ref,
@@ -513,6 +534,9 @@ export class OwnedStore {
         this.root.work.metadataRowsRead++;
       yield row;
     }
+    if (!acceptedNative) throw new Error('Missing completed metadata read identity.');
+    if (reference && typeof reference === 'object')
+      this.admittedNative.set(reference, acceptedNative);
   }
   async readFixed(relative: string): Promise<Value | null> {
     return readFixedMetadata(this.root, relative);
@@ -565,20 +589,9 @@ export class OwnedStore {
     await this.assertNoIntents();
     const locator = await this.locator();
     if (locator) {
-      if (
-        !previous ||
-        previous.root.path !== this.root.path ||
-        locator[2] !== previous.codec.options.invocation
-      )
-        throw new Error('Existing lifecycle must be reconciled before initialization.');
-      const old = previous.codec.schemas.documents['local-state'].parse(await previous.state());
-      if (old[4] !== 'completed') throw new Error('Previous lifecycle is not complete.');
-      await previous.resumeRetirements();
-      const binding = previous.codec.schemas.documents.bindings.parse(
-        await previous.readDocument(old[5], 'bindings'),
-      );
-      if (binding[5][0] !== this.root.path || !sameObject(binding[5][1], this.root.binding))
-        throw new Error('Previous root binding changed.');
+      const old = await completedPreviousOwner(this.root);
+      if (old === this.codec.options.invocation)
+        throw new Error('Prepare cannot restart the same invocation.');
     }
     const b = this.codec.schemas.documents.bindings.parse(this.codec.validate(bindings));
     if (b[5][0] !== this.root.path || !sameObject(b[5][1], this.root.binding))
@@ -586,258 +599,61 @@ export class OwnedStore {
     const ref = await this.writeDocument(b),
       state: Value = [
         'local-state',
-        1,
+        2,
         this.codec.options.invocation,
         0,
         'prepare-pending',
         ref,
         null,
         null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
       ];
     await this.fixed(this.prefix + 'state.json', state);
-    if (previous) await this.prepareRetirement(previous);
     await this.fixed('.mammoth/v1/current.json', [
       'current',
       1,
       this.codec.options.invocation,
       this.prefix + 'state.json',
     ]);
-    if (previous) {
-      await this.fail('retirement-owner-published');
-      await this.resumeRetirements();
-    }
     return state;
   }
   async updateState(value: Value): Promise<void> {
     const before = this.codec.schemas.documents['local-state'].parse(await this.state()),
       next = this.codec.schemas.documents['local-state'].parse(value);
     if (next[3] !== before[3] + 1) throw new Error('State revision did not advance once.');
-    if (next[4] === 'completed') await this.resumeRetirements();
     await this.fixed(this.prefix + 'state.json', next);
   }
-  // Protocol: docs/dev/cache-lifecycle-protocol.md#owned-metadata-retirement.
-  // Callers close old consumers before completion. Only the dedicated private
-  // terminal namespace is detached; live cache paths never enter this API.
-  private async prepareRetirement(previous: OwnedStore): Promise<void> {
-    if (
-      previous.codec.options.invocation === this.codec.options.invocation ||
-      previous.root.path !== this.root.path ||
-      !sameObject(previous.root.binding, this.root.binding)
-    )
-      throw new Error('Invalid previous retirement owner/root.');
-    const source = previous.prefix.slice(0, -1),
-      from = await this.root.stat(source);
-    if (!from || from[2] !== 'directory' || from[3] !== this.root.binding[3])
-      throw new Error('Unsafe previous namespace.');
-    const state = previous.codec.schemas.documents['local-state'].parse(
-      await previous.readFixed(previous.prefix + 'state.json'),
-    );
-    if (state[4] !== 'completed') throw new Error('Previous lifecycle is not complete.');
-    const binding = previous.codec.schemas.documents.bindings.parse(
-      await previous.readDocument(state[5], 'bindings'),
-    );
-    if (binding[5][0] !== this.root.path || !sameObject(binding[5][1], this.root.binding))
-      throw new Error('Previous retirement root binding changed.');
-    await this.fixed(this.prefix + 'retirements/' + previous.codec.options.invocation + '.json', [
-      'retirement',
-      1,
-      this.codec.options.invocation,
-      previous.codec.options.invocation,
-      from,
-      rawSha(encodeRecord(state)),
-      this.root.binding,
-    ]);
-    await this.fail('retirement-record-published');
-  }
-  private async checkRetirementOwner() {
-    const state = this.codec.schemas.documents['local-state'].parse(await this.state());
-    const bindings = this.codec.schemas.documents.bindings.parse(
-      await this.readDocument(state[5], 'bindings'),
-    );
-    if (bindings[5][0] !== this.root.path || !sameObject(bindings[5][1], this.root.binding))
-      throw new Error('Current retirement root binding changed.');
-    await this.assertNoIntents();
-  }
-  async resumeRetirements(budget = new WorkingBudget()): Promise<void> {
-    await this.checkRetirementOwner();
-    const records = this.prefix + 'retirements',
-      native = await this.root.stat(records);
-    if (!native) {
-      await this.assertRetiredEmpty();
-      return;
-    }
-    if (native[2] !== 'directory' || native[3] !== this.root.binding[3])
-      throw new Error('Unsafe retirement record directory.');
-    const entries = await opendir(this.root.resolve(records), { bufferSize: 1 });
-    try {
-      while (true) {
-        const entry = await entries.read();
-        if (!entry) break;
-        if (!/^[a-f0-9]{64}\.json$/.test(entry.name)) throw new Error('Unknown retirement record.');
-        const name = records + '/' + entry.name;
-        const record = this.codec.schemas.documents.retirement.parse(await this.readFixed(name));
-        if (entry.name !== record[3] + '.json' || !sameObject(record[6], this.root.binding))
-          throw new Error('Retirement record binding changed.');
-        const source = '.mammoth/v1/' + record[3],
-          parent = this.prefix + 'retired',
-          target = parent + '/' + record[3];
-        let from = await this.root.stat(source),
-          to = await this.root.stat(target);
-        if (from && to) throw new Error('Ambiguous retirement source and target.');
-        if (from) {
-          if (!sameNative(record[4], from, true))
-            throw new Error('Previous namespace changed before detachment.');
-          const state = await this.readFixed(source + '/state.json');
-          if (
-            !Array.isArray(state) ||
-            state[0] !== 'local-state' ||
-            state[1] !== 1 ||
-            state[2] !== record[3] ||
-            state[4] !== 'completed' ||
-            rawSha(encodeRecord(state)) !== record[5]
-          )
-            throw new Error('Previous terminal state changed.');
-          // Completion/initialize drain older records, preventing recursive garbage nesting.
-          for (const folder of ['retired', 'retirements']) {
-            const nested = await this.root.stat(source + '/' + folder);
-            if (!nested) continue;
-            if (nested[2] !== 'directory' || nested[3] !== this.root.binding[3])
-              throw new Error('Unsafe previous retirement directory.');
-            const children = await opendir(this.root.resolve(source + '/' + folder), {
-              bufferSize: 1,
-            });
-            try {
-              if (await children.read())
-                throw new Error('Previous retirements must finish before detachment.');
-            } finally {
-              await children.close();
-            }
-          }
-          await this.root.parents(parent);
-          try {
-            await mkdir(this.root.resolve(parent));
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-          }
-          const p = await this.root.stat(parent);
-          if (!p || p[2] !== 'directory' || p[3] !== this.root.binding[3])
-            throw new Error('Cross-filesystem retirement parent.');
-          // Recheck after nested-directory reads (their atime is the sole allowed read effect).
-          from = await this.root.stat(source);
-          if (!from || !sameNative(record[4], from, true))
-            throw new Error('Previous namespace changed during retirement validation.');
-          to = await this.root.renameAbsent(source, target, from);
-          await this.fail('retired-container-renamed');
-        }
-        if (to) {
-          const expected = record[4];
-          if (
-            to[2] !== 'directory' ||
-            to[3] !== expected[3] ||
-            to[4] !== expected[4] ||
-            to[6] !== expected[6] ||
-            (process.platform !== 'win32' && to[10] !== expected[10])
-          )
-            throw new Error('Detached retirement container replaced.');
-          await this.fail('retired-container-detached');
-          await retireOwnedDirectory(this, target, to, budget, 'retired-member-retired');
-          await this.fail('retired-container-retired');
-        }
-        const actual = await this.readFixed(name);
-        if (actual === null || !encodeRecord(actual).equals(encodeRecord(record)))
-          throw new Error('Retirement record changed.');
-        await unlink(this.root.resolve(name));
-        this.root.work.unlinks++;
-        await this.fail('retirement-record-retired');
-      }
-    } finally {
-      await entries.close();
-    }
-    await this.assertRetiredEmpty();
-  }
-  private async assertRetiredEmpty(): Promise<void> {
-    const parent = this.prefix + 'retired',
-      native = await this.root.stat(parent);
-    if (!native) return;
-    if (native[2] !== 'directory' || native[3] !== this.root.binding[3])
-      throw new Error('Unsafe retired namespace.');
-    const entries = await opendir(this.root.resolve(parent), { bufferSize: 1 });
-    try {
-      if (await entries.read()) throw new Error('Unrecorded retired container.');
-    } finally {
-      await entries.close();
-    }
-  }
-  async publishIntent(value: Value): Promise<void> {
-    await this.state();
-    const valid = this.codec.validate(value),
-      tag = (valid as Value[])[0];
-    const relative =
-      tag === 'install-intent' || tag === 'gc-intent'
-        ? this.prefix + tag + '.json'
-        : tag === 'relocation'
-          ? this.prefix + 'relocation/' + (valid as Value[])[3] + '.json'
-          : null;
-    if (relative === null) throw new Error('Not a fixed destructive intent.');
-    if (await this.readFixed(relative)) throw new Error('Outstanding destructive intent.');
-    await this.fixed(relative, valid);
-  }
-  /** Exact current relocation replacement; caller binds cursor/epoch semantics to its plan. */
-  async replaceRelocation(expected: Value, next: Value): Promise<void> {
-    const before = this.codec.schemas.documents.relocation.parse(expected),
-      after = this.codec.schemas.documents.relocation.parse(next),
-      name = this.prefix + 'relocation/' + before[3] + '.json';
-    if (
-      before[3] !== after[3] ||
-      before[4] !== after[4] ||
-      !encodeRecord(before[5]).equals(encodeRecord(after[5]))
-    )
-      throw new Error('Relocation replacement changes owner/epoch/plan.');
-    const actual = await this.readFixed(name);
-    if (actual === null || !encodeRecord(actual).equals(encodeRecord(before)))
-      throw new Error('Relocation changed before replacement.');
-    await this.fixed(name, after);
-  }
-  async clearIntent(expected: Value): Promise<void> {
-    const valid = this.codec.validate(expected),
-      row = valid as Value[],
-      relative =
-        row[0] === 'relocation'
-          ? this.prefix + 'relocation/' + row[3] + '.json'
-          : this.prefix + row[0] + '.json';
-    if (!['install-intent', 'gc-intent', 'relocation'].includes(String(row[0])))
-      throw new Error('Not a fixed intent.');
-    const actual = await this.readFixed(relative);
-    if (actual === null) return;
-    if (rawSha(encodeRecord(actual)) !== rawSha(encodeRecord(valid)))
-      throw new Error('Intent changed before retirement.');
-    await unlink(this.root.resolve(relative));
-    await this.fail('intent-retired');
-  }
-  async assertNoIntents(ownedIntent?: Value): Promise<void> {
-    // Only the exact discoverable current-invocation owner may be excluded.
-    let ownedName: string | undefined;
-    if (ownedIntent !== undefined) {
-      const value = this.codec.validate(ownedIntent) as readonly Value[];
-      if (value[0] === 'install-intent') ownedName = this.prefix + 'install-intent.json';
-      else if (value[0] === 'gc-intent') ownedName = this.prefix + 'gc-intent.json';
-      else if (value[0] === 'relocation')
-        ownedName = this.prefix + 'relocation/' + value[3] + '.json';
-      else throw new Error('Unsupported recovery intent.');
-      const actual = await this.readFixed(ownedName);
-      if (actual === null || !encodeRecord(actual).equals(encodeRecord(ownedIntent)))
-        throw new Error('Recovery intent changed.');
-    }
-    await checkRootIntents(this.root, ownedName);
+  async assertNoIntents(): Promise<void> {
+    await checkRootIntents(this.root);
   }
 
+  async retireAdmittedMetadata(reference: Reference): Promise<void> {
+    const expected = this.admittedNative.get(reference);
+    if (!expected) throw new Error('Missing completed admitted metadata disposal owner.');
+    const actual = await this.root.stat(reference[2]);
+    if (!actual || !sameNative(expected, actual, true))
+      throw new Error('Admitted metadata changed; retained at ' + this.root.resolve(reference[2]));
+    await unlink(this.root.resolve(reference[2]));
+    this.root.work.unlinks++;
+    this.root.work.cleanupFiles++;
+    this.admittedNative.delete(reference);
+  }
+  hasAdmittedMetadata(reference: Reference): boolean {
+    return this.admittedNative.has(reference);
+  }
+  /** Original successful writer identity authorizes disposal, never a decoded reference or content rehash. */
+  async retireProducedMetadata(reference: Reference): Promise<void> {
+    const expected = this.writtenNative.get(reference);
+    if (!expected) throw new Error('Missing original produced metadata disposal owner.');
+    const actual = await this.root.stat(reference[2]);
+    if (!actual) return;
+    if (!sameNative(expected, actual, true))
+      throw new Error('Produced metadata changed; retained at ' + this.root.resolve(reference[2]));
+    await unlink(this.root.resolve(reference[2]));
+    this.root.work.unlinks++;
+    this.root.work.cleanupFiles++;
+    this.writtenNative.delete(reference);
+    this.writtenStreams.delete(reference);
+  }
   /** These Q purposes are referenced only by root-state cells, never arbitrary streams. */
   async retireReplacedDocument(reference: Value): Promise<void> {
     if (
@@ -859,368 +675,37 @@ export class OwnedStore {
   }
   /** Purpose-exclusive install metadata, detached by its owning installer. */
   async retireInstallMetadata(reference: Value): Promise<void> {
-    if (
-      !Array.isArray(reference) ||
-      !['install-plan', 'install-current', 'native-evidence', 'install-evidence'].includes(
-        String(reference[1]),
-      )
-    )
-      throw new Error('Not install-owned metadata.');
-    const ref = this.codec.schemas.ref(String(reference[1])).parse(reference);
-    const state = this.codec.schemas.documents['local-state'].parse(await this.state());
-    if (await this.readFixed(this.prefix + 'install-intent.json'))
-      throw new Error('Install metadata still has an intent owner.');
-    if (ref[1] !== 'install-evidence' && state[11] !== null)
-      throw new Error('Install metadata still has a progress owner.');
-    if (!(await this.root.stat(ref[2]))) return;
-    for await (const bytes of this.read(ref, ref[1])) void bytes;
-    await unlink(this.root.resolve(ref[2]));
-    this.root.work.unlinks++;
-  }
-  /** GC-only detached evidence/stack, after progress replacement and intent retirement. */
-  async retireGcMetadata(reference: Reference): Promise<void> {
-    if (!['gc-evidence', 'cursor-stack'].includes(reference[1]))
-      throw new Error('Not GC-owned metadata.');
-    const ref = this.codec.schemas.ref(reference[1]).parse(reference);
-    if (await this.readFixed(this.prefix + 'gc-intent.json'))
-      throw new Error('GC metadata still has an intent owner.');
-    const state = this.codec.schemas.documents['local-state'].parse(await this.state());
-    if (ref[1] === 'cursor-stack') {
-      for (const [cell, purpose] of [
-        [state[10], 'gc-progress'],
-        [state[11], 'install-progress'],
-      ] as const) {
-        if (!cell) continue;
-        const progress = this.codec.schemas.documents[purpose].parse(
-          await this.readDocument(cell, purpose),
-        );
-        if (progress[4][5]?.[2] === ref[2]) throw new Error('GC stack is still referenced.');
-      }
-    }
-    if (!(await this.root.stat(ref[2]))) return;
-    for await (const bytes of this.read(ref, ref[1])) void bytes;
-    await unlink(this.root.resolve(ref[2]));
-    this.root.work.unlinks++;
-  }
-  async append(
-    purpose: 'adjustments' | 'outbound-evidence' | 'return-evidence',
-    partition: string,
-    budget: WorkingBudget,
-  ): Promise<OwnedAppend> {
-    const relative = this.prefix + 'prefixes/' + randomUUID();
-    await this.makeParents(relative);
-    this.root.work.opens++;
-    const handle = await open(this.root.resolve(relative), 'wx+', 0o600);
-    const grammar = new LocalStreamGrammar(purpose, { codec: this.codec, budget, partition });
-    const append = new OwnedAppend(
-      this,
-      purpose,
-      relative,
-      handle,
-      grammar,
-      budget,
-      createHash('sha256'),
-      new Digest('local-' + purpose),
-      0,
-      0,
-    );
-    try {
-      await append.header();
-      return append;
-    } catch (error) {
-      await append.close();
-      throw error;
-    }
-  }
-  async resumePrefix(
-    reference: Value,
-    purpose: 'adjustments' | 'outbound-evidence' | 'return-evidence',
-    partition: string,
-    budget: WorkingBudget,
-    intent: Value,
-  ): Promise<OwnedAppend> {
-    const prefix = this.codec.schemas.appendPrefix(purpose).parse(reference),
-      marker = this.codec.schemas.documents.relocation.parse(intent);
-    if (partition !== marker[3]) throw new Error('Prefix partition differs from relocation.');
-    const actual = await this.readFixed(this.prefix + 'relocation/' + marker[3] + '.json');
-    if (actual === null || rawSha(encodeRecord(actual)) !== rawSha(encodeRecord(marker)))
-      throw new Error('Prefix has no matching live intent.');
-    const committed =
-      purpose === 'outbound-evidence'
-        ? marker[11]
-        : purpose === 'return-evidence'
-          ? marker[12]
-          : marker[13];
-    if (
-      !committed ||
-      committed[0] !== 'prefix' ||
-      rawSha(encodeRecord(committed)) !== rawSha(encodeRecord(prefix))
-    )
-      throw new Error('Prefix is not committed by intent.');
-    const containsQ = (value: Value): boolean =>
-      Array.isArray(value) &&
-      ((value[0] === 'ref' && value[2] === prefix[2]) || value.some(containsQ));
-    const state = this.codec.schemas.documents['local-state'].parse(await this.state());
-    let published = containsQ(state) || containsQ(marker);
-    if (state[9])
-      await this.readStream(
-        state[9],
-        'partition-state',
-        { budget, partition: null },
-        async (row) => {
-          if (containsQ(row)) published = true;
-        },
-      );
-    if (published)
-      throw new Error('Prefix is already published as immutable Q; reconcile retirement.');
-    const before = await this.root.stat(prefix[2]);
-    if (!before || BigInt(before[5]) < BigInt(prefix[3]))
-      throw new Error('Committed prefix is missing.');
-    const iterator = this.root.read(prefix[2], before)[Symbol.asyncIterator]();
-    let remainder: Buffer | null = null;
-    const clipped = (async function* () {
-      let left = prefix[3];
-      while (left > 0) {
-        const next = await iterator.next();
-        if (next.done) return;
-        const size = Math.min(left, next.value.length);
-        remainder = next.value.length > size ? next.value.subarray(size) : null;
-        yield next.value.subarray(0, size);
-        left -= size;
-      }
-    })();
-    let restored: Awaited<ReturnType<typeof readLocalPrefix>> | undefined;
-    try {
-      restored = await readLocalPrefix(
-        clipped,
-        purpose,
-        { codec: this.codec, budget, partition },
-        prefix,
-      );
-      let tailReadFailed = false;
-      const tail = (async function* () {
-        if (remainder) yield remainder;
-        while (true) {
-          let next: IteratorResult<Buffer>;
-          try {
-            next = await iterator.next();
-          } catch (error) {
-            tailReadFailed = true;
-            throw error;
-          }
-          if (next.done) return;
-          yield next.value;
-        }
-      })();
-      let sealed = false;
-      try {
-        for await (const row of decodeRecords(tail))
-          if (Array.isArray(row.value) && row.value[0] === 'local-end') sealed = true;
-      } catch (error) {
-        if (sealed || tailReadFailed) throw error;
-      } // Incomplete/malformed uncommitted tail may be discarded.
-      if (sealed) {
-        restored.grammar.dispose();
-        throw new Error('Prefix is sealed; reconcile immutable candidate.');
-      }
-    } catch (error) {
-      restored?.grammar.dispose();
-      throw error;
-    } finally {
-      await iterator.return?.(undefined);
-    }
-    if (!restored) throw new Error('Prefix reload incomplete.');
-    const after = await this.root.stat(prefix[2]);
-    if (!after || !sameNative(before, after, true)) {
-      restored.grammar.dispose();
-      throw new Error('Prefix changed during reload.');
-    }
-    this.root.work.opens++;
-    const handle = await open(
-      this.root.resolve(prefix[2]),
-      constants.O_RDWR | (constants.O_NOFOLLOW ?? 0),
-    );
-    try {
-      const opened = nativeIdentity(await handle.stat({ bigint: true }));
-      this.root.work.stats++;
-      if (!sameNative(after, opened, true)) throw new Error('Prefix changed while opening.');
-      await handle.truncate(prefix[3]);
-      return new OwnedAppend(
-        this,
-        purpose,
-        prefix[2],
-        handle,
-        restored.grammar,
-        budget,
-        restored.rawHash,
-        restored.eventDigest,
-        prefix[3],
-        prefix[4],
-      );
-    } catch (error) {
-      await handle.close();
-      restored.grammar.dispose();
-      throw error;
-    }
-  }
-}
-// Protocol: docs/dev/cache-lifecycle-protocol.md#immutable-references-and-append-prefixes
-export class OwnedAppend {
-  private readonly writer: BufferedWriter;
-  private closed = false;
-  private failed = false;
-  constructor(
-    private readonly store: OwnedStore,
-    readonly purpose: string,
-    readonly path: string,
-    private readonly handle: Awaited<ReturnType<typeof open>>,
-    private readonly grammar: LocalStreamGrammar,
-    budget: WorkingBudget,
-    private readonly hash: Hash,
-    private readonly events: Digest,
-    private bytes: number,
-    private records: number,
-  ) {
-    this.writer = new BufferedWriter(
-      handle,
-      budget,
-      (n) => {
-        store.root.work.writeBytes = add(store.root.work.writeBytes, n);
-      },
-      bytes,
-      () => {
-        store.root.work.metadataWriteCalls++;
-      },
-    );
-  }
-  private async writeEncoded(bytes: Buffer): Promise<void> {
-    if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
-    try {
-      await this.writer.append(bytes);
-      this.hash.update(bytes);
-      this.bytes = add(this.bytes, bytes.length);
-    } catch (error) {
-      this.failed = true;
-      throw error;
-    }
-  }
-  async header(): Promise<void> {
-    if (this.bytes !== 0) throw new Error('Duplicate prefix header.');
-    const header = encodeRecord(this.grammar.header());
-    await this.writeEncoded(header);
-    this.events.encoded(header.subarray(0, -1));
-  }
-  async append(value: Value): Promise<void> {
-    if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
-    const bytes = encodeRecord(value);
-    try {
-      this.grammar.accept(value);
-      await this.writeEncoded(bytes);
-      this.events.encoded(bytes.subarray(0, -1));
-      this.records = add(this.records);
-    } catch (error) {
-      this.failed = true;
-      throw error;
-    }
-  }
-  async checkpoint(): Promise<Prefix> {
-    if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
-    this.grammar.finish();
-    await this.writer.flush();
-    this.writer.releaseBuffer();
-    return this.store.codec.schemas
-      .appendPrefix(this.purpose)
-      .parse([
-        'prefix',
-        this.purpose,
-        this.path,
-        this.bytes,
-        this.records,
-        this.hash.copy().digest('hex'),
-      ]);
-  }
-  async seal(): Promise<Reference> {
-    if (this.closed || this.failed) throw new Error('Closed/failed prefix.');
-    this.grammar.finish();
-    await this.writeEncoded(encodeRecord(['local-end', this.records, this.events.digest()]));
-    await this.writer.flush();
-    this.writer.dispose();
-    await this.handle.close();
-    this.closed = true;
-    this.grammar.dispose();
-    return this.store.codec.schemas
-      .ref(this.purpose)
-      .parse(['ref', this.purpose, this.path, this.bytes, this.hash.digest('hex')]);
-  }
-  async close(): Promise<void> {
-    if (!this.closed) {
-      this.writer.dispose();
-      await this.handle.close();
-      this.closed = true;
-      this.grammar.dispose();
-    }
+    this.codec.schemas.ref('install-plan').parse(reference);
+    await this.retireProducedMetadata(reference as Reference);
   }
 }
 
-/** Disabled/no-owner admission shares the exact existing conservative discovery. */
+/** Disabled/no-owner admission uses the same conservative refusal checks. */
 export async function assertNoRootIntents(root: NativeRoot) {
   await checkRootIntents(root);
 }
-async function checkRootIntents(root: NativeRoot, ownedName?: string) {
-  // Known old destructive formats never become executable new-format inputs.
+async function checkRootIntents(root: NativeRoot) {
   for (const name of [
     'restore-move-v1.json',
     'groovy-apply-v1/intent.json',
     'workspace-apply-v2/intent.json',
     'workspace-apply-v3/intent.json',
+    'cutoff-state-v2/current.json',
   ])
     if (await root.stat('.mammoth/' + name))
-      throw new Error('Incompatible legacy destructive intent.');
-  const legacy = '.mammoth/cutoff-state-v2/current.json';
-  const legacyPointer = await root.stat(legacy);
-  if (legacyPointer) {
-    if (BigInt(legacyPointer[5]) > 4096n) throw new Error('Unrecognized legacy lifecycle pointer.');
-    const chunks: Buffer[] = [];
-    for await (const chunk of root.read(legacy, legacyPointer)) chunks.push(chunk);
-    const pointer = z
-      .object({
-        schemaVersion: z.literal(1),
-        journal: z.string().regex(/^journal-[a-f0-9-]{36}\.json$/),
-      })
-      .strict()
-      .parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-    const file = '.mammoth/cutoff-state-v2/' + pointer.journal,
-      { handle, identity } = await root.openRead(file);
-    try {
-      const bytes = Buffer.alloc(256);
-      const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-      const id = pointer.journal.slice(8, -5),
-        prefix = `{"schemaVersion":6,"invocation":"${id}","phase":"completed",`;
-      if (!bytes.subarray(0, bytesRead).toString('utf8').startsWith(prefix))
-        throw new Error('Incompatible unfinished legacy lifecycle.');
-      const current = await root.stat(file);
-      if (!current || !sameNative(identity, current, true))
-        throw new Error('Legacy lifecycle changed.');
-    } finally {
-      await handle.close();
-    }
-  }
+      throw new Error('Incompatible legacy destructive intent/lifecycle.');
   const base = '.mammoth/v1';
   if (!(await root.stat(base))) return;
   for await (const entry of await opendir(root.resolve(base))) {
-    if (entry.name === 'current.json') continue;
-    if (!/^[a-f0-9]{64}$/.test(entry.name)) continue;
+    if (entry.name === 'current.json' || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
     if (!entry.isDirectory() || entry.isSymbolicLink())
       throw new Error('Unsafe invocation discovery directory.');
-    for (const file of fixedIntents) {
-      const relative = base + '/' + entry.name + '/' + file;
-      if (relative === ownedName) continue;
-      if (await root.stat(relative)) throw new Error('Pending root-local destructive intent.');
-    }
+    for (const file of ['install-intent.json', 'gc-intent.json'])
+      if (await root.stat(base + '/' + entry.name + '/' + file))
+        throw new Error('Pending root-local destructive intent.');
     const relocation = base + '/' + entry.name + '/relocation';
     if (await root.stat(relocation))
       for await (const marker of await opendir(root.resolve(relocation)))
-        if (marker.name.endsWith('.json') && relocation + '/' + marker.name !== ownedName)
-          throw new Error('Pending root-local relocation.');
+        if (marker.name.endsWith('.json')) throw new Error('Pending root-local relocation.');
   }
 }

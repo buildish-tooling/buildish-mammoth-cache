@@ -70,7 +70,7 @@ export function localFixtures(options = localOptions(), invocationNonce = nonce)
   ];
   const bindings: Value[] = [
     'bindings',
-    1,
+    2,
     options.invocation,
     options.context,
     invocationNonce,
@@ -78,27 +78,16 @@ export function localFixtures(options = localOptions(), invocationNonce = nonce)
     q('model'),
     options.model.familyProjection,
     policy,
-    null,
-    q('producers'),
-    q('prepare-sources'),
-    q('activity'),
   ];
   const bytes = codec.encode(bindings);
   const state: Value[] = [
     'local-state',
-    1,
+    2,
     options.invocation,
     1,
     'build-ready',
     ['ref', 'bindings', prefix + 'bindings.json', bytes.length, rawSha(bytes)],
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
+    q('handoff'),
     null,
   ];
   const decision: Value = [

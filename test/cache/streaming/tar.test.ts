@@ -189,7 +189,7 @@ describe('opt-in worker TAR profile', () => {
   });
 });
 it('binds the new family namespace independently from old keys', () => {
-  expect(STREAMING_PROFILES.worker).toBe('worker-tar-v1');
+  expect(STREAMING_PROFILES.worker).toBe('worker-tar-v2');
   expect(
     streamingFamilyId('maven', 'db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef'),
   ).toBe('mammoth-s1-maven-db28172d252fd67b0feb15f23ac18c39c38164039839912ff27f4d5da44be3ef');

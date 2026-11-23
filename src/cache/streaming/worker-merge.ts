@@ -35,13 +35,12 @@ export interface WorkerMergeInput {
   readonly authorizedSnapshots?: readonly string[];
   readonly producerId?: string;
 }
-import { PreparedWorkerSnapshot } from './worker-snapshot';
-export { PreparedWorkerSnapshot } from './worker-snapshot';
+import { MetadataSnapshot } from './metadata-snapshot';
 export interface WorkerSnapshotRequirement {
   readonly partition: string;
   readonly job: string;
   readonly required: boolean;
-  readonly baseline?: PreparedWorkerSnapshot;
+  readonly baseline?: MetadataSnapshot;
 }
 export interface WorkerMergeOptions {
   readonly budget: WorkingBudget;
@@ -57,7 +56,7 @@ export interface WorkerMergeResult {
   readonly summaries: readonly WorkerSummary[];
   readonly readers: readonly WorkerFrontier[];
   readonly activity: readonly ActivityProjection[];
-  readonly inheritedSnapshots: readonly PreparedWorkerSnapshot[];
+  readonly inheritedSnapshots: readonly MetadataSnapshot[];
   readonly selectedSnapshots: readonly string[];
   readonly snapshotOrigins: readonly { partition: string; producerId: string }[];
   readonly warnings: Readonly<{ count: number; details: readonly string[] }>;
@@ -97,7 +96,7 @@ export function claimCompletedWorkerInputs(store: OwnedStore, result: WorkerMerg
 }
 // Protocol: docs/dev/cache-protocol.md#streaming-merge-and-acceptance.
 // This is the only worker merge engine. Complete archive success grants provisional
-// staging/activity; the separate native-evidence acceptance bridge grants receipts.
+// staging/activity; final native index acceptance and original-part transfer grant authority.
 export async function mergeWorkerArchives(
   store: OwnedStore,
   inputs: readonly WorkerMergeInput[],
@@ -112,7 +111,7 @@ export async function mergeWorkerArchives(
     : controller.signal;
   const snapshotRequirements = new Map<string, WorkerSnapshotRequirement>(),
     selectedSnapshots = new Set<string>(),
-    inheritedSnapshots: PreparedWorkerSnapshot[] = [];
+    inheritedSnapshots: MetadataSnapshot[] = [];
   const warnings = { count: 0, details: [] as string[] };
   let detailBytes = 0;
   const warning = (message: string) => {
@@ -150,12 +149,16 @@ export async function mergeWorkerArchives(
       )
         throw new Error('Invalid snapshot writer selection.');
       nameSchema.parse(req.job);
-      if (req.baseline) PreparedWorkerSnapshot.assertReceipt(req.baseline, store, req.partition);
+      if (req.baseline) MetadataSnapshot.assertReceipt(req.baseline, store, req.partition);
       snapshotRequirements.set(req.partition, req);
     }
     if (
       store.codec.options.model.partitions.some(
-        (p) => p[3] === 'single-writer' && !snapshotRequirements.has(p[0]),
+        (p) =>
+          p[3] === 'single-writer' &&
+          p[4] !== null &&
+          p[4] !== store.codec.options.context[4] &&
+          !snapshotRequirements.has(p[0]),
       )
     )
       throw new Error('Missing complete snapshot writer selection.');
@@ -221,7 +224,7 @@ export async function mergeWorkerArchives(
         await advance(c);
         const meta = expectControl(c, 'file-meta');
         if (selected(c))
-          candidates.push([c.input.job, String(meta[4]), header.size, header.mtimeMs, header.mode]);
+          candidates.push([c.input.job, String(meta[3]), header.size, header.mtimeMs, header.mode]);
       }
       if (chosen) {
         const launcher = normalizeMode(store.codec.options.model.tuple[2], path, 0o644) === 0o755;

@@ -16,102 +16,34 @@
 
 import { unlink, rmdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { tuple, equal, canonical, encodeRecord, type Value } from './encoding';
+import { tuple, canonical, type Value } from './encoding';
 import { sameNative, type NativeIdentity } from './native';
 import { sameDirectoryObject } from './install-member';
-import { requirePostBindings } from './post-admission';
 import { InstallParentPhase } from './install-parent-phase';
 import { retireOwnedDirectory } from './owned-retirement';
 import { GcProgram, type GcCursor, type GcBatch } from './gc-program';
 import { ObservationIndex } from './observation-index';
-import { checkSharedGcMetadata } from './gc-metadata';
+import { claimCapturedObservationIndex } from './observation-capture';
+import type { PostAttempt } from './lifecycle-attempt';
 import {
   checkGcProjection,
   type GcProjectionWork,
   type GcProjectionObserver,
 } from './gc-projection';
-import type { OwnedStore, Reference } from './owned-store';
-import { settleBaseCleanup, type BaseObjectOptions } from './base-object';
-
-export interface GcOptions extends BaseObjectOptions {
+import type { OwnedStore } from './owned-store';
+import { settleNativeCleanup, type NativeOperationOptions } from './native-operation';
+export interface GcOptions extends NativeOperationOptions {
   readonly batchOperations?: number;
   readonly batchBytes?: number;
 }
 const defaultSignal = () => new AbortController().signal;
-type Intent = ReturnType<OwnedStore['codec']['schemas']['documents']['gc-intent']['parse']>;
 
-async function admission(store: OwnedStore, options: GcOptions, recovering: boolean) {
-  options.signal?.throwIfAborted();
-  const state = store.codec.schemas.documents['local-state'].parse(await store.state()),
-    bindings = store.codec.schemas.documents.bindings.parse(
-      await store.readDocument(state[5], 'bindings'),
-    );
-  await requirePostBindings(store, state, bindings, options);
-  if (
-    store.codec.options.access !== 'writable' ||
-    !['observations-frozen', 'gc-complete'].includes(state[4]) ||
-    !state[6] ||
-    !state[10]
-  )
-    throw new Error('GC requires a bound writable frozen observation.');
-  if (state[8] || state[9] || state[7] || state[11])
-    throw new Error('GC cannot follow source/publication/install commitment.');
-  // The caller must re-establish the exclusive cache window on every invocation.
-  // A persisted quiescence document is never a lock or permission to stop a process.
-  const saved = store.codec.schemas.documents['gc-progress'].parse(
-    await store.readDocument(state[10], 'gc-progress'),
-  );
-  equal(saved[3], state[6], 'GC observations');
-  const raw = await store.readFixed(store.prefix + 'gc-intent.json'),
-    intent = raw ? store.codec.schemas.documents['gc-intent'].parse(raw) : null;
-  await store.assertNoIntents(recovering && intent ? intent : undefined);
-  if (saved[5] !== null && (!intent || saved[5] !== store.prefix + 'gc-intent.json'))
-    throw new Error('Missing GC intent owner.');
-  if (intent) {
-    equal(intent[3], state[6], 'GC intent observations');
-    if (
-      !canonical(saved[4]).equals(canonical(intent[4])) &&
-      !canonical(saved[4]).equals(canonical(intent[5]))
-    )
-      throw new Error('GC intent/progress disagreement.');
-  }
-  return { state, saved, intent };
-}
-async function commit(
-  store: OwnedStore,
-  observations: Reference,
-  cursor: GcCursor,
-  complete: boolean,
-) {
-  const state = store.codec.schemas.documents['local-state'].parse(await store.state()),
-    old = state[10];
-  equal(state[6], observations, 'unchanged GC observation');
-  if (state[4] !== 'observations-frozen' && state[4] !== 'gc-complete')
-    throw new Error('GC phase changed.');
-  const ref = await store.writeDocument([
-    'gc-progress',
-    1,
-    store.codec.options.invocation,
-    observations,
-    cursor,
-    null,
-  ]);
-  await store.fail('gc-progress-candidate');
-  state[3]++;
-  state[10] = store.codec.schemas.ref('gc-progress').parse(ref);
-  if (complete) state[4] = 'gc-complete';
-  await store.updateState(state);
-  await store.fail('gc-progress-pointer');
-  if (old) await store.retireReplacedDocument(old);
-}
-async function retireStack(store: OwnedStore, old: GcCursor, current: GcCursor) {
-  if (old[5] && old[5][2] !== current[5]?.[2]) await store.retireGcMetadata(old[5]);
-}
 async function apply(
   store: OwnedStore,
-  evidence: Reference,
+  evidence: AsyncIterable<Value>,
   index: ObservationIndex,
   phase: InstallParentPhase,
+  mutated: () => void = () => {},
 ) {
   const signal = index.options.signal ?? defaultSignal();
   let marker: { row: readonly Value[]; release: () => void } | undefined;
@@ -121,7 +53,7 @@ async function apply(
     const path = String(r[1]),
       expected = r[3] as NativeIdentity;
     let actual = await phase.stat(path);
-    if (!actual) return; // Complete original/native admission already proved this exact allowed omission.
+    if (!actual) throw new Error('Frozen GC target disappeared.');
     if (expected[2] === 'directory') {
       await phase.parents(path + '/pending'); // Checks own attributed child-directory changes before popping it.
       actual = await phase.stat(path);
@@ -139,18 +71,14 @@ async function apply(
       await unlink(store.root.resolve(path));
       store.root.work.unlinks++;
     }
+    mutated();
     await store.fail('gc-target-deleted');
     await phase.changed(path);
   };
   try {
-    for await (const item of store.rows(
-      evidence,
-      'gc-evidence',
-      { ...index.options, partition: null, gcMode: 'shared' },
-      signal,
-    )) {
+    for await (const item of evidence) {
       signal.throwIfAborted();
-      const r = tuple(item.value);
+      const r = tuple(item);
       if (r[0] === 'gc-unit-open') maven = r[1] === 'maven-directory';
       if (r[0] === 'target') {
         if (maven && String(r[1]).endsWith('/_remote.repositories')) {
@@ -171,84 +99,28 @@ async function apply(
     marker?.release();
   }
 }
-async function exactEvidence(program: GcProgram, intent: Intent) {
-  let start = program.units.position,
-    end = start;
-  // A single sequential metadata range reconstruction on reload; never per target/batch.
-  let at = 0,
-    found = false;
-  for await (const v of program.units.rows(0, program.units.position)) {
-    const r = tuple(v),
-      size = encodeRecord(v).length;
-    if (Number(r[2]) > intent[4][2] && Number(r[2]) <= intent[5][2]) {
-      if (!found) {
-        start = at;
-        found = true;
-      }
-      end = at + size;
-    }
-    at += size;
-  }
-  const expected = program.evidence(start, end);
-  try {
-    for await (const item of program.index.store.rows(
-      intent[6],
-      'gc-evidence',
-      { ...program.index.options, partition: null, gcMode: 'shared' },
-      program.index.options.signal,
-    )) {
-      const r = tuple(item.value);
-      if (r[0] === 'local-stream' || r[0] === 'local-end') continue;
-      const next = await expected.next();
-      if (next.done) throw new Error('Extra active GC evidence.');
-      equal(r, next.value, 'exact active GC evidence range');
-    }
-    if (!(await expected.next()).done) throw new Error('Incomplete active GC evidence.');
-  } finally {
-    await expected.return(undefined);
-  }
-}
 
-// Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas.
-// Recovery completes ONLY the discoverable active range. Forward execution may
-// subsequently continue the frozen suffix, without recapturing policy/timestamps.
-async function run(
-  store: OwnedStore,
-  input: GcOptions,
-  recovering: boolean,
-  observer?: GcProjectionObserver,
-  retainIndex = false,
-  suppliedIndex?: ObservationIndex,
-) {
-  const options = Object.freeze({ ...input, signal: input.signal ?? defaultSignal() }),
-    { state, saved, intent } = await admission(store, options, recovering),
-    index = suppliedIndex ?? (await ObservationIndex.open(store, state[6]!, options));
-  ObservationIndex.assert(index, store);
-  equal(index.reference, state[6], 'shared captured observation index');
+/** Direct one-process GC; only the genuine original capture can enter. */
+async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttempt) {
+  const store = index.store,
+    options = Object.freeze({
+      ...input,
+      signal: AbortSignal.any([attempt.signal, ...(input.signal ? [input.signal] : [])]),
+    });
+  await attempt.guard();
   let program: GcProgram | undefined,
     phase: InstallParentPhase | undefined,
     container: string | undefined,
-    native: NativeIdentity | null = null;
+    native: NativeIdentity | null = null,
+    changed = false,
+    failure: unknown;
   const work: GcProjectionWork = { directories: 0, entries: 0 };
-  let failure: unknown;
-  let completedResult:
-    | {
-        cursor: GcCursor;
-        complete: boolean;
-        work: Readonly<GcProjectionWork>;
-        index?: ObservationIndex;
-      }
-    | undefined;
+  let cursor: GcCursor | undefined;
   try {
-    program = await GcProgram.create(
-      index,
-      { operations: options.batchOperations, bytes: options.batchBytes },
-      [saved[4], ...(intent ? [intent[4], intent[5]] : [])],
-    );
-    if (intent) {
-      await checkSharedGcMetadata(index, intent[6]);
-      await exactEvidence(program, intent);
-    }
+    program = await GcProgram.create(index, {
+      operations: options.batchOperations,
+      bytes: options.batchBytes,
+    });
     container = store.prefix + 'mutation/' + randomUUID();
     await store.makeParents(container + '/ledger/pending');
     native = await store.root.stat(container);
@@ -257,128 +129,141 @@ async function run(
       '',
       container + '/ledger/',
       options.budget,
-      async () => null,
+      async (path) => {
+        const lease = await index.directory(path);
+        try {
+          return lease.node[2];
+        } finally {
+          lease.release();
+        }
+      },
       options.signal,
     );
-    const committed = intent && canonical(saved[4]).equals(canonical(intent[5]));
-    // With no deletions there is no mutation/recovery boundary to admit here;
-    // the complete final projection below is the sole native co-read.
-    if (intent || program.units.position !== 0)
-      await checkGcProjection(index, saved[4][2], intent ? intent[5][2] : saved[4][2], phase, work);
     options.signal.throwIfAborted();
-    await phase.barrier(); // Parent checkpoints precede any recovered cursor/cleanup.
+    for await (const value of program.batches.rows(0, program.batches.position)) {
+      options.signal.throwIfAborted();
+      const batch = value as GcBatch;
+      await apply(store, program.evidence(batch[1], batch[2]), index, phase, () => {
+        changed = true;
+      });
+    }
+    cursor = program.final;
+    if (changed) {
+      const observer: GcProjectionObserver = {
+        async open(directory, actual) {
+          if (!sameNative(directory[2], actual, true)) await phase!.created(directory[1], actual);
+        },
+        async file() {},
+        async protected() {},
+        async close() {},
+      };
+      await checkGcProjection(index, cursor[2], cursor[2], undefined, work, observer);
+    }
+    await attempt.guard();
+    await program.close();
+    program = undefined;
     options.signal.throwIfAborted();
-    let cursor: GcCursor = saved[4];
-    if (intent) {
-      if (!committed) {
-        await apply(store, intent[6], index, phase);
-        await commit(store, index.reference, intent[5], intent[5][2] === program.final[2]);
-      }
-      await store.clearIntent(intent);
-      await store.fail('gc-intent-retired');
-      await store.retireGcMetadata(intent[6]);
-      await retireStack(store, intent[4], intent[5]);
-      cursor = intent[5];
-    }
-    if (!recovering) {
-      for await (const value of program.batches.rows(0, program.batches.position)) {
-        options.signal.throwIfAborted();
-        const b = value as GcBatch;
-        if (b[3] <= cursor[2]) continue;
-        const end = await program.cursor(b);
-        // The normal path follows its genuine program batches. A previous recovery
-        // endpoint can cut a newly grouped batch: filter only its completed units.
-        let from = b[1];
-        if (cursor[2]) {
-          for await (const row of program.units.rows(b[1], b[2])) {
-            if (Number(tuple(row)[2]) > cursor[2]) break;
-            from += encodeRecord(row).length;
-          }
-        }
-        if (from === b[2]) {
-          await commit(store, index.reference, end, end[2] === program.final[2]);
-          await retireStack(store, cursor, end);
-          cursor = end;
-          continue;
-        }
-        const q = await store.writeStream(
-          'gc-evidence',
-          { ...options, partition: null, gcMode: 'shared' },
-          program.evidence(from, b[2]),
-          options.signal,
-        );
-        await checkSharedGcMetadata(index, q);
-        await store.fail('gc-evidence-published');
-        const marker = store.codec.schemas.documents['gc-intent'].parse([
-          'gc-intent',
-          1,
-          store.codec.options.invocation,
-          index.reference,
-          cursor,
-          end,
-          q,
-        ]);
-        await store.publishIntent(marker);
-        await store.fail('gc-intent-published');
-        await apply(store, q, index, phase);
-        await commit(store, index.reference, end, end[2] === program.final[2]);
-        await store.clearIntent(marker);
-        await store.fail('gc-intent-retired');
-        await store.retireGcMetadata(q);
-        await retireStack(store, cursor, end);
-        cursor = end;
-      }
-    }
-    // Final absence/projection consumer also detects recreation of completed paths.
-    await checkGcProjection(index, cursor[2], cursor[2], undefined, work, observer);
-    completedResult = Object.freeze({
-      cursor,
-      complete: cursor[2] === program.final[2],
-      work: Object.freeze(work),
-      ...(retainIndex ? { index } : {}),
-    });
   } catch (error) {
     failure = error;
   } finally {
     phase?.release();
-    try {
-      await settleBaseCleanup(
-        [
-          () => program?.close(),
-          () => (!retainIndex || failure !== undefined ? index.dispose() : undefined),
-          () =>
-            container && native
-              ? retireOwnedDirectory(store, container, native, options.budget)
-              : undefined,
-        ],
-        failure,
-      );
-    } catch (error) {
-      failure = error;
-      if (retainIndex)
-        try {
-          await settleBaseCleanup([() => index.dispose()], error);
-        } catch (cleanup) {
-          failure = cleanup;
-        }
-    }
   }
-  if (failure !== undefined) throw failure;
-  try {
-    options.signal.throwIfAborted();
-  } catch (error) {
-    if (retainIndex) await settleBaseCleanup([() => index.dispose()], error);
-    throw error;
+  if (failure !== undefined) {
+    await settleNativeCleanup(
+      [
+        () => program?.close(),
+        () => index.dispose(),
+        () =>
+          container && native
+            ? retireOwnedDirectory(store, container, native, options.budget)
+            : undefined,
+      ],
+      failure,
+    );
+    throw failure;
   }
-  return completedResult!;
+  return {
+    cursor: Object.freeze(cursor!),
+    work: Object.freeze(work),
+    phase: phase!,
+    container: container!,
+    native: native!,
+  };
 }
-export const executeGc = (store: OwnedStore, options: GcOptions) => run(store, options, false);
-export const recoverGc = (store: OwnedStore, options: GcOptions) => run(store, options, true);
 
-/** Internal live-capture handoff: final co-read populates facts and transfers its index. */
-export const captureGcProjection = (
-  store: OwnedStore,
-  options: GcOptions,
-  observer: GcProjectionObserver,
-  index?: ObservationIndex,
-) => run(store, options, false, observer, true, index);
+const survivorOwners = new WeakSet<GcSurvivorOwner>();
+/** Actual completed GC owns this original hierarchy and its changed-parent ledger. */
+export class GcSurvivorOwner {
+  #active = true;
+  #readers = 0;
+  private constructor(
+    readonly index: ObservationIndex,
+    private readonly phase: InstallParentPhase,
+    private readonly container: string,
+    private readonly native: NativeIdentity,
+    readonly work: Readonly<GcProjectionWork>,
+    readonly cursor: Readonly<GcCursor>,
+  ) {
+    survivorOwners.add(this);
+    Object.freeze(this);
+  }
+  static async execute(index: ObservationIndex, options: GcOptions): Promise<GcSurvivorOwner> {
+    ObservationIndex.assert(index);
+    if (
+      index.options.budget !== options.budget ||
+      (index.options.maxDirectoryEntries ?? 100000) !== (options.maxDirectoryEntries ?? 100000)
+    )
+      throw new Error('GC survivor original capture policy/budget mismatch.');
+    const attempt = claimCapturedObservationIndex(index, index.store);
+    const result = await run(index, options, attempt);
+    return new GcSurvivorOwner(
+      index,
+      result.phase,
+      result.container,
+      result.native,
+      result.work,
+      result.cursor,
+    );
+  }
+  static assertReceipt(owner: GcSurvivorOwner): void {
+    if (!survivorOwners.has(owner)) throw new Error('Unavailable original GC survivor receipt.');
+    owner.assert();
+  }
+  assert(): void {
+    if (!survivorOwners.has(this) || !this.#active)
+      throw new Error('Unavailable GC survivor owner.');
+    ObservationIndex.assert(this.index);
+  }
+  borrow(): () => void {
+    this.assert();
+    this.#readers++;
+    let held = true;
+    return () => {
+      if (held) {
+        held = false;
+        this.#readers--;
+      }
+    };
+  }
+  async directoryNative(path: string): Promise<NativeIdentity> {
+    this.assert();
+    const actual = await this.phase.effective(path);
+    if (!actual) throw new Error('Missing surviving directory.');
+    return actual;
+  }
+  async dispose(): Promise<void> {
+    if (this.#readers) throw new Error('GC survivor hierarchy still borrowed.');
+    if (!this.#active) return;
+    this.#active = false;
+    await settleNativeCleanup([
+      () => this.index.dispose(),
+      () =>
+        retireOwnedDirectory(
+          this.index.store,
+          this.container,
+          this.native,
+          this.index.options.budget,
+        ),
+    ]);
+  }
+}

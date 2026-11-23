@@ -25,7 +25,7 @@ import {
 import { mergeWorkerArchives as rawMerge } from '../../../src/cache/streaming/worker-merge';
 import { tuple, type Value } from '../../../src/cache/streaming/encoding';
 import { ActivityProjection } from '../../../src/cache/streaming/worker-activity';
-import { PreparedWorkerSnapshot } from '../../../src/cache/streaming/worker-snapshot';
+import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot';
 import { byteSource } from './protocol-fixtures';
 const results: Awaited<ReturnType<typeof rawMerge>>[] = [];
 afterEach(async () => {
@@ -196,9 +196,9 @@ it('preserves optional absence but never drops an admitted optional archive fail
     a = await completeArchive(f, 'A', { 'data/a': 'a' }, [], { other: {} });
   let verified = 0;
   const baseline = await preparedSnapshotFixture(f, 'state');
-  const verify = PreparedWorkerSnapshot.prototype.verify;
-  vi.spyOn(PreparedWorkerSnapshot.prototype, 'verify').mockImplementation(async function (
-    this: PreparedWorkerSnapshot,
+  const verify = MetadataSnapshot.prototype.verify;
+  vi.spyOn(MetadataSnapshot.prototype, 'verify').mockImplementation(async function (
+    this: MetadataSnapshot,
     ...args
   ) {
     if (this === baseline) verified++;
@@ -224,6 +224,7 @@ it('preserves optional absence but never drops an admitted optional archive fail
     mergeWorkerArchives(f.store, [aa, { ...b, source: byteSource(b.bytes) }], options),
   ).rejects.toThrow();
   expect(verified).toBe(1);
+  await baseline.dispose();
   expect(f.budget.retained).toBe(0);
 });
 
@@ -276,9 +277,9 @@ it('rejects an admitted optional writer omitting its selected snapshot instead o
     b = await completeArchive(f, 'B');
   let baselineCalls = 0;
   const baseline = await preparedSnapshotFixture(f, 'state');
-  const verify = PreparedWorkerSnapshot.prototype.verify;
-  vi.spyOn(PreparedWorkerSnapshot.prototype, 'verify').mockImplementation(async function (
-    this: PreparedWorkerSnapshot,
+  const verify = MetadataSnapshot.prototype.verify;
+  vi.spyOn(MetadataSnapshot.prototype, 'verify').mockImplementation(async function (
+    this: MetadataSnapshot,
     ...args
   ) {
     if (this === baseline) baselineCalls++;
@@ -296,6 +297,7 @@ it('rejects an admitted optional writer omitting its selected snapshot instead o
     }),
   ).rejects.toThrow('Admitted snapshot writer omitted');
   expect(baselineCalls).toBe(0);
+  await baseline.dispose();
   expect(f.budget.retained).toBe(0);
 });
 
@@ -309,9 +311,9 @@ it('cancels a pending prepared-baseline verification and validates activity limi
     }),
     controller = new AbortController();
   const baseline = await preparedSnapshotFixture(f, 'state');
-  const verify = PreparedWorkerSnapshot.prototype.verify;
-  vi.spyOn(PreparedWorkerSnapshot.prototype, 'verify').mockImplementation(async function (
-    this: PreparedWorkerSnapshot,
+  const verify = MetadataSnapshot.prototype.verify;
+  vi.spyOn(MetadataSnapshot.prototype, 'verify').mockImplementation(async function (
+    this: MetadataSnapshot,
     ...args
   ) {
     if (this === baseline) {
@@ -332,5 +334,6 @@ it('cancels a pending prepared-baseline verification and validates activity limi
   await started;
   controller.abort(new Error('cancelled fallback'));
   await expect(pending).rejects.toThrow('cancelled fallback');
+  await baseline.dispose();
   expect(f.budget.retained).toBe(0);
 });

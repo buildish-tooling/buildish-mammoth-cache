@@ -21,17 +21,13 @@ import { GradleBuildToolAdapter } from '../../../src/build-tool/gradle/adapter';
 import type { NormalizedGradleConfig } from '../../../src/config/types';
 import { createCachePartitions } from '../../../src/cache/model';
 import { resolveCacheModel } from '../../../src/cache/streaming/model';
-import { captureObservations } from '../../../src/cache/streaming/observation-capture';
-import { executeGc } from '../../../src/cache/streaming/gc-execute';
-import { LiveBaseInputs } from '../../../src/cache/streaming/live-base-inputs';
-import {
-  FrozenMovingPublication,
-  movingObjectRef,
-} from '../../../src/cache/streaming/base-moving-publication';
-import { MovingBasePublication } from '../../../src/cache/streaming/moving-publication';
-import { NativeObjectDownload } from '../../../src/cache/streaming/base-transport';
+import { captureFixtureObservations as captureObservations } from './observation-fixtures';
+import { executeFixtureGc as executeGc } from './observation-fixtures';
+import { MetadataPublicationSource } from '../../../src/cache/streaming/metadata-publication-source';
+import { publishMetadataBase } from '../../../src/cache/streaming/metadata-publication';
+import { MetadataBaseRestore } from '../../../src/cache/streaming/metadata-base-restore';
+import { lineageId } from '../../../src/cache/streaming/model';
 import { sameNative, sameRename } from '../../../src/cache/streaming/native';
-import { tuple } from '../../../src/cache/streaming/encoding';
 import { walkNative } from '../../../src/cache/streaming/native-walk';
 import { observationFixture } from './observation-fixtures';
 import { nativeCacheBackend, cleanupBaseFixtures } from './base-fixtures';
@@ -90,6 +86,7 @@ it.each([false, true])(
       root = 'caches/build-cache-1',
       lock = root + '/build-cache-1.lock';
     cleanup.push(async () => {
+      await f.finish();
       expect(f.budget.retained).toBe(0);
       await f.close();
     });
@@ -110,71 +107,54 @@ it.each([false, true])(
     });
     expect(out.purge.deleted).toBe(1);
     expect(await f.store.root.stat(lock)).toBeNull();
-    await executeGc(f.store, { budget: f.budget });
-    const input = await LiveBaseInputs.capture(f.store, { budget: f.budget });
+    const result = await executeGc(f.store, { budget: f.budget }),
+      input = await MetadataPublicationSource.survivors(result.owner),
+      sdk = await nativeCacheBackend();
     cleanup.push(() => input.dispose());
-    const pub = await FrozenMovingPublication.freeze(input, 'main');
-    cleanup.push(() => pub.dispose());
-    const choice = pub.choices.find((c) => c[1] === 'build-cache')!;
-    if (choice[0] !== 'new') throw new Error('Expected default build-cache publication.');
-    const roots: string[] = [],
-      kinds: string[] = [];
-    for await (const row of f.store.rows(choice[6], 'move-plan', {
-      ...pub.options,
-      partition: 'build-cache',
-    })) {
-      const r = tuple(row.value);
-      if (r[0] === 'move') {
-        roots.push(String(r[3]));
-        kinds.push(String(r[5]));
-      }
-    }
-    expect(kinds).toEqual(split ? ['file', 'file'] : ['directory']);
-    const sdk = await nativeCacheBackend(),
-      publisher = MovingBasePublication.open(pub);
-    cleanup.push(() => publisher.close());
     const start = vi.mocked(rename).mock.calls.length;
-    await publisher.saveObjects(sdk.backend);
-    const moves = vi
+    const published = await publishMetadataBase(input, sdk.backend, {
+      lineage: lineageId('main'),
+      writer: 'a'.repeat(64),
+      decision: 'b'.repeat(64),
+    });
+    expect(published.outcome).toBe('published');
+    const managedMoves = vi
       .mocked(rename)
       .mock.calls.slice(start)
       .filter(([a, b]) =>
-        roots.some(
-          (r) => String(a) === f.store.root.resolve(r) || String(b) === f.store.root.resolve(r),
+        [a, b].some(
+          (p) =>
+            String(p) === f.store.root.resolve('caches') ||
+            String(p) === f.store.root.resolve(root) ||
+            String(p).startsWith(f.store.root.resolve(root) + '/entry-'),
         ),
       );
-    expect(moves).toHaveLength(2 * roots.length);
+    expect(managedMoves).toHaveLength(split ? 4 : 2);
     const after = (await f.store.root.stat(root + '/entry-a'))!;
     expect(split ? sameRename(before, after) : sameNative(before, after, true)).toBe(true);
     if (split)
       expect(await readFile(f.store.root.resolve(root + '/keep.lock'), 'utf8')).toBe('private');
-    await f.store.assertNoIntents();
-    await publisher.publish(sdk.backend);
-    const restored = await NativeObjectDownload.restore(
+    const restored = await MetadataBaseRestore.acquire(
       f.store,
       sdk.backend,
-      movingObjectRef(choice),
-      pub.options,
-      true,
+      { currentRef: 'main' },
+      { budget: f.budget },
     );
     try {
-      expect(restored.object).not.toBeNull();
+      const source = restored.context?.source('build-cache');
+      expect(source).toBeDefined();
       const files = [];
-      for await (const e of walkNative(f.store.root, restored.object!.payload, {
+      for await (const e of walkNative(f.store.root, source!.nativeRoot, {
         budget: f.budget,
         logicalRoot: '',
       }))
         if (e.tag === 'file') files.push(e.path);
       expect(files.sort()).toEqual([root + '/entry-a', root + '/entry-b']);
       expect(
-        await readFile(
-          f.store.root.resolve(restored.object!.payload + '/' + root + '/entry-a'),
-          'utf8',
-        ),
+        await readFile(f.store.root.resolve(source!.nativeRoot + '/' + root + '/entry-a'), 'utf8'),
       ).toBe('a');
-      expect(sdk.calls.find((c) => c.kind === 'save' && c.key === choice[3])?.members).toHaveLength(
-        3,
-      );
+      for (const call of sdk.calls.filter((c) => c.kind === 'save'))
+        expect(call.members).not.toContain('tree.ndjson');
     } finally {
       await restored.dispose();
     }

@@ -16,11 +16,17 @@
 
 import { afterEach, expect, it, vi } from 'vitest';
 import { installFixture } from './install-fixture';
-import { captureInstallCurrent } from '../../../src/cache/streaming/install-current';
-import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
-import { buildInstallIndex } from '../../../src/cache/streaming/install-index';
+import { installCurrentRows } from '../../../src/cache/streaming/install-current';
+import type { InstallScratch } from '../../../src/cache/streaming/install-scratch';
+import { buildObservedInstallIndex } from '../../../src/cache/streaming/install-index';
 import { selectInstall, type Selection } from '../../../src/cache/streaming/install-selection';
-import type { VerifiedIncoming } from '../../../src/cache/streaming/install-evidence';
+import type { GenerationEntry } from '../../../src/cache/streaming/native-records';
+import type { FixtureIncoming } from './install-plan-fixture';
+import { MetadataInstallContext } from '../../../src/cache/streaming/metadata-install-context';
+import {
+  createMetadataDescriptor,
+  createMetadataGeneration,
+} from '../../../src/cache/streaming/metadata-base-records';
 import type { Value } from '../../../src/cache/streaming/encoding';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
@@ -33,34 +39,56 @@ async function fixture(tool: 'gradle' | 'maven' = 'gradle') {
 }
 async function select(
   f: Awaited<ReturnType<typeof installFixture>>,
-  inputs: VerifiedIncoming[],
+  inputs: FixtureIncoming[],
   beforeSelect?: (scratch: InstallScratch) => void,
   signal?: AbortSignal,
 ) {
-  const beforeReads = f.store.root.work.readBytes - f.store.root.work.scratchReadBytes;
-  const current = await captureInstallCurrent(f.store, { budget: f.budget }),
-    scratch = await InstallScratch.create(f.store, f.budget);
+  const beforeReads = f.store.root.work.readBytes - f.store.root.work.scratchReadBytes,
+    signalValue = signal ?? new AbortController().signal;
+  const entries: GenerationEntry[] = f.model.partitions.map((p) => [
+    'object',
+    p[0],
+    inputs.find((input) => input.partition === p[0])?.reference ??
+      createMetadataDescriptor(f.model, [
+        f.model.family,
+        f.model.id,
+        p[0],
+        'a'.repeat(64),
+        'b'.repeat(64),
+        'c'.repeat(64),
+      ]).reference,
+  ]);
+  const generation = createMetadataGeneration(
+    f.model,
+    'a'.repeat(64),
+    'b'.repeat(64),
+    'c'.repeat(64),
+    entries,
+    f.model.partitions.map((p) => [p[0]]),
+  );
+  const context = await MetadataInstallContext.discover(
+    f.store,
+    generation,
+    inputs.map((input) => ({ partition: input.partition, root: input.objectRoot })),
+    { budget: f.budget },
+  );
+  const scratch = context.scratch;
   try {
-    const old = await buildInstallIndex(
+    let ordinal = 0;
+    const old = await buildObservedInstallIndex(
       scratch,
-      f.store.rows(current, 'install-current', { budget: f.budget, partition: null }),
       f.model,
       null,
+      signalValue,
+      async (accept) => {
+        for await (const value of installCurrentRows(f.store, { budget: f.budget }))
+          await accept({ value, start: ordinal, end: ++ordinal, record: ordinal });
+      },
     );
-    const sources = [];
-    for (const input of inputs)
-      sources.push({
-        partition: f.model.partitions.findIndex((p) => p[0] === input.partition),
-        root: await buildInstallIndex(
-          scratch,
-          f.store.rows(input.evidence, 'native-evidence', {
-            budget: f.budget,
-            partition: input.partition,
-          }),
-          f.model,
-          input.partition,
-        ),
-      });
+    const sources = inputs.map((input) => ({
+      partition: f.model.partitions.findIndex((p) => p[0] === input.partition),
+      root: context.source(input.partition)!.index,
+    }));
     beforeSelect?.(scratch);
     const renames = f.store.root.work.renames,
       root = await selectInstall(scratch, f.model, old, sources, signal),
@@ -80,11 +108,11 @@ async function select(
     if (root !== null) await visit(root);
     expect(f.store.root.work.renames).toBe(renames);
     expect(f.store.root.work.readBytes - f.store.root.work.scratchReadBytes - beforeReads).toBe(
-      current[3] + inputs.reduce((sum, i) => sum + i.evidence[3], 0),
+      inputs.reduce((sum, i) => sum + i.reference[3], 0),
     );
     return ops;
   } finally {
-    await scratch.close();
+    await context.dispose();
     expect(f.budget.retained).toBe(0);
   }
 }
@@ -101,7 +129,7 @@ it('keeps untouched aggregate files and excludes protected snapshot siblings', a
     ['state/stale', 'delete'],
   ]);
 });
-it('coarsens a complete snapshot before hashing any old payload', async () => {
+it('coarsens a complete snapshot using its admitted metadata', async () => {
   const f = await fixture();
   await f.files('', { 'state/old/a': 'old', 'state/old/b': 'old' });
   const ops = await select(f, [await f.incoming('state', { 'state/new/a': 'new' })]);

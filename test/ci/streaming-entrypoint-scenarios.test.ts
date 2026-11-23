@@ -148,7 +148,7 @@ it.each(['maven', 'gradle'] as const)(
   },
 );
 it.each(['maven', 'gradle'] as const)(
-  'actual %s owning failed prepare abandons state without report/publication',
+  'actual %s owning failed prepare keeps failure state without report/publication',
   async (tool) => {
     const j = await entrypointJob(root, tool, 'failed', inputs);
     await expect(j.run('main', { MAMMOTH_TEST_FAIL_RESTORE: '1' })).rejects.toThrow(
@@ -159,7 +159,7 @@ it.each(['maven', 'gradle'] as const)(
     await j.run('post');
     const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
       state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
-    expect(state[14]).toBe('abandoned');
+    expect(state[4]).toBe('prepare-failed');
     expect(await readFile(j.job + '/summary', 'utf8')).toBe('');
     expect((await j.trace()).filter(([name]) => name !== 'native-work')).toEqual([]);
   },
@@ -180,7 +180,7 @@ it.each(['maven', 'gradle'] as const)(
   },
 );
 it.each(['maven', 'gradle'] as const)(
-  'new opposite-tool disabled delegate returns interrupted OLD %s sources before provisioning',
+  'new opposite-tool disabled delegate rejects interrupted OLD %s sources before provisioning',
   async (oldTool) => {
     const old = await entrypointJob(root, oldTool, 'old', inputs);
     await old.run('main');
@@ -189,15 +189,14 @@ it.each(['maven', 'gradle'] as const)(
     await expect(readFile(old.home + '/data/body')).rejects.toMatchObject({ code: 'ENOENT' });
     const tool = oldTool === 'maven' ? 'gradle' : 'maven',
       next = await entrypointJob(root, tool, 'next', { 'cache-enabled': 'false' });
-    await next.run('main', { GRADLE_USER_HOME: old.home, MAVEN_USER_HOME: old.home });
-    expect(await readFile(old.home + '/data/body', 'utf8')).toBe('owned');
-    expect((await next.trace()).filter(([name]) => name === 'process-inspection')).toHaveLength(
-      oldTool === 'gradle' ? 1 : 0,
-    );
-    expect((await next.trace()).filter(([name]) => name === 'cache-save')).toEqual([]);
+    await expect(
+      next.run('main', { GRADLE_USER_HOME: old.home, MAVEN_USER_HOME: old.home }),
+    ).rejects.toThrow('fresh dedicated root');
+    await expect(readFile(old.home + '/data/body')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await next.trace()).filter(([name]) => name !== 'native-work')).toEqual([]);
     const locator = JSON.parse(await readFile(old.home + '/.mammoth/v1/current.json', 'utf8')),
       state = JSON.parse(await readFile(old.home + '/' + locator[3], 'utf8'));
-    expect(state[14]).toBe('abandoned');
+    expect(state[7]).toBeNull();
   },
   30000,
 );
@@ -223,7 +222,7 @@ it('counts real delegated metadata work across shared directories without multip
 }, 30000);
 
 it.each(['maven', 'gradle'] as const)(
-  'actual %s standalone warns and skips unavailable saves while required aggregation fails',
+  'actual %s warns once for unavailable standalone and abandoned aggregation saves',
   async (tool) => {
     const j = await entrypointJob(root, tool, 'unavailable-writable', inputs),
       unavailable = { MAMMOTH_TEST_UNAVAILABLE: '1' };
@@ -232,13 +231,15 @@ it.each(['maven', 'gradle'] as const)(
     await j.write('data/a', 'preserve');
     const post = await j.run('post', unavailable);
     expect(post.stdout).toContain('Cache save skipped: cache backend is unavailable.');
+    expect(post.stdout.match(/::warning::Cache save skipped/g)).toHaveLength(1);
     expect(await readFile(j.home + '/data/a', 'utf8')).toBe('preserve');
     expect((await j.trace()).filter(([name]) => name === 'cache-save')).toEqual([]);
     const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
       state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
     expect(state[4]).toBe('completed');
-    expect(state[14]).toBe('feature-unavailable');
-    for (const cell of [7, 8, 9, 12]) expect(state[cell]).toBeNull();
+    expect(state[7][1]).toBe('feature-unavailable');
+    expect(state).toHaveLength(8);
+    expect(state[7].slice(2)).toEqual([null, null, null]);
     expect(await readFile(j.job + '/summary', 'utf8')).toContain('Outcome: feature-unavailable.');
     await j.run('post');
     expect((await j.trace()).filter(([name]) => name === 'cache-save')).toEqual([]);
@@ -248,9 +249,12 @@ it.each(['maven', 'gradle'] as const)(
     });
     await required.run('main');
     await required.write('data/a', 'required');
-    await expect(required.run('post', unavailable)).rejects.toThrow(
-      'Native base backend cannot publish',
+    const abandoned = await required.run('post', unavailable);
+    expect(abandoned.stdout).toContain(
+      'Cache publication abandoned: outgoing cache confirmation unavailable.',
     );
+    expect(abandoned.stdout.match(/::warning::Cache publication abandoned/g)).toHaveLength(1);
+    expect(await readFile(required.job + '/summary', 'utf8')).toContain('Outcome: abandoned.');
     expect(await readFile(required.home + '/data/a', 'utf8')).toBe('required');
     expect((await required.trace()).filter(([name]) => name === 'cache-save')).toEqual([]);
   },
@@ -292,6 +296,88 @@ it.each(['standalone', 'distributed-worker'] as const)(
     await consumer.run('main');
     expect(await readFile(consumer.home + '/data/a', 'utf8')).toBe('valid-content');
     await expect(readFile(consumer.home + '/' + unknown)).rejects.toMatchObject({ code: 'ENOENT' });
+  },
+  30000,
+);
+
+it.each(['maven', 'gradle'] as const)(
+  'actual %s gates V1 outgoing before publication and warns once without a receipt',
+  async (tool) => {
+    const j = await entrypointJob(root, tool, 'v1-outgoing', inputs);
+    await j.run('main');
+    await j.write('data/a', 'preserve');
+    const post = await j.run('post', { ACTIONS_CACHE_SERVICE_V2: '' });
+    expect(post.stdout).toContain('outcome: abandoned');
+    expect(
+      post.stdout.match(
+        /::warning::(?:Base cache save unavailable|Cache publication abandoned|Cache publication skipped)/g,
+      ),
+    ).toHaveLength(1);
+    expect((await j.trace()).filter(([name]) => name === 'cache-save')).toEqual([]);
+    expect(await readFile(j.home + '/data/a', 'utf8')).toBe('preserve');
+    const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
+      state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
+    expect(state[7][1]).toBe('abandoned');
+    expect(state).toHaveLength(8);
+    expect(state[4]).toBe('completed');
+  },
+);
+it.each(['maven', 'gradle'] as const)(
+  'actual %s worker abandons lost/null/thrown outgoing responses without salvage or success receipts',
+  async (tool) => {
+    for (const outcome of ['throw', 'null', 'lost']) {
+      const j = await entrypointJob(root, tool, 'unconfirmed-' + outcome, {
+        ...inputs,
+        'job-mode': 'distributed-worker',
+      });
+      await j.run('main');
+      await j.write('data/a', 'body');
+      const post = await j.run('post', { MAMMOTH_TEST_UPLOAD_OUTCOME: outcome });
+      expect(post.stdout).toContain('outcome: abandoned');
+      expect(post.stdout.match(/::warning::Raw worker upload unconfirmed/g)).toHaveLength(1);
+      const trace = await j.trace();
+      expect(trace.filter(([name]) => name === 'artifact-upload')).toHaveLength(1);
+      expect(
+        trace.filter(([name]) =>
+          ['artifact-get', 'artifact-list', 'artifact-download'].includes(name),
+        ),
+      ).toEqual([]);
+      const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
+        state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
+      expect(state[7][1]).toBe('abandoned');
+      expect(state[7].slice(2)).toEqual([null, null, null]);
+      const files = await readdir(j.home + '/.mammoth/v1/' + state[2] + '/archives');
+      expect(files.length).toBeGreaterThan(0);
+      expect(await readFile(j.job + '/summary', 'utf8')).toContain('Outcome: abandoned.');
+      await j.run('post');
+      expect((await j.trace()).filter(([name]) => name === 'artifact-upload')).toHaveLength(1);
+    }
+  },
+  30000,
+);
+it.each(['maven', 'gradle'] as const)(
+  'actual %s wrappers fail local return and package errors instead of reporting abandonment',
+  async (tool) => {
+    const base = await entrypointJob(root, tool, 'occupied-return', inputs);
+    await base.run('main');
+    await base.write('data/a', 'body');
+    await expect(base.run('post', { MAMMOTH_TEST_OCCUPY_RETURN: '1' })).rejects.toThrow(
+      '::error::',
+    );
+    expect((await base.trace()).filter(([name]) => name === 'cache-save')).toHaveLength(1);
+    const worker = await entrypointJob(root, tool, 'changed-package', {
+      ...inputs,
+      'job-mode': 'distributed-worker',
+    });
+    await worker.run('main');
+    await worker.write('data/a', 'body');
+    await expect(worker.run('post', { MAMMOTH_TEST_MUTATE_PACKAGE: '1' })).rejects.toThrow(
+      '::error::',
+    );
+    expect((await worker.trace()).filter(([name]) => name === 'artifact-upload')).toHaveLength(1);
+    expect(await readFile(worker.job + '/summary', 'utf8')).not.toContain(
+      'Outcome: worker-uploaded.',
+    );
   },
   30000,
 );

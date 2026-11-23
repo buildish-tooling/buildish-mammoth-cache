@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
+import type { NativeOperationOptions } from './native-operation';
 import { lstat, opendir, unlink, rmdir } from 'node:fs/promises';
 import { checkPostRootBinding } from './post-admission';
-import { equal } from './encoding';
-import { PrepareFacts } from './prepare-state';
 import { nativeIdentity, sameNative, sameObject, type NativeIdentity } from './native';
 import { sameDirectoryObject } from './install-member';
 import type { OwnedStore } from './owned-store';
@@ -40,7 +39,7 @@ export async function retireOwnedDirectory(
   const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
   const disposable =
     parts.length === 2 &&
-    ['planning', 'admission', 'mutation', 'worker', 'base'].includes(parts[0]) &&
+    ['planning', 'admission', 'mutation', 'worker', 'base', 'snapshots'].includes(parts[0]) &&
     uuid.test(parts[1]);
   const parentLedger =
     parts.length === 3 && parts[0] === 'parents' && uuid.test(parts[1]) && parts[2] === 'ledger';
@@ -81,12 +80,14 @@ async function retireTree(
       if (!sameDirectoryObject(identity, current))
         throw new Error('Disposable directory was replaced.');
       check();
+      store.root.work.cleanupListings++;
       const directory = await opendir(store.root.resolve(path), { bufferSize: 1 });
       try {
         while (true) {
           check();
           const entry = await directory.read();
           if (!entry) break;
+          store.root.work.cleanupEntries++;
           const before = await stat(path);
           if (!sameNative(current, before, true)) throw new Error('Disposable parent changed.');
           const child = path + '/' + entry.name,
@@ -98,6 +99,7 @@ async function retireTree(
             check();
             await unlink(store.root.resolve(child));
             store.root.work.unlinks++;
+            store.root.work.cleanupFiles++;
             await store.fail(event);
           }
           const after = await stat(path);
@@ -114,6 +116,7 @@ async function retireTree(
       check();
       await rmdir(store.root.resolve(path));
       store.root.work.directoryRemovals++;
+      store.root.work.cleanupDirectories++;
       await store.fail(event);
     } finally {
       release();
@@ -123,17 +126,17 @@ async function retireTree(
   check();
 }
 
-// Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-prepare-selection.
-// Only this private, derived container can be reset without a per-child catalogue.
-// It never grants install/source authority: immutable selected inputs must be revalidated.
-export async function clearPrepareInstall(
-  facts: PrepareFacts,
-  assertCurrent: () => undefined = () => {},
+/** Exact invocation-owned install container, never a live cache/backup tree. */
+export async function retireInstallStaging(
+  store: OwnedStore,
+  installOwner: NativeIdentity,
+  options: NativeOperationOptions,
+  assertCurrent: () => undefined,
 ) {
-  PrepareFacts.assert(facts);
-  const { store, options, state, selection } = facts;
-  if (state[4] !== 'prepare-pending' || state[11] !== null || !selection)
-    throw new Error('Install staging disposal requires idle prepare ownership.');
+  const state = store.codec.schemas.documents['local-state'].parse(await store.state()),
+    bindings = store.codec.schemas.documents.bindings.parse(
+      await store.readDocument(state[5], 'bindings'),
+    );
   const check = () => {
     options.signal?.throwIfAborted();
     if (assertCurrent() !== undefined)
@@ -144,16 +147,15 @@ export async function clearPrepareInstall(
     store.root.work.stats++;
     checkPostRootBinding(
       store,
-      facts.bindings,
+      bindings,
       nativeIdentity(await lstat(store.root.path, { bigint: true })),
     );
     check();
   };
   await checkRoot();
-  equal(await store.state(), state, 'staging disposal owner');
   await store.assertNoIntents();
   const parent = store.prefix + 'install',
-    expected = selection[8];
+    expected = installOwner;
   const checkParent = async () => {
     check();
     const current = await store.root.stat(parent);

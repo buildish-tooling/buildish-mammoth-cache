@@ -29,7 +29,7 @@ import {
   type RecordFrame,
 } from './encoding';
 import { BufferedWriter } from './buffered-writer';
-import { parentPath } from './tree-state';
+import { parentPath, decodedRecordCharge } from './tree-state';
 import { nativeIdentity, sameNative, sameObject, type NativeIdentity } from './native';
 import type { OwnedStore } from './owned-store';
 import type { WorkingBudget } from './tree-state';
@@ -45,6 +45,7 @@ export interface ScratchWork {
 export class InstallScratch {
   readonly work: ScratchWork = { reads: 0, readBytes: 0, writes: 0, writeBytes: 0 };
   private end = 0;
+  private decoded?: { offset: number; value: Value; bytes: number; charge: number };
   private readonly writer: BufferedWriter;
   private closed = false;
   private parked = false;
@@ -153,6 +154,10 @@ export class InstallScratch {
       this.store.root.work.metadataRowsWritten++;
       this.work.writes++;
       this.end = this.writer.position;
+      this.store.root.work.scratchLogicalWriteBytes = add(
+        this.store.root.work.scratchLogicalWriteBytes,
+        bytes.length,
+      );
       encoded?.(bytes);
       return start;
     } catch (error) {
@@ -184,6 +189,10 @@ export class InstallScratch {
       await this.writer.append(bytes);
       this.end = this.writer.position;
       this.work.writes++; // Logical records; root.work.scratchWriteCalls counts handle writes.
+      this.store.root.work.scratchLogicalWriteBytes = add(
+        this.store.root.work.scratchLogicalWriteBytes,
+        bytes.length,
+      );
       encoded?.(bytes);
       return start;
     } catch (error) {
@@ -312,6 +321,8 @@ export class InstallScratch {
   }
   releaseReadCache(): void {
     if (this.reading || this.lookups > 0) throw new Error('Active scratch read.');
+    if (this.decoded) this.budget.release(this.decoded.charge);
+    this.decoded = undefined;
     this.budget.release(this.pages.length * 65536);
     this.pages.length = 0;
     if (!this.lookupBusy) {
@@ -398,6 +409,16 @@ export class InstallScratch {
       size = Math.min(size * 2, 65536);
     }
   }
+  private remember(offset: number, value: Value, bytes: number): void {
+    if (this.decoded) this.budget.release(this.decoded.charge);
+    this.decoded = undefined;
+    const charge = decodedRecordCharge(2048);
+    // One small, private typed row only; cache absence never changes admission.
+    if (bytes <= 2048 && this.budget.limit - this.budget.retained >= charge * 2) {
+      this.budget.retain(charge);
+      this.decoded = { offset, value: structuredClone(value), bytes, charge };
+    }
+  }
   async record(offset: number): Promise<{ value: Value; release: () => void; bytes: number }> {
     if (
       this.closed ||
@@ -409,6 +430,15 @@ export class InstallScratch {
       offset >= this.end
     )
       throw new Error('Invalid scratch offset.');
+    if (this.decoded?.offset === offset) {
+      this.store.root.work.scratchRowReuses++;
+      this.store.root.work.metadataRowsRead++;
+      return {
+        value: structuredClone(this.decoded.value),
+        bytes: this.decoded.bytes,
+        release: this.budget.holdRecord(this.decoded.bytes),
+      };
+    }
     // A resident complete row can be decoded synchronously without input/assembly copies.
     const page = this.pages.find((p) => offset >= p.start && offset < p.end);
     const resident =
@@ -420,6 +450,7 @@ export class InstallScratch {
       const bytes = lf + 1,
         value = decodeRecord(resident.subarray(0, bytes));
       this.store.root.work.metadataRowsRead++;
+      this.remember(offset, value, bytes);
       return { value, release: this.budget.holdRecord(bytes), bytes };
     }
     this.lookups++;
@@ -439,6 +470,7 @@ export class InstallScratch {
     try {
       for await (const row of decodeRecords(this.bytes(offset, this.end, 256), decoder)) {
         this.store.root.work.metadataRowsRead++;
+        this.remember(offset, row.value, row.raw.length);
         return {
           value: row.value,
           release: this.budget.holdRecord(row.raw.length),
@@ -539,6 +571,7 @@ export class InstallScratch {
     let expected: ReturnType<typeof nativeIdentity> | undefined;
     let failure: unknown;
     try {
+      if (!this.parked) this.store.root.work.stats++;
       expected = this.parked
         ? this.fileNative
         : nativeIdentity(await this.handle.stat({ bigint: true }));

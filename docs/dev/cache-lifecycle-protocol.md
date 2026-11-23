@@ -22,397 +22,116 @@ limitations under the License.
 
 ## Status and reference rules
 
-**Draft version 1; the streaming prepare/build/post lifecycle is
-implemented.** This is the local part of the [streaming cache protocol](../cache-protocol/),
-paired with the [native-base and generation schemas](../native-base-protocol/).
-It includes acquisition/install/recovery, observation and GC, native save
-relocation/return, Gradle invocation capture/shutdown and provider composition.
-These are local records, never worker payload members or cached generation data.
-The unreleased Gradle/Maven Action source delegates now select this lifecycle.
-Existing release tags retain their published implementation; incompatible release
-exposure remains pending. The parent protocol's integrated
-review, full-pipeline resource/platform qualification, release cleanup and final
-cutover review gates still apply. Implementation comments cite this file and its
-relevant heading. No serialized flag restores a process-local verification proof.
+This is the active incompatible, unreleased `local-v2` lifecycle. It composes the
+[worker v1 wire](../cache-protocol/) with the
+[metadata-only native base](../native-base-protocol/). One successful main handoff
+may be admitted by a fresh post process. An interrupted main or active post is
+refused; no old namespace, journal, cursor, source package or replay recipe resumes.
+Same-operation native cleanup, safe partial backup retirement and independent
+source return remain required. Existing release tags and platform qualification
+are separate from this source change.
 
-Use the parent's canonical `J`, framed `A(domain)`/`H(domain,tuple)`, scalar types,
-paths and portable metadata. Each JSON tuple/NDJSON record is bounded to 64 KiB;
-streams have no total-byte/record admission limit. Unknown versions/tags/fields,
-noncanonical numbers/encoding and unsafe arithmetic fail validation. Bounded arrays
-below contain model partitions/producers, never file/unit/root inventories.
-
-All paths below are **relative to the actual managed root**, except explicitly
-marked `nativePath` fields. Owned state lives under `.mammoth/v1/<invocationId>/`.
-The reserved directory is excluded unconditionally from managed custom partitions.
-This protocol requires **one active Mammoth lifecycle per actual managed root**
-through prepare, build and post, as on a dedicated job root. Two jobs/prepares sharing
-a root, or an old process resuming concurrently with recovery, are unsupported.
-The existing per-job invocation guard does not provide cross-job/root locking.
-Root-local records/locator are crash-discovery bindings, not an atomic exclusion
-claim or lease; reject concurrent ownership when detected, but do not claim every
-race is detectable. A caller must establish that the old lifecycle is no longer
-running before fresh recovery/supersession.
-Canonicalize/bind the managed root before use; reject an unexpected root identity,
-escaping path, symlink traversal or an unrelated invocation's scratch ownership.
-rootBinding's locator compares the same canonical native path and stable directory
-kind/device/file ID (and birth identity when reliably available), not full N equality.
-Ordinary builds or creating owned metadata can legitimately change root size/mtime/
-ctime; those fields are not root-replacement evidence. Later frozen managed subtree
-evidence has its own observation boundary. Native evidence for actual
-managed subtrees keeps the stricter mutation rules below. Use same-filesystem native rename only; no copy-fallback record variant exists.
-A `nativePath` is a validated absolute platform path, used only locally and never
-formed by interpreting a worker logical path as an executable or authority.
+A dedicated root has no concurrent build/cache consumer while a mutating phase is
+active. Native checks protect admitted paths, selected endpoints, ownership and
+actual cleanup; repeating a full inventory cannot provide a filesystem lock.
 
 ### Native identity and evidence
 
 ```text
-N = ["native",1,kind,device,fileId,size,mode,atimeNs,mtimeNs,ctimeNs,birthNs]
-rootBinding = [nativePath,N]
+N = ["native",1,"file"|"directory",device,inode,size,mode,atimeNs,mtimeNs,ctimeNs,birthNs|null]
 ```
 
-`kind` is `file` or `directory`. Device/file ID/size are canonical unsigned decimal
-strings; times are canonical signed decimal nanosecond strings (no leading zeros
-or negative zero); birthNs may be `null` when unavailable or not reliably distinguishable from a
-platform fallback. The Node adapter uses Windows native creation time; it omits
-Unix birth identity because the stat interface can substitute ctime. Other N fields
-retain full native precision. Mode is the full native
-integer mode, not portable normalized mode. Preserve actual native precision;
-portable millisecond truncation is not valid for source-stability checks. A platform
-adapter must supply consistent stable identities or reject the mutating operation,
-not fabricate a successful rename proof from zero/unknown IDs.
-
-Frozen identities include atime for activity decisions. Subsequent content reads
-attributable to Mammoth may ignore atime only; size/mode/mtime/ctime and file ID
-remain checked. A known rename can change the moved root's ctime; on Windows, native filename
-tunneling can also adjust that root's creation/birth timestamp. A live guarded
-operation bridges exactly the observed transition, retaining kind/device/file ID,
-size/mode/mtime. Ordinary identity comparisons and the root locator keep their
-birth checks. See [Microsoft file-time documentation](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfiletime). It cannot excuse changed descendants.
-For an ancestor whose children Mammoth deliberately changes, compare stable kind/
-device/file ID and the exact attributed child projection; do not accept its current
-timestamps as a new blanket baseline. Record the affected ancestor facts through
-ordered traversal/operation evidence, not a global path set.
-
-On reload, serialized before/after identities are bindings to revalidate, not proof
-that a past process performed a trusted syscall. Ambiguous moved roots require
-complete frozen membership and content-hash verification before adoption/return.
-Same-size changes remain detectable against the frozen expected bytes. No old live
-path retains authority after its native object is moved elsewhere.
+Decimal native fields preserve actual OS precision. Device/type/link acceptance
+is part of the original producer/discovery. Full N supports activity and selected
+mutation/body/cleanup guards. Summary equality uses its separate documented
+normalization, never directory clocks/atime/ctime/inode as semantic change evidence.
+Genuine in-process owners bind store/root/partition/index/budget/bounds and lifetime;
+serialized offsets, hashes, booleans and writer receipts cannot manufacture them.
 
 ### Immutable references and append prefixes
 
 ```text
-Q = ["ref",purpose,path,bytes,sha]
-P = ["prefix",purpose,path,bytes,records,sha]
-span = ["span",streamSha,startByte,endByte]
-```
-
-`Q` binds exact complete file bytes (including LF), purpose and an owned path under
-the invocation root. A referenced local stream's header must independently match
-invocation/model/family/partition. Binary artifact refs bind the opaque immutable
-file and its expected artifact identity from bindings. Only declared references may
-be reopened; a matching filename alone is insufficient. A `span` is a half-open
-range of whole validated records in the referenced immutable stream, at known
-file/subtree/unit boundaries, not an arbitrary payload byte extent.
-
-Standalone Q purposes are explicit: `generation` for record.json, `envelope`
-for envelope.json, `native-tree` for tree.ndjson and `worker-archive` for opaque
-worker TAR/gzip bytes. Local standalone document refs use their document tag
-(`bindings`, `publication`, `quiescence`, `gc-progress`, `install-progress`).
-Complete local stream refs use the stream's purpose. Reference purpose is checked
-against the decoded document tag/header, never inferred from its filename.
-
-`P` binds an immutable **prefix** of an owned append-only evidence file, not a new
-whole-file copy at every checkpoint. Its byte count ends at an LF; records excludes
-the stream header and counts complete data records in that prefix. Validate prefix
-hash/grammar once on reload and reconstruct the incremental hasher in that linear
-read. Normal appends keep hasher state and commit a new prefix without rehashing the
-entire prefix per batch. Uncommitted owned tail is not accepted evidence; recovery
-may truncate/rebuild it under its still-live intent. This is not permission to
-truncate an unowned, referenced immutable or unexpected file.
-
-A completed stream has these framing records:
-
-```text
-["local-stream",1,purpose,invocationId,modelId,familyId,partition]
-... purpose-specific records ...
+Q = ["ref",purpose,ownedPath,bytes,sha]
+["local-stream",1,purpose,invocationId,modelId,familyId,null]
+... ordered purpose rows ...
 ["local-end",dataRecords,eventSha]
 ```
 
-Partition is `null` for global streams, otherwise its model ID. `eventSha` is
-`A("local-" + purpose)` over header and preceding data records, excluding local-end.
-`Q.sha` additionally covers all exact bytes including local-end. A live prefix lacks
-local-end until sealed; a prefix is allowed only where explicitly declared below.
-Empty complete streams still have header/end. No closed stream is mutated later.
+The local-v2 family selects this canonical framing envelope (its framing version is
+still 1). `eventSha` frames header and data in `local-<purpose>`; Q.sha binds exact
+bytes including EOF. Strict whole-stream grammar, native continuity and raw-ref EOF
+acceptance precede any admitted cleanup receipt. A receipt retains the ORIGINAL ref
+object and actual N, not a parsed clone or caller flag. Fixed bounded control refs
+are bindings, model, handoff, envelope and generation; opaque worker archives retain
+their independent mandatory raw binding.
+
+The only active stream purposes are model, handoff, activity, installations,
+observations and install-plan. Prefix/restart/progress formats and old source,
+producer, current, evidence, digest, publication and recovery package purposes are
+not accepted by local-v2. Active scratch rows remain process-local real work, not
+serialized restart authority.
 
 ### Durable replacement and cursors
 
-Write an owned candidate completely, close it, then atomically rename it into place.
-Publish a reference/pointer only after its complete evidence is available. Do not
-begin destructive work before the corresponding ownership and intent publication.
-The [filesystem and recovery requirements](../portability/filesystem/) apply on
-every platform: recovery covers process termination/restart while the operating
-system and filesystem remain running. Mammoth issues no explicit file or directory
-storage flushes and does not promise recovery across OS crash, reboot or power loss.
-In this document, durable or committed state means completed publication under that
-process-restart contract. Evidence/intent/mutation/progress/pointer/retirement ordering
-remains mandatory. Process-restart tests do not qualify host-crash persistence.
-
-Keep at most current plus one candidate for a replaced checkpoint, not retry history.
-For every replaced **Q-referenced** record/stream, write to a new unique immutable
-owned pathname, finish its writes, atomically commit the root state's new Q pointer, and only
-then retire the old Q file. Never overwrite bytes at a still-referenced Q.path and
-leave its old hash live, even temporarily. Fixed mutable state/intent/locator files
-replace at reserved paths under their distinct mutable-record rules. A P may append
-without changing its committed prefix; sealing it as its first Q is allowed, but
-that complete Q's bytes never change afterward. GC/install cursor advancement means
-both a new immutable progress Q **and the root pointer replacement** are durable
-before clearing the destructive intent or retiring evidence.
-
-```text
-cursor = ["cursor",streamSha,nextByte,nextRecord,boundary,stackRef]
-frame = ["frame",depth,path,phase,lastFile,lastDirectory,unit]
-```
-
-A cursor identifies the next complete record/unit boundary, with checked byte and
-record positions; boundary is completed unit/root count for that stream. `stackRef`
-is a `Q` of purpose `cursor-stack`, or `null` at an empty stack. Frames are streamed
-in ancestor order, depth starting at zero; phase is `files` or `directories`, last
-names are a component or `null`, and unit is `null` or `[kind,root,scope]`.
-A cursor-stack has at most the admitted depth; decode/name budgets still apply.
-
-Do not embed all ancestor paths in one potentially huge checkpoint tuple. Validate
-stack/path/ordering against the referenced stream boundary once on reload, then
-resume sequentially. A cursor is not permission to seek into an arbitrary line or
-skip the active intent. Replacement stacks are owned by current/candidate pointers;
-no per-boundary stack history is retained. A destructive batch cursor advances only
-at a complete semantic unit boundary, never midway through a workspace.
+Fixed state replacement is atomic and revision-checked. Scratch batch cursors are
+operation-local whole-record/unit boundaries. They never authorize cold replay.
+A first complete unit is always admitted into its batch, even when it alone exceeds
+the target; header/context bytes cannot form an empty prefix batch.
 
 ## CI invocation anchor and cold reopening
 
-The per-action CI state handoff is one canonical record (terminal LF included):
-
 ```text
-["streaming-lifecycle",1,canonicalManagedRoot,rootN,context,nonce]
-["streaming-disabled",1,context,hookRoot,captureTempDirectoryOrNull]
+["streaming-lifecycle",1,absoluteRoot,rootN,context,nonce]
+["current",1,invocationId,".mammoth/v1/"+invocationId+"/state.json"]
+["bindings",2,invocationId,context,nonce,[absoluteRoot,rootN],modelRef,familyProjection,policy]
+["local-state",2,invocationId,revision,status,bindingsRef,handoffRef|null,terminal|null]
+status = prepare-pending | prepare-failed | build-ready | post-active | completed
+terminal = ["outcome",kind,key|null,artifactId|null,artifactName|null]
 ```
 
-These are alternative enabled/disabled shapes, never a copied model or per-file
-catalogue. Root N is a directory; compare its stable object identity and mode, not
-activity timestamps. Invocation ID derives from the existing context/nonce hash.
-Save the enabled anchor before failure-prone owned initialization. It names the
-issued invocation namespace, not successful prepare; only validated build-ready
-bindings/cutoff allow post. An incomplete or unpublished namespace cannot be treated
-as build-ready. A disabled handoff authorizes no managed-payload or cache-publication authority (known provider-owned build-hook cleanup is permitted).
-
-Cold reopening first validates canonical, bounded anchor/current-locator/state and
-bindings bytes with existing no-follow native reads. Extract model Q, family projection,
-context/nonce and policy only provisionally. The same canonical stream framing, raw Q
-hash, final seal and bounded decoder then read at most 64 model partition rows;
-reconstruct and check the existing model/family projection. Validate complete state
-and bindings with the normal LocalCodec before issuing a reopened handle. No alternate
-permissive record parser or flag recreates native source receipts. Recheck current state
-and root identity before acceptance; a changed owner/context or reference fails.
-
-State is mutable across legitimate progress, so the anchor does not pin a stale state
-hash. It also does not grant concurrency exclusion or recovery permission. Current-owner
-recovery uses that owner's frozen bindings, never current configuration/defaults.
-Metadata bootstrap can inspect owned records before config, build-report and provider
-SDK imports; it reads no managed payload. Examples are in vector A0.
+`kind` is read-only, no-change, published, worker-uploaded,
+skipped-not-quiescent, feature-unavailable or abandoned. Only completed has a
+terminal. Build-ready/post-active/completed require handoff. Main persists no
+intermediate source authority. Fresh post reconstructs the exact model and family,
+checks root/context/nonce/bindings and exact handoff/generation, then claims
+post-active BEFORE awaited capture. Only genuine `OpenedInvocation` can claim.
+Pending/failed main and interrupted post reject reentry. Completed diagnostics
+read bounded controls only and do not stat/read/admit retired activity or snapshots.
+Old destructive markers are conservatively refused, never executed or adopted.
 
 ## Invocation bindings and operational capture
 
-The immutable bindings document is:
-
 ```text
-["bindings",1,invocationId,context,nonce,rootBinding,modelRef,familyProjection,
- policy,baseline,producerSetRef,prepareSourcesRef,activityRef]
-baseline = null | ["baseline",recordKey,recordRef]
-producer = [artifactName,artifactId,transportSha,context,archiveRef]
-snapshotSource = [partitionId,sourceKind,identity,metadataRef,nativeRoot]
+policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|null,
+          ordinaryPolicy,maxDirectoryEntries,ordinaryJobOrder]
+["handoff",2,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+ cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef]|null,
+ actualActivityRef,originalBuildCutoff,selectedWorkerCount]
+["partition",partitionId,available|empty|cold|miss,pin|null,snapshotDescriptor|null]
 ```
 
-Context/nonce/model/family and all identities follow the base specification.
-`recordRef` is a `Q` of the pinned generation bytes, not a historical-chain pointer.
-ModelRef is a complete purpose `model` stream containing one
-`["model-header",buildTool,hardExcludes]` and model-order
-`["partition",id,includes,ordinaryExcludes,publication,writer,conflict,purgeableGlobs?]` rows. These reconstruct
-the native-base model hash projection; it is not one potentially oversized model JSON
-record. ProducerSetRef binds purpose `producers` with `["producer",producer]` rows,
-sorted by the parent's job-name ordering, unique, with nonempty service IDs and
-immutable downloaded archive refs; admission bounds their count. PrepareSourcesRef
-binds purpose `prepare-sources` with an optional first `prepare-selection` control
-row followed by `["snapshot-source",snapshotSource]` rows.
-These sets are streamed by bounded records rather than embedding up to 64 repeated
-native paths/refs in one 64-KiB bindings tuple.
-Prepare snapshot sources are in model order and include only already sealed
-baseline/incoming-worker views. `activityRef` binds the complete prepare-time selected
-worker activity stream, including imported usage, and is nonnull at build-ready
-(an empty stream is valid). Final local-writer post-build views are **not** captured
-in prepare bindings. The shared snapshotSource tuple's source kind is `baseline`, `local-writer` or
-`worker-writer`; identity is `[kind,originId]`, where originId is its pinned object
-key, this invocation ID or the selected artifact ID respectively. For a baseline
-explicit-empty generation entry, originId is instead the selected generation's exact
-recordKey; the outer partition ID disambiguates its empty source. For a committed
-restore miss, a deliberately empty prepared view uses `miss:<invocationId>`; for an
-unavailable/cold partition it uses `cold:<selectedRecordKey>`. These are derived
-empty-view identities, not object keys or upload receipts. Only current validated
-miss/cold selection plus a verified empty owned native tree can issue that prepared
-view; never infer it from stale live contents. It still has a sealed
-empty native tree and no fabricated object reference/upload. Metadata ref
-binds the exact source's validated tree/activity and nativeRoot is an owned native
-staging path under the same managed root. Retained snapshot nativeRoot rejects the
-first-component `install` subtree, including native case/trailing-dot/space aliases;
-`VerifiedIncoming` instead requires exactly `install/<partition>`. A consumable root
-cannot also be the retained authoritative snapshot. No-link/nlink guards complement
-this namespace separation. Never store file lists in bindings.
+The header is followed by exactly one ordered row per model partition. All bounded
+controls are O(P), with P at most 64 and worker count at most 16. The exact generation
+key, family, cold groups and original per-partition object refs bind pre-overlay pins.
+Pin BEFORE pre-existing extras, prune and worker application; final prepare state is
+never a replacement baseline. Only the actual imported used/upsert activity stream
+crosses main/post per file. Successful main ends all native/index/install scratch
+owners; no per-file current/evidence/catalogue/source-package pointer remains.
 
-```text
-policy = ["policy",1,role,access,restoreCleanup,gcMode,gcCutoffMs,cutoffMs,
-          duplicatePolicy,maxDirectoryEntries,ordinaryOrder]
-policyId = H("policy",policy)
-producerSetSha = producerSetRef.sha
-snapshotSourcesSha = postSourcesRef.sha
-```
+A snapshot descriptor is `["snapshot",ownedRoot,parentN,rootN,origin]` under the
+current invocation's exact `snapshots/<UUID>/<partition>` container. Origin is
+`["base",exactObjectRef|null]`, `["worker",producerId]`, `["local",invocationId]`
+or `["empty",miss|cold|generation]`. These are data, never capability flags. Fresh
+post validates exact root/parent and discovers this independent payload once under
+its new owner. Output facts are actual final output N, not source inode rebasing.
 
-Role is `standalone`, `distributed-worker` or `distributed-aggregator`; access is
-`writable` or `read-only`; restoreCleanup is `none` or `prune-managed`; gcMode is
-`off` or `timestamp`; gcCutoffMs is `null` only for off. Cutoff is a `uint`, set only
-after successful prepare (never reconstructed from a later clock). Duplicate policy
-is `strict` or `newer-mtime`, with the exact fold in the parent specification.
-OrdinaryOrder is the validated configured dependent-jobs list after stable first-
-occurrence deduplication, in declaration order and empty when none; it excludes jobs added solely for snapshot discovery.
-Keep it separately from the sorted producer inventory and bind it into policyId so
-retries cannot reorder an order-sensitive reduction. Directory
-entry allowance is positive. GC cutoff is fixed for the attempt, not recomputed on
-retry. For prepare-pending bindings only, cutoffMs may be `null`. At build-ready,
-seal final bindings with that cutoff and freeze them thereafter. The root state
-changes its bindings ref atomically; older unreferenced prepare candidate is retired.
+## Build-tool lifecycle boundary
 
-Snapshot source sets may be empty. Prepare sources are immutable; local-writer
-capture for a **base publisher** happens only after observations commit and GC
-completes, while content reads are permitted. Freeze the final source set as a complete purpose `post-sources`
-stream containing `["snapshot-source",snapshotSource]` rows in model order, choosing
-one authorized source per contributed partition. Source metadataRef is a `Q` of
-`native-evidence` at its owned nativeRoot; baseline hashes retain trusted-base status
-and worker/local hashes retain their guarded capture evidence. Never alias a mutable
-live cache as a sealed snapshot. An unavailable optional writer inherits its prepared
-baseline/worker source according to the existing snapshot policy; a required absent
-producer remains an error.
-
-Atomically install postSourcesRef in gc-complete state only after every complete
-post-source capture/ref is durable; null means not finalized, while a sealed empty
-stream means intentionally no sources. Decision/key derivation then binds that exact
-ref's sha. It cannot derive keys before a local-writer's post-build source exists,
-mutate prepare bindings or substitute a pre-build snapshot. Once base publication freezes, neither postSourcesRef nor its sources change. A failed uncommitted capture
-can discard its owned candidate and retry under the same frozen observations; after
-source-set commit, changes invalidate the frozen attempt. Local native paths in this
-invocation-local digest do not enter portable family compatibility.
-
-For **distributed workers**, postSourcesRef instead binds a purpose `worker-sources`
-stream with `["worker-snapshot",partitionId,observationsRef]` rows, in model order,
-only for this worker's authorized complete snapshot contributions. It describes
-frozen live partition scope, not a sealed native shadow tree. Commit this membership
-selection after observations/GC and before package creation, then guarded-stream each
-complete live snapshot directly into its TAR channel, hashing the same bytes once.
-No native snapshot copy/native-evidence prehash is required for worker creation.
-Source/tree stability must still match the frozen observations. At package-frozen,
-the immutable archive plus workerRef is retry authority; do not reread live bytes or
-refreeze the snapshot. Base publication consumes only the native `post-sources`
-variant, never this worker-only source selector.
-
-### Frozen prepare selection
-
-The integrated prepare service MUST commit this optional first `prepare-sources`
-control row in initial bindings before owner publication, before acquiring selected
-payloads. Both choices are pending and availability is null at initialization; this
-atomically binds effective GC age/configuration with the initial absolute GC cutoff. Lower-level
-source-only streams may omit it; post-sources MUST reject it. It is never allowed after
-a snapshot row, repeated, or with extra/unknown fields. No compatibility fallback is
-implied. Its bytes use the same 64KiB per-record bound and normal stream seal.
-
-```text
-["prepare-selection",1,currentRef,defaultRefOrNull,
- ["execution",1,captureTempDirectoryOrNull,artifactRetentionDays,"enabled"|"disabled",gcAgeMsOrNull],
- baseChoice,workerChoice,coldPartitionsOrNull,installParentN,stage]
-baseChoice = ["pending"] | ["miss"] | ["pinned",recordKey,generationQ]
-workerChoice = ["pending"] | ["selected",[artifact,...]]
-artifact = [serviceId,name,size,"sha256:<lowercase-hex>"|null,context,authorizedSnapshots]
-stage = "selected" | "base-installed" | "workers-installed"
-```
-
-Execution freezes cleanup-enabled and the effective positive GC age in milliseconds
-(or null for off); the absolute GC cutoff is derived only once in initial bindings.
-This permits configuration-drift checks on a retry without recomputing that cutoff.
-Retention is positive and the capture
-temp directory is a canonical absolute native path or null. Do not serialize tokens.
-DefaultRef is null when absent/equal to currentRef. Base key must belong to the frozen
-family/current-or-default lineage; the existing pinned-generation reader validates the
-exact generation bytes and key. `pending` means no result committed, while `miss`
-means a committed no-generation result. Worker selected with an empty list is a
-committed empty selection, distinct from pending. Service IDs and jobs are unique,
-with at most16 descriptors in frozen request order. Each descriptor's context matches
-repository/workflow/run/revision/tool/provider, has attempt at most this execution,
-uses its expected artifact name, and belongs to a requested producer other than the
-current job. Snapshot IDs are unique, in model order, and authorized for that producer.
-Read-only and non-aggregator invocations have no selected worker inputs.
-
-Before acquisition, commit each resolved lookup by replacing prepare-sources and
-bindings Qs through the existing root-state pointer. A remote result lost before that
-pointer is uncommitted; retry may repeat that lookup. Once committed, retry MUST use
-its exact key/Q/descriptors and MUST NOT rediscover newer candidates or reinterpret
-miss/empty selection. Commit immutable downloaded worker Qs in the existing producer
-stream before merging. No second archive parser, file catalogue or retry journal.
-
-ColdPartitions is null before base acceptance. Before the first live install, freeze
-the exact accepted cold partition list in model order, including complete recovery-
-group unions. On miss it is empty; pending base cannot have an availability outcome.
-An installed stage requires resolved base/workers and nonnull availability. When a
-retry must reacquire a not-yet-completely-installed base, it must reproduce the frozen
-availability outcome or reject before more installation. It cannot silently turn a
-previously cold group into an available one or lose a previously accepted group.
-
-Validate all selected worker bodies/final seals before the first live installation.
-Their temporary merge staging may coexist with accepted base staging; publish worker
-install roots only after base install releases the fixed per-partition roots. Retain
-independent snapshot authorities before consuming install copies. Every header rewrite
-preserves matching snapshot rows. The bindings/state replacement that advances to
-base-installed MUST include the matching accepted baseline and retained source refs;
-workers-installed MUST also include matching selected activity. Commit those source
-refs before the corresponding install can consume its copies. Progress advances only
-after installation finishes. Interrupted active batches reconcile first; retry may
-rematerialize only those same committed inputs. Final cutoff/activity and build-ready
-bindings still commit last, after hooks and all prepare operations succeed.
-
-InstallParentN is the stable native DIRECTORY identity of the derived
-`.mammoth/v1/<invocationId>/install` container, sealed with initial bindings before
-publishing any incoming install root. It is not an arbitrary pathname. Require the
-same kind/device/file ID/native birth identity and exact mode, on the managed root's
-device; ignore parent clocks/size changes caused by own child publication/removal.
-This specifically permits disposal of unclaimed or consumed incoming staging under
-that proven container; it supersedes pathname-only orphan rejection for no other
-namespace. No per-child/per-file catalogue or new journal is required.
-
-After reconciling any discoverable install intent/progress, and with no active source
-reader/consumer, an idle prepare may discard only known model partition directory
-children of this same container. Reject unknown children, links, replaced parents,
-mode/device drift and cross-device descendants. Never touch retained snapshots,
-immutable Qs, backups or live cache roots. Directory facts must come from fully
-validated current bindings and a process-local reader receipt, not a caller-created
-object or path. A partially interrupted disposal remains safe to repeat under the
-same stable parent binding; missing disposable members need no install receipt.
-Disposal does not mint VerifiedIncoming or advance install progress. Rematerialize
-and revalidate only the same frozen selections afterward. Commit retained snapshot
-and stage authority before discarding consumed incoming copies. A pre-locator
-bootstrap candidate's bound install parent MUST still be empty.
-
-For a true generation hit with effective prune-managed, the existing installer treats
-ALL eligible managed partitions as authoritative, including unavailable/cold ones,
-while preserving excluded/protected entries. It uses its existing indexed inventory,
-not a separate pruning pass or restore-clear-restore. Do not apply this aggregate
-prune rule on miss or during worker application. Snapshot partitions retain their
-separate complete-replacement rule and start empty on a miss. Vector P0 fixes a
-complete empty-selection stream.
+Current frozen tool identity selects configuration-free capture, quiescence and
+known-hook cleanup. Gradle registration/stop/inspection is tool-owned; shared code
+retains post admission, exclusive-window receipt and all cache mutations. Maven
+uses the dedicated-root/completed-consumer lifetime. A tool returns installation
+metadata, never a shared mutation grant. Read-only has no daemon/GC/payload work.
 
 ### Gradle installation registration
 
@@ -457,22 +176,13 @@ settlement interval (also within the overall deadline), then fail closed if nece
 Real process inspection occurs only at this window boundary, not per file/partition.
 Keep wrapper/dists and needed runtimes
 accessible until every stop client exits and native process verification succeeds.
-A quiescence document is:
-
-```text
-["quiescence",1,invocationId,installationsRef,"all-exited",checkedAtMs]
-```
-
-This records the completed gate, not a reusable lock. Missing/failed capture,
-unknown relevant daemons, inaccessible process details or a timeout yields
-`skipped-not-quiescent` before relocation. No launcher sweep/download/OS-kill fallback.
-Java launcher `@argfile` input before the visible main is uncertain; do not read it
-across the post payload barrier to guess a main class. Check frozen root identity/mode
-on entry and after awaited stop/inspection before committing the new window; these
-are fixed phase costs, not per-file checks. Duration arithmetic uses a monotonic clock;
-checkedAtMs alone uses wall time. On a later process/retry, re-establish the exclusive window before new mutations;
-never trust checkedAtMs as proof that no daemon restarted. Read-only does not stop
-processes. This does not authorize stopping unrelated shared-machine processes.
+The validated installation stream belongs only to the current window establishment
+and is retired after stop clients and native exit verification finish. No persisted
+quiescence tuple grants permission. Missing/failed capture, unknown relevant daemons,
+inaccessible process details or timeout yields `skipped-not-quiescent` before cache
+mutation. Root identity/mode and cheap lifetime assertions remain fixed phase costs.
+Every fresh active post establishes its own window. Read-only does not stop daemons;
+no launcher sweep, download or OS-kill fallback is authorized.
 
 #### Native macOS process evidence
 
@@ -499,1203 +209,105 @@ new concurrent consumer after inspection; the dedicated-root/completed-consumer 
 still applies. Platform implementation and small native proofs do not establish large-cache
 throughput, memory/paging guarantees or qualification of every macOS release/architecture.
 
-## Build-tool lifecycle boundary
-
-The implemented internal composition selects a configuration-free lifecycle from the
-validated owner's Gradle/Maven identity. It delegates capture installation, consumer
-quiescence, recovery consumer verification and known-hook cleanup. Gradle defers each
-operation's dependencies independently; Maven retains ordinary hooks and the caller's
-completed-consumer lifetime without Gradle registration or process inspection.
-
-Shared cache code retains role/access admission, root/state/lifetime checks, quiescence
-record commitment, exclusive-window grants, recovery dispatch and all cache mutations.
-A tool operation returns installation metadata, never a grant. Recovery selects the OLD
-owner's frozen identity and cleanup signal, without constructing the next configured
-adapter or executing captured launchers. No pending destructive work means no recovery
-process inspection. Hook cleanup uses the frozen tool/root independently of reporting.
-Selecting these routes in unreleased Action source delegates does not change existing
-release tags or qualify cache scale, throughput or memory/paging behavior.
-
-## Mutable root state and partition cells
-
-The fixed managed-root locator `.mammoth/v1/current.json` is:
-
-```text
-["current",1,invocationId,statePath]
-```
-
-StatePath is exactly `.mammoth/v1/<invocationId>/state.json`. Recover the prior
-locator's pending fixed GC/install/relocation markers before superseding it. Create
-new prepare state and bindings durably, commit this locator, then permit any new
-intent/mutation. A crash before locator commit cannot have new destructive work;
-after commit, fixed markers are discoverable even if their refs have not reached
-state yet. Reject detected concurrent owners/unsupported legacy intents; do not select a
-newest-looking directory by name. An abandoned unreferenced candidate is not an
-authorized recovery owner.
-
-Fixed owned `state.json` is:
-
-```text
-["local-state",1,invocationId,revision,phase,bindingsRef,observationsRef,postSourcesRef,
- publicationRef,partitionStateRef,gcProgressRef,installProgressRef,
- workerRef,quiescenceRef,outcome]
-```
-
-Revision starts at zero and advances on each atomic replacement. References are
-`Q` or `null` as phase permits. `workerRef` is `null` or
-`[archiveRef,artifactName,transportSha,receipt]`; receipt is `null` or
-`["artifact-receipt",artifactId,artifactName,transportSha]`. Outcome is `null` before
-completion, otherwise `read-only`, `no-change`, `published`, `worker-uploaded`,
-`skipped-not-quiescent`, `feature-unavailable` or `abandoned`. `feature-unavailable`
-is terminal only for an optional writable standalone before publication starts:
-observation/GC references remain required, with no post sources, publication,
-partition state or receipt. Replay reports the same skip without a backend lookup;
-required aggregation and resumed publication still fail if the backend is unavailable.
-Required worker completion rules still apply;
-a failed required producer cannot report a successful empty artifact.
-
-`partitionStateRef` is a `Q` of purpose `partition-state`, containing at most P rows:
-
-```text
-["partition-state",partitionId,baseline,adjustmentRef,snapshotSource,
- objectReceipt,relocationMarker]
-baseline = ["baseline-partition",status,objectRef]
-```
-
-Rows occur exactly once per model partition, in model order. Status is `restored`,
-`empty` or `missing`; objectRef is nonnull only for restored. Adjustment ref is the
-one current `Q` of purpose `adjustments`, or `null`. Snapshot source is that
-partition's sealed source tuple or `null`. Relocation marker is a reserved owned
-relative path or `null`; validate it if present. Object receipt is defined below.
-No unbounded object list is embedded in state or partition cells. Replacing this
-P-bounded stream plus root pointer is not copying all file descriptors per checkpoint.
-The fixed marker paths must also be checked at recovery startup; a crash cannot make
-an unreferenced durable destructive intent invisible just because a state replacement
-had not yet installed its pointer.
-
-### State phases and prerequisites
-
-| Phase                  | Required evidence and permitted next transition                                                                                                                               |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prepare-pending`      | Recover prior root-local destructive markers first; bind selected generation/producer IDs, validate all inputs, then guarded install. No successful build cutoff yet.         |
-| `build-ready`          | Install intents reconciled; final bindings/cutoff and worker activity durable. Read-only may complete; writable post establishes quiescence where needed.                     |
-| `quiescent`            | Required stop/process gate succeeded in the current exclusive window; metadata-only freeze may begin.                                                                         |
-| `observations-frozen`  | Complete observations and initial GC progress refs are durable before any content/hash/report/GC work.                                                                        |
-| `gc-complete`          | All selected GC batches reconciled and completed cursor durable; retained-source evidence still matches. Capture/seal postSourcesRef here before decision/key/package freeze. |
-| `objects-frozen`       | Immutable publication plan, keys, trees/envelopes and move plans are sealed. Worker mode instead goes to package-frozen.                                                      |
-| `relocating`           | Partition-wide marker exists before first outbound move; no receipt yet.                                                                                                      |
-| `staged`               | Outbound plan complete, sealed stage evidence matches all frozen bytes/membership.                                                                                            |
-| `object-saved`         | SDK returned or outcome is ambiguous; stage post-barrier still required, sources not yet declared returned.                                                                   |
-| `returning`            | Return every evacuated root, including ambiguous active outbound range; no next partition.                                                                                    |
-| `sources-returned`     | Locations reconciled, adjustment state committed, marker cleared/retired; only now accept object receipt and advance partition.                                               |
-| `final-source-barrier` | All P choices/receipts match immutable plan; no pending markers; retained projection and deleted-target absence verified.                                                     |
-| `record-saved`         | Exact record confirmed; complete publication atomically.                                                                                                                      |
-| `package-frozen`       | Worker archive complete and source-stable; no base relocation path.                                                                                                           |
-| `worker-uploaded`      | Exact artifact identity/digest receipt confirmed; worker may complete.                                                                                                        |
-| `completed`            | Outcome fixed; cleanup only unreferenced owned state with no destructive intent.                                                                                              |
-
-`phase` is exactly one listed tag. Partition progress also binds phase/epoch in the
-relocation marker, so root state cannot forget earlier moved batches. Sources-returned
-may loop to relocating for the next changed partition. A writable worker uses
-build-ready → observations-frozen → gc-complete → package-frozen; it does not
-need the Gradle base-relocation shutdown gate. A non-Gradle base publisher enters
-quiescent only after its own cache consumers have finished. Read-only completion
-performs no post-build tree/hash traversal. No-change requires validated observation/
-GC/publication decisions, not a fabricated hit. Any actual failure returns sources
-under outstanding intents first or leaves recoverable state blocking prepare.
-
-Writable base capture requires quiescent state (and Gradle quiescence evidence).
-Distributed-worker capture instead starts at build-ready and commits the same
-observation/GC grammar without a base quiescent phase or ref. Shared GC admits these
-worker observations; worker capture never accepts the base purge-window capability.
-Read-only remains prohibited from either capture/GC path. This role admission does
-not turn a serialized quiescence record into a live exclusive-window grant.
-
 ## Frozen observation and GC schemas
 
-Purpose `observations` contains one balanced managed tree. Records are:
+Post imports original activity before listing/purge/body work, then ONE native
+capture writes its operation-owned original hierarchy/index. Observation rows are
+ordered dir-open N, complete physical child facts, managed file
+`["file",name,partition,N,activity,decision]`, complete-unit controls and dir-close.
+There is no previous portable/hash field. Physical protected/scaffold facts remain
+available to actual GC and native guards without becoming upload contributions.
 
-```text
-["dir-open",path,N]
-["child",name,type,device,fileId]
-["file",name,partition,N,baseline,activity,decision]
-baseline = null | ["portable",size,mode,mtimeMs,contentSha]
-["unit-open",kind,root,scope,activity,decision,unitEvidenceSha]
-["unit-close",kind,root,unitEvidenceSha]
-["dir-close",path]
-```
-
-After each dir-open, emit its complete immediate `child` projection in sorted
-non-directory then directory name order, before the managed file/unit/subtree body.
-It includes enumerated excluded/unsupported children, using lstat IDs without
-following them; unsupported managed members still fail admission. Type is `file`,
-`directory`, `symlink` or `other`; device/file IDs are native decimal strings.
-Reuse these frozen rows for GC parent projections; do not invent a fresh post-unlink
-child list as the original projection. The additional metadata calls for excluded
-child IDs are part of the one preflight inventory and must be counted.
-
-Retain every actually traversed directory's native evidence and child projection,
-including unowned scaffolding such as an empty hook directory. Hard-pruned opaque
-scopes remain physical children of their parent and are not traversed. Observation
-scaffolding is evidence, not owned empty payload presence: it grants no GC/deletion
-or upload authority. This includes empty Gradle workspace namespace directories
-outside a recognized complete-unit root, even when a broad partition glob matches;
-local discovery omits regular files outside recognized workspace roots with at most
-ten bounded warnings, while retaining their physical child evidence. Imported files
-still require a supported workspace layout. Namespace directories do
-not gain cleanup authority when GC removes their last supported unit. Activity, native-evidence and transport contributions retain
-their managed ownership requirements. An evidence-only retained workspace may emit
-no channels; an unowned workspace revealing managed file or owned-empty presence
-must reject rather than discard that contribution.
-
-Worker replay co-reads this same tree. It checks frozen physical child identities,
-uses the same immutable hard-prune policy, and skips physical files absent from the
-semantic stream. A new/replaced child or unexplained directory change still rejects;
-IDs alone do not justify skipping a traversed directory and hiding late descendants.
-These records reuse the existing walk; retaining scaffolding adds linear sequential
-metadata work without another capture listing or a global inventory.
-
-Activity is `none`, `used` or `upsert`; decision is `retain` or `delete`.
-Ordinary file activity/GC eligibility follows frozen native timestamps/cutoff and
-validated imported activity. An explicit unit's decision covers all managed members;
-its file records must agree. Compute unit membership/eligibility with bounded
-metadata-only spooling before emitting summary-first unit-open. No payload reads
-precede the committed full observation ref. `unitEvidenceSha` is `A("observation-unit")` over normalized
-`["directory",path,N]`, `["child",parentPath,name,type,device,fileId]`, and
-`["file",fullPath,partition,N,baseline]` facts in observation order, excluding asserted
-unit headers/closes and activity/decision fields. It requires no new file-body hash;
-any baseline contentSha is already pinned metadata. A subtree initializes with its
-already-open root N/child projection and covers all descendants. A direct Maven
-unit includes its parent N/child projection and direct file facts only, not descendants.
-Full-stream Q hashing binds the frozen activity/decision fields separately.
-GC must be off/retain for unsupported units and obey existing complete-workspace/
-Maven coordinate policy; never freshly reclassify by timestamps after capture.
-A deleting recognized workspace must satisfy its metadata marker requirements;
-incomplete retained observations may still be recorded. Activity stream framing
-and unit membership alone do not establish complete imported content: prepare must
-bind that stream to already validated selected worker units. Timestamp/cutoff policy,
-referenced frozen observations and source provenance remain required preflight inputs.
-
-Purpose `activity` records imported selected worker facts with these exact ordered
-tuples, without file hashes:
-
-```text
-["dir-open",path]
-["unit-open",kind,root,scope,activity]
-["upsert",name,partition] | ["used",name,partition]
-["unit-close",kind,root]
-["dir-close",path]
-```
-
-Here activity is `upsert` or `used`; direct file records use one component name.
-Files/used names share one sorted sibling category, no duplicate path or mixed
-representation for an indivisible unit. Units retain subtree/direct boundaries.
-A complete activity stream has a balanced empty root even when no facts exist.
-The same purpose can encode per-source upsert membership for the parent's usage-
-exclusion join, then retire it; bindings.activityRef instead pins selected prepare
-activity needed by post. Purpose `cursor-stack` uses frame tuples. These streams retain necessary sequential evidence,
-not a searchable global index. Baseline file facts can be co-read from pinned tree
-metadata rather than materialized in a map.
-
-```text
-["gc-progress",1,invocationId,observationsRef,completedCursor,activeMarker]
-["gc-intent",1,invocationId,observationsRef,startCursor,endCursor,evidenceRef]
-```
-
-GC progress is a small `Q` referenced from root state; activeMarker is the fixed owned
-`gc-intent.json` path or `null`. Purpose `gc-evidence` brackets complete semantic units:
-
-```text
-["gc-unit-open",kind,root,scope]
-["target",path,partition,N]
-["parent-child",parentPath,name,type,device,fileId]
-["gc-unit-close",kind,root,projectionSha]
-```
-
-Ordinary one-file units use kind `file`, scope `file`; existing unit kinds/scopes
-are otherwise unchanged. `projectionSha` is `A("gc-unit")` over unit-open and **all** preceding target,
-directory and parent-child rows in this unit, excluding close. Workspace evidence
-includes `["directory",path,N]` facts in traversal order. Direct Maven evidence
-includes its parent directory N and one parent-child row for **every immediate child**,
-sorted non-directories then directories by the common name order, including unmanaged siblings
-and child directories. Type is `file`, `directory`, `symlink` or `other`, and IDs use
-native canonical decimal strings from lstat without following links. No child-directory
-descendant is recursively inventoried for this parent projection.
-
-Compare recovery's immediate children against that frozen projection minus planned
-targets already absent; all surviving identities/types must agree, and unexpected
-children fail. Own unlink may change parent ctime, never its stable ID or permission
-to hide another child. Preserve child directories/unmanaged entries. Every target has a preceding native directory projection and matching immediate
-parent-child type/device/file ID; subtree directory targets match their own explicit
-directory identity. Direct units cannot include descendant directory evidence.
-Directory cleanup targets are declared after their descendant evidence/targets,
-in postorder; they permit only guarded empty-directory removal.
-Workspace scope instead compares complete descendants using directory/target rows
-and the complete immediate child projection for each traversed directory, including
-existing protected/excluded children too. Those
-protected rows are evidence, never implicit deletion targets: preserve existing lock/
-bookkeeping files and leave directories nonempty when they contain them. Unknown new
-members still block. Never recursively unlink the whole workspace merely to satisfy
-its deletion decision. Evidence for
-every file/tree actually deleted is explicit; optional empty-directory cleanup must
-itself be an expected directory target and must not sweep unknown children.
-
-Group consecutive complete units into one evidence file, candidates 16,384 targets
-or 8 MiB encoded evidence, closing at unit boundaries. One larger indivisible unit
-may use its own streamed batch; this is not a unit/cache byte quota. Sync evidence
-and intent before deletion; only one active GC batch. Delete origin markers last
-inside a Maven direct unit and preserve child directories/unmanaged siblings.
-
-Replay accepts an absent planned target or its exact expected native object;
-a recreated/replaced target, unexplained child or type change blocks recovery.
-After deletion, durably replace the progress Q and root pointer with the advanced
-completedCursor, then clear intent and retire evidence.
-Crash after cursor advance but before cleanup completes the same cleanup idempotently.
-A fresh prepare recovers active batch ownership first; it need not finish all future
-GC batches of an abandoned attempt. Final publication still validates absence of
-completed deletion targets: do not prune their paths from replay and miss recreation.
+Only the genuine original capture, completed gates and active `PostAttempt` can
+create `GcSurvivorOwner`; reopening observation bytes cannot recreate authority.
+Original activity drives unit decisions; purge preserves original activity clocks.
+Semantic units, Maven marker-last deletion, protected siblings and required Gradle
+workspace markers retain their established policy. Actual deletion remains direct,
+selected-target and selected-parent checked, with no intent/progress/retry format.
+A failure retains actual partial effects and grants no completion/survivor owner.
 
 ### Shared GC parent projections
 
-New GC execution uses the explicit **shared** profile of purpose `gc-evidence`.
-The first data row is exactly `["gc-context",observationsRef]`; this is the exact
-complete Q bound by the active GC progress/intent. Every unit retains its existing
-open/close and target tuples, but replaces inline directory/parent-child facts with:
-
-```text
-["gc-parent",parentPath,projectionSpan]
-```
-
-The span's streamSha equals context observationsRef.sha. It starts at that parent's
-`dir-open` record and ends immediately after its last consecutive `child` record
-(or after dir-open if there are none), before any unit/file/subdirectory body.
-It therefore includes the full original immediate projection, including protected
-children. Exact offsets, whole records, parent N/path, observation context and EOF
-are validated by the execution consumer against the complete original Q; matching
-hash strings or syntactic span bounds alone do not authorize deletion. A shared
-context with no units is valid empty evidence. No duplicate/late context or mixed
-inline rows are permitted. Legacy/default inline readers reject the new profile;
-only a reader explicitly selecting shared mode admits it. This is an unreleased
-local-v1 amendment, with no reinterpretation of released state or worker/base wire.
-
-The unit projection digest uses the existing gc-unit framing over its open,
-gc-parent and target rows; close is excluded. A file unit references its parent;
-a direct Maven unit references its root; a subtree references its root and each
-traversed directory in files-first hierarchy. Files require their preceding parent;
-directory cleanup targets follow their own complete descendant evidence. Referenced
-spans may be reused by multiple units: original child rows occur once in observations,
-not copied/parsed again for every target/batch. Active directory state is bounded.
-
-The consumer validates/indexes original observations once per operation or reload
-and binds each parent span/target to that index. It verifies current membership
-against the original projection minus only completed GC targets and the discoverable
-active range's possible deletions; future planned absences are not yet authorized.
-Unknown/replaced survivors and recreated completed targets reject. Own directory
-changes are attributed by those exact deletions and scoped native-parent guards,
-never a fresh post-delete baseline. Normal batches retain this evidence and do not
-re-list the whole parent or rehash/rebuild the complete index at each checkpoint.
-On reload one linear reconstruction/co-read is allowed. Final absence/source checks
-retain completed target paths. Shared syntax alone grants no execution capability.
-
-## Frozen publication and native transfer plans
-
-The publication document is:
-
-```text
-["publication",1,invocationId,decision,decisionSha,postSourcesRef,partitionsRef,recordRef,recordKey]
-partition = ["reuse",partitionId,objectRef]
-          | ["empty",partitionId]
-          | ["new",partitionId,objectIdentity,objectKey,envelopeRef,treeRef,movePlanRef]
-```
-
-Decision and all key/ref derivations follow the native-base specification.
-`partitionsRef` binds a complete purpose `publication-partitions` stream of the listed
-reuse/empty/new rows, exactly once in model order. It must not be an embedded array:
-64 ordinary new-partition rows with keys and three refs already exceed a 64-KiB
-record. Stream the rows with bounded parser state, not all file descriptors. `recordRef` is the complete candidate generation
-bytes, already frozen; it may be uploaded only after all objects and source barriers.
-Native source-free empty/reuse choices need no move plan. Changed-partition trees and
-content hashes are produced in one retained-source traversal routed to at most P
-sinks, not one full-cache walk per partition. Producer/snapshot set digests and
-observation hash and finalized postSourcesRef are fixed before deriving keys.
-The publication source ref must equal root state's committed postSourcesRef.
-
-Purpose `move-plan` starts with exactly one source binding, then contains zero or more complete move units:
-
-```text
-["move-source",nativeEvidenceRef]
-["move-unit-open",kind,root,scope]
-["move",index,sourceSpace,sourcePath,logicalPath,kind,treeSpan,sourceEvidenceSpan]
-["move-unit-close",kind,root,rootCount]
-```
-
-The `move-source` Q is the complete frozen **post-GC original native/hash projection**
-for this partition, captured before decision/key derivation. Validate its exact Q,
-invocation/model/family/partition header, EOF and complete portable-tree correspondence
-once before native use. Live aggregate roots derive from the bound managed root;
-owned source roots derive from committed postSources, and their Q must equal that
-snapshot source's metadataRef. Keep the live per-move observation spans below: the
-source Q augments their original-decision provenance rather than replacing it.
-Effective adjustments/transitions may change only their attributable roots/ancestors
-from this frozen baseline. A new stat or GC omission must never rebase post-freeze
-source directory clocks into authority. Even a zero-move presence-only plan contains
-this first source row, without a fabricated move unit. This extends the unreleased
-local-v1 draft; prior source-less transfer plans are rejected, not migrated.
-
-A **prepared zero-transfer** variant instead contains exactly one data row:
-
-```text
-["prepared-source",nativeEvidenceRef]
-```
-
-`nativeEvidenceRef` has purpose `native-evidence`. Its complete stream header must
-match invocation/model/family and this plan's partition, with valid Q hash and EOF.
-The source root is derived exactly as `objects/<partition>/payload` under this
-invocation; no path override is encoded. This is an original N/hash provenance binding,
-not evidence of a completed move/return. It cannot mix with move/unit rows, repeat or
-be empty. The common local record count is one; moves/targets/roots are zero.
-Relocation/cursor/batch readers must reject this variant. Only an explicit prepared
-reader accepts it and revalidates actual original native evidence plus all fixed
-intent/relocation paths. Single-writer sources additionally match the exact committed
-postSources entry, including metadata ref/root/provenance. No boolean or callback echo
-replaces these gates, and the prepared variant never advances a relocation cursor.
-
-Compatibility decision: this extends the unreleased draft `local-v1` grammar before
-activation; earlier draft readers reject the new tag. It changes neither worker/native
-wire records nor the publication-new tuple. Transfer decoding remains the default and
-rejects prepared records, preventing old transfer consumers from treating the variant
-as an empty successful move plan. Persistent development fixtures using it require
-updated prepared readers; no released Action state is migrated or reinterpreted.
-
-Index starts at 1; moves and units follow canonical hierarchical order. Unit kinds
-are `file`/scope `file`, existing recognized kinds/scopes, or the local-only
-`directory`/scope `subtree` move group. A directory group contains exactly one
-`move` whose kind is directory and logicalPath equals the group's nonempty root.
-This transfer grouping may contain several ordinary files or complete recognized
-units; frozen referenced projections must prove all selected contents belong to
-this partition and no indivisible unit straddles its boundary. It does not alter
-worker conflict units or introduce a GC/install directory-group descriptor.
-A physical directory group may include multiple complete Maven direct units, including
-nested coordinates. For example, if `repository/org/example/a/1/a-1.jar` and
-`repository/org/example/b/1/b-1.jar` are the only physical repository contents and
-belong to one selected partition, `directory/repository/subtree` moves `repository/`
-once out and once back. Their logical Maven units in worker conflict reduction,
-observation/GC, native trees and install/recovery groups remain separate. An excluded
-lock/bookkeeping entry or another partition's coordinate disqualifies each ancestor
-containing it; select maximal smaller eligible roots instead, leaving excluded data
-live and outside the SDK archive. No parking or consume-on-save permission is implied.
-Exact original observation, post-GC source and portable tree spans still cover the
-complete physical group. Existing frozen plans retain their original descriptors,
-keys and cursors on resume; recovery never reruns the planner to coarsen old plans.
-
-Maximality applies within these admitted move groups. An ordinary file unit moves
-one file, never a directory disguised as a file. A direct Maven unit may move its
-own directory root only when its complete frozen projection proves no child directories,
-unmanaged entries or other-partition members would be carried along. Source space is `live`
-or `owned`; sourcePath is logicalPath for live, or the exact sealed snapshot/staging
-path under this invocation for owned. LogicalPath maps to
-`.mammoth/v1/<invocationId>/objects/<partition>/payload/<logicalPath>`. Return to the
-same original source even for an owned source, preserving its required lifetime.
-Tree span binds exact portable member facts/hashes; evidence span binds the frozen
-native projection. Ref streams/ancestors are retained until all returns reconcile.
-
-Move roots are maximal fully selected, nonoverlapping files/directories; no root
-contains another. A directory root must contain only that partition's selected
-members, no unmanaged/excluded/reserved siblings or nested mount. Never move the
-managed root, enclosing homes or `.mammoth` itself. Shared/mixed directories instead
-use smaller eligible roots; source parents remain in place. A complete workspace may
-need multiple roots, all under the same semantic move unit. Maximality and boundary
-summaries use bounded spools, not an array of every root.
-
-`sourceEvidenceSpan` refers to the frozen observation for live sources or to a sealed
-purpose `native-evidence` tree for owned sources. Its records are
-`["directory",path,N]` and `["file",path,N,contentSha]`, in hierarchical order; a
-span cannot change the frozen expected content hash. Owned source admission validates
-membership/hash once under its guarded lifetime. Same-invocation rename evidence
-then permits reusing that proof; recovery without the transition proof rehashes.
-
-### Partition-wide relocation marker
-
-Fixed `relocation/<partition>.json` remains durable throughout the entire operation:
-
-```text
-["relocation",1,invocationId,partitionId,epoch,planRef,inputAdjustmentRef,phase,
- outbound,returned,active,outEvidence,returnEvidence,adjustmentCandidate,stageRef]
-active = null | [direction,startCursor,endCursor]
-```
-
-Epoch is positive and increases above the current adjustment stream's highest
-epoch whenever a prior attempt owned any complete or ambiguous native move range
-under the same immutable plan/key. A root in such a range receives an epoch-bearing
-adjustment even when recovery finds it never moved. Merging current adjustments
-preserves that history. An attempt with no owned native range may reuse epoch `1`
-when no earlier epoch-bearing adjustment exists: this includes an immutable
-zero-move presence-only plan and an attempt abandoned before its first active range.
-There is no native transition identity to distinguish in those cases. The old owner
-must be retired first; fresh stage identities and unique full `P`/`Q` references
-still bind each lifecycle to the same fixed source, decision and key. Empty file
-contents alone do not qualify for this exception.
-
-Phase is `outbound`, `staged`, `saving`, `returning` or
-`sources-returned`. Outbound/returned are independent move-plan cursors; returned
-cannot exceed the reconciled owned high-water boundary. Active direction is `outbound` or `return`.
-Evidence fields are `P` or `null`, purpose `outbound-evidence`/`return-evidence`.
-Adjustment candidate is `null`, a live `P` or a sealed `Q` of purpose `adjustments`.
-Stage ref is `null` or a complete `Q` of purpose `stage-evidence`.
-
-Durably install this marker before the first move, including full plan binding and
-zero cursors. Every batch installs its active range before its first rename. Batch
-bounds match GC's root/evidence grouping and preserve semantic unit boundaries;
-a large unit remains streamable, not rejected. The marker—not merely the active
-batch—owns the entire outbound prefix until all sources return. Never retire prior
-ownership when moving to the next active range or clear the marker after evacuation.
-
-Purpose `outbound-evidence`/`return-evidence` records are:
-
-```text
-["transition",index,epoch,direction,before,after,treeSpan]
-```
-
-Before/after are native root identities observed immediately around the guarded
-rename. Revalidate every descendant against frozen/effective evidence; this root
-row does not authorize adopting modified descendant bytes. Source and destination
-parents/devices/types are checked, but actual rename still decides whether a mount
-crossing is supported. EXDEV fails with no alternate copy operation.
-
-Seal the batch's transfer-output prefix before advancing its completed cursor;
-update evidence-prefix and cursor atomically in the marker, then clear active range.
-Missing/ambiguous evidence after a crash requires hash/membership reconstruction;
-never bless a current identity solely because the expected root name exists.
-Recovery covers outbound-completed prefix **plus** ambiguous active outbound range,
-minus reconciled returns, not just the last active batch. If a crash interrupted a
-multi-root semantic unit, atomically replace the marker to switch to returning and
-normalize outbound to that active range's complete end boundary, retaining its active
-range binding until reconciliation completes. In returning phase this cursor is the
-owned/reconciled **high-water boundary**, not an assertion that every root was moved.
-Return walks the whole owned range: expected original-only roots are already safe;
-staged-only roots must return. It may then checkpoint a complete semantic boundary
-without inventing an illegal mid-workspace cursor. Transition evidence can have gaps
-for never-moved indices; it cannot invent rename proofs for them. The unattempted
-suffix beyond the active range is not owned by this normalization. A normalized
-aborted evacuation cannot go back to staged/saved; finish recovery, then start a new
-epoch with zero move cursors under the same immutable plan/key if retry is valid. One linear reconciliation
-pass is allowed on reload, not a full-plan scan before every batch.
-
-### Stage barrier, return and adjustments
-
-Purpose `stage-evidence` has `["directory",path,N]` and
-`["file",path,N,contentSha]` in payload order. Build it only after comparing the
-actual native payload against exact portable membership and expected effective
-native descendants from frozen source plus valid transitions. Synthetic structural
-directories are allowed only where the tree requires them. Record their identities
-for the before/after barrier, never synthesize proof for changed file bytes.
-
-A portable empty leaf directory not covered by a move may be materialized as a
-synthetic projected presence only for a live aggregate partition when the bound
-original observation and effective post-GC source projection prove its meaningful
-directory identity, no retained partition payload below it, and nonmovable protected,
-excluded or other-partition contents preventing whole-directory transfer. The original
-directory and its protected/foreign projection remain untouched and guarded through
-final source validation; only attributed changes from other planned operations may
-adjust their effective evidence. Stage construction records the new private directory's
-actual native identity and includes it in complete pre/post-SDK membership barriers.
-Every file and every fully movable empty subtree still requires exact move coverage.
-Structural ancestors and these proven empty presences do not grant permission to
-omit payloads, move protected contents or repair/rebase original evidence.
-A presence-only partition may have zero transfer units after its move-source row, without a fabricated move
-unit or prepared-source record; its stage and final source barriers still apply.
-
-Native SDK TAR is recursive. Compare sealed stage evidence before **and after**
-the SDK call/readback, including directory ctime: transient add-then-remove members
-must reject, even when final names match. Ignore only attributable access-time
-changes. On success, ambiguous outcome or exception, return all moved sources first.
-A wrong uploaded immutable object or failed stage barrier is not a receipt.
-
-Return roots in plan order, preserving source parents. Verify expected staged source
-and absent original endpoint; never overwrite/merge an unexpected live destination.
-A return batch seals its evidence and adjustment prefix before advancing returned.
-The marker survives every batch and SDK error until all locations are reconciled.
-
-Purpose `adjustments` is a canonical current stream per partition:
-
-```text
-["adjust",path,epoch,N,sourceEvidenceSpan,treeSpan]
-["ancestor-effect",path,device,fileId,projectionSha]
-```
-
-Adjust rows replace only attributable moved-root native facts; unchanged descendants
-remain bound to frozen observations. Ancestor-effect identifies stable ancestor
-identity and expected managed child/type projection after attributed operations;
-projection is `A("ancestor-children")` over sorted `[name,type]` facts, not a timestamp
-exemption or permission to ignore unexpected children. Rows follow tree order,
-with at most one effective adjust/effect per path and epoch. Shared ancestor effects
-are reconciled against all recorded operations, not an earlier partition's stale time.
-
-Co-read at most P current partition adjustment streams with the frozen observation.
-Do not concatenate A's `a,c` with B's `b` and pretend it is globally ordered. On retry,
-join the same frozen source plan with current effective adjustments, not original
-pre-first-rename ctime. Produce one new canonical candidate merging prior still-valid
-adjustments with this epoch's changes. No append-only retry history.
-
-After every planned source is verified back, finish the adjustment candidate, then
-atomically replace the partition-state catalog/root pointer to reference it. Keep
-old current plus candidate until that pointer commits. Mark sources-returned and
-retire marker/evidence only after this binding is durable. Crash between pointer
-commit and marker retirement recognizes the exact old/new adjustment pair and
-finishes cleanup; a third unexpected ref/epoch blocks. Then old adjustment and
-unreferenced evidence can retire. A returned root's new ctime is not newly observed
-build activity. Final source barrier also checks completed GC target absence.
-
-### Object and worker receipts
-
-```text
-["object-receipt",1,partitionId,objectKey,envelopeSha,decisionSha,confirmation]
-confirmation = ["save",serviceId] | ["readback",objectKey]
-```
-
-ServiceId is a nonempty provider confirmation string. Receipt may enter partition
-state only after valid post-stage barrier, all source returns and adjustment commit.
-An ambiguous save uses exact-key readback; ordinary trusted-base restore is not enough
-to rescue an invalid archive attempt. Readback after a stage-barrier failure must
-check full payload membership/content hashes under the planned envelope. Wrong immutable
-bytes invalidate that key/attempt; never overwrite or derive a new retry key.
-
-Worker archive/source evidence is frozen at package-frozen. Its artifact receipt
-must match name/ID/transport hash from the same frozen archive, not a new scan. A
-worker receipt does not imply base publication. Final generation save confirms exact
-record bytes/key, after final-source-barrier and no pending destructive markers.
+No-op GC transfers the original hierarchy with zero reconciliation. Actual GC
+mutation performs one counted final survivor reconciliation and retains only actual
+changed-parent N in its existing parent ledger. Publication uses a lazy selected
+view over that SAME index and ledger; it does not spool full survivor facts or build
+another index. A loan prevents index disposal through SDK settlement and return,
+including after foreground/window cancellation. Missing/foreign/replaced endpoints
+remain errors. Original observation scratch retires when its last active consumer
+ends, with no main/post persistence.
 
 ## Install batches and recovery
 
-If an overwritten destination has no already trusted content hash bound to its
-current native identity/projection, create its destination native-evidence by reading
-and hashing that **preimage** before committing the install intent. Otherwise reuse
-valid existing evidence. Account explicitly for these conditional old-byte reads in
-addition to incoming worker hashes; this is not a second archive pass or a universal
-no-extra-hashing claim. Normal base transport restore still does not hash incoming
-trusted-base bytes. Recovery may hash old/desired native staging to re-establish an
-ambiguous transition. A missing preimage digest is not silently treated as proof.
+One shared metadata-native installer uses index-backed member selectors for base
+and genuine verified-worker native facts. Incoming/current roles remain distinct.
+Selectors bind genuine active context, original scratch/node offset, source root,
+partition, path, kind and owner mask; decoded tuples do not grant authority.
 
-Purpose `install-current` freezes the complete physical current-root projection
-needed by admission, shared across all selected units and snapshot partitions:
+Freeze captures/indexes current state ONCE in its mutation-free phase. Admission
+borrows that exact one-use frozen-plan/scratch/current-index receipt. It does not
+walk current again or replay a serialized inventory. Selected old roots, paths,
+kinds, ownership, ancestors and no-overwrite checks remain at mutation. Cleanup
+uses the original selected current subtree and actual parent invalidation, retaining
+necessary partial-survivor/native joins and deletion-order work. Unknown survivors
+and replaced endpoints remain visible. No old-body hash/preimage stream remains.
+Ownership is installed before awaits; cancellation/early admission/freeze errors
+close/revoke contexts and dispose known declared-empty roots. Primary and cleanup
+errors aggregate, preserving unresolved locations.
 
-```text
-["dir-open",path,N]
-["file",path,N]
-["parent-child",parentPath,name,type,device,fileId]
-["dir-close",path,N]
-```
+## Final worker native producer capability
 
-Its stream partition is `null`. The empty root is balanced even for an empty cache.
-Regular files and opened directories supply their own immediate child kind/ID facts.
-A `parent-child` row supplies that fact instead for a protected/pruned child, with
-`type` and canonical decimal IDs as in GC evidence. It does not open or follow that
-child; metadata directory variants and unsupported objects can be protected facts.
-All immediate children share files/non-directories-first then directories ordering
-and the physical breadth limit. A protected child is counted exactly once. Protected
-subtrees can be pruned only when all requested evidence excludes their descendants;
-unknown ownership is not sufficient proof for pruning a directory. Directory close
-retains its open identity except attributable read effects. All active frames and
-reader records share the existing working budgets.
+Complete every input archive, mandatory body (including losers), conflicts, late
+seal and clean EOF. Publish final install parts, then accept their native metadata
+ONCE into a shared index. Make required independent selected snapshot copies from
+that original topology with actual final output N. Only then fold activity from
+index child pages, validate inherited snapshots and transfer install authority.
+Activity union has zero native directory listings. Its index reads and group-merge
+metadata pass are distinct charged consumers, not uncounted traversal.
 
-The native installer rejects hardlinked selected files and cross-device source,
-backup or mutation parents. Unselected current aliases remain protected/preserved
-according to ownership. Final merged immediate-child names share the configured
-physical breadth cap. Native name comparison conservatively folds case on Windows
-and folds normalized Unicode names on macOS; layouts distinguishing those aliases
-may be rejected even on a case-sensitive volume. These checks fail before ordinary
-execution admission and never grant a copy fallback.
+The worker-only transfer additionally requires genuine completed merge, exact
+original published part identities and active stage lifetime. A generic native
+producer/index, independent snapshot copy, caller flag or arbitrary writer receipt
+cannot grant worker provenance. Closing/disposing attempts revoke authority before
+awaits, even when cleanup fails. Worker v2 keeps strict content SHA, effective-header channel/archive seals and EOF validation.
 
-This inventory carries no body hashes or GC/activity decisions, and does not assert
-that every enumerated child is managed or eligible for replacement. In particular,
-untouched aggregate bodies are not read. The later selected-source/current join
-proves ownership and derives required old preimage native-evidence/hashes, preserving
-protected children. Presence of an unsupported child is evidence to preserve it,
-never authority to consume it. Snapshot planning must use the complete current owned
-projection from this shared traversal, not a caller's partial destination list.
-Complete the Q hash/EOF gate before treating the inventory as frozen; abandon or
-failure cannot grant installation authority. The inventory is sequential operation
-metadata, not an in-memory searchable file catalogue.
+## Frozen publication and native transfer plans
 
-Initial input preflight completes for **all required inputs** before first live
-install. V2/V3 producers apply selected portable mode/mtime (including merged execute
-bits or the chosen header timestamp) before sealing incoming native-evidence and
-creating `VerifiedIncoming`. The evidence binds the resulting full native identities.
-V4a freezes and renames those objects; it performs no portable metadata repair on
-staging or live destinations. Repair after sealing invalidates the receipt and needs
-new evidence/verification. Purpose `install-plan` contains complete semantic units with records:
+Compare selected summaries against ORIGINAL pre-overlay exact pins and origins.
+True unchanged exits before group generation, root plans, layouts, output-only
+copies or generation writing. A lineage-only record can reuse exact refs and
+existing groups. Same-size/mtime/mode aggregate rewrites may be missed, including
+verified controlled worker upserts; snapshot origin rules are stricter.
 
-```text
-["install-context",installCurrentQ]
-["install-unit-open",kind,root,scope]
-["install-parent",index,logicalPath,ownedEmptySourcePath,N]
-["install",index,logicalPath,sourcePath,sourceEvidenceRef,destinationEvidenceRef,
- operation,backupPath]
-["install-unit-close",kind,root]
-evidence = ["evidence",nativeEvidenceQ,span]
-```
+For new objects, choose maximal native roots from existing indices. Mixed owners,
+protected contents or unselected descendants split roots. Root counts and bounded
+split hints come from this existing callback, with no reporting traversal. Move
+only selected roots, await actual SDK settlement and return independently before
+saving the generation. No body rehash, full readback, upload salvage lookup or
+retry/restage cycle is permitted. A return failure stays hard and reports retained
+paths. No orphan namespace scan or background cleanup service is introduced.
 
-Exactly one `install-context` is required as the first data row, in both plan and
-batch evidence. It binds the complete frozen `install-current` projection, including
-existing-parent identities and protected child IDs needed even by ordinary inserts.
-Batch evidence must repeat the plan's exact context Q; tuple validity alone is not
-that cross-reference proof. Retain this Q while any dependent plan/intent can need
-it. The initial cursor is immediately after context (including for an empty plan),
-not after the header. Later cursors remain complete-unit boundaries.
+### Object and worker receipts
 
-A generic aggregate directory insertion uses
-`["install-unit-open","directory",root,"subtree"]` and
-`["install-unit-close","directory",root]`. It contains exactly one directory
-`insert` operation for that exact nonempty logical root, plus any required structural
-`install-parent` rows. Source evidence spans the whole subtree; destination evidence
-and backup are null. It is distinct from empty-directory presence and snapshot
-replacement. Its complete subtree must have one aggregate owner, no protected or
-excluded members, and contain every semantic unit it touches in full. Structural directory roots need
-not match a file-only include; derive ownership from the complete referenced subtree
-and its aggregate source partition, never a fabricated child-name probe. Directory
-membership/kinds/native identities, ownership and destination absence require actual
-admission and execution checks; tuple validity is not that proof. A root inside a
-larger Gradle workspace cannot be used to split it.
-
-The planner selects maximal nonoverlapping safe absent subtrees; existing/mixed
-aggregate directories retain finer merges. Grouped units close atomically for cursor
-and batching purposes, even above normal target batch size. No later aggregate unit
-may overlap a grouped directory. Restart and ambiguous-rename classification use the
-same full directory spans, exact endpoint guards and committed-prefix projection as
-other directory operations; presence alone never establishes success.
-
-Install plans list aggregate semantic units in canonical hierarchical order first,
-then each authoritative snapshot partition once in model order. Operations within
-each unit follow canonical files-first hierarchy and have no ancestor/descendant
-overlap. This preserves complete snapshot units when partition paths interleave;
-there is no single global logical-path sort across snapshot units. Since install
-rows omit member kind, ordering uses independently validated referenced native
-member kind. Source/destination evidence slots bind `evidence` or `null`, not a
-bare Q. The span SHA equals Q.sha and its end is within Q.bytes. A file span contains
-exactly its one matching file record. A directory span starts at its matching
-directory record, contains every contiguous descendant record, and ends immediately
-before a checked outside-subtree record or local-end. Canonical LF boundaries and
-header/end exclusion must be checked; arbitrary tuple-valid offsets are insufficient.
-
-A completed local writer can hand off its exact immutable stream reference,
-post-publication native file identity, framing offsets and fixed grammar profile
-within the same OwnedStore/process. The reference-object identity must resolve to
-that store's private completion proof, and its value/native identity/profile must
-still match. This proof covers metadata bytes and grammar only, never native payload
-ownership. Native-evidence, install-current and observation streams can reuse it;
-context-sensitive install/GC/move grammars still validate on admission. Cloned or
-reloaded references have no such proof and use complete EOF/digest/grammar validation.
-Bounded replay still checks native stability and canonical record boundaries; no
-serialized flag creates completion or source authority.
-
-The genuine frozen install plan can retain its already built current/source disk
-indexes through a closed-handle parked scratch owner. Reopen only under the same
-process-local plan, original full metadata-file identity and readonly handle. This
-is disposable process state, not a new recovery ref/format: cold recovery rebuilds
-indexes from validated authoritative evidence. Ordinary source admission checks
-selected root identities and checked parents, then full selected-subtree/member
-validation occurs at actual installation; authoritative snapshots retain their
-separate complete preflight. Common upstream object/group validation remains before
-live installation. Do not replace actual descendant checks with root identity alone.
-
-Validate/hash each distinct evidence Q once per stable phase and bind shared
-positional readers to that exact Q, purpose/partition and native metadata-file
-identity. Bounded span reads then permit different source/destination physical orders:
-old a=directory,b=file and desired a=file,b=directory cannot both be co-read in the
-same physical order. Do not rescan a complete Q or revalidate all ancestors for
-each member, or create one Q per file. Per-side member spans are nonduplicated and
-nonoverlapping; include bounded outside-record lookahead, seeks and range bytes in
-aggregate work. Derive offsets through checked LocalRows and bounded sequential or
-per-directory metadata spooling, never a global resident offset index. A complete
-partition-projection span still does not establish complete physical ownership.
-Serialized Q+span cannot recreate the reader or native execution capability after
-restart; recovery re-establishes the required native/content proof. An ordinary file unit requires file kind. Cross-unit alias/overlap,
-complete directory ownership and retained snapshot separation remain mandatory
-referenced-evidence preflight checks before live installation.
-
-Structural `install-parent` rows and content `install` rows share one contiguous
-index starting at 1 in a full plan. A batch evidence stream may start at the
-positive global index of its validated plan range, then remains contiguous; admission
-binds its exact rows/first index to that intent range. A parent row creates only an absent ancestor needed by a later
-content operation in the same complete unit. Before intent publication, create an
-empty native directory in the owned staging namespace, capture its directory N,
-and freeze its source path/N in the plan. This is metadata preparation, not a live
-mkdir. Execute parent rows before dependent content by guarded same-filesystem
-rename. Inline N is bounded native evidence; it avoids a per-directory reference or
-misrepresenting an unowned structural ancestor as meaningful managed content.
-
-Admission proves the source empty, its identity unchanged, the destination absent,
-and the existing ancestor chain guarded. Each parent is created once; later units
-reuse its frozen binding through ordered plan/evidence traversal. Parent rows count
-in batch work, but structural ancestry is exempt from the content-operation overlap
-ban. They cannot alone satisfy a nonempty ordinary unit. Recovery after the rename
-must prove the parent identity and exactly the descendants attributable to this
-batch or the committed plan prefix. It must not demand that the now populated
-parent stay empty, adopt an unrelated same-name directory, or hide unexpected
-children. There is no unrecorded live mkdir exception.
-
-Local install-only `empty-directory`/scope `subtree` is a presence unit for a
-standalone meaningful empty aggregate directory outside recognized Gradle units.
-Empty Maven repository directories may use this presence-only unit without implying
-a complete direct-file coordinate upsert; they do not replace coordinate contents. Its
-verified desired source must be empty. It permits at most one content operation,
-at exactly the root with directory kind: insert when absent, or replacement of an
-exact owned file preimage. An existing directory is an overlay-preserving no-op
-(zero content rows allowed), retaining all its children. It never authorizes deleting
-a nonempty directory to force emptiness, widening a workspace, or using V4b's
-whole-directory move group. Snapshot directory outcomes stay in snapshot units.
-
-Content operation is `insert`, `replace` or `delete`:
-
-- Insert requires desired sourcePath/sourceEvidenceRef, an expected absent destination,
-  and null destinationEvidenceRef/backupPath.
-- Replace requires desired sourcePath/sourceEvidenceRef, an exact expected old
-  destinationEvidenceRef and a fixed owned backupPath.
-- Delete requires null sourcePath/sourceEvidenceRef, exact old destinationEvidenceRef
-  and a fixed owned backupPath. It means authoritative planned absence, not an
-  unspecified optional source.
-
-For snapshot file operations, logicalPath must be owned by that partition. A
-nonempty structural directory root need not itself match a file-only include glob:
-directory operations instead require admission to prove the full physical source
-and/or preimage subtree contains only that partition's meaningful members and no
-protected/mixed/unknown descendants. Directory kind alone is insufficient. Retain
-ordinary empty-leaf ownership rules and forbid managed-root operations.
-
-Snapshot installation uses one complete `["install-unit-open","snapshot",partitionId,
-"partition"]` through corresponding close. This local-only unit kind/scope is distinct
-from worker workspace selection. Generate desired insert/replace **and stale managed
-delete** operations by co-reading the complete snapshot and current owned projection.
-An explicit empty snapshot still has this unit and deletes stale managed members.
-Whole-subtree replacement is allowed only when fully owned; mixed/excluded roots
-use guarded smaller operations preserving unrelated siblings. The whole snapshot
-unit can occupy its own streamed batch regardless of total size. Build-ready/cutoff
-is forbidden until this complete authoritative outcome, not merely its surviving
-files, is installed. Ordinary aggregate units retain overlay behavior.
-
-Source/backup paths are owned root-local native staging paths. Consumable install
-staging must be distinct from every retained authoritative snapshot nativeRoot.
-If a snapshot must serve both live install and later exact post/publication retry,
-materialize an independent install copy under guarded evidence and rename that copy.
-This intentional snapshot/live copy is ordinary accounted I/O, never an EXDEV fallback;
-install cannot consume the only snapshot tree while its sealed source ref remains live.
-destination is derived
-from logicalPath under managed root. Source evidence is verified desired member/type/
-portable content evidence and guarded native identity; destination evidence is the
-exact old owned projection, not merely a filename. `native-evidence` records define
-their shapes. Baseline install uses trusted-base hashes; worker install uses verified
-body hashes. Unknown native changes invalidate the proof. Move a subtree whole only
-when fully owned; granular operations otherwise preserve unmanaged/excluded siblings.
-Operations have no ancestor/descendant overlap; all operations for one indivisible
-unit occur in the same batch before any successful prepare/build is advertised.
-
-```text
-["install-progress",1,invocationId,planRef,completedCursor,activeMarker]
-["install-intent",1,invocationId,planRef,startCursor,endCursor,evidenceRef]
-```
-
-Purpose `install-evidence` repeats the active range's install-unit/install-parent/install rows, bound
-to their complete source/destination refs. Publish immutable evidence then fixed
-`install-intent.json` before the first rename. For replacement, rename expected old
-target into its exact backup first; then rename desired staged source into target.
-For insert, only the latter move is required. For delete, move the exact expected
-old target into backup and leave its destination absent. No cross-device copy fallback.
-
-Replay checks source/target/backup against expected native/content evidence. Desired
-source present + expected target means not yet moved; source present + old backup +
-absent target means finish new move; source absent + verified desired target means
-new move finished. For insert, source present + absent target is pending. Both desired
-source and desired target present, a missing desired source/target, unexpected old
-preimage, backup alias or unknown descendants block instead of overwrite/cleanup.
-For delete, expected old target + absent backup is pending; absent target + expected
-backup is the completed rename pending cursor/cleanup. Both absent before a committed
-cursor is missing preimage evidence and blocks; both present conflicts. After the
-cursor commits, an absent target and absent backup may mean finished cleanup; a
-recreated target still blocks. Never reinterpret a delete as a missing insert.
-After a native ambiguity/reload, hash desired data as needed to re-establish its
-binding; trusted-base policy does not allow adopting an unrelated native object. The
-current restart engine rehashes installed roots in the committed plan prefix as well
-as active ambiguous roots: exact observed post-rename root identities are process-local,
-so prefix recovery re-establishes those bindings. Include these restart-only bytes
-in I/O accounting. Normal uninterrupted prepare still reuses verified incoming hashes.
-Even when an intent was already retired, a noninitial install progress cursor retains
-its frozen prefix projection until prepare clears that progress; validate created and
-existing parents and reject unknown children before discarding it. For active moves
-observed complete on reload, reconcile their exact source/destination and affected
-parent projections before advancing the cursor; endpoint existence alone does not
-establish ownership or complete membership.
-
-Group consecutive complete ordinary units into batches by the same candidate
-16,384 operation/8 MiB evidence thresholds as GC, not one durable cycle per one-file
-unit. Close only at a complete unit boundary; a larger workspace/snapshot may occupy
-one streamed batch. Count actual evidence/intent/progress/pointer and native work explicitly.
-
-After the batch is reconciled, persist a new progress Q **and its root-state pointer**
-with completedCursor, then retire old backups under
-owned projection guards, clear marker and retire evidence. Backup cleanup may itself be interrupted. With
-that committed cursor and still-live intent, co-read the frozen old backup projection
-against remaining backup members: absent planned members are already retired;
-identity-matching survivors may be deleted. Reconcile only attributed parent timestamp
-changes structurally; reject replacements/recreated targets or unknown children.
-Do not require an already partially retired backup to equal its original complete
-tree. Keep marker/evidence until this cleanup finishes, without per-file checkpoints.
-A crash after cursor commit still requires marker/backup cleanup; cursor alone cannot discard ownership.
-Only one install batch is active. Evidence and
-cursor commits occur per complete-unit batch. On fresh prepare, resolve any active
-batch first or block. It need not complete all future old-plan batches, but cannot
-claim the abandoned invocation was build-ready. Already installed complete units
-are ordinary live cache state for the new prepare's own guarded restore/preflight;
-there is no promise to restore a byte-identical pre-prepare cache after abandonment.
-
-## Recovery and abandonment dispatch
-
-The integrated lifecycle MUST reopen the current owner with its frozen model,
-context, bindings and policy before provisioning, backend construction, restore,
-snapshot cleanup or supersession. Inspect the fixed install/GC intent names and
-stream the current relocation marker directory, as well as state progress hints.
-Unknown or cross-owner destructive intents, simultaneous markers and unsupported
-formats block; neither pathname age nor a newer configuration grants ownership.
-
-Reconcile an install when its marker or install-progress Q remains, including a
-committed prefix whose marker has already retired. Reconcile GC's discoverable
-active batch, without executing its unowned future suffix. Return relocation sources
-when a marker exists even if the state phase pointer predates that marker. Return
-uses existing frozen plans, adjustment evidence and return cursors, without a remote
-backend. A frozen publication with no marker does not by itself require rebuilding
-the moving window or traversing live contents during dispatch; intent publication
-precedes every physical outbound move. Normal publication resumes its own source
-checks later. Missing required marker/progress ownership is an obstruction.
-
-Recovery MUST re-establish its dedicated-root/completed-consumer lifetime independently
-of foreground cancellation. For Gradle base recovery, require fresh native daemon
-absence/available process evidence before reconciling live mutations. Do not invoke
-captured launchers: wrapper distributions or installations may already be evacuated.
-This recovery-only permission cannot grant a new purge, GC suffix or publication.
-A subsequent base save still acquires its normal shutdown window. Worker recovery
-retains worker admission and cannot borrow a base quiescence record. Maven retains
-its caller-asserted completed-consumer contract. Check the frozen root path, object,
-mode and owner before recovery; recheck after awaited inspection and before final
-acceptance. Persisted quiescence timestamps are never permission.
-
-Ordinary cancellation does not cancel necessary intent reconciliation or physical
-return; an independent interruptible cleanup signal does. Failed/ambiguous cleanup
-leaves its markers discoverable and blocks abandonment/prepare. Preserve both the
-original recovery failure and subsequent cleanup failures. Recheck the cleanup/caller
-lifetime after the final state commit; durable abandonment alone cannot turn a
-concurrent cancellation into a successful return. After reconciliation,
-prove no destructive intents remain, close readers, drain recorded retirements, then
-choose resume or mark completed with the existing `abandoned` outcome. Do not invent
-a publication/worker receipt. Normal completed-owner retirement performs supersession.
-
-For a crash before locator publication, an exact invocation's fully sealed revision-zero
-`prepare-pending` candidate may be reused only after validating its bindings, frozen
-model, root, empty producer stream and no snapshot-source rows. Its optional
-prepare-selection row must have both choices pending, null availability, selected
-stage and GC-age/off agreement; it carries configuration only, never selected inputs. It must have no post/install progress,
-cutoff, baseline, activity or selected inputs, and no destructive intent anywhere in
-the root. Preserve its unreferenced private files for eventual ordinary namespace
-retirement; do not sweep them before publication. A partial namespace without that
-proof is preserved and blocks retry for explicit reconciliation. No new bootstrap
-journal or reference collector is introduced.
+Outgoing SDK availability/capability/confirmation errors warn and abandon before
+evacuation; local source errors remain hard. Direct confirmed save permits
+record-last publication only after source return. Raw worker upload is attempted
+once from its immutable current package; an unconfirmed response retains that file
+with an actionable warning, without discovery/download/retry. Successful worker
+upload retires its exact original package and stores only terminal scalars.
 
 ## Owned metadata retirement
 
-One lifecycle owner exclusively controls the dedicated managed root. Old consumers
-and retained readers must be closed before completion or metadata retirement; these
-guards are not a cross-process lock. Native cache directories remain outside this
-private garbage lifecycle.
-
-Unpublished planning spools and admission/mutation lookup directories are disposable
-process state. Fixed-size 64-KiB metadata write buffers share the operation's working
-budget; no buffer is allocated per payload file. Logical scratch offsets include
-pending bytes and scratch readers see coherent pending/physical ranges without
-flushing for each lookup. A sealed in-process worker spool may retain charged pending
-bytes until its first reader; that reader checks the backing file, finishes writes
-and releases the write buffer before replay. Such a logical seal is not a published
-Q or restart authority. Authoritative Q/P publication and checkpoint/close handoff
-must finish buffered writes first. Disposable scratch retirement may discard unused
-pending bytes only after its consumers are finished. Close unpublished container handles before guarded retirement;
-unpublished lookups never become restart authority.
-
-A `base/<uuid>` container holds one isolated SDK native-object or generation download.
-The SDK must settle before validation or guarded cleanup, including on cancellation;
-its current API has no cancellation hook. Exact root layout and no-follow native
-membership checks precede acceptance. Per-object validation is provisional until
-all available objects and recovery groups pass. Metadata refs and any retained
-consumers keep their container alive; disposal is explicit and cannot delete an
-install/snapshot source published outside it. Native-base acceptance copies the bounded
-generation record into an independent invocation-owned immutable Q before handing its
-baseline tuple to prepare/post. Disposing download/pin owners cannot invalidate that
-returned baseline reference; it follows the invocation's normal binding/retirement
-lifetime. This is at most one 64-KiB metadata document, not a payload copy.
-
-A `worker/<uuid>` container holds one unpublished worker merge
-candidate, with selected payload partition directories and no live-cache authority.
-It may retire under the same guarded, no-follow owned-container rules after all
-body/reader handles close. Before granting incoming install receipts, native-rename
-its complete selected partition roots to the exact invocation `install/<partition>`
-paths and seal their resulting native evidence; no reference may keep the old
-pathname as source authority. Retain each partition's sealed pre-publication root
-identity in bounded process state and require full native equality before its move;
-a fresh stat must not rebase unexplained ctime changes into a later rename exception.
-Only that verified own move permits the documented root rename adjustments.
-
-Native-base incoming and selected snapshot copies use the same publication ownership
-rules. Register attempted private renames before their syscall: a post-syscall error
-must reconcile guarded source-only/target-only/ambiguous endpoints, never forget a
-completed move. Snapshot copy verification joins planned created-directory IDs/final
-N and file N/hash facts against the final native traversal, including meaningful empty
-directories; a fresh post-copy listing cannot adopt unexpected directories.
-
-A failure after publishing these roots but before returning a common accepted merge
-can leave unclaimed, invocation-owned install/snapshot sources. Do not adopt or erase
-those roots by pathname on a new attempt. They can block another attempt at the fixed
-install path until their owner retires or supersedes the invocation; V4a recovery
-replays recorded install intent/progress, not arbitrary worker publication orphans.
-Published install sources and independent retained
-snapshots are excluded from candidate cleanup. Parent lookup ledgers can retire
-after plan sealing, while the separately staged parent objects remain available to
-pending install rows. Superseded progress Qs retire only after the replacement pointer
-is durable. Batch evidence retires only after its fixed intent is cleared. After clean
-finish/abandon and reader closure, retire the consumed plan/current/preimage Qs.
-Borrowed upstream source evidence is not consumed by this metadata cleanup.
-
-Unused consumable sources, retained authoritative snapshots, unreferenced failed-attempt
-Qs and crash-orphan lookups remain owned by their invocation. They can be required
-through post/publication retry. Their final retirement occurs when a completed invocation
-is superseded, rather than through a transitive reference collector or a global file map.
-All live local Q/P references and retained native source roots are restricted to their
-own invocation. The reserved `retired/` subtree is forbidden to those references.
-
-The fixed record `.mammoth/v1/<current>/retirements/<old>.json` is:
-
-```text
-["retirement",1,currentInvocationId,oldInvocationId,oldNamespaceN,oldStateSha,managedRootN]
-```
-
-IDs must differ; both N values describe same-device directories. Paths are derived:
-source `.mammoth/v1/<old>`, target `.mammoth/v1/<current>/retired/<old>`.
-`oldStateSha` hashes the exact canonical completed old state bytes including LF.
-This record authorizes retirement of a wholly detached private namespace; it grants
-no install, source-return or live-cache mutation permission.
-
-`OwnedStore.initialize` validates the old completed state and root binding, checks
-that no destructive intent remains, and drains old retirement records. It writes
-new bindings/state and the retirement record durably **before** publishing the new
-locator. Only the matching current locator may replay the record. On interrupted
-initialization, its owner calls `resumeRetirements` before continuing; installation
-admission also drains those records. Completion drains pending retirements, preventing
-`retired/A/retired/B/...` nesting across repeated interruptions.
-
-Replay uses these cases:
-
-| Source  | Target  | Required action                                                                                                                                                         |
-| ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Present | Absent  | Require exact old namespace N (apart from own read atime), unchanged completed state digest, stable managed-root binding and no intents; rename into target.            |
-| Absent  | Present | Require the bound directory identity/mode; permit attributed rename/deletion size/time changes and the documented Windows rename birth-time exception; resume disposal. |
-| Present | Present | Block; do not choose or merge containers.                                                                                                                               |
-| Absent  | Absent  | Re-establish containing-directory barriers and retire the record idempotently.                                                                                          |
-
-Sync both rename parents before deleting target contents, including on restart after
-an observed completed rename. The exact reserved target is action-owned disposable
-storage: its whole contents can retire without retaining old state/bindings or
-opening a per-file catalogue. Stream one directory entry at a time under the shared
-working budget. Guard root/container identities, stay on the same device, reject
-links/unsupported objects and preserve ambiguous paths. Keep the record through partial
-deletion and the final target-parent barrier; remove it last. A replaced container or
-unrecorded target blocks. Directory/state deletion followed by an abrupt exit remains
-recoverable because the independent current-owner record survives.
-
-For example, after `A` completes and `B` commits its locator, a crash before the rename
-leaves B's record plus source A; B verifies and detaches A on retry. A crash halfway
-through deleting `B/retired/A` instead leaves that target and the same record, so B
-continues disposing it without requiring A's already deleted state file. B cannot
-complete until this retirement finishes.
-
-A crash **before locator publication** can leave an unpublished initialization
-namespace/record. It cannot have new live mutations and matching-current replay
-intentionally ignores it. The integrated dispatcher admits only the fully sealed revision-zero candidate
-described above; it preserves and blocks on partial/unproven bootstrap namespaces.
-It does not collect arbitrary bootstrap orphans. Published invocation retirement and ordinary attempt cleanup above
-are implemented; native I/O or ownership failures remain explicit, never copy fallback.
-
-## Recovery location matrix and worked examples
-
-For each relocation plan root, inspect both planned locations and frozen/effective
-evidence, not presence alone:
-
-| Original source                 | Owned payload    | Result                                                                                                                 |
-| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Expected present                | Absent           | Unmoved or returned. Verify expected/effective identity, or reconstruct content proof if the transition was ambiguous. |
-| Absent                          | Expected present | Verify full projection/hash as required, then rename back under marker.                                                |
-| Present                         | Present          | Conflict: do not overwrite either, even if bytes appear equal. No copy-in-progress interpretation exists.              |
-| Absent                          | Absent           | Lost expected source: block; never publish completion.                                                                 |
-| Unexpected identity/type/member | Any              | Block, retain marker/evidence and diagnose; no recursive cleanup of unknown state.                                     |
-
-### Crash across two outbound batches
-
-Suppose a partition plan contains 30,000 ordinary roots. Batch 1 covers roots
-1–16,384 and its output prefix/cursor is committed. Batch 2's active range covers
-16,385–30,000; a crash occurs after 100 of these renames but before its output prefix
-commit. Marker state still owns all 16,384 completed roots **and** the active range.
-Recovery makes one ordered location/evidence pass over that prefix/range, discovers
-the additional 100 moved roots, reconstructs ambiguous hashes and returns every moved
-root. The remaining suffix stays live. It must not return only the last 100 or forget
-batch 1 because its active range was retired. No generation receipt exists yet.
-
-### Retry with interleaved partition paths
-
-Partition A has moved roots `a,c`; B has `b`. A's current adjustment stream contains
-its returned effective identities in `a,c` order; B's contains `b`. Final replay
-co-reads both to yield `a,b,c`. A retry epoch 2 validates A against its epoch-1 effective
-ctime and writes one replacement stream; it does not compare against original ctime
-or append another complete retry history. If a crash follows catalog-pointer commit
-but precedes marker removal, recover the exact committed candidate and retire the
-old stream, preserving at most current plus candidate.
-
-### Empty snapshot and worker snapshot capture
-
-A base publisher's designated writer produces an empty single-writer snapshot while
-the live partition still has stale managed files beside excluded siblings. The
-install plan contains one snapshot unit with delete rows for those managed files,
-not an empty overlay plan. Each old target is renamed to owned backup under intent;
-only after the entire snapshot unit's cursor/root-pointer commit can backups retire
-and prepare advertise its cutoff. Excluded siblings remain. Retain the authoritative
-snapshot independently from consumable install staging.
-
-A distributed worker that owns the same snapshot instead seals worker-sources against
-its frozen observation and emits its full live snapshot directly to TAR. File hashes
-are computed in that write, not by copying/hashing an intermediate native tree. The
-completed archive is its upload retry authority. This worker branch cannot be used
-as the base publisher's retained native source set.
-
-### Interrupted workspace replacement
-
-A complete transform workspace is one install unit. Old expected target has been
-renamed to the owned backup; new expected source remains staged when the process
-stops. No build-ready cutoff has been committed. Recovery verifies old backup and
-new source against the intent, finishes the rename into the absent destination,
-commits the completed unit boundary, then guardedly retires backup. An unrelated
-process creating that destination blocks recovery; never merge it with the workspace.
-A crash before cursor commit but after new move can verify the desired target and
-finish the same batch without reinstalling an unrelated tree.
-
-## Failure cases and validation obligations
-
-| Failure                                                     | Required result                                                                                                                           |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Registration suppressed by Test/summary filtering           | Capture is incomplete; unknown relevant daemons prevent relocating save. Fix capture, do not sweep retained launcher trees or force-kill. |
-| Stop returns but daemon remains/restarts                    | No quiescent claim or source move. A saved timestamp is not an exclusive lock.                                                            |
-| Observation candidate incomplete before pointer commit      | Discard owned candidate and restart metadata-only preflight; no content/hash/GC work was authorized.                                      |
-| Crash after GC intent, before cursor                        | Replay exact frozen batch; absent targets allowed, replacement/unknown children block.                                                    |
-| Deleted target recreated after completed GC                 | Final replay rejects publication; do not prune the deleted unit from validation.                                                          |
-| Outbound cursor advanced without durable output evidence    | Invalid marker transition; reconstruct hashes under still-live ownership or block, never trust stale prehash.                             |
-| Same-size edit to moved descendant after prehash            | Reject stage comparison; root rename cannot bless descendant changes.                                                                     |
-| Add/remove transient extra stage file during SDK archive    | Directory ctime barrier rejects; recover sources and reconcile backend bytes before any receipt.                                          |
-| Upload fails or is ambiguous                                | Return sources first; receipt remains absent until exact valid confirmation.                                                              |
-| EXDEV after several successful roots                        | Return all previously moved roots under full marker; no copying helper or alternate record variant.                                       |
-| Return blocked by new live destination or nested mount      | Preserve sources/markers/evidence and block prepare. Never treat as harmless skipped save.                                                |
-| Crash after adjustment pointer, before marker retirement    | Match exact candidate/epoch and finish idempotent cleanup; do not revert to original identities.                                          |
-| Install destination/backup unexpected or desired bytes lost | Block; do not overwrite, silently accept partial unit, or recursively delete unknown contents.                                            |
-| Crash after all sources return, before generation save      | Live sources remain intact; exact frozen receipts/keys may be retried after current-window/source revalidation.                           |
-| Runner loss removes all root-local evidence                 | No exact across-runner replay guarantee. Start a fresh invocation from available backend generations and actual cache state.              |
-| Legacy copy-fallback intent detected                        | Block explicitly; never reinterpret, execute or silently discard it under local-v1.                                                       |
-
-Prove count/byte work across multiple units, not just success on one tiny fixture.
-Include 64 ordinary all-new publication choices and prepare binding sets, verifying
-that refs/streamed rows never become an oversized single checkpoint. Exercise
-cursor/intent/evidence/pointer/retirement crash boundaries, large indivisible
-units, unknown descendants, native identities, platform durability, daemon coverage
-and EXDEV on Linux/macOS/Windows. Measure active names/records, stream buffers and
-SDK children under representative hosted-runner memory load. These schemas do not
-claim qualification has already happened or introduce total-byte/disk admission.
-
-## Isolated prepared-base publisher
-
-New SDK object uploads in the V3 vertical slice accept only prearranged native
-`objects/<partition>/payload` roots. Unchanged inherited single-writer reuse keeps
-its committed owned baseline root, without transfer or upload. Its zero-transfer gate reads the actual committed observations, whose only
-three data rows are root `dir-open`, the protected `.mammoth` directory child and
-root `dir-close`. It checks full original root identity, the protected child native
-ID, actual root membership, a completed zero-target GC cursor, exact committed
-postSourcesRef and original prepared native evidence. All fixed intents/relocations
-must be absent. Live observation members or transfer plans are rejected until V4b
-supplies real evacuation/return and deleted-target evidence. This is an internal
-service restriction; it does not enable the Action lifecycle or stop daemons.
-
-A crash before the full publicationRef pointer is installed leaves an **uncommitted
-freeze**. No SDK save may have started. Such an attempt cannot be resumed by finding
-files or recapturing current native identities; V5 must abandon it and retire its
-owned orphans with ownership checks. In the same process, the genuine original
-prepared source may reconcile partial tree/envelope metadata under the same identity.
-Fresh capture rejects a root where either keyed metadata file already exists, before
-reading payload bodies and again before returning its capability:
-compare exact expected bytes, never overwrite an existing immutable file. Candidate
-record reconciliation likewise compares exact bytes. After full pointer commit,
-restart uses only the frozen publication, choices and original prepared-source
-NativeEvidence references. This design intentionally supplies no extra durable
-preparation phase for cross-process recovery of an uncommitted freeze.
-
-Every single-writer partition choice agrees with its committed post-source. `empty`
-requires root-only native evidence (no meaningful empty subdirectory). The isolated
-publisher's `reuse` case requires baseline origin, that exact object key as provenance
-and an identical prepare/post source tuple; changed inherited views require a new
-object or V4b's later adjustment handoff. New sources match the committed tuple and
-original prepared evidence/root exactly. Directory allowance equals the frozen policy,
-including on resume. Per-object receipt checks inspect that object's source; shared
-pre/final barriers inspect all sources once, deduplicating new single-writer evidence.
-
-## Moving-source publication handoff
-
-Moving sources use the ordinary transfer move-plan, never the prepared-source variant.
-After observation/GC, guarded original-source reads produce hashes and unit/event
-spools before keyed metadata or evacuation. A newly captured local-writer snapshot
-is an explicit counted independent copy into fresh owned retained space; it is sealed
-before postSources/decision. Its live input is not aliased as an owned snapshot.
-Hash reuse requires genuine original-input/destination native proof from that copy,
-not a fabricated worker receipt. Uncommitted candidates may be abandoned without
-moving live originals; committed postSources are not recaptured on retry.
-
-Metadata-only handoffs may retain genuine process-local completion evidence and
-bounded disk-backed indexes under their original native metadata-file identities.
-They must not adopt freshly observed payload identities or recover such authority
-from a serialized flag. Compare unkeyed counts and semantic summaries before
-rendering keyed metadata; unchanged eligible partitions reuse their exact pinned
-references. A warm handoff can retain its completed choices and metadata, while a
-cold retry independently validates the frozen files, plans and cursors.
-
-The final GC projection may also produce source-capture facts and transfer its
-admitted observation index. Captured post-GC parent identities remain binding even
-when no partition changes: a sequential directory frontier suffices without another
-index. Only a genuine pristine captured view can supply initial source evidence;
-changed or recovered epochs must reconcile their adjustments. Keep fresh checks at
-selected-root mutations, SDK exposure and return, and one final common effective-
-source/GC-absence barrier. The final barrier seals the source window against further
-mutation and need not write parent checkpoints for a completed operation.
-
-A frozen transfer publication binds the existing complete publication/choices,
-tree/envelope, original observation or owned-source evidence spans and exact keys
-before payload placement. The first move-source row additionally binds the already captured
-post-GC native/hash Q, including live aggregate directories. Pre-key metadata rendering
-does not grant a stage receipt.
-Admission resolves live evidence through the bound observations Q and owned evidence
-through its exact committed snapshot-source root/ref. Synthetic SDK parent directories
-are structural, not permission to move protected/other-partition contents.
-
-Only after marker-owned evacuation and complete stage verification may a genuine
-staged-object capability call native SDK transport. Resume reopens the frozen plan
-and reconciles source locations from marker/epoch/evidence plus current adjustments;
-it cannot require a populated payload after sources have returned, or reconstruct
-original authority by capturing current identities. Prepared zero-transfer admission
-keeps its existing strict geometry/source checks; no caller flag bypasses them.
-
-SDK settlement and post-stage outcome remain provisional. Moving sources return and
-commit effective adjustments first, then exact-key reconciliation/readback and receipt
-issuance. Lost/failed stage evidence requires strong remote expected-byte verification;
-wrong immutable bytes invalidate the attempt. Final publication binds effective-source
-validation and completed-GC-target absence, not an already-returned flag. A returned
-stage may retain metadata/structural empty directories; its contents are not a new
-source. Existing record-last and intent/marker ownership rules remain in force.
+Successful main retains only actual activity plus bounded control and independent
+snapshot payload descriptors. Main releases snapshot indices for fresh post; it
+retires unused/failed current-operation copies under exact owned endpoint N.
+Normal post closes readers, waits for SDK/returns, retires current snapshot UUID
+containers and activity under ORIGINAL admitted N, then writes terminal status.
+Completed reopen never dereferences stale data refs. SDK-unavailable normal outcomes
+retire known current snapshots by exact endpoints without creating unused indices.
+Skipped-not-quiescent deliberately retains payload/activity and reports their absolute
+paths because no safe window exists. Hard/stranded local failures retain payload.
+Unknown/replaced containers remain; no generic recursive namespace cleanup occurs.
 
 ## Pre-freeze purge configuration
 
@@ -1710,9 +322,9 @@ once, credited in resolved partition order. No purge-policy Q/version/journal ex
 
 Only an explicitly supplied current exclusive/no-consumer window may enable purge,
 in writable base capture before observation commitment and without unresolved intents.
-Persisted quiescence is not live permission. V5 establishes this window; per-candidate
+Persisted quiescence is not live permission. The active post owner establishes this window; per-candidate
 checks are synchronous cheap lifetime/root/invocation assertions, not process queries.
-The released lifecycle does not invoke this internal primitive yet.
+This describes unreleased source, not existing release tags.
 
 Purge uses the existing closed directory listing and only already traversed capture
 domain. Ordinary excluded file entries can qualify. Hard-pruned descendants (including
@@ -1725,10 +337,8 @@ No payload reads, survivor rescan, relisting, ancestor rewalk or process inspect
 
 Freeze native N and complete surviving child evidence only after authorized removals,
 while retaining original activity mtime/ctime separately for the same-process unit/GC
-decision. Do not change build cutoff or restore timestamps. On crash before commit,
-retry the same frozen configuration under a new window; missing files are no-ops and
-lost activity clocks imply conservative activity. Earlier successful purges are final.
-After observation commit, recover with original frozen facts and do not purge again.
+decision. Do not change build cutoff or restore timestamps. Interrupted prepare/post cannot resume. Successful removals remain actual effects;
+a failed capture grants no survivor/publication authority and preserves local errors.
 
 Diagnostic summaries are operation-local and have no authority or persisted schema.
 Capture supplies admitted/skipped status and actual removals (shared claims credited
@@ -1740,202 +350,17 @@ working budget, with explicit truncation; opaque-scope samples have the same sin
 shared bound. No diagnostic reads files, relists directories or adds inventories.
 The orchestration caller owns and disposes the collector, including on failure.
 
-### Save capture evidence lifetime
-
-An uninterrupted base post may build its bounded observation index as the strict
-observation writer emits admitted canonical rows and exact offsets. Only a completed
-writer Q can bind that process-local index; it is not reconstructed from a caller
-flag. Cold readers still validate and build from the original immutable observation
-stream once. The index owner is transferred to the GC/source consumer or closed on
-any early return, cancellation or failed candidate/pointer operation.
-
-Observation capture checks source leaves during traversal and checks directory
-structure again before committing its pointer, under checked parent scopes. Pure
-rendering does not mint fresh native facts. An edit of a leaf during candidate writes
-can therefore be detected at the mandatory post-freeze original/native join rather
-than by another whole-file stability sweep. Frozen observations describe expected
-facts; they do not authorize a deletion, accepted hash result or SDK publication
-without that consuming join. With GC targets, retain the pre-deletion projection.
-Without targets, use the single retained-source projection. The final common
-source/absence barrier after source return remains mandatory.
-
-A projection can list names/kinds first and stat each matched child at its consuming
-boundary; it must not discard a stat only to immediately repeat it. Protected and
-relocated roots still require their exact current kind/device/file-ID checks, managed
-files require full N/nlink validation, and unknown names reject. Current checked
-ancestors authorize scoped child stats; an unchanged directory timestamp alone does
-not validate its descendants. Directory after-checks detect membership changes during
-the join. Content hash reuse follows the separate prepared-digest rules below.
-
-## Prepared digest handoff
-
-The local invocation may retain verified incoming `native-evidence` metadata after
-install staging is retired. This grants digest-comparison evidence only, never a
-sealed live snapshot, installation/return permission or an upload receipt. The
-existing `prepare-sources` stream may additionally contain model-order rows:
-
-```text
-["digest-handoff",stage,partitionId,placementsRef]
-stage = 0 | 1                         # completed base install / worker install
-placementsRef = Q("digest-placements")
-```
-
-Handoffs follow snapshot-source rows and are strictly ordered by stage then model
-partition order. At most one per partition/stage exists. Stage zero may be committed
-with `base-installed` or later; stage one only with `workers-installed`. Previously
-committed handoffs are immutable. The same bindings replacement commits selection
-and handoff references; there is no per-file recovery journal. A missing uncommitted
-candidate is not optimization authority after interruption. Current install recovery
-still resolves native ownership; a cold retry may safely omit optimization coverage.
-
-Purpose `digest-placements` is partition scoped, with ordinary local framing and:
-
-```text
-["digest-source",nativeEvidenceRef]     # exactly first data row
-["digest-placement",logicalRoot,kind,sourceSpan,afterN]
-kind = "file" | "directory"
-sourceSpan = null | span
-```
-
-Placements are nonoverlapping, unique and in files-first hierarchical membership
-order within that partition/stage. `sourceSpan` and `afterN` are both null for an
-invalidation (for example a deletion); otherwise the span binds the exact source
-Q hash and complete selected member. Its original root kind/path and the checked
-post-rename root N must agree. Shared source references occur once per stream.
-A directory's descendants retain their original verified full N and digest across
-that known root rename; a moved root uses its actual checked after N. This does not
-permit relaxing descendant ctime/birth comparisons. Individual file replacements
-can require one placement each; directory insertions use one root placement.
-
-Only the trusted installer can produce a normal handoff, after selected-source
-membership checks and successful guarded rename endpoints. No extra payload scan
-or body read is required. References keep the original immutable source metadata
-reachable, independently of disposable install payloads. The prepare selection,
-invocation/model/root, partition and strict Q validation bind reopening. Native
-source admission supplies the digest provenance; portable baseline metadata alone
-cannot mint it. Local state remains under the documented managed-root trust model.
-
-Post joins the ordered source members with its fresh full-precision file observation.
-Reuse requires matching path/partition/origin, regular-file/nlink-one, safe current
-parents/device and exact leaf N except atime. New or changed files, same-size edits
-with restored mtime, and unproven retained local winners require a fresh guarded hash.
-The later worker stage supersedes all earlier coverage of its selected roots; a
-later invalidation or missing member cannot fall back to an older base digest.
-Activity decisions still use the original observation times independently of hash
-reuse. Parent membership can change during the build; a matching parent timestamp
-is neither required for leaf digest reuse nor sufficient to prove unchanged bytes.
-
-Absent optional handoffs/coverage use ordinary hashing. Missing/unreadable or malformed
-referents of committed Qs reject. Full stream/ref/member boundaries are validated,
-even when current files were deleted or no digest matched. A serialized completion
-flag is not native evidence. After observations or postSources freeze, cold post uses
-those original refs and existing adjustments/recovery; it never recaptures observations
-or adopts today's native identities onto old digests. Ambiguous moves/returns retain
-their expected-byte hashing requirements. These rules amend unreleased local state
-only; worker TAR, native-base objects and generation bytes are unchanged.
-
-## Retained baseline metadata
-
-Accepted prepare retains each available base object's `envelope.json` and
-`tree.ndjson` under the invocation's derived `baseline/<partition>/` directory,
-before disposing downloaded payloads or committing an installed stage. The frozen
-generation binds the envelope bytes; the envelope binds the complete tree bytes,
-grammar and semantic digests. No separate inventory, binding slot or journal is
-introduced. Frozen cold partitions have no retained metadata requirement.
-
-These files grant metadata comparison authority only. They cannot authorize payload
-installation, source return or reuse of unvalidated native contents. Post reopens
-and validates them against the exact frozen generation before observation capture
-and publication planning; it never fetches a newer remote baseline or adopts live
-contents to replace missing metadata. For example, a missing or truncated retained
-tree rejects post before purge/capture. During an interrupted prepare retry, the
-original accepted immutable input may fill an absent file; an existing file must
-match its original complete bytes. Divergence blocks the retry.
-
-After observations freeze, a new process renews exclusivity by validating the
-original quiescence/inventory and checking fresh native daemon absence. It does
-not execute captured launchers, which GC may legitimately have deleted, and does
-not replace publication-bound quiescence references. Remaining or uncertain daemon
-evidence blocks the retry. This renewal never authorizes recapturing or re-purging
-frozen observations. Initial post still runs the captured stop clients.
-
-An aggregator partition with no configured writer inherits its prepared complete
-snapshot; local changes do not become a writer implicitly. A standalone invocation
-may capture its own snapshot. Exact no-change completion requires no new object
-choices, equal baseline lineage/partition references/recovery groups, completed
-source returns and a successful final effective-source barrier. It does not create
-an upload receipt or save a new generation record.
-
-## Cold worker package reopening
-
-A package-frozen retry reads its exact current `workerRef` and derives the expected
-artifact name from frozen observations and worker-sources, model and context.
-The native basename must match. It verifies current regular-file identity/link count,
-Q length/hash, the existing complete worker TAR profile and seals, exact context and
-selected snapshot scope, then rechecks identity and state. This grants only an immutable
-archive upload capability. For example, removing live payload files after package
-commit does not prevent retry; renaming, replacing or altering the archive, substituting
-another producer's archive, or changing its authorized scope rejects retry. No live
-source view, native shadow, duplicate serialized summary or second parser is used.
-The one validation/decompression read on cold reopen is additional retry I/O.
-
-Worker post captures observations before checking raw backend capability, then GC,
-selected worker-sources, immutable package, receipt and completed state in that order.
-Only explicitly configured snapshot writers contribute complete snapshots. Empty
-contributions still upload a valid completion artifact. Capability failure preserves
-the frozen observations and performs no GC/source/package traversal. A failed upload
-retains the committed package for exact-byte retry; a lost acknowledgement needs the
-existing exact service readback. Read-only post only advances owned completion metadata;
-it never observes cache content, stops daemons, purges, GCs or uploads. Disabled prepare
-reconciles any discoverable prior owner before provisioning and creates no cache owner.
-
 ## Provider composition and activation boundary
 
-The selected `src/phases/streaming/prepare.ts` and `post.ts` compose the same shared
-services used by integration tests. Prepare claims the existing per-job guard,
-resolves existing partition configuration/presets once, recovers prior ownership
-before provisioning and freezes the CI anchor. Post checks that guard before opening
-an anchor or importing provider/configuration/build-tool implementations. An owning
-failed prepare reconciles and abandons its recorded mutations; it never publishes
-an artifact or claims successful aggregation. Duplicate and missing prepare do no
-cache work. Frozen owner policy, including directory allowance, governs old recovery
-and post; a later configuration cannot replace it.
+Unreleased Gradle/Maven delegates select this one active coherent family. Successful
+main→build→fresh post is the only process handoff. No old base/tree/digest/recovery
+compatibility branch, user switch, old journal adoption or source-package replay is
+present. Disabled mode makes no new owner and conservatively refuses detected
+unfinished ownership; read-only validates current controls without payload capture.
+Action/provider errors stay distinct from outgoing optional cache outcomes.
 
-Post uses frozen execution configuration and does not reread a repository config
-file. Backend factories load only at the core service's admitted boundary. Build
-reports and summary sinks load after post's observation/source-return/receipt work;
-a skipped-not-quiescent save does not read those contents. Known Gradle hook removal
-is a separate pre-capture step, so report collection cannot invalidate captured parent
-identities. Bounded partition diagnostics consume existing events and frozen model
-configuration; emitting them performs no filesystem operations.
-
-`src/ci/github/streaming.ts` supplies deferred existing GitHub adapters and pure report
-composition. Its cache factory receives the anchored root (or the known prepare root)
-so the SDK's existing path limitations remain visible before cache operations.
-The unreleased `src/ci/github/{gradle,maven}/{main,post}.ts` source delegates select
-this composition. Existing release tags retain their published lifecycle. Public
-schema/version exposure and legacy removal remain release work after independent
-integrated and resource/platform qualification. There is no user-facing feature flag or
-permanent parallel format compatibility mode.
-
-Disabled anchors freeze only the known build-hook root and report temp location in
-addition to execution context. They grant no managed cache authority or root owner.
-This is necessary to clean the exact installed Gradle summary hooks without rereading
-configuration, including read-only/disabled mode and failed prepare after abandonment.
-Read-only hooks are removed after owned completion; no managed observation/GC/upload
-is performed. Disabled mode creates no cache owner or cache metadata directory.
-Effective timestamp-GC age is rounded **up** once from configured days to whole
-milliseconds, retaining rather than deleting at a fractional boundary, then checked
-against the existing safe-integer admission and frozen unchanged for retries.
-
-Frozen owner reopening and destructive-intent reconciliation use an independent
-cleanup signal, including when the foreground is already cancelled at post entry.
-Only after returning sources and closing active recovery does the caller propagate
-foreground cancellation and refuse further facts/configuration/backend/report work.
-An explicitly cancelled cleanup signal or expired dedicated-root assertion still
-blocks cleanup; foreground cancellation never grants new cleanup authority.
-
-Prepare forwards the existing worker merge's bounded differing-contribution warning
-count and samples to the host after complete archive verification. Equivalent inputs
-produce no host warning. Diagnostics may repeat if an uncommitted merge is retried;
-they add no persisted state, content reread, inventory or change to winner policy.
+Focused process, integrity, lifetime, cleanup and complete-operation count tests
+are required. Counts include original native work, metadata codecs, indices/scratch,
+SDK controls/archives, required worker body/archive hashes, copies and actual cleanup.
+Zero native-base body hashing does not mean zero SHA work. These small fixtures do
+not establish large-cache scale, RSS, throughput or platform qualification.

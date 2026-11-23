@@ -96,96 +96,24 @@ it('checks finalized cutoff/activity through the referenced bindings document', 
   state[4] = 'prepare-pending';
   expect(() => f.codec.checkStateBindings(state, bad)).not.toThrow();
 });
-it('encodes empty cursor and all fixed document kinds without native operations', () => {
-  const f = localFixtures(),
-    i = f.options.invocation;
-  const rows: Value[] = [
-    ['current', 1, i, f.prefix + 'state.json'],
-    f.bindings,
-    f.state,
-    f.publication,
-    f.relocation,
-    ['quiescence', 1, i, f.q('installations'), 'all-exited', 1],
-    ...(['gc', 'install'] as const).flatMap(
-      (kind) =>
-        [
-          [
-            kind + '-progress',
-            1,
-            i,
-            f.q(kind === 'gc' ? 'observations' : 'install-plan'),
-            f.cursor(),
-            null,
-          ],
-          [
-            kind + '-intent',
-            1,
-            i,
-            f.q(kind === 'gc' ? 'observations' : 'install-plan'),
-            f.cursor(),
-            f.cursor(1),
-            f.q(kind === 'gc' ? 'gc-evidence' : 'install-evidence'),
-          ],
-        ] as Value[],
-    ),
-  ];
-  for (const row of rows) expect(f.codec.decode(f.codec.encode(row))).toEqual(row);
-});
+
 it.each([
-  'outcome',
-  'missing-observations',
-  'missing-publication',
-  'worker-base',
-  'read-only',
-  'initial-revision',
-])('rejects impossible state %s', (kind) => {
-  const options = { ...localOptions() };
-  if (kind === 'worker-base') options.role = 'distributed-worker';
-  if (kind === 'read-only') options.access = 'read-only';
-  const f = localFixtures(options),
+  'missing-handoff',
+  'missing-terminal',
+  'unexpected-terminal',
+  'v1',
+  'extra-package',
+  'zero-revision',
+])('rejects impossible v2 state %s', (kind) => {
+  const f = localFixtures(),
     bad = structuredClone(f.state);
-  if (kind === 'outcome') bad[14] = 'published';
-  if (kind === 'missing-observations') bad[4] = 'observations-frozen';
-  if (kind === 'missing-publication' || kind === 'worker-base' || kind === 'read-only')
-    bad[4] = 'objects-frozen';
-  if (kind === 'initial-revision') bad[3] = 0;
+  if (kind === 'missing-handoff') bad[6] = null;
+  if (kind === 'missing-terminal') bad[4] = 'completed';
+  if (kind === 'unexpected-terminal') bad[7] = ['outcome', 'abandoned', null, null, null];
+  if (kind === 'v1') bad[1] = 1;
+  if (kind === 'extra-package') bad.push(f.q('worker-archive'));
+  if (kind === 'zero-revision') bad[3] = 0;
   expect(() => f.codec.encode(bad)).toThrow();
-});
-it('validates interrupted outbound ownership and normalized return high-water', () => {
-  const f = localFixtures(),
-    r = structuredClone(f.relocation);
-  r[8] = f.cursor(16384);
-  r[10] = ['outbound', f.cursor(16384), f.cursor(30000)];
-  expect(() => f.codec.encode(r)).not.toThrow();
-  r[7] = 'returning';
-  r[8] = f.cursor(30000);
-  expect(() => f.codec.encode(r)).not.toThrow();
-  r[9] = f.cursor(30001);
-  expect(() => f.codec.encode(r)).toThrow();
-  r[9] = f.cursor(30000);
-  r[7] = 'sources-returned';
-  r[10] = null;
-  r[13] = f.q('adjustments');
-  expect(() => f.codec.encode(r)).not.toThrow();
-  r[9] = f.cursor(100);
-  expect(() => f.codec.encode(r)).toThrow();
-});
-it('rejects wrong-purpose intents and malformed cursor ranges', () => {
-  const f = localFixtures(),
-    row: Value[] = [
-      'gc-intent',
-      1,
-      f.options.invocation,
-      f.q('observations'),
-      f.cursor(),
-      f.cursor(1),
-      f.q('gc-evidence'),
-    ];
-  row[6] = f.q('install-evidence');
-  expect(() => f.codec.encode(row)).toThrow();
-  row[6] = f.q('gc-evidence');
-  row[5] = ['cursor', 'b'.repeat(64), 1, 1, 1, null];
-  expect(() => f.codec.encode(row)).toThrow();
 });
 it('keeps policy order/strictness in identity and rejects duplicates/GC ambiguity', () => {
   const f = localFixtures(),
@@ -199,89 +127,91 @@ it('keeps policy order/strictness in identity and rejects duplicates/GC ambiguit
   p[6] = 0;
   expect(() => policyId(p)).toThrow();
 });
-it('checks exact relocation marker paths, receipt/marker exclusion and install variants', () => {
-  const f = localFixtures();
-  expect(() =>
-    f.codec.schemas.rows.partitionState.parse([
-      'partition-state',
-      'data',
-      ['baseline-partition', 'empty', null],
-      null,
-      null,
-      null,
-      f.prefix + 'other.json',
-    ]),
-  ).toThrow();
-  const insert: Value[] = [
-    'install',
-    1,
-    'repository/a',
-    f.prefix + 'source',
-    f.evidence(),
-    null,
-    'insert',
-    null,
-  ];
-  expect(() => f.codec.schemas.rows.install.parse(insert)).not.toThrow();
-  insert[6] = 'replace';
-  expect(() => f.codec.schemas.rows.install.parse(insert)).toThrow();
-  insert[5] = f.evidence();
-  insert[7] = f.prefix + 'backup';
-  expect(() => f.codec.schemas.rows.install.parse(insert)).not.toThrow();
-  insert[7] = f.prefix + 'source/backup';
-  expect(() => f.codec.schemas.rows.install.parse(insert)).toThrow();
-  insert[6] = 'delete';
-  insert[3] = null;
-  insert[4] = null;
-  insert[7] = f.prefix + 'backup';
-  expect(() => f.codec.schemas.rows.install.parse(insert)).not.toThrow();
-});
+
 it('rejects oversized local documents before schema validation', () => {
   const codec = new LocalCodec(localOptions());
   expect(() => codec.decode(Buffer.alloc(65537, 32))).toThrow();
   expect(() => codec.encode(['current', 1, 'a'.repeat(100000), 'bad'])).toThrow('record bound');
 });
 
-it('requires a frozen base decision for no-change and prevents worker completion skips', () => {
-  const f = localFixtures(),
-    s = structuredClone(f.state);
-  s[4] = 'completed';
-  s[14] = 'no-change';
-  s[6] = f.q('observations');
-  s[10] = f.q('gc-progress');
-  expect(() => f.codec.encode(s)).toThrow('publication');
-  s[7] = f.q('post-sources');
-  s[8] = f.q('publication');
-  s[9] = f.q('partition-state');
-  expect(() => f.codec.encode(s)).not.toThrow();
-  const worker = localFixtures({ ...localOptions(), role: 'distributed-worker' });
-  for (const outcome of ['no-change', 'skipped-not-quiescent']) {
-    const state = structuredClone(worker.state);
+it('roundtrips the exact v2 documents and terminal outcomes without package authority', () => {
+  const f = localFixtures();
+  for (const value of [
+    ['current', 1, f.options.invocation, f.prefix + 'state.json'],
+    f.bindings,
+    f.state,
+  ] as Value[])
+    expect(f.codec.decode(f.codec.encode(value))).toEqual(value);
+  for (const outcome of [
+    'read-only',
+    'no-change',
+    'skipped-not-quiescent',
+    'feature-unavailable',
+    'abandoned',
+  ]) {
+    const state = structuredClone(f.state);
     state[4] = 'completed';
-    state[14] = outcome;
-    expect(() => worker.codec.encode(state)).toThrow();
+    state[7] = ['outcome', outcome, null, null, null];
+    expect(f.codec.decode(f.codec.encode(state))).toEqual(state);
+  }
+  const complete = structuredClone(f.state);
+  complete[4] = 'completed';
+  for (const terminal of [
+    ['outcome', 'published', 'record-key', null, null],
+    ['outcome', 'worker-uploaded', null, 7, 'artifact'],
+  ]) {
+    complete[7] = terminal;
+    expect(() => f.codec.encode(complete)).not.toThrow();
+    const bad = structuredClone(complete);
+    (bad[7] as Value[])[3] = null;
+    if (terminal[1] === 'worker-uploaded') expect(() => f.codec.encode(bad)).toThrow();
   }
 });
-it('requires sealed adjustment ownership at sources-returned', () => {
+it('binds install selectors to bounded metadata context and preserves replacement geometry', () => {
   const f = localFixtures(),
-    r = structuredClone(f.relocation);
-  r[7] = 'sources-returned';
-  expect(() => f.codec.encode(r)).toThrow();
-  r[13] = ['prefix', 'adjustments', f.prefix + 'adjustments.ndjson', 100, 1, h];
-  expect(() => f.codec.encode(r)).toThrow();
-  r[13] = f.q('adjustments');
-  expect(() => f.codec.encode(r)).not.toThrow();
+    source: Value = ['metadata-member', 'a'.repeat(32), 'source', 'metadata', 4],
+    current: Value = ['metadata-member', 'a'.repeat(32), 'current', 'metadata', 8];
+  expect(f.codec.schemas.installMember.parse(source)).toEqual(source);
+  expect(() => f.codec.schemas.installMember.parse(f.evidence())).toThrow();
+  for (const bad of [
+    ['metadata-member', 'a'.repeat(64), 'source', 'metadata', 4],
+    ['metadata-member', 'a'.repeat(32), 'source', 'foreign', 4],
+    ['metadata-member', 'a'.repeat(32), 'source', 'metadata', -1],
+  ])
+    expect(() => f.codec.schemas.installMember.parse(bad)).toThrow();
+  const row: Value[] = [
+    'install',
+    1,
+    'metadata/a',
+    f.prefix + 'source',
+    source,
+    null,
+    'insert',
+    null,
+  ];
+  expect(() => f.codec.schemas.rows.install.parse(row)).not.toThrow();
+  row[6] = 'replace';
+  expect(() => f.codec.schemas.rows.install.parse(row)).toThrow();
+  row[5] = current;
+  row[7] = f.prefix + 'backup';
+  expect(() => f.codec.schemas.rows.install.parse(row)).not.toThrow();
+  row[7] = f.prefix + 'source/backup';
+  expect(() => f.codec.schemas.rows.install.parse(row)).toThrow();
+  row[6] = 'delete';
+  row[3] = null;
+  row[4] = null;
+  row[7] = f.prefix + 'backup';
+  expect(() => f.codec.schemas.rows.install.parse(row)).not.toThrow();
 });
-
-it('binds install member spans to their exact shared evidence Q', () => {
-  const f = localFixtures(),
-    binding = f.evidence() as Value[];
-  expect(() => f.codec.schemas.memberEvidence.parse(binding)).not.toThrow();
-  expect(() => f.codec.schemas.memberEvidence.parse(f.q('native-evidence'))).toThrow();
-  const wrongSha = structuredClone(binding);
-  (wrongSha[2] as Value[])[1] = '0'.repeat(64);
-  expect(() => f.codec.schemas.memberEvidence.parse(wrongSha)).toThrow();
-  const outside = structuredClone(binding);
-  (outside[2] as Value[])[3] = 101;
-  expect(() => f.codec.schemas.memberEvidence.parse(outside)).toThrow();
+it.each([
+  'publication',
+  'relocation',
+  'gc-intent',
+  'install-intent',
+  'gc-progress',
+  'install-progress',
+  'quiescence',
+])('rejects removed local document %s', (kind) => {
+  const f = localFixtures();
+  expect(() => f.codec.encode([kind, 1, f.options.invocation])).toThrow('Unknown local document');
 });

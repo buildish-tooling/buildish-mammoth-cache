@@ -18,11 +18,10 @@ import type * as Fs from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { observationFixture } from './observation-fixtures';
 import { PartitionSummaries } from '../../../src/cache/streaming/partition-summaries';
-import { captureObservations } from '../../../src/cache/streaming/observation-capture';
-import { executeGc } from '../../../src/cache/streaming/gc-execute';
-import { LiveBaseInputs } from '../../../src/cache/streaming/live-base-inputs';
-import { FrozenMovingPublication } from '../../../src/cache/streaming/base-moving-publication';
-import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
+import { captureFixtureObservations as captureObservations } from './observation-fixtures';
+import { executeFixtureGc as executeGc } from './observation-fixtures';
+import { MetadataPublicationSource } from '../../../src/cache/streaming/metadata-publication-source';
+import { publishMetadataBase } from '../../../src/cache/streaming/metadata-publication';
 const counts = vi.hoisted(() => ({ root: '', stats: 0, listings: 0, unlinks: 0 }));
 vi.mock('node:fs/promises', async (original) => {
   const actual = await original<typeof Fs>();
@@ -46,6 +45,13 @@ vi.mock('node:fs/promises', async (original) => {
     },
   };
 });
+const summaryBackend = {
+  capabilities: { supportsExplicitSave: true, supportsNewestPrefixRestore: true },
+  isFeatureAvailable: () => true,
+  saveCache: async () => 1,
+  restoreCache: async () => undefined,
+  isMissingPathsError: () => false,
+};
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   counts.root = '';
@@ -65,6 +71,7 @@ it.each([4, 16])(
           summaries = reporting ? new PartitionSummaries(f.model, f.budget) : undefined;
         cleanup.push(async () => {
           summaries?.dispose();
+          await f.finish();
           expect(f.budget.retained).toBe(0);
           await f.close();
         });
@@ -83,8 +90,7 @@ it.each([4, 16])(
         await f.files('', files);
         counts.root = f.root.replaceAll('\\', '/');
         counts.stats = counts.listings = counts.unlinks = 0;
-        const hash = vi.spyOn(NativeReadPhase.prototype, 'hash'),
-          initial = { ...f.store.root.work };
+        const initial = { ...f.store.root.work };
         const obs = await captureObservations(f.store, {
           budget: f.budget,
           summaries,
@@ -98,14 +104,18 @@ it.each([4, 16])(
               }
             : {}),
         });
-        expect(hash).not.toHaveBeenCalled();
+        expect(f.store.root.work.bodyHashBytes).toBe(0);
         const capture = { stats: counts.stats, listings: counts.listings, unlinks: counts.unlinks };
         expect(obs.purge.deleted).toBe(enabled ? n : 0);
-        await executeGc(f.store, { budget: f.budget });
-        const input = await LiveBaseInputs.capture(f.store, { budget: f.budget });
+        const result = await executeGc(f.store, { budget: f.budget });
+        const input = await MetadataPublicationSource.survivors(result.owner);
         cleanup.push(() => input.dispose());
-        const pub = await FrozenMovingPublication.freeze(input, 'main', [], summaries);
-        cleanup.push(() => pub.dispose());
+        await publishMetadataBase(input, summaryBackend, {
+          lineage: 'a'.repeat(64),
+          writer: 'b'.repeat(64),
+          decision: 'c'.repeat(64),
+          summaries,
+        });
         const before = { ...f.store.root.work };
         summaries?.emit(
           { info: () => {} },
@@ -124,11 +134,10 @@ it.each([4, 16])(
             listings: counts.listings,
             unlinks: counts.unlinks,
             opens: w.opens - initial.opens,
-            hashes: hash.mock.calls.length,
+            hashes: w.bodyHashCalls - initial.bodyHashCalls,
             renames: w.renames - initial.renames,
           },
         });
-        hash.mockRestore();
         counts.root = '';
       }
     expect(results[1]).toEqual(results[0]);

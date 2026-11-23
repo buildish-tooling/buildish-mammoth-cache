@@ -17,7 +17,7 @@
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { captureInstallCurrent } from '../../../src/cache/streaming/install-current';
+import { installCurrentRows } from '../../../src/cache/streaming/install-current';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { walkWork } from '../../../src/cache/streaming/native-walk';
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
@@ -42,17 +42,9 @@ it('captures one complete physical projection without reading untouched payload 
     await writeFile(path.join(f.directory, file), 'untouched body');
   const work = walkWork(),
     before = f.store.root.work.readBytes;
-  const ref = await captureInstallCurrent(f.store, { budget: f.budget }, work);
-  expect(f.store.root.work.readBytes).toBe(before);
   const rows: Value[] = [];
-  await f.store.readStream(
-    ref,
-    'install-current',
-    { budget: f.budget, partition: null },
-    async (row) => {
-      rows.push(row);
-    },
-  );
+  for await (const row of installCurrentRows(f.store, { budget: f.budget }, work)) rows.push(row);
+  expect(f.store.root.work.readBytes).toBe(before);
   expect(
     rows.filter((r) => Array.isArray(r) && r[0] === 'file').map((r) => (r as Value[])[1]),
   ).toEqual(['unmanaged', 'cache/a', 'cache/shared/a', 'cache/shared/b']);
@@ -60,9 +52,9 @@ it('captures one complete physical projection without reading untouched payload 
     rows
       .filter((r) => Array.isArray(r) && r[0] === 'parent-child')
       .map((r) => (r as Value[]).slice(1, 4)),
-  ).toEqual([['', '.mammoth', 'directory']]);
+  ).toEqual([]);
   expect(work.listings).toBe(3);
-  expect(work.entries).toBe(7);
+  expect(work.entries).toBe(6);
   expect(f.budget.retained).toBe(0);
 });
 it('records every adjacent protected link by native IDs without following their targets', async () => {
@@ -76,20 +68,12 @@ it('records every adjacent protected link by native IDs without following their 
       process.platform === 'win32' ? 'junction' : 'dir',
     );
   const work = walkWork(),
-    ref = await captureInstallCurrent(f.store, { budget: f.budget }, work),
     protectedRows: Value[][] = [];
-  await f.store.readStream(
-    ref,
-    'install-current',
-    { budget: f.budget, partition: null },
-    async (row) => {
-      if (Array.isArray(row) && row[0] === 'parent-child') protectedRows.push([...row]);
-    },
-  );
+  for await (const row of installCurrentRows(f.store, { budget: f.budget }, work))
+    if (Array.isArray(row) && row[0] === 'parent-child') protectedRows.push([...row]);
   expect(protectedRows.map((r) => [r[2], r[3]])).toEqual([
     ['link-a', 'symlink'],
     ['link-b', 'symlink'],
-    ['.mammoth', 'directory'],
   ]);
   expect(
     protectedRows.every((r) => /^[0-9]+$/.test(String(r[4])) && /^[0-9]+$/.test(String(r[5]))),
@@ -101,13 +85,17 @@ it('bounds direct-child names and releases both producer and validator charges o
   const f = await fixture();
   for (let i = 0; i < 5; i++) await writeFile(path.join(f.directory, String(i)), 'body');
   await expect(
-    captureInstallCurrent(f.store, { budget: f.budget, maxDirectoryEntries: 3 }),
+    collect(installCurrentRows(f.store, { budget: f.budget, maxDirectoryEntries: 3 })),
   ).rejects.toThrow('breadth');
   expect(f.budget.retained).toBe(0);
   const cancelled = new AbortController();
   cancelled.abort(new Error('cancel inventory'));
   await expect(
-    captureInstallCurrent(f.store, { budget: f.budget, signal: cancelled.signal }),
+    collect(installCurrentRows(f.store, { budget: f.budget, signal: cancelled.signal })),
   ).rejects.toThrow('cancel inventory');
   expect(f.budget.retained).toBe(0);
 });
+
+async function collect(source: AsyncIterable<Value>) {
+  for await (const row of source) void row;
+}

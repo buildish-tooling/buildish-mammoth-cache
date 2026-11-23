@@ -19,15 +19,17 @@ import { expect, it } from 'vitest';
 import { encodeRecord, rawSha } from '../../../src/cache/streaming/encoding';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import {
-  createGeneration,
-  decodeGeneration,
-  decodeEnvelope,
   objectKey,
   RecoveryGroups,
   type ObjectIdentity,
   type ObjectRef,
-  type Envelope,
 } from '../../../src/cache/streaming/native-records';
+import {
+  createMetadataGeneration as createGeneration,
+  decodeMetadataGeneration as decodeGeneration,
+  createMetadataDescriptor,
+  decodeMetadataDescriptor,
+} from '../../../src/cache/streaming/metadata-base-records';
 import { modelVector } from './protocol-fixtures';
 const model = () => resolveModel(modelVector, 'vectors-', 1);
 const h = 'a'.repeat(64);
@@ -59,7 +61,7 @@ it('derives generation bytes/key using an independent single-frame oracle', () =
   const g = createGeneration(m, h, h, h, entries, groups);
   const sha = independentlyHash('partition-decisions', [
     'partition-decisions',
-    1,
+    2,
     m.family,
     m.id,
     h,
@@ -73,8 +75,8 @@ it('derives generation bytes/key using an independent single-frame oracle', () =
     Buffer.from(
       JSON.stringify([
         'generation',
-        1,
-        'generation-v1',
+        2,
+        'generation-v2',
         m.family,
         m.id,
         h,
@@ -119,28 +121,30 @@ it('preserves inherited identity rather than relabeling it to the generation wri
     ),
   ).toThrow();
 });
-it('checks exact envelope bytes and independent identity before using tree assertions', () => {
+it('checks exact descriptor bytes and independent identity without payload assertions', () => {
   const m = model(),
-    e: Envelope = [
-      'envelope',
-      1,
-      'native-tree-v1',
-      identity(),
-      'partition-projection',
-      100,
-      h,
-      [0, 1, 0, 0, 0],
-      h,
-    ];
-  const bytes = encodeRecord(e),
-    r: ObjectRef = ['object-ref', e[3], objectKey(e[3]), bytes.length, rawSha(bytes)];
-  expect(decodeEnvelope(bytes, r, m)).toEqual(e);
-  expect(() => decodeEnvelope(Buffer.concat([bytes, Buffer.from(' ')]), r, m)).toThrow('reference');
-  const invalid = structuredClone(e);
-  invalid[7][3] = 1;
-  const bad = encodeRecord(invalid);
+    built = createMetadataDescriptor(m, identity());
+  expect(decodeMetadataDescriptor(built.bytes, built.reference, m)).toEqual(built.descriptor);
   expect(() =>
-    decodeEnvelope(bad, [...r.slice(0, 3), bad.length, rawSha(bad)] as ObjectRef, m),
+    decodeMetadataDescriptor(Buffer.concat([built.bytes, Buffer.from(' ')]), built.reference, m),
+  ).toThrow('reference');
+  const bad = encodeRecord([
+    'envelope',
+    1,
+    'native-tree-v1',
+    identity(),
+    'partition-projection',
+    100,
+    h,
+    [0, 1, 0, 0, 0],
+    h,
+  ]);
+  expect(() =>
+    decodeMetadataDescriptor(
+      bad,
+      ['object-ref', identity(), objectKey(identity()), bad.length, rawSha(bad)],
+      m,
+    ),
   ).toThrow();
 });
 it('checks transitive model-bounded groups and partial availability', () => {
@@ -220,7 +224,7 @@ it.each(['version', 'decision', 'key', 'missing', 'duplicate', 'object-key'])(
         [['data'], ['metadata']],
       );
     const bad = structuredClone(g) as unknown[];
-    if (kind === 'version') bad[1] = 2;
+    if (kind === 'version') bad[1] = 1;
     if (kind === 'decision') bad[10] = 'b'.repeat(64);
     if (kind === 'key') bad[11] = 'bad';
     if (kind === 'missing') bad[8] = [['empty', 'data']];

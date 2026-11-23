@@ -14,63 +14,47 @@
  * limitations under the License.
  */
 
-import { lstat } from 'node:fs/promises';
 import { z } from 'zod';
-import { decodeRecords, equal, tuple, type Value } from './encoding';
-import type { OwnedStore, Reference } from './owned-store';
-import { missing, nativeIdentity, sameNative, sameObject, type NativeIdentity } from './native';
+import { tuple, type Value } from './encoding';
+import type { OwnedStore } from './owned-store';
+import type { NativeIdentity } from './native';
 import { NativeReadPhase } from './native-read-phase';
-import { walkNative, walkWork, type WalkEvent } from './native-walk';
-import {
-  isWorkspaceScaffolding,
-  compareName,
-  joinPath,
-  normalizeMode,
-  type WorkingBudget,
-} from './tree-state';
+import { walkWork } from './native-walk';
+import { GcSurvivorOwner } from './gc-execute';
+import { ObservationIndex, type ObservedDirectory, type ObservedFile } from './observation-index';
+import { isWorkspaceScaffolding, baseName, normalizeMode, type WorkingBudget } from './tree-state';
 import { unitSchema, type Unit } from './schema';
-import { InstallScratch } from './install-scratch';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
-import { createCacheGlobMatcher } from '../manifest';
 import { WorkerSpool } from './worker-spool';
 import type { WorkerEvent } from './worker-codec';
 
 export interface WorkerSourceView {
-  readonly observations: Reference;
-  /** Required when the frozen decisions remove anything; must reach the final root boundary. */
-  readonly gcProgress: Reference | null;
-  readonly workerSources: Reference;
-  /** Same projection used to capture observations, never a fresh selection/GC policy. */
-  readonly prune?: (path: string) => boolean;
+  readonly survivors: GcSurvivorOwner;
 }
 interface Frame {
   path: string;
-  before: NativeIdentity;
-  actual: NativeIdentity | null;
-  affected: boolean;
-  hasMembers: boolean;
+  native: NativeIdentity;
   open: Set<number>;
   release: () => void;
-  maven: { payload: boolean; protectedArtifact: boolean } | null;
-  projection: number;
-  end: number;
-  omitted: number;
-  planned: number;
 }
-// Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas.
-// One co-read/listing phase, then metadata-only guards and direct live-body reads.
+interface ActiveUnit {
+  descriptor: Unit;
+  channels: Set<number>;
+  protectedArtifact: boolean;
+  deleting: boolean;
+}
+/** One shared original hierarchy pass selects actual delta channel work; no new native inventory. */
 export class WorkerSources {
   readonly work = walkWork();
-  private snapshotIds: readonly string[] = [];
-  get snapshots(): readonly string[] {
-    return this.snapshotIds;
-  }
+  private disposed = false;
   private constructor(
     private readonly store: OwnedStore,
     private readonly budget: WorkingBudget,
+    private readonly owner: GcSurvivorOwner,
     private readonly channels: WorkerSpool[],
-    private readonly guards: WorkerSpool,
+    readonly snapshots: readonly string[],
+    private readonly releaseOwner: () => void,
   ) {}
   static async create(
     store: OwnedStore,
@@ -79,420 +63,208 @@ export class WorkerSources {
     signal = new AbortController().signal,
     maxDirectoryEntries = 100000,
   ): Promise<WorkerSources> {
-    // Pin caller-owned tuples before the first await; every subsequent phase uses
-    // exactly the Q that passed the complete metadata validation gate.
-    view = Object.freeze({
-      ...view,
-      observations: Object.freeze(
-        store.codec.schemas.ref('observations').parse(view.observations),
-      ) as Reference,
-      workerSources: Object.freeze(
-        store.codec.schemas.ref('worker-sources').parse(view.workerSources),
-      ) as Reference,
-      gcProgress:
-        view.gcProgress === null
-          ? null
-          : (Object.freeze(
-              store.codec.schemas.ref('gc-progress').parse(view.gcProgress),
-            ) as Reference),
-    });
-    const snapshotIds: string[] = [];
-    const guards = await WorkerSpool.create(store, budget),
-      channels: WorkerSpool[] = [];
-    const result = new WorkerSources(store, budget, channels, guards);
+    const owner = view.survivors;
+    GcSurvivorOwner.assertReceipt(owner);
+    if (
+      owner.index.store !== store ||
+      owner.index.options.budget !== budget ||
+      (owner.index.options.maxDirectoryEntries ?? 100000) !== maxDirectoryEntries
+    )
+      throw new Error('Worker source original owner/store/policy mismatch.');
+    const release = owner.borrow(),
+      channels: WorkerSpool[] = [],
+      snapshots = Object.freeze(
+        store.codec.options.model.partitions
+          .filter((p) => p[3] === 'single-writer' && p[4] === store.codec.options.context[4])
+          .map((p) => p[0]),
+      ),
+      result = new WorkerSources(store, budget, owner, channels, snapshots, release);
     try {
-      await store.readStream(
-        view.workerSources,
-        'worker-sources',
-        { budget, partition: null },
-        async (value) => {
-          const r = tuple(value);
-          if (r[0] === 'worker-snapshot') {
-            equal(r[2], view.observations, 'worker snapshot observations');
-            snapshotIds.push(String(r[1]));
-          }
-        },
-        signal,
-      );
-      result.snapshotIds = Object.freeze(snapshotIds);
-      for (let i = 0; i < 2 + result.snapshots.length; i++)
+      for (let i = 0; i < 2 + snapshots.length; i++)
         channels.push(await WorkerSpool.create(store, budget));
-      await result.capture(view, signal, maxDirectoryEntries);
+      await result.capture(signal);
       signal.throwIfAborted();
       return result;
     } catch (error) {
-      await result.dispose();
+      try {
+        await result.dispose();
+      } catch (cleanup) {
+        throw new AggregateError([error, cleanup], 'Worker source selection cleanup failed.', {
+          cause: cleanup,
+        });
+      }
       throw error;
     }
   }
-  private async capture(
-    view: WorkerSourceView,
-    signal: AbortSignal,
-    maxDirectoryEntries: number,
-  ): Promise<void> {
-    // Validate once without a second live name table, then co-read immutable canonical
-    // bytes. The extra sequential metadata read is counted; no extra tree listing.
-    await this.store.readStream(
-      view.observations,
-      'observations',
-      { budget: this.budget, partition: null, maxDirectoryEntries },
-      undefined,
-      signal,
-    );
-    const projections = await InstallScratch.create(this.store, this.budget);
-    const frames: Frame[] = [],
+  private async capture(signal: AbortSignal): Promise<void> {
+    const index = this.owner.index,
       model = this.store.codec.options.model,
-      hard = createCacheGlobMatcher(model.tuple[3]);
-    let unit: {
-      descriptor: Unit;
-      activity: string;
-      decision: string;
-      channels: Set<number>;
-      unowned?: boolean;
-    } | null = null;
-    let expectedFile: string | null = null;
-    let removed = false,
-      finalEnd = 0,
-      finalRecord = 0;
-    const absent = async (path: string) => {
-      this.store.root.work.stats++;
-      try {
-        await lstat(this.store.root.resolve(path));
-        return false;
-      } catch (error) {
-        if (missing(error)) return true;
-        throw error;
-      }
-    };
-    const projectionNext = async (f: Frame) => {
-      if (f.projection === f.end) return null;
-      const row = await projections.record(f.projection);
-      try {
-        f.projection += row.bytes;
-        return tuple(row.value);
-      } finally {
-        row.release();
-      }
-    };
-    const inspect: NonNullable<Parameters<typeof walkNative>[2]['inspectChild']> = async (
-      child,
-    ) => {
-      const f = frames[frames.length - 1];
-      if (!f || child.parent !== f.path) throw new Error('Missing frozen physical projection.');
-      while (true) {
-        const expected = await projectionNext(f);
-        if (!expected) throw new Error('Unexpected physical source child.');
-        const cmp =
-          Number(expected[2] === 'directory') - Number(child.type === 'directory') ||
-          compareName(String(expected[1]), child.name);
-        if (cmp < 0) {
-          f.omitted++;
-          continue;
-        }
-        if (cmp > 0) throw new Error('Unexpected physical source child.');
-        equal(
-          expected.slice(1),
-          [child.name, child.type, child.device, child.fileId],
-          'frozen physical child',
-        );
-        // Omitted semantic files remain protected physical children. Their frozen
-        // kind/identity was checked above; do not surface them as managed events.
-        const protectedFile = child.type !== 'directory' && child.path !== expectedFile;
-        if (
-          (child.pruned || protectedFile) &&
-          child.type !== 'directory' &&
-          model.tuple[2] === 'maven' &&
-          f.maven !== null &&
-          !isCacheMetadataPath(child.path) &&
-          !isMavenTransientFile(child.name)
-        ) {
-          f.maven!.protectedArtifact = true;
-          if (f.maven!.payload) throw new Error('Incomplete Maven direct-file contribution.');
-        }
-        if (protectedFile) return 'prune';
-        return;
-      }
-    };
-    const live = walkNative(
-      this.store.root,
-      '',
-      {
-        budget: this.budget,
-        signal,
-        maxDirectoryEntries,
-        metadata: 'exclude',
-        prune: (path) =>
-          hard(path) || hard(path + '/.workspace-directory-probe') || !!view.prune?.(path),
-        inspectChild: inspect,
-      },
-      this.work,
-    )[Symbol.asyncIterator]();
-    let head: IteratorResult<WalkEvent> | undefined;
-    const peek = async () => {
-      while (true) {
-        head ??= await live.next();
-        if (head.done || head.value.tag !== 'protected-child') return head;
-        head = undefined;
-      }
-    };
-    const next = async (tag: WalkEvent['tag'], path: string) => {
-      const n = await peek();
-      if (n.done || n.value.tag !== tag || n.value.path !== path)
-        throw new Error('Frozen source projection changed.');
-      head = undefined;
-      return n.value;
-    };
-    const append = (c: number, r: Value) => this.channels[c].append(r, signal);
-    const ensure = async (c: number) => {
-      for (const f of frames)
-        if (!f.open.has(c)) {
-          if (!f.actual) throw new Error('Cannot emit missing directory.');
-          await append(c, ['dir-open', f.path, f.actual]);
-          f.open.add(c);
+      frames: Frame[] = [];
+    const append = (channel: number, value: Value) => this.channels[channel].append(value, signal);
+    const ensure = async (channel: number) => {
+      for (const frame of frames)
+        if (!frame.open.has(channel)) {
+          await append(channel, ['dir-open', frame.path, frame.native]);
+          frame.open.add(channel);
         }
     };
-    const routes = (partition: string, activity: string) => {
-      const p = model.partitions.find((p) => p[0] === partition)!,
-        output: number[] = [];
-      if (p[3] === 'aggregate' && activity !== 'none') output.push(activity === 'upsert' ? 0 : 1);
+    const routes = (partition: string, activity: string): number[] => {
+      const part = model.partitions.find((p) => p[0] === partition)!;
+      const channels: number[] = [];
+      if (part[3] === 'aggregate' && activity !== 'none')
+        channels.push(activity === 'upsert' ? 0 : 1);
       const snapshot = this.snapshots.indexOf(partition);
-      if (snapshot >= 0) output.push(snapshot + 2);
-      return output;
+      if (snapshot >= 0) channels.push(snapshot + 2);
+      return channels;
+    };
+    const openUnit = async (channel: number, unit: ActiveUnit) => {
+      await ensure(channel);
+      if (!unit.channels.has(channel)) {
+        if (channel !== 1 && unit.protectedArtifact)
+          throw new Error('Incomplete Maven direct-file contribution.');
+        await append(channel, [channel === 1 ? 'used-unit-open' : 'unit-open', unit.descriptor]);
+        unit.channels.add(channel);
+      }
+    };
+    const file = async (node: ObservedFile, unit: ActiveUnit | null) => {
+      if (node[5] === 'delete') return;
+      for (const channel of routes(node[3], node[4])) {
+        if (unit) await openUnit(channel, unit);
+        else await ensure(channel);
+        await append(
+          channel,
+          channel === 1 ? ['used', baseName(node[1])] : ['file', node[1], node[2]],
+        );
+      }
+    };
+    const visit = async (offset: number, inherited: ActiveUnit | null = null): Promise<void> => {
+      signal.throwIfAborted();
+      this.owner.assert();
+      ObservationIndex.assert(index, this.store);
+      const lease = await index.node(offset);
+      try {
+        if (lease.node[0] === 'observed-file') {
+          await file(lease.node, inherited);
+          return;
+        }
+        const directory: ObservedDirectory = lease.node;
+        if (directory[10][5]) return;
+        const frame: Frame = {
+          path: directory[1],
+          native: await this.owner.directoryNative(directory[1]),
+          open: new Set(),
+          release: this.budget.holdRecord(1024 + Buffer.byteLength(directory[1])),
+        };
+        frames.push(frame);
+        let unit = inherited,
+          localUnit = false;
+        const declaration = directory[9];
+        if (declaration) {
+          if (unit) throw new Error('Nested observed worker unit.');
+          const descriptor = unitSchema.parse(declaration.slice(1, 4));
+          let protectedArtifact = false;
+          if (descriptor[0] === 'maven-directory')
+            for await (const edge of index.children(directory))
+              if (
+                edge[5] === null &&
+                edge[2] !== 'directory' &&
+                !isCacheMetadataPath(directory[1] + '/' + edge[1]) &&
+                !isMavenTransientFile(edge[1])
+              )
+                protectedArtifact = true;
+          unit = {
+            descriptor,
+            channels: new Set(),
+            protectedArtifact,
+            deleting: declaration[5] === 'delete',
+          };
+          localUnit = true;
+          if (declaration[5] !== 'delete' && descriptor[2] === 'subtree') {
+            let partition: string | undefined;
+            try {
+              partition = model.owner(descriptor[1] + '/.workspace-directory-probe')[0];
+            } catch {
+              /* unowned scaffold */
+            }
+            if (partition)
+              for (const channel of routes(partition, declaration[4]))
+                await openUnit(channel, unit);
+          }
+        }
+        let members = 0;
+        for await (const edge of index.children(directory))
+          if (edge[5] !== null && !edge[6] && edge[2] === 'file') {
+            members++;
+            await visit(edge[5], unit);
+          }
+        if (localUnit && unit!.descriptor[2] === 'direct') {
+          for (const channel of unit!.channels)
+            await append(channel, [channel === 1 ? 'used-unit-close' : 'unit-close']);
+          unit = inherited;
+        }
+        for await (const edge of index.children(directory))
+          if (edge[5] !== null && !edge[6] && edge[2] === 'directory') {
+            members++;
+            await visit(edge[5], unit);
+          }
+        if (localUnit && declaration![3] === 'subtree')
+          for (const channel of unit!.channels)
+            await append(channel, [channel === 1 ? 'used-unit-close' : 'unit-close']);
+        if (
+          !members &&
+          !unit?.deleting &&
+          !(localUnit && declaration![5] === 'delete') &&
+          directory[1] &&
+          !isWorkspaceScaffolding(model, directory[1])
+        ) {
+          let partition: string | undefined;
+          try {
+            partition = model.owner(directory[1] + '/.workspace-directory-probe')[0];
+          } catch {
+            /* unowned scaffold */
+          }
+          if (partition) for (const channel of routes(partition, 'upsert')) await ensure(channel);
+        }
+        if (!directory[1])
+          for (let channel = 0; channel < this.channels.length; channel++) await ensure(channel);
+        for (const channel of frame.open)
+          await append(channel, ['dir-close', frame.path, frame.native]);
+        frames.pop();
+        frame.release();
+      } finally {
+        lease.release();
+      }
     };
     try {
-      for await (const raw of decodeRecords(this.store.read(view.observations, 'observations'))) {
-        signal.throwIfAborted();
-        const release = this.budget.holdRecord(raw.raw.length);
-        try {
-          const r = tuple(raw.value),
-            tag = r[0];
-          if (tag === 'local-stream' || tag === 'local-end') continue;
-          if (tag === 'child') {
-            await projections.append(raw.value);
-            frames[frames.length - 1].end = projections.position;
-            continue;
-          }
-          if (tag === 'dir-open') {
-            expectedFile = null;
-            const path = String(r[1]),
-              before = r[2] as NativeIdentity,
-              parent = frames[frames.length - 1];
-            let actual: NativeIdentity | null = null;
-            if (!parent || parent.actual) {
-              const upcoming = await peek();
-              if (
-                !upcoming.done &&
-                upcoming.value.tag === 'directory-open' &&
-                upcoming.value.path === path
-              ) {
-                const e = await next('directory-open', path);
-                if (e.tag !== 'directory-open') throw new Error('Expected directory.');
-                actual = e.identity;
-                if (!sameObject(before, actual) || before[6] !== actual[6])
-                  throw new Error('Frozen directory replaced.');
-                if (parent) parent.hasMembers = true;
-              } else {
-                if (!(await absent(path)))
-                  throw new Error('Frozen directory changed shape: ' + path);
-                if (parent) {
-                  parent.planned++;
-                  parent.affected = true;
-                }
-                removed = true;
-                if (unit && unit.decision !== 'delete')
-                  throw new Error('Missing retained subtree.');
-              }
-            } else {
-              parent.planned++;
-            }
-            frames.push({
-              path,
-              before,
-              actual,
-              affected: false,
-              hasMembers: false,
-              open: new Set(),
-              release: this.budget.holdRecord(1024 + Buffer.byteLength(path)),
-              maven: null,
-              projection: projections.position,
-              end: projections.position,
-              omitted: 0,
-              planned: 0,
-            });
-            if (unit && unit.decision !== 'delete') for (const c of unit.channels) await ensure(c);
-          } else if (tag === 'unit-open') {
-            unit = {
-              descriptor: unitSchema.parse(r.slice(1, 4)),
-              activity: String(r[4]),
-              decision: String(r[5]),
-              channels: new Set(),
-            };
-            const f = frames[frames.length - 1];
-            if (unit.descriptor[0] === 'maven-directory')
-              f.maven = { payload: false, protectedArtifact: false };
-            if (!f.actual && (unit.decision !== 'delete' || unit.descriptor[2] !== 'subtree'))
-              throw new Error('Missing retained unit root.');
-            if (unit.decision !== 'delete' && unit.descriptor[2] === 'subtree') {
-              let partition: string | undefined;
-              try {
-                partition = model.owner(unit.descriptor[1] + '/.workspace-directory-probe')[0];
-              } catch (error) {
-                if (!(error instanceof Error) || error.message !== 'Unowned managed path.')
-                  throw error;
-                unit.unowned = true;
-              }
-              for (const c of partition === undefined ? [] : routes(partition, unit.activity)) {
-                await ensure(c);
-                await append(c, [c === 1 ? 'used-unit-open' : 'unit-open', unit.descriptor]);
-                unit.channels.add(c);
-              }
-            }
-          } else if (tag === 'file') {
-            if (unit?.unowned) throw new Error('Unowned workspace contains managed members.');
-            const f = frames[frames.length - 1],
-              path = joinPath(f.path, String(r[1]));
-            if (r[6] === 'delete') {
-              removed = true;
-              if (f.actual) {
-                if (!(await absent(path)))
-                  throw new Error('Planned source removal has not completed.');
-                f.affected = true;
-              }
-              f.planned++;
-              continue;
-            }
-            if (!f.actual) throw new Error('Retained file under removed directory.');
-            expectedFile = path;
-            const event = await next('file', path);
-            if (
-              event.tag !== 'file' ||
-              event.links !== '1' ||
-              !sameNative(r[3] as NativeIdentity, event.identity, true)
-            )
-              throw new Error('Retained frozen file changed.');
-            f.hasMembers = true;
-            await this.guards.append(['file', path, event.identity], signal);
-            for (const c of routes(String(r[2]), String(r[5]))) {
-              await ensure(c);
-              if (unit && !unit.channels.has(c)) {
-                await append(c, [c === 1 ? 'used-unit-open' : 'unit-open', unit.descriptor]);
-                unit.channels.add(c);
-              }
-              await append(c, c === 1 ? ['used', String(r[1])] : ['file', path, event.identity]);
-            }
-          } else if (tag === 'unit-close') {
-            if (!unit) throw new Error('Missing observed unit.');
-            const maven = frames[frames.length - 1].maven;
-            if (maven) {
-              maven.payload = [...unit.channels].some((c) => c !== 1);
-              if (maven.payload && maven.protectedArtifact)
-                throw new Error('Incomplete Maven direct-file contribution.');
-            }
-            for (const c of unit.channels)
-              await append(c, [c === 1 ? 'used-unit-close' : 'unit-close']);
-            // A deleted unit may leave protected files/directories. They are verified
-            // by the original projection, but contribute no worker payload.
-            frames[frames.length - 1].hasMembers = true;
-            unit = null;
-          } else if (tag === 'dir-close') {
-            expectedFile = null;
-            const f = frames[frames.length - 1];
-            if (f.actual) {
-              await next('directory-close', f.path);
-              while (await projectionNext(f)) f.omitted++;
-              if (f.omitted !== f.planned) throw new Error('Unexplained physical source omission.');
-              if (!f.affected && !sameNative(f.before, f.actual, true))
-                throw new Error('Unexplained directory change.');
-              await this.guards.append(['directory', f.path, f.actual], signal);
-              if (
-                f.path &&
-                !f.hasMembers &&
-                (!unit || unit.unowned) &&
-                !isWorkspaceScaffolding(model, f.path)
-              ) {
-                let partition: string | undefined;
-                try {
-                  partition = model.owner(f.path + '/.workspace-directory-probe')[0];
-                } catch {
-                  /* Unowned scaffolding. */
-                }
-                if (partition !== undefined && unit?.unowned)
-                  throw new Error('Unowned workspace contains managed members.');
-                if (partition !== undefined)
-                  for (const c of routes(partition, 'upsert')) await ensure(c);
-              }
-              if (f.path === '') for (let c = 0; c < this.channels.length; c++) await ensure(c);
-              for (const c of f.open) await append(c, ['dir-close', f.path, f.actual]);
-            } else {
-              while (await projectionNext(f)) f.omitted++;
-              if (f.omitted !== f.planned)
-                throw new Error('Protected child removed with deleted subtree.');
-              if (!unit && !f.hasMembers)
-                throw new Error('Missing directory without deleted unit.');
-            }
-            frames.pop()!.release();
-            if (f.path === '') {
-              finalEnd = raw.end;
-              finalRecord = raw.index;
-            }
-          }
-        } finally {
-          release();
-        }
-      }
-      if (!(await peek()).done) throw new Error('Unexpected live source member.');
-      if (removed) {
-        if (!view.gcProgress) throw new Error('Missing completed GC progress.');
-        const p = tuple(await this.store.readDocument(view.gcProgress, 'gc-progress'));
-        equal(p[3], view.observations, 'GC source observations');
-        const c = tuple(p[4]);
-        if (
-          p[5] !== null ||
-          c[2] !== finalEnd ||
-          c[3] !== finalRecord ||
-          c[5] !== null ||
-          (await this.store.readFixed(this.store.prefix + 'gc-intent.json')) !== null
-        )
-          throw new Error('GC progress is not at the final source boundary.');
-      }
-      for (const spool of [...this.channels, this.guards]) spool.seal(signal);
+      await visit(index.root);
+      for (const channel of this.channels) channel.seal(signal);
     } finally {
-      await live.return?.(undefined);
-      for (const f of frames) f.release();
-      await projections.close();
+      for (const frame of frames) frame.release();
     }
   }
   async assertStable(signal: AbortSignal): Promise<void> {
-    for await (const row of this.guards.rows(signal)) {
-      const r = tuple(row),
-        path = String(r[1]),
-        expected = r[2] as NativeIdentity;
-      this.store.root.work.stats++;
-      const raw = await lstat(path ? this.store.root.resolve(path) : this.store.root.path, {
-        bigint: true,
-      });
-      if ((raw.isFile() && raw.nlink !== 1n) || !sameNative(expected, nativeIdentity(raw), true))
-        throw new Error('Frozen source changed before package sealing.');
-    }
-    await this.store.root.verifyRoot();
     signal.throwIfAborted();
+    this.owner.assert();
+    // NativeReadPhase already checks every emitted directory and every forward-read
+    // body at its consuming boundary. The original phase does not support concurrent writers.
   }
   async *events(signal: AbortSignal): AsyncGenerator<WorkerEvent> {
     for (const spool of this.channels) {
+      this.owner.assert();
       const phase = new NativeReadPhase(this.store.root);
       yield { type: 'channel-open' };
       for await (const value of spool.rows(signal)) {
-        const r = tuple(value),
-          type = String(r[0]);
+        const row = tuple(value),
+          type = String(row[0]);
         if (type === 'dir-open' || type === 'dir-close') {
-          const path = String(r[1]),
-            native = r[2] as NativeIdentity;
+          const path = String(row[1]),
+            native = row[2] as NativeIdentity;
           if (type === 'dir-open') await phase.enter(path, native);
           else await phase.leave(path, native);
           yield { type, path };
         } else if (type === 'file') {
-          const path = String(r[1]),
-            native = r[2] as NativeIdentity;
+          const path = String(row[1]),
+            native = row[2] as NativeIdentity;
           yield {
             type,
             path,
@@ -502,26 +274,33 @@ export class WorkerSources {
             bytes: phase.read(path, native, signal),
             assertStable: async (s) => {
               s.throwIfAborted();
+              this.owner.assert();
             },
           };
-        } else if (type === 'used') yield { type, name: String(r[1]) };
+        } else if (type === 'used') yield { type, name: String(row[1]) };
         else if (type === 'unit-open' || type === 'used-unit-open')
-          yield { type, unit: unitSchema.parse(r[1]) };
+          yield { type, unit: unitSchema.parse(row[1]) };
         else if (type === 'unit-close' || type === 'used-unit-close') yield { type };
-        else throw new Error('Invalid source event.');
+        else throw new Error('Invalid selected worker source event.');
       }
       yield { type: 'channel-close' };
     }
   }
   async dispose(): Promise<void> {
-    const results = await Promise.allSettled(
-      [...this.channels, this.guards].map((s) => s.dispose()),
-    );
-    const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (errors.length)
-      throw new AggregateError(
-        errors.map((r) => r.reason),
-        'Source spool cleanup failed.',
+    if (this.disposed) return;
+    this.disposed = true;
+    try {
+      const results = await Promise.allSettled(this.channels.map((channel) => channel.dispose()));
+      const failed = results.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
       );
+      if (failed.length)
+        throw new AggregateError(
+          failed.map((result) => result.reason),
+          'Worker channel cleanup failed.',
+        );
+    } finally {
+      this.releaseOwner();
+    }
   }
 }

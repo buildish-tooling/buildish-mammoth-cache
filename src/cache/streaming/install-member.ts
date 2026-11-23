@@ -30,7 +30,6 @@ export async function checkInstallMember(
   physical: string,
   options: {
     renamed: boolean;
-    hash: boolean;
     partial?: boolean;
     rootNative?: NativeIdentity;
     observed?: (row: Value, physical: string, native: NativeIdentity) => Promise<void>;
@@ -48,23 +47,12 @@ export async function checkInstallMember(
   const phase = new NativeReadPhase(
     store.root,
     actualRoot[2] === 'file' ? parentPath(physical) : physical,
-    readers.hashes,
   );
   if (actualRoot[2] === 'file') {
     store.root.work.stats++;
     const raw = await lstat(store.root.resolve(physical), { bigint: true });
     if (raw.nlink !== 1n || !sameNative(actualRoot, nativeIdentity(raw), true))
       throw new Error('Aliased/changed install root file.');
-  }
-  let fileParent: { path: string; native: NativeIdentity } | undefined;
-  if (actualRoot[2] === 'file' && options.hash) {
-    const parent = parentPath(physical);
-    store.root.work.stats++;
-    fileParent = {
-      path: parent,
-      native: nativeIdentity(await lstat(store.root.resolve(parent), { bigint: true })),
-    };
-    await phase.enter(parent, fileParent.native);
   }
   const actual =
     actualRoot[2] === 'directory'
@@ -141,12 +129,6 @@ export async function checkInstallMember(
           (e.tag === 'file' && e.links !== '1')
         )
           throw new Error('Install member native identity changed.');
-        if (
-          e.tag === 'file' &&
-          options.hash &&
-          (await phase.hash(e.nativePath, observed, null, signal)) !== row[3]
-        )
-          throw new Error('Install member hash changed.');
         if (options.observed) await options.observed(value, e.nativePath, observed);
         head = await next();
       },
@@ -157,7 +139,6 @@ export async function checkInstallMember(
     const after = await stat(physical);
     if (!after || !sameNative(actualRoot, after, true))
       throw new Error('Install member changed during validation.');
-    if (fileParent) await phase.leave(fileParent.path, fileParent.native);
     return after;
   } finally {
     await actual.return(undefined as never);

@@ -17,6 +17,8 @@
 import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { Writable } from 'node:stream';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import * as encoding from '../../../src/cache/streaming/encoding';
 import { afterEach, expect, it, vi } from 'vitest';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
@@ -173,6 +175,7 @@ it.each(['body', 'metadata'])(
   },
 );
 it('stages only provisional winners, hashes losers and repairs equivalent mode/time before sealing', async () => {
+  const hashes = vi.spyOn(encoding, 'H');
   const f = await fixture(),
     a = await archive(f, 'A', 'abc', 1000, 0o755),
     b = await archive(f, 'B', 'abc', 2000, 0o644);
@@ -181,8 +184,11 @@ it('stages only provisional winners, hashes losers and repairs equivalent mode/t
     ordinaryOrder: ['A', 'B'],
     ordinaryPolicy: 'strict',
   });
+  expect(hashes.mock.calls.filter(([domain]) => domain === 'header')).toEqual([]);
+  hashes.mockRestore();
   expect(result.stage.work.bodyBytes).toBe(3);
   expect(result.readers.map((r) => r.work.bodyBytes)).toEqual([3, 3]);
+  expect(result.readers.map((r) => r.work.archivePasses)).toEqual([1, 1]);
   expect(result.readers.every((r) => r.work.peakPending === 1)).toBe(true);
   const part = result.partitions[0],
     rows = [];
@@ -352,5 +358,24 @@ it('destroys unstarted owned streams when the second membership acquisition fail
   } finally {
     spy.mockRestore();
   }
+  expect(f.budget.retained).toBe(0);
+});
+
+it('rejects a corrupt losing body before accepting either contribution under the five-field metadata grammar', async () => {
+  const f = await fixture(),
+    a = await archive(f, 'A'),
+    b = await archive(f, 'B'),
+    tar = gunzipSync(b.bytes),
+    header = tar.indexOf(Buffer.from('payload/aggregate/f000\0'));
+  expect(header).toBeGreaterThanOrEqual(0);
+  expect(header % 512).toBe(0);
+  tar[header + 512] ^= 1;
+  await expect(
+    mergeWorkerArchives(f.store, [a, { ...b, source: byteSource(gzipSync(tar)) }], {
+      budget: f.budget,
+      ordinaryOrder: ['A', 'B'],
+      ordinaryPolicy: 'strict',
+    }),
+  ).rejects.toThrow('file metadata');
   expect(f.budget.retained).toBe(0);
 });

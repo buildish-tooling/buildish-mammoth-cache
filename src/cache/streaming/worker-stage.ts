@@ -17,7 +17,7 @@
 import { mkdir, open, lstat, chmod, utimes } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { add, encodeRecord, tuple } from './encoding';
+import { add, encodeRecord } from './encoding';
 import {
   nativeIdentity,
   sameNative,
@@ -60,6 +60,7 @@ export class WorkerStage {
   private sealed = false;
   private adopted = false;
   private disposed = false;
+  private retiring = false;
   private retired = false;
   private constructor(
     readonly store: OwnedStore,
@@ -268,17 +269,30 @@ export class WorkerStage {
     return Object.freeze([...this.partitions.values()]);
   }
   adopt(): void {
-    if (this.disposed) throw new Error('Disposed worker stage.');
+    if (this.disposed || this.retiring) throw new Error('Disposed worker stage.');
     this.adopted = true;
+  }
+  /** Original final install projection only; generic stage data grants no merge authority. */
+  static assertPublishedInstall(
+    stage: WorkerStage,
+    store: OwnedStore,
+    part: StagedPartition,
+  ): void {
+    if (
+      stage.store !== store ||
+      stage.disposed ||
+      stage.retiring ||
+      stage.adopted ||
+      !stage.sealed ||
+      stage.frames.length ||
+      stage.partitions.get(part.partition) !== part ||
+      part.nativeRoot !== store.prefix + 'install/' + part.partition ||
+      stage.moves.get(part.partition)?.target !== part.nativeRoot
+    )
+      throw new Error('Unbound/retired final worker install projection.');
   }
   private async rollback(): Promise<void> {
     if (this.adopted || !this.moves.size) return;
-    const state = await this.store.state();
-    if (
-      (await this.store.readFixed(this.store.prefix + 'install-intent.json')) ||
-      (state && tuple(state)[11] !== null)
-    )
-      throw new Error('Install still owns published worker sources.');
     for (const [partition, move] of [...this.moves].reverse()) {
       const source = await this.store.root.stat(move.source),
         target = await this.store.root.stat(move.target);
@@ -299,6 +313,7 @@ export class WorkerStage {
   }
   async dispose(): Promise<void> {
     if (this.disposed) return;
+    this.retiring = true; // Revoke producer authority before cleanup can fail or suspend.
     while (this.frames.length) {
       const f = this.frames.pop()!;
       for (const binding of f.directories.values()) binding.release();

@@ -18,17 +18,13 @@ import { lstat, writeFile, opendir } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { canonical, add, equal, encodeRecord, decodeRecord, type Value } from './encoding';
 import { sameNative, nativeIdentity, missing, type NativeIdentity } from './native';
-import { openVerifiedNativeEvidence } from './install-evidence';
-import { installCurrentRows } from './install-current';
-import { buildInstallIndex, IndexDirectories, indexedEntries, indexedNode } from './install-index';
+import { IndexDirectories, indexedEntries, indexedNode } from './install-index';
 import { InstallScratch } from './install-scratch';
 import { isMavenTransientFile } from '../maven-repository';
 import { isCacheMetadataPath } from '../metadata-paths';
-import type { LocalRow } from './local-stream';
 import { retireOwnedDirectory } from './owned-retirement';
-import { EvidenceFile } from './evidence-file';
 import { assertFrozenInstall, takeInstallIndexes, type FrozenInstall } from './install-plan';
-import type { OwnedStore, Reference } from './owned-store';
+import type { OwnedStore } from './owned-store';
 import { parentPath, type WorkingBudget } from './tree-state';
 
 /** Bounded parent-only lookup files; data rows remain solely in sealed plan/evidence. */
@@ -68,10 +64,9 @@ export class AdmittedParents {
 }
 const admitted = new WeakSet<object>();
 export class InstallAdmission {
-  readonly source: (EvidenceFile | null)[];
-  readonly old: (EvidenceFile | null)[];
   kind: 'file' | 'directory' = 'file';
   private scratch: InstallScratch | null = null;
+  operations!: InstallScratch;
   private directories: IndexDirectories | null = null;
   readonly sourceDirectories: (IndexDirectories | null)[];
   async currentDirectory(path: string): Promise<NativeIdentity | null> {
@@ -85,9 +80,7 @@ export class InstallAdmission {
     readonly initialState: Value,
     private readonly namespaceNative: NativeIdentity,
   ) {
-    this.source = frozen.store.codec.options.model.partitions.map(() => null);
-    this.old = this.source.map(() => null);
-    this.sourceDirectories = this.source.map(() => null);
+    this.sourceDirectories = frozen.store.codec.options.model.partitions.map(() => null);
     admitted.add(this);
   }
   assert(store: OwnedStore) {
@@ -104,7 +97,7 @@ export class InstallAdmission {
     assertFrozenInstall(store, frozen);
     signal.throwIfAborted();
     const state = await store.state();
-    if (!Array.isArray(state) || state[4] !== 'prepare-pending' || state[11] !== null)
+    if (!Array.isArray(state) || state[4] !== 'prepare-pending')
       throw new Error('Install requires idle prepare-pending state.');
     const bindings = store.codec.schemas.documents.bindings.parse(
       await store.readDocument(state[5], 'bindings'),
@@ -113,7 +106,6 @@ export class InstallAdmission {
       throw new Error('Frozen directory limit differs from persisted invocation policy.');
     const maxDirectoryEntries = frozen.maxDirectoryEntries;
     await store.assertNoIntents();
-    await store.resumeRetirements(budget);
     await store.makeParents(store.prefix + 'backups/pending');
     const backupParent = await store.root.stat(store.prefix + 'backups');
     if (
@@ -132,59 +124,13 @@ export class InstallAdmission {
       (await store.root.stat(prefix.slice(0, -1)))!,
     );
     try {
-      // Re-establish once, co-reading current bytes/native facts into a bounded index.
+      // Borrow the original completed current index; decoded metadata grants no authority.
       const reused = await takeInstallIndexes(store, frozen);
-      const scratch = reused?.scratch ?? (await InstallScratch.create(store, budget));
+      if (!reused) throw new Error('Install indexes already consumed or missing.');
+      const scratch = reused.scratch;
       result.scratch = scratch;
-      const actual = installCurrentRows(store, { budget, signal, maxDirectoryEntries });
-      async function* compared(): AsyncGenerator<LocalRow> {
-        try {
-          for await (const record of store.rows(
-            frozen.current,
-            'install-current',
-            { budget, partition: null, maxDirectoryEntries },
-            signal,
-          )) {
-            const value = record.value as readonly Value[];
-            if (value[0] !== 'local-stream') {
-              const observed = await actual.next();
-              if (value[0] === 'local-end') {
-                if (!observed.done) throw new Error('Trailing current member.');
-              } else {
-                if (
-                  observed.done ||
-                  !Array.isArray(observed.value) ||
-                  value[0] !== observed.value[0] ||
-                  value[1] !== observed.value[1]
-                )
-                  throw new Error('Frozen current membership changed.');
-                if (value[0] === 'parent-child')
-                  equal(value, observed.value, 'protected current child');
-                else if (
-                  !sameNative(value[2] as NativeIdentity, observed.value[2] as NativeIdentity, true)
-                )
-                  throw new Error('Frozen current identity changed.');
-              }
-            }
-            yield record;
-          }
-        } finally {
-          await actual.return(undefined);
-        }
-      }
-      let index: number;
-      if (reused) {
-        for await (const row of compared()) void row;
-        index = reused.current;
-      } else
-        index = await buildInstallIndex(
-          scratch,
-          compared(),
-          store.codec.options.model,
-          null,
-          signal,
-        );
-      const directories = new IndexDirectories(scratch, index);
+      result.operations = await InstallScratch.create(store, budget);
+      const directories = new IndexDirectories(scratch, reused.current);
       result.directories = directories;
       let lastMaven = '';
       const checkedMaven = new AdmittedParents(store, prefix + 'maven-');
@@ -220,66 +166,10 @@ export class InstallAdmission {
       }
       for (const input of frozen.inputs) {
         const p = store.codec.options.model.partitions.findIndex((v) => v[0] === input.partition);
-        const start = scratch.position;
-        const observed = reused
-          ? undefined
-          : async (row: LocalRow) => {
-              await scratch.append([
-                'checked-source-row',
-                row.value,
-                row.start,
-                row.end,
-                row.record,
-              ]);
-            };
-        result.source[p] =
-          store.codec.options.model.partitions[p][3] === 'single-writer'
-            ? await openVerifiedNativeEvidence(
-                store,
-                input.evidence,
-                input.nativeRoot,
-                input.partition,
-                { budget, signal, maxDirectoryEntries },
-                observed,
-              )
-            : await EvidenceFile.open(
-                store,
-                input.evidence,
-                input.partition,
-                budget,
-                signal,
-                observed,
-                maxDirectoryEntries,
-              );
-        const end = scratch.position;
-        async function* sourceRows(): AsyncGenerator<LocalRow> {
-          for await (const value of scratch.rows(start, end)) {
-            const r = value as readonly Value[];
-            yield { value: r[1], start: Number(r[2]), end: Number(r[3]), record: Number(r[4]) };
-          }
-        }
-        const sourceIndex =
-          reused?.sources.get(p) ??
-          (await buildInstallIndex(
-            scratch,
-            sourceRows(),
-            store.codec.options.model,
-            input.partition,
-            signal,
-          ));
+        const sourceIndex = reused.sources.get(p);
+        if (sourceIndex === undefined) throw new Error('Missing admitted source index.');
         result.sourceDirectories[p] = new IndexDirectories(scratch, sourceIndex);
       }
-      for (let p = 0; p < frozen.preimages.length; p++)
-        if (frozen.preimages[p])
-          result.old[p] = await EvidenceFile.open(
-            store,
-            frozen.preimages[p]!,
-            store.codec.options.model.partitions[p][0],
-            budget,
-            signal,
-            undefined,
-            maxDirectoryEntries,
-          );
       const pending: { path: string; release: () => void }[] = [];
       const parentStack: { path: string; expected: NativeIdentity | null; release: () => void }[] =
         [];
@@ -344,6 +234,8 @@ export class InstallAdmission {
           await checkParent(frame);
         }
       }
+      let admittedSource: NativeIdentity | null = null,
+        admittedOld: NativeIdentity | null = null;
       try {
         for await (const row of store.rows(
           frozen.plan,
@@ -351,9 +243,11 @@ export class InstallAdmission {
           { budget, partition: null, installKind: () => result.kind, maxDirectoryEntries },
           signal,
           async (value) => {
+            admittedSource = null;
+            admittedOld = null;
             if (!Array.isArray(value)) throw new Error('Invalid install row.');
             if (value[0] === 'install-context') {
-              equal(value[1], frozen.current, 'install current context');
+              equal(value[1], frozen.metadata.nonce, 'process-owned install context');
               return;
             }
             if (value[0] === 'install-parent') {
@@ -401,47 +295,51 @@ export class InstallAdmission {
               op[3] === null
                 ? -1
                 : frozen.inputs.findIndex((i) => op[3] === i.nativeRoot + '/' + op[2]);
-            let p = -1,
-              rootNative: NativeIdentity | null = null;
+            let p = -1;
             if (op[3] !== null) {
               if (sourcePartition < 0)
                 throw new Error('Source escapes selected disposable staging.');
               const input = frozen.inputs[sourcePartition];
               p = store.codec.options.model.partitions.findIndex((v) => v[0] === input.partition);
-              equal(op[4]![1], input.evidence, 'selected source reference');
-              result.kind = await result.source[p]!.member(
-                op[4]!,
-                op[2],
-                null,
-                async (entry) => {
-                  if (rootNative === null)
-                    rootNative = (entry as readonly Value[])[2] as NativeIdentity;
-                },
-                signal,
-              );
+              let rootNative: NativeIdentity;
+              const member = await result.sourceDirectories[p]!.member(op[2]);
+              if (!member) throw new Error('Missing selected source member.');
+              try {
+                const node = member.node;
+                const binding = frozen.metadata.parse(op[4]!, 'source', input.partition);
+                const selected = await indexedNode(scratch, binding[4]);
+                try {
+                  equal(selected.node, node, 'selected metadata source node');
+                } finally {
+                  selected.release();
+                }
+                if (node[1] !== 'file' && node[1] !== 'directory')
+                  throw new Error('Unsupported source member.');
+                result.kind = node[1];
+                rootNative = node[3] as NativeIdentity;
+                admittedSource = rootNative;
+              } finally {
+                member.release();
+              }
               const native = await direct(op[3]);
               if (!native || !rootNative || !sameNative(native, rootNative, true))
                 throw new Error('Selected source root changed.');
             }
             let oldNative: NativeIdentity | null = null;
             if (op[5] !== null) {
-              const old = op[5][1] as Reference,
-                part = frozen.preimages.findIndex((ref) => ref?.[2] === old[2]);
-              if (part < 0 || (p >= 0 && p !== part))
-                throw new Error('Unbound/mixed preimage partition.');
-              p = part;
-              const oldKind = await result.old[p]!.member(
-                op[5],
-                op[2],
-                null,
-                async (entry) => {
-                  if (oldNative === null)
-                    oldNative = (entry as readonly Value[])[2] as NativeIdentity;
-                },
-                signal,
+              let oldKind: 'file' | 'directory';
+              const binding = frozen.metadata.parse(op[5], 'current');
+              const part = store.codec.options.model.partitions.findIndex(
+                (v) => v[0] === binding[3],
               );
+              if (part < 0 || (p >= 0 && p !== part))
+                throw new Error('Mixed metadata preimage partition.');
+              const node = await frozen.metadata.reader(op[5]).rootNode(op[5], op[2], null);
+              oldKind = node[1] as 'file' | 'directory';
+              oldNative = node[3] as NativeIdentity;
               if (op[3] === null) result.kind = oldKind;
             }
+            admittedOld = oldNative;
             if (op[7] !== null && op[7] !== store.prefix + 'backups/' + String(op[1]))
               throw new Error('Backup namespace/index mismatch.');
             if (op[7] !== null && (await store.root.stat(op[7])))
@@ -454,7 +352,15 @@ export class InstallAdmission {
               throw new Error('Frozen preimage root changed.');
           },
         ))
-          void row;
+          await result.operations.append([
+            'admitted-row',
+            row.value,
+            admittedSource,
+            admittedOld,
+            row.start,
+            row.end,
+            row.record,
+          ]);
         while (parentStack.length) await leaveParent();
       } finally {
         for (const frame of parentStack.splice(0)) frame.release();
@@ -469,24 +375,12 @@ export class InstallAdmission {
       throw error;
     }
   }
-  async before(value: Value, signal: AbortSignal): Promise<void> {
-    if (!Array.isArray(value) || value[0] !== 'install') return;
-    const op = this.frozen.store.codec.schemas.rows.install.parse(value),
-      ref = (op[4] ?? op[5])!;
-    const reader = [...this.source, ...this.old].find((v) => v?.reference[2] === ref[1][2]);
-    if (!reader) throw new Error('Unbound execution evidence reader.');
-    this.kind = await reader.member(ref, op[2], null, async () => {}, signal);
-  }
   async close() {
     admitted.delete(this);
+    this.frozen.metadata.close();
     this.directories?.close();
     for (const directory of this.sourceDirectories) directory?.close();
-    const closed = await Promise.allSettled([
-      this.scratch?.close(),
-      ...[...this.source, ...this.old]
-        .filter((v): v is EvidenceFile => v !== null)
-        .map((v) => v.close()),
-    ]);
+    const closed = await Promise.allSettled([this.scratch?.close(), this.operations?.close()]);
     const disposed = await Promise.allSettled([
       retireOwnedDirectory(
         this.frozen.store,

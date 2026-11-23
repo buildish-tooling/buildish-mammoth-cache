@@ -95,6 +95,15 @@ export interface ResolvedModel {
   purge(path: string): readonly string[];
 }
 export function resolveModel(input: unknown, prefix: string, schemaVersion: number): ResolvedModel {
+  return resolveModelWithProfiles(input, prefix, schemaVersion, STREAMING_PROFILES);
+}
+
+function resolveModelWithProfiles(
+  input: unknown,
+  prefix: string,
+  schemaVersion: number,
+  profiles: { readonly [K in keyof typeof STREAMING_PROFILES]: string },
+): ResolvedModel {
   const raw = requireTuple(input as Value, 'model', 5);
   const partitions = requireTuple(raw[4]);
   if (partitions.length < 1 || partitions.length > 64)
@@ -126,7 +135,7 @@ export function resolveModel(input: unknown, prefix: string, schemaVersion: numb
     prefix,
     schemaVersion,
     id,
-    ...Object.values(STREAMING_PROFILES),
+    ...Object.values(profiles),
   ] as const;
   const family = streamingFamilyId(tuple[2], H('family', familyProjection));
   const hard = createCacheGlobMatcher(tuple[3]);

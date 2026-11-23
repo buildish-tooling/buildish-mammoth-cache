@@ -16,13 +16,12 @@
 
 import { afterEach, expect, it, vi } from 'vitest';
 import { sep } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, rename, mkdir } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
 import { installFixture } from './install-fixture';
 import { resolveModel } from '../../../src/cache/streaming/model';
-import { freezeInstallPlan } from '../../../src/cache/streaming/install-plan';
-import { executeInstall, recoverInstall } from '../../../src/cache/streaming/install-execute';
-import { OwnedStore } from '../../../src/cache/streaming/owned-store';
+import { freezeInstallPlan } from './install-plan-fixture';
+import { executeInstall } from '../../../src/cache/streaming/install-execute';
 const counts = vi.hoisted(() => ({ prefix: '', renames: 0, exdev: false }));
 vi.mock('node:fs/promises', async (original) => {
   const actual = await original<typeof FsPromises>();
@@ -91,7 +90,7 @@ it.each([16, 256])(
     }))
       rows.push(row.value);
     expect(rows.filter((r) => Array.isArray(r) && r[0] === 'install')).toHaveLength(4);
-    counts.prefix = f.store.root.resolve(f.store.prefix + 'install') + sep;
+    counts.prefix = f.store.root.resolve(f.store.prefix + 'base') + sep;
     await executeInstall(f.store, plan, f.budget, { batchOperations: 1, batchBytes: 1 });
     expect(counts.renames).toBe(4);
     for (let p = 0; p < 4; p++) {
@@ -113,7 +112,7 @@ it('moves file-only included structural roots without a fabricated owner probe',
     input = await f.incoming('data', { 'data/a.bin': 'a', 'data/deep/b.bin': 'b' });
   expect(() => model.owner('data/.workspace-directory-probe')).toThrow();
   const plan = await freezeInstallPlan(f.store, [input], f.budget);
-  counts.prefix = f.store.root.resolve(f.store.prefix + 'install') + sep;
+  counts.prefix = f.store.root.resolve(f.store.prefix + 'base') + sep;
   await executeInstall(f.store, plan, f.budget);
   expect(counts.renames).toBe(1);
   expect(await readFile(f.store.root.resolve('data/deep/b.bin'), 'utf8')).toBe('b');
@@ -127,52 +126,52 @@ it('keeps existing Maven coordinates and moves only missing complete coordinate 
     'repository/new/b/1/b.jar': 'jar-b',
   });
   const plan = await freezeInstallPlan(f.store, [input], f.budget);
-  counts.prefix = f.store.root.resolve(f.store.prefix + 'install') + sep;
+  counts.prefix = f.store.root.resolve(f.store.prefix + 'base') + sep;
   await executeInstall(f.store, plan, f.budget);
   expect(counts.renames).toBe(1);
   expect(await readFile(f.store.root.resolve('repository/local/1/keep.jar'), 'utf8')).toBe('local');
   expect(await readFile(f.store.root.resolve('repository/new/a/1/a.pom'), 'utf8')).toBe('pom');
 });
-it.each(['unknown-descendant', 'changed-body', 'destination-race'])(
-  'rejects %s at the actual directory boundary before a payload rename',
+it.each(['source-root-replaced', 'destination-occupied'] as const)(
+  'rejects %s at the selected directory boundary before payload rename',
   async (kind) => {
     const f = await fixture(),
-      input = await f.incoming('data', { 'data/deep/a': 'original' });
-    const plan = await freezeInstallPlan(f.store, [input], f.budget);
-    let changed = false;
-    vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-      if (point !== 'install-intent-published' || changed) return;
-      changed = true;
-      if (kind === 'destination-race') await f.files('', { 'data/foreign': 'keep' });
-      else
-        await f.files(input.nativeRoot, {
-          [kind === 'unknown-descendant' ? 'data/deep/foreign.lock' : 'data/deep/a']: 'foreign',
-        });
-    });
-    counts.prefix = f.store.root.resolve(f.store.prefix + 'install') + sep;
+      input = await f.incoming('data', { 'data/deep/a': 'original' }),
+      plan = await freezeInstallPlan(f.store, [input], f.budget);
+    if (kind === 'destination-occupied') await f.files('', { 'data/foreign': 'keep' });
+    else {
+      await rename(
+        f.store.root.resolve(input.nativeRoot + '/data'),
+        f.store.root.resolve(input.nativeRoot + '/retained'),
+      );
+      await mkdir(f.store.root.resolve(input.nativeRoot + '/data'));
+    }
+    counts.prefix = f.store.root.resolve(f.store.prefix + 'base') + sep;
     await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow();
     expect(counts.renames).toBe(0);
-    expect(await f.store.readFixed(f.store.prefix + 'install-intent.json')).not.toBeNull();
-    if (kind === 'destination-race')
+    await f.store.assertNoIntents();
+    if (kind === 'destination-occupied')
       expect(await readFile(f.store.root.resolve('data/foreign'), 'utf8')).toBe('keep');
-    else expect(await f.store.root.stat('data')).toBeNull();
+    else {
+      expect(await f.store.root.stat('data')).toBeNull();
+      expect(
+        await readFile(f.store.root.resolve(input.nativeRoot + '/retained/deep/a'), 'utf8'),
+      ).toBe('original');
+    }
     expect(f.budget.retained).toBe(0);
   },
 );
-it('fails EXDEV without copy and retries the same directory intent after endpoint reconciliation', async () => {
+it('fails EXDEV without copy or recorded intent replay', async () => {
   const f = await fixture(),
     input = await f.incoming('data', { 'data/deep/a': 'body' });
   const plan = await freezeInstallPlan(f.store, [input], f.budget);
-  counts.prefix = f.store.root.resolve(f.store.prefix + 'install') + sep;
+  counts.prefix = f.store.root.resolve(f.store.prefix + 'base') + sep;
   counts.exdev = true;
   await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('cross device');
   expect(await f.store.root.stat('data')).toBeNull();
   expect(await readFile(f.store.root.resolve(input.nativeRoot + '/data/deep/a'), 'utf8')).toBe(
     'body',
   );
-  counts.exdev = false;
-  await recoverInstall(await OwnedStore.bind(f.root, f.store.codec), f.budget);
-  expect(await readFile(f.store.root.resolve('data/deep/a'), 'utf8')).toBe('body');
   await f.store.assertNoIntents();
   expect(f.budget.retained).toBe(0);
 });

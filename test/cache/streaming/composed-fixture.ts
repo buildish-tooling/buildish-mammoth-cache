@@ -22,8 +22,13 @@ import type { BaseCacheBackend } from '../../../src/cache/backend';
 export async function composedFixture(
   overrides: Partial<StreamingPrepareRequest> = {},
   model?: ResolvedModel,
+  configuration: Parameters<typeof installFixture>[1] = {},
+  tool: 'gradle' | 'maven' = 'maven',
 ) {
-  const f = await installFixture(model?.tuple[2] ?? 'maven', { model });
+  const f = await installFixture(model?.tuple[2] ?? configuration.model?.tuple[2] ?? tool, {
+    ...configuration,
+    model: model ?? configuration.model,
+  });
   let saved = '';
   const backend: BaseCacheBackend = {
     capabilities: { supportsExplicitSave: true, supportsNewestPrefixRestore: true },

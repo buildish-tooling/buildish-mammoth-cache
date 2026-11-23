@@ -18,12 +18,11 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
-import { beforeAll, afterAll, afterEach, expect, it } from 'vitest';
-import { installFixture } from './install-fixture';
+import { beforeAll, afterAll, expect, it } from 'vitest';
 import { OpenedInvocation } from '../../../src/cache/streaming/invocation';
-import { prepareStreaming } from '../../../src/cache/streaming/prepare';
+import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
 let directory: string, bundle: string;
-const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
+const roots: string[] = [];
 beforeAll(async () => {
   directory = await mkdtemp(path.resolve('build/prepare-process-'));
   bundle = directory + '/fixture.mjs';
@@ -40,84 +39,64 @@ beforeAll(async () => {
     },
   });
 });
-afterAll(() => rm(directory, { recursive: true, force: true }));
-afterEach(async () => {
-  for (const f of fixtures.splice(0)) {
-    expect(f.budget.retained).toBe(0);
-    await f.close();
-  }
+afterAll(async () => {
+  for (const root of [directory, ...roots]) await rm(root, { recursive: true, force: true });
 });
-function crash(root: string, point: string) {
+async function root() {
+  const value = await mkdtemp(path.resolve('build/prepare-root-'));
+  roots.push(value);
+  return value;
+}
+function run(mode: string, root: string, point = 'unused') {
+  return execFileSync(process.execPath, [bundle, mode, root, point], {
+    stdio: 'pipe',
+    timeout: 15000,
+  });
+}
+function crash(mode: string, root: string, point: string) {
   let status: unknown;
   try {
-    execFileSync(process.execPath, [bundle, 'start', root, point], { stdio: 'pipe' });
+    run(mode, root, point);
   } catch (error) {
     status = (error as { status: unknown }).status;
     if (status !== 73) process.stderr.write(String((error as { stderr?: Buffer }).stderr ?? error));
   }
   expect(status).toBe(73);
 }
-it.each([
-  'install-intent-published',
-  'prepare-base-installed',
-  'prepare-workers-installed',
-  'prepare-ready',
-])('cold retries actual composed prepare after process exit at %s', async (point) => {
-  const f = await installFixture('maven');
-  fixtures.push(f);
-  crash(f.root, point);
-  execFileSync(process.execPath, [bundle, 'retry', f.root, 'unused'], { stdio: 'pipe' });
-  const opened = await OpenedInvocation.current(f.root, f.budget);
-  expect(opened?.state[4]).toBe('build-ready');
-  expect(opened?.bindings[8][7]).toBe(12345);
-  expect(await readFile(f.store.root.resolve('data/keep'), 'utf8')).toBe('ordinary');
-  expect(await f.store.root.stat('state/stale')).toBeNull();
-  await opened!.store.assertNoIntents();
+it.each(['prepare-base-installed', 'prepare-workers-installed', 'prepare-ready'])(
+  'rejects interrupted main re-entry at %s without adopting old operation state',
+  async (point) => {
+    const value = await root();
+    crash('start', value, point);
+    expect(() => run('retry', value)).toThrow();
+    const budget = new WorkingBudget(),
+      opened = await OpenedInvocation.current(value, budget);
+    expect(opened?.state[4]).toBe(point === 'prepare-ready' ? 'build-ready' : 'prepare-pending');
+    expect(opened?.state).toHaveLength(8);
+    expect(opened?.bindings).toHaveLength(9);
+    expect(budget.retained).toBe(0);
+  },
+);
+it('runs successful local-v2 main and post in distinct actual OS processes', async () => {
+  const value = await root();
+  run('success', value);
+  const budget = new WorkingBudget(),
+    prepared = await OpenedInvocation.current(value, budget);
+  expect(prepared?.state[4]).toBe('build-ready');
+  run('post', value);
+  const completed = await OpenedInvocation.current(value, budget);
+  expect(completed?.state[4]).toBe('completed');
+  expect(completed?.state[7]?.[1]).toBe('published');
+  expect(await readFile(value + '/data/keep', 'utf8')).toBe('ordinary');
+  expect(budget.retained).toBe(0);
 });
-it('reconciles an old active install and retires its completed owner before any new provision/backend callback', async () => {
-  const f = await installFixture('maven');
-  fixtures.push(f);
-  crash(f.root, 'install-intent-published');
-  const order: string[] = [];
-  const ready = await prepareStreaming({
-    root: f.root,
-    model: f.model,
-    context: f.store.codec.options.context,
-    nonce: 'b'.repeat(32),
-    budget: f.budget,
-    policy: {
-      role: 'standalone',
-      access: 'writable',
-      restoreCleanup: 'none',
-      gcAgeMs: null,
-      ordinaryPolicy: 'strict',
-      ordinaryOrder: [],
-    },
-    currentRef: 'refs/heads/main',
-    captureTempDirectory: null,
-    artifactRetentionDays: 7,
-    cleanupEnabled: true,
-    saveAnchor: () => {},
-    cacheBackend: async () => {
-      order.push('backend');
-      return {
-        capabilities: { supportsExplicitSave: true, supportsNewestPrefixRestore: true },
-        isFeatureAvailable: () => true,
-        restoreCache: async () => undefined,
-        saveCache: async () => 1,
-        isMissingPathsError: () => false,
-      };
-    },
-    provision: async () => {
-      expect(await f.store.root.stat('state/stale')).toBeNull();
-      expect(await f.store.root.stat(f.store.prefix.slice(0, -1))).toBeNull();
-      order.push('provision');
-    },
-    installHooks: async () => {
-      order.push('hooks');
-    },
-    assertCurrent: (): undefined => {},
-  });
-  expect(order).toEqual(['provision', 'backend', 'hooks']);
-  expect(ready.store.codec.options.invocation).not.toBe(f.store.codec.options.invocation);
+it('rejects actual interrupted post after SDK source evacuation without replaying publication', async () => {
+  const value = await root();
+  run('success', value);
+  crash('post-crash', value, 'unused');
+  const budget = new WorkingBudget(),
+    interrupted = await OpenedInvocation.current(value, budget);
+  expect(interrupted?.state[4]).toBe('post-active');
+  expect(() => run('post', value)).toThrow();
+  expect(budget.retained).toBe(0);
 });

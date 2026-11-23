@@ -29,8 +29,8 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, it } from 'vitest';
-import { installFixture } from '../cache/streaming/install-fixture';
-import { initializeObservationFixture } from '../cache/streaming/observation-fixtures';
+import { composedFixture } from '../cache/streaming/composed-fixture';
+import { prepareStreaming } from '../../src/cache/streaming/prepare';
 import { installGradleLifecycleCapture } from '../../src/build-tool/gradle/lifecycle-capture';
 import { toGroovySingleQuotedString } from '../../src/build-tool/gradle/build-result-capture-scripts';
 import { ExclusiveWindow } from '../../src/cache/streaming/quiescence';
@@ -67,14 +67,10 @@ it.skipIf(!configured)(
       helper = root + '/invoke.cjs';
     await mkdir(guh);
     await mkdir(project);
-    const f = await installFixture('gradle', { root: await realpath(guh) });
+    const f = await composedFixture({}, undefined, { root: await realpath(guh) }, 'gradle');
     try {
-      await initializeObservationFixture(f);
-      const state = f.store.codec.schemas.documents['local-state'].parse(await f.store.state());
-      state[3]++;
-      state[4] = 'build-ready';
-      state[13] = null;
-      await f.store.updateState(state);
+      const ready = await prepareStreaming(f.request);
+      f.store = ready.store;
       await installGradleLifecycleCapture(f.store, { tempDirectory: root + '/reports' });
       await writeFile(
         helper,

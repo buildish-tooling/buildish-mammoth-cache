@@ -15,19 +15,22 @@
  */
 
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
-import { reconcileInvocation, type RecoveryOptions } from './recovery';
-import { PrepareFacts, localRecords } from './prepare-state';
-import { assertLifecycleWindow } from './post-admission';
+import type { LifecycleOptions } from './lifecycle-options';
+import { PostAttempt } from './lifecycle-attempt';
 import { captureObservations } from './observation-capture';
-import { executeGc } from './gc-execute';
-import { freezeWorkerArtifact, uploadWorkerArtifact } from './worker-service';
-import { rawWorkerBackend } from './worker-artifact-identity';
-import { FrozenWorkerArchive } from './worker-package';
+import type { ObservationIndex } from './observation-index';
+import { GcSurvivorOwner } from './gc-execute';
+import {
+  freezeWorkerArtifact,
+  uploadWorkerArtifact,
+  WorkerUploadUnconfirmed,
+} from './worker-service';
 import type { Failpoint } from './native';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 import type { PartitionSummaries } from './partition-summaries';
+import { settleNativeCleanup } from './native-operation';
 
-export interface WorkerPostRequest extends RecoveryOptions {
+export interface WorkerPostRequest extends LifecycleOptions {
   readonly anchor: InvocationAnchor;
   readonly fail?: Failpoint;
   readonly removeHooks?: () => Promise<void>;
@@ -35,132 +38,108 @@ export interface WorkerPostRequest extends RecoveryOptions {
   readonly summaries?: PartitionSummaries;
   readonly onWarning?: (message: string) => void;
 }
-// Protocol: docs/dev/cache-lifecycle-protocol.md#object-and-worker-receipts.
+/** One fresh post operation; no source/package pointer can authorize replay or upload retry. */
 export async function postStreamingWorker(input: WorkerPostRequest) {
-  const caller = Object.freeze({ ...input }),
-    opened = await OpenedInvocation.open(caller.anchor, caller.budget, caller.cleanupSignal),
-    request = Object.freeze({ ...caller, maxDirectoryEntries: opened.bindings[8][9] }),
-    store = await reconcileInvocation(opened, 'resume', request),
-    facts = await PrepareFacts.open(store, request);
+  const opened = await OpenedInvocation.open(input.anchor, input.budget, input.cleanupSignal),
+    request = Object.freeze({ ...input, maxDirectoryEntries: opened.bindings[8][9] }),
+    attempt = await PostAttempt.open(opened, request),
+    store = attempt.store;
+  let captured: ObservationIndex | undefined, owner: GcSurvivorOwner | undefined;
+  let failure: unknown,
+    answer: { outcome: 'abandoned' } | { outcome: 'worker-uploaded'; name: string } | undefined;
   try {
     if (
       store.codec.options.role !== 'distributed-worker' ||
       store.codec.options.access !== 'writable'
     )
       throw new Error('Worker post requires writable worker role.');
-    if (!facts.selection) throw new Error('Missing frozen prepare selection.');
-    const guard = () => assertLifecycleWindow(store, facts.bindings, request);
-    if (facts.state[4] === 'completed') {
-      await guard();
-      if (facts.state[14] !== 'worker-uploaded')
+    if (attempt.state[4] === 'completed') {
+      const terminal = attempt.state[7]!;
+      if (terminal[1] !== 'abandoned' && terminal[1] !== 'worker-uploaded')
         throw new Error('Worker has no completion artifact.');
-      return { outcome: 'worker-uploaded' as const, name: facts.state[12]![1] };
-    }
-    if (facts.state[4] === 'worker-uploaded') {
-      await guard();
-      await store.assertNoIntents();
-      const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-      state[3]++;
-      state[4] = 'completed';
-      state[14] = 'worker-uploaded';
-      await store.updateState(state);
-      await guard();
-      return { outcome: 'worker-uploaded' as const, name: state[12]![1] };
-    }
-    if (facts.state[4] === 'prepare-pending') {
-      await reconcileInvocation(
-        await OpenedInvocation.open(request.anchor, request.budget),
-        'abandon',
-        request,
-      );
-      throw new Error('Worker cannot upload failed prepare.');
-    }
-    await guard();
-    if (!facts.state[6]) {
+      await attempt.guard();
+      answer =
+        terminal[1] === 'abandoned'
+          ? { outcome: 'abandoned' }
+          : { outcome: 'worker-uploaded', name: terminal[4]! };
+    } else {
+      const options = { ...request, signal: attempt.signal, attempt };
       await request.removeHooks?.();
-      await guard();
-      await captureObservations(store, { ...request, summaries: request.summaries });
-    }
-    // Raw/retention capability admission follows observation freeze, precedes GC/body traversal.
-    const backend = await request.artifactBackend();
-    rawWorkerBackend(backend);
-    if (!backend.capabilities.supportsRetentionDays)
-      throw new Error('Worker backend lacks requested retention support.');
-    await guard();
-    let state = store.codec.schemas.documents['local-state'].parse(await store.state());
-    if (state[4] === 'observations-frozen') {
-      await executeGc(store, request);
-      state = store.codec.schemas.documents['local-state'].parse(await store.state());
-    }
-    let archive: FrozenWorkerArchive;
-    if (state[4] === 'gc-complete') {
-      if (!state[7]) {
-        const rows = store.codec.options.model.partitions
-          .filter((p) => p[3] === 'single-writer' && p[4] === store.codec.options.context[4])
-          .map((p) => ['worker-snapshot', p[0], state[6]]);
-        const sources = await store.writeStream(
-          'worker-sources',
-          { ...request, partition: null },
-          localRecords(rows),
-          request.signal,
-        );
-        await guard();
-        state[3]++;
-        state[7] = store.codec.schemas.ref('worker-sources').parse(sources);
-        await store.updateState(state);
-        await store.fail('worker-sources-pointer');
-      }
-      await guard();
-      archive = await freezeWorkerArtifact(
-        backend,
-        store,
-        { observations: state[6]!, gcProgress: state[10], workerSources: state[7]! },
-        request.budget,
-        request,
-      );
-      await guard();
-      state[3]++;
-      state[4] = 'package-frozen';
-      state[12] = [
-        store.codec.schemas.ref('worker-archive').parse(archive.reference),
-        archive.name,
-        archive.sha,
-        null,
-      ];
-      await request.fail?.('worker-package-before-pointer');
-      await store.updateState(state);
-      await store.fail('worker-package-pointer');
-      await request.fail?.('worker-package-pointer');
-    } else archive = await FrozenWorkerArchive.reopen(store, request.budget, request);
-    await guard();
-    state = store.codec.schemas.documents['local-state'].parse(await store.state());
-    if (!state[12]![3]) {
-      const receipt = await uploadWorkerArtifact(backend, archive, {
-        signal: request.signal,
-        retentionDays: facts.selection[4][3],
+      await attempt.guard();
+      const observation = await captureObservations(store, {
+        ...options,
+        retainIndex: true,
+        summaries: request.summaries,
       });
-      await guard();
-      state[3]++;
-      state[4] = 'worker-uploaded';
-      state[12]![3] = [
-        'artifact-receipt',
-        String(receipt.artifact.id),
-        receipt.artifact.name,
-        archive.sha,
-      ];
-      await store.updateState(state);
-      await store.fail('worker-receipt-pointer');
-      await request.fail?.('worker-receipt-pointer');
+      captured = observation.index!;
+      let backend: WorkflowArtifactBackend | undefined;
+      try {
+        backend = await request.artifactBackend();
+      } catch {
+        /* outgoing provider unavailable */
+      }
+      if (
+        !backend ||
+        !backend.capabilities.supportsRawWorkerArchives ||
+        !backend.capabilities.supportsRetentionDays
+      ) {
+        request.onWarning?.(
+          'Worker publication abandoned: raw upload/retention backend unavailable.',
+        );
+        await captured.dispose();
+        captured = undefined;
+        await attempt.finish(['outcome', 'abandoned', null, null, null]);
+        answer = { outcome: 'abandoned' };
+      } else {
+        owner = await GcSurvivorOwner.execute(captured, options);
+        captured = undefined;
+        const archive = await freezeWorkerArtifact(
+          backend,
+          store,
+          { survivors: owner },
+          request.budget,
+          options,
+        );
+        await attempt.guard();
+        let receipt: Awaited<ReturnType<typeof uploadWorkerArtifact>> | undefined;
+        try {
+          receipt = await uploadWorkerArtifact(backend, archive, {
+            signal: attempt.signal,
+            retentionDays: attempt.handoff.header[5],
+          });
+        } catch (error) {
+          if (!(error instanceof WorkerUploadUnconfirmed)) throw error;
+          request.onWarning?.(error.message);
+        }
+        if (receipt) {
+          await attempt.guard();
+          await archive.retireUploaded();
+          await owner.dispose();
+          owner = undefined;
+          await attempt.finish([
+            'outcome',
+            'worker-uploaded',
+            null,
+            receipt.artifact.id,
+            receipt.artifact.name,
+          ]);
+          answer = { outcome: 'worker-uploaded', name: receipt.artifact.name };
+        } else {
+          await owner.dispose();
+          owner = undefined;
+          await attempt.finish(['outcome', 'abandoned', null, null, null]);
+          answer = { outcome: 'abandoned' };
+        }
+      }
     }
-    await guard();
-    await store.assertNoIntents();
-    state[3]++;
-    state[4] = 'completed';
-    state[14] = 'worker-uploaded';
-    await store.updateState(state);
-    await guard();
-    return { outcome: 'worker-uploaded' as const, name: archive.name };
-  } finally {
-    facts.close();
+  } catch (error) {
+    failure = error;
   }
+  try {
+    await settleNativeCleanup([() => owner?.dispose(), () => captured?.dispose()], failure);
+  } finally {
+    attempt.close();
+  }
+  if (failure !== undefined) throw failure;
+  return answer!;
 }

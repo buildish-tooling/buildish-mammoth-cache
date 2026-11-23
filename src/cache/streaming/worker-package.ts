@@ -14,16 +14,15 @@
  * limitations under the License.
  */
 
+import { unlink } from 'node:fs/promises';
 import { PassThrough, Readable } from 'node:stream';
 import path from 'node:path';
 import type { OwnedStore, Reference } from './owned-store';
 import { nativeIdentity, sameNative, type NativeIdentity } from './native';
 import { WorkerSources, type WorkerSourceView } from './worker-walk';
 import { DiskMembership } from './worker-spool';
-import { readWorkerArchive, writeWorkerArchive, type WorkerWriteWork } from './worker-codec';
+import { writeWorkerArchive, type WorkerWriteWork } from './worker-codec';
 import type { WorkerSummary } from './worker-state';
-import { equal } from './encoding';
-import { workerArtifactName } from './worker-artifact-identity';
 import type { WorkingBudget } from './tree-state';
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') {
@@ -34,9 +33,29 @@ function freeze<T>(value: T): T {
 }
 const genuine = new WeakSet<object>();
 // Protocol: docs/dev/cache-protocol.md#worker-transport and docs/dev/cache-lifecycle-protocol.md#object-and-worker-receipts.
-// Completed immutable bytes, stable basename and native identity are the ONLY retry
-// authority. Reopening a caller-supplied object cannot manufacture this capability.
+// Completed immutable bytes, stable basename and native identity authorize one upload.
+// No serialized package pointer grants retry or cleanup authority.
 export class FrozenWorkerArchive {
+  #upload: 'fresh' | 'active' | 'confirmed' | 'unconfirmed' | 'retired' = 'fresh';
+  claimUpload(): void {
+    if (this.#upload !== 'fresh') throw new Error('Worker package upload already attempted.');
+    this.#upload = 'active';
+  }
+  settleUpload(confirmed: boolean): void {
+    if (this.#upload !== 'active') throw new Error('Worker upload is not active.');
+    this.#upload = confirmed ? 'confirmed' : 'unconfirmed';
+  }
+  async retireUploaded(): Promise<void> {
+    if (this.#upload !== 'confirmed')
+      throw new Error('Worker package has no settled direct confirmation.');
+    const current = await this.store.root.stat(this.reference[2]);
+    if (!current || !sameNative(this.native, current, true))
+      throw new Error('Worker package replaced; retained at ' + this.file);
+    await unlink(this.file);
+    this.store.root.work.unlinks++;
+    this.store.root.work.cleanupFiles++;
+    this.#upload = 'retired';
+  }
   private constructor(
     readonly store: OwnedStore,
     readonly reference: Reference,
@@ -143,93 +162,6 @@ export class FrozenWorkerArchive {
     }
     signal.throwIfAborted();
     if (!result) throw new Error('Missing frozen worker archive.');
-    return result;
-  }
-  /** Cold retry validates the exact committed package; live sources are irrelevant. */
-  static async reopen(
-    store: OwnedStore,
-    budget: WorkingBudget,
-    options: { readonly signal?: AbortSignal; readonly maxDirectoryEntries?: number } = {},
-  ) {
-    const signal = options.signal ?? new AbortController().signal;
-    signal.throwIfAborted();
-    const state = store.codec.schemas.documents['local-state'].parse(await store.state());
-    if (
-      !['package-frozen', 'worker-uploaded'].includes(state[4]) ||
-      !state[12] ||
-      !state[6] ||
-      !state[7]
-    )
-      throw new Error('Missing frozen worker package.');
-    const bindings = store.codec.schemas.documents.bindings.parse(
-      await store.readDocument(state[5], 'bindings'),
-    );
-    if (options.maxDirectoryEntries !== undefined && options.maxDirectoryEntries !== bindings[8][9])
-      throw new Error('Worker directory allowance differs from frozen policy.');
-    options = Object.freeze({ ...options, maxDirectoryEntries: bindings[8][9] });
-    const [reference, name] = state[12],
-      expected = workerArtifactName(store.codec.options.model, store.codec.options.context, {
-        observations: state[6],
-        workerSources: state[7],
-      });
-    if (name !== expected || path.posix.basename(reference[2]) !== name)
-      throw new Error('Frozen worker archive name mismatch.');
-    const snapshots: string[] = [];
-    await store.readStream(
-      state[7],
-      'worker-sources',
-      { ...options, budget, partition: null },
-      async (v) => {
-        if (Array.isArray(v) && v[0] === 'worker-snapshot') {
-          equal(v[2], state[6], 'frozen worker snapshot observations');
-          snapshots.push(String(v[1]));
-        }
-      },
-      signal,
-    );
-    const opened = await store.root.openRead(reference[2]);
-    const native = opened.identity;
-    try {
-      store.root.work.stats++;
-      const n = await opened.handle.stat({ bigint: true });
-      if (n.nlink !== 1n || !sameNative(native, nativeIdentity(n), true))
-        throw new Error('Aliased/changed frozen worker archive.');
-    } finally {
-      await opened.handle.close();
-    }
-    const summary = await readWorkerArchive(
-      Readable.from(store.read(reference, 'worker-archive'), {
-        objectMode: false,
-        highWaterMark: 65536,
-      }),
-      {
-        model: store.codec.options.model,
-        context: store.codec.options.context,
-        authorizedSnapshots: snapshots,
-        budget,
-        maxDirectoryEntries: options.maxDirectoryEntries,
-        membership: await DiskMembership.create(store, budget),
-        consumeFile: async (file) => {
-          for await (const _ of file.body) {
-            signal.throwIfAborted();
-            void _;
-          }
-        },
-      },
-      signal,
-    );
-    equal(summary.identity[7], snapshots, 'exact frozen worker snapshot scope');
-    equal(await store.state(), state, 'frozen worker reopen state');
-    const result = new FrozenWorkerArchive(
-      store,
-      freeze(structuredClone(reference)),
-      name,
-      freeze(summary),
-      freeze({ tarBytes: 0, controlMembers: 0, controlBodyBytes: 0 }),
-      freeze(native),
-    );
-    await result.assertStable(signal);
-    signal.throwIfAborted();
     return result;
   }
   async assertStable(signal: AbortSignal): Promise<void> {

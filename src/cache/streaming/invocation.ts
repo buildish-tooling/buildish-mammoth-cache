@@ -119,8 +119,8 @@ export class OpenedInvocation {
     if (locator === null) return null;
     const current = locatorSchema.parse(locator),
       id = current[2],
-      rawState = tuple((await fixed(root, current[3]))!, 'local-state', 15);
-    equal(rawState[2], id, 'current invocation');
+      rawState = tuple((await fixed(root, current[3]))!, 'local-state', 8);
+    equal([rawState[1], rawState[2]], [2, id], 'current v2 invocation');
     const bindingRef = ownedReferenceSchema(id, 'bindings').parse(rawState[5]);
     const rawBindings = await fixed(root, bindingRef[2]);
     if (rawBindings === null) throw new Error('Missing lifecycle bindings.');
@@ -132,9 +132,10 @@ export class OpenedInvocation {
     );
     // These facts are provisional extraction, not an alternate acceptance schema.
     // The normal codec validates the complete documents after model reconstruction.
-    const b = tuple(rawBindings, 'bindings', 13),
+    const b = tuple(rawBindings, 'bindings', 9),
       context = contextSchema.parse(b[3]),
       nonce = nonceSchema.parse(b[4]);
+    equal(b[1], 2, 'v2 lifecycle bindings');
     equal([b[2], invocationId(context, nonce)], [id, id], 'bootstrap invocation');
     const projection = tuple(b[7], 'family', 12),
       prefix = textSchema.parse(projection[2]),

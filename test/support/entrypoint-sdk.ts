@@ -45,6 +45,11 @@ export async function saveCache(paths: string[], key: string) {
   for (let i = 0; i < paths.length; i++)
     await cp(path.resolve(paths[i]), dir + '/' + i, { recursive: true, preserveTimestamps: true });
   await writeFile(dir + '.json', JSON.stringify({ key, paths, dir }));
+  if (process.env.MAMMOTH_TEST_OCCUPY_RETURN === '1' && key.includes('-p-data-')) {
+    const managed = process.env.MAVEN_USER_HOME ?? process.env.GRADLE_USER_HOME!;
+    await mkdir(managed + '/data', { recursive: true });
+    await writeFile(managed + '/data/a', 'foreign return occupant');
+  }
   return 1;
 }
 export async function restoreCache(
@@ -80,6 +85,9 @@ export async function restoreCache(
 const artifact = {
   async uploadArtifact(name: string, files: string[]) {
     await trace('artifact-upload', name);
+    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'throw')
+      throw new Error('Fixture raw upload unavailable');
+    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'null') return null;
     const items = await rows('artifacts'),
       id = items.length + 1,
       bytes = await readFile(files[0]),
@@ -89,6 +97,9 @@ const artifact = {
     await cp(files[0], dir + '/' + name);
     const metadata = { id, name, size: bytes.length, digest };
     await writeFile(dir + '.json', JSON.stringify(metadata));
+    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'lost')
+      throw new Error('Fixture lost upload acknowledgement');
+    if (process.env.MAMMOTH_TEST_MUTATE_PACKAGE === '1') await appendFile(files[0], 'changed');
     return metadata;
   },
   async listArtifacts() {
