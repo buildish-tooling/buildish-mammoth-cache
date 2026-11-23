@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { timed } from '../../util/timing';
+import { hostTiming } from '../../host/timing';
 import { resolveLifecycle } from '../../build-tool/lifecycle';
 import { randomBytes } from 'node:crypto';
 import { createCachePartitions, validatePartitionConflictHandling } from '../../cache/model';
@@ -52,7 +54,7 @@ export interface StreamingPrepareDependencies extends Omit<LifecycleOptions, 'bu
 }
 // Protocol: docs/dev/cache-lifecycle-protocol.md#provider-composition-and-activation-boundary.
 // Action prepare composition. Never calls legacy bootstrap, snapshots or cutoff inventory.
-export async function runStreamingPrepare(d: StreamingPrepareDependencies) {
+async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
   const host = d.runtimeHost,
     ci = d.ciProvider.context,
     claim = await claimSingleRunPrepareExecution({ ciContext: ci, saveState: host.saveState });
@@ -215,4 +217,14 @@ async function prepareSummary(d: StreamingPrepareDependencies, outcome: string) 
     `Base cache: ${outcome}.`,
   ]);
   assert();
+}
+
+export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
+  const d = { ...input, timing: input.timing ?? hostTiming(input.runtimeHost) };
+  return timed(
+    d,
+    'preparation',
+    () => runStreamingPrepareImpl(d),
+    (result) => ('restoreStatus' in result ? result.restoreStatus : result.outcome),
+  );
 }

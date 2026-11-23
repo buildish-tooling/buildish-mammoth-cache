@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { TimingOptions } from '../../util/timing';
 import path from 'node:path';
 import type {
   ArtifactLookupScope,
@@ -65,7 +66,11 @@ export async function discoverWorkerArtifacts(
   model: ResolvedModel,
   execution: Context,
   requests: readonly WorkerRequest[],
-  options: { readonly scope?: ArtifactLookupScope; readonly signal?: AbortSignal } = {},
+  options: {
+    readonly timing?: TimingOptions['timing'];
+    readonly scope?: ArtifactLookupScope;
+    readonly signal?: AbortSignal;
+  } = {},
 ): Promise<readonly SelectedWorkerArtifact[]> {
   if (requests.length > 16) throw new Error('Worker discovery producer admission exceeded.');
   execution = Object.freeze(contextSchema.parse(execution)) as Context;
@@ -134,7 +139,11 @@ export async function acquireWorkerArtifacts(
   store: OwnedStore,
   backend: WorkflowArtifactBackend,
   selections: readonly SelectedWorkerArtifact[],
-  options: { readonly scope?: ArtifactLookupScope; readonly signal?: AbortSignal } = {},
+  options: {
+    readonly timing?: TimingOptions['timing'];
+    readonly scope?: ArtifactLookupScope;
+    readonly signal?: AbortSignal;
+  } = {},
 ): Promise<readonly DownloadedWorkerArchive[]> {
   const downloads: DownloadedWorkerArchive[] = [];
   if (selections.length > 16) throw new Error('Worker acquisition admission exceeded.');
@@ -188,6 +197,7 @@ export async function uploadWorkerArtifact(
   archive: FrozenWorkerArchive,
   options: {
     readonly retentionDays?: number;
+    readonly timing?: TimingOptions['timing'];
     readonly scope?: ArtifactLookupScope;
     readonly signal?: AbortSignal;
   } = {},

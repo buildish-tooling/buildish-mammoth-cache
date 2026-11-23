@@ -205,9 +205,11 @@ it('composes two real worker archives in configured order, installing complete s
   const f = await fixture(),
     { service, request } = await workerArtifacts(f);
   await f.files('', { 'data/local': 'keep local aggregate', 'state/stale': 'old' });
+  const logs: string[] = [];
   const warnings = vi.fn(),
     ready = await prepareStreaming({
       ...request,
+      timing: { now: () => 0, info: (s) => logs.push(s) },
       policy: { ...request.policy, ordinaryOrder: ['B', 'A', 'B'] },
       onWorkerWarnings: warnings,
     });
@@ -222,6 +224,19 @@ it('composes two real worker archives in configured order, installing complete s
     expect(await readFile(f.store.root.resolve(name), 'utf8')).toBe(body);
   expect(await f.store.root.stat('state/stale')).toBeNull();
   expect(ready.workerCount).toBe(2);
+  for (const worker of ['A', 'B'])
+    expect(
+      logs.some((s) => s.includes(`Finished incoming worker SDK restore [worker=${worker}]`)),
+    ).toBe(true);
+  for (const label of [
+    'worker discovery',
+    'shared worker validation and merge',
+    'worker install',
+    'handoff creation',
+    'cleanup and retirement',
+  ])
+    expect(logs.some((s) => s.includes('Finished ' + label))).toBe(true);
+  expect(logs.some((s) => s.includes('outgoing worker SDK save'))).toBe(false);
   expect(service.list).toHaveBeenCalledTimes(1);
   expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
   const opened = await OpenedInvocation.open(ready.anchor, f.budget),

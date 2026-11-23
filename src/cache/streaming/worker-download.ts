@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import type { TimingOptions } from '../../util/timing';
+import { timed } from '../../util/timing';
 import { opendir, lstat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -66,7 +68,11 @@ export class DownloadedWorkerArchive {
     store: OwnedStore,
     backend: WorkflowArtifactBackend,
     input: SelectedWorkerArtifact,
-    options: { readonly scope?: ArtifactLookupScope; readonly signal?: AbortSignal } = {},
+    options: {
+      readonly timing?: TimingOptions['timing'];
+      readonly scope?: ArtifactLookupScope;
+      readonly signal?: AbortSignal;
+    } = {},
   ): Promise<DownloadedWorkerArchive> {
     const context = Object.freeze(contextSchema.parse(input.context)) as Context,
       artifact = workerDescriptor(input.artifact),
@@ -95,12 +101,18 @@ export class DownloadedWorkerArchive {
       signal.throwIfAborted();
       // Backend API has no cancellation hook. Observe cancellation AFTER it settles,
       // before cleanup, so the SDK never writes into an already-retired directory.
-      const result = await backend.downloadArtifact(artifact.id, {
-        path: store.root.resolve(directory),
-        expectedHash: artifact.digest ?? undefined,
-        scope,
-        skipDecompress: true,
-      });
+      const result = await timed(
+        options,
+        `incoming worker SDK restore [worker=${context[4]}]`,
+        () =>
+          backend.downloadArtifact(artifact.id, {
+            path: store.root.resolve(directory),
+            expectedHash: artifact.digest ?? undefined,
+            scope,
+            skipDecompress: true,
+          }),
+        (result) => (result.digestMismatch ? 'failed' : 'success'),
+      );
       signal.throwIfAborted();
       const relative = path.relative(
         store.root.resolve(directory),

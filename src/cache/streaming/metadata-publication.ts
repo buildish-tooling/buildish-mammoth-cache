@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { timed } from '../../util/timing';
 import type { PartitionSummaries } from './partition-summaries';
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rmdir, unlink, chmod } from 'node:fs/promises';
@@ -271,179 +272,185 @@ async function publishAttempt(
     }
   }
   try {
-    release = options.budget.holdRecord(36864 + model.partitions.length * 4096);
-    await store.makeParents(stage);
-    if (choices.some((choice) => choice[0] === 'new')) await created(stage);
-    const stageParents = new Map<string, NativeIdentity>();
-    for (const c of choices)
-      if (c[0] === 'new') {
-        const descriptor = createMetadataDescriptor(model, [
-            model.family,
-            model.id,
-            c[1],
-            request.lineage,
-            request.writer,
-            request.decision,
-          ]),
-          root = stage + '/' + c[1];
-        await created(root);
-        stageParents.set(c[1], await created(root + '/payload'));
-        await control(root + '/envelope.json', descriptor.bytes);
-        plans.set(c[1], {
-          partition: c[1],
-          root,
-          head: null,
-          count: 0,
-          reference: descriptor.reference,
-        });
-      }
-    const components = source.components(),
-      coordinates: (number | null)[] = [],
-      groups = new RecoveryGroups(model);
-    const deriveGroups = request.groups === undefined && model.tuple[2] === 'maven';
-    for (const component of components) {
-      if (!deriveGroups && !component.partitions.some((p) => plans.has(p))) continue;
-      const physical = component.source,
-        selected = component.partitions.reduce((mask, p) => mask | partitionBit(model, p), 0n);
-      let coordinateHead: number | null = null;
-      async function select(
-        offset: number,
-        originalParent: NativeIdentity,
-        parents: ReadonlyMap<string, NativeIdentity>,
-        suppressed: bigint,
-        direct?: Set<string>,
-      ): Promise<void> {
-        signal.throwIfAborted();
-        physical.assert();
-        const entry = await physical.node(offset);
-        let releaseFrame = () => {};
-        try {
-          releaseFrame = options.budget.holdRecord(512 + parents.size * 128);
-          const n = entry.node,
-            originalMask = nodeMask(n),
-            mask = originalMask & selected,
-            native = n[3] as NativeIdentity;
-          if (n[1] === 'protected' || !mask) return;
-          if (n[1] === 'file') direct?.add(model.owner(n[2])[0]);
-          const remaining = new Map<string, NativeIdentity>();
-          let next = suppressed;
-          for (const [p, parent] of parents) {
-            const bit = partitionBit(model, p);
-            if (!(mask & bit) || suppressed & bit) continue;
-            const plan = plans.get(p)!,
-              target = plan.root + '/payload/' + n[2];
-            if (originalMask === bit && n[6] === 0) {
-              plan.head = await scratch.append([
-                'move',
-                plan.head,
-                joinPath(physical.nativeRoot, n[2]),
-                target,
-                native,
-                originalParent,
-                parent,
-              ]);
-              plan.count++;
-              request.summaries?.root(p, n[1] === 'file' ? 'file' : 'directory');
-              next |= bit;
-            } else if (n[1] === 'directory') {
-              if (n[6] > 0)
-                request.summaries?.hint(p, 'excluded or unmanaged entries remain', n[2]);
-              if (originalMask !== bit)
-                request.summaries?.hint(p, 'mixed partition ownership', n[2]);
-              if ((originalMask & ~selected) !== 0n)
-                request.summaries?.hint(p, 'unselected contents', n[2]);
-              remaining.set(p, await created(target));
+    const groups = await timed(options, 'shared publication staging planning', async () => {
+      release = options.budget.holdRecord(36864 + model.partitions.length * 4096);
+      await store.makeParents(stage);
+      if (choices.some((choice) => choice[0] === 'new')) await created(stage);
+      const stageParents = new Map<string, NativeIdentity>();
+      for (const c of choices)
+        if (c[0] === 'new') {
+          const descriptor = createMetadataDescriptor(model, [
+              model.family,
+              model.id,
+              c[1],
+              request.lineage,
+              request.writer,
+              request.decision,
+            ]),
+            root = stage + '/' + c[1];
+          await created(root);
+          stageParents.set(c[1], await created(root + '/payload'));
+          await control(root + '/envelope.json', descriptor.bytes);
+          plans.set(c[1], {
+            partition: c[1],
+            root,
+            head: null,
+            count: 0,
+            reference: descriptor.reference,
+          });
+        }
+      const components = source.components(),
+        coordinates: (number | null)[] = [],
+        groups = new RecoveryGroups(model);
+      const deriveGroups = request.groups === undefined && model.tuple[2] === 'maven';
+      for (const component of components) {
+        if (!deriveGroups && !component.partitions.some((p) => plans.has(p))) continue;
+        const physical = component.source,
+          selected = component.partitions.reduce((mask, p) => mask | partitionBit(model, p), 0n);
+        let coordinateHead: number | null = null;
+        async function select(
+          offset: number,
+          originalParent: NativeIdentity,
+          parents: ReadonlyMap<string, NativeIdentity>,
+          suppressed: bigint,
+          direct?: Set<string>,
+        ): Promise<void> {
+          signal.throwIfAborted();
+          physical.assert();
+          const entry = await physical.node(offset);
+          let releaseFrame = () => {};
+          try {
+            releaseFrame = options.budget.holdRecord(512 + parents.size * 128);
+            const n = entry.node,
+              originalMask = nodeMask(n),
+              mask = originalMask & selected,
+              native = n[3] as NativeIdentity;
+            if (n[1] === 'protected' || !mask) return;
+            if (n[1] === 'file') direct?.add(model.owner(n[2])[0]);
+            const remaining = new Map<string, NativeIdentity>();
+            let next = suppressed;
+            for (const [p, parent] of parents) {
+              const bit = partitionBit(model, p);
+              if (!(mask & bit) || suppressed & bit) continue;
+              const plan = plans.get(p)!,
+                target = plan.root + '/payload/' + n[2];
+              if (originalMask === bit && n[6] === 0) {
+                plan.head = await scratch.append([
+                  'move',
+                  plan.head,
+                  joinPath(physical.nativeRoot, n[2]),
+                  target,
+                  native,
+                  originalParent,
+                  parent,
+                ]);
+                plan.count++;
+                request.summaries?.root(p, n[1] === 'file' ? 'file' : 'directory');
+                next |= bit;
+              } else if (n[1] === 'directory') {
+                if (n[6] > 0)
+                  request.summaries?.hint(p, 'excluded or unmanaged entries remain', n[2]);
+                if (originalMask !== bit)
+                  request.summaries?.hint(p, 'mixed partition ownership', n[2]);
+                if ((originalMask & ~selected) !== 0n)
+                  request.summaries?.hint(p, 'unselected contents', n[2]);
+                remaining.set(p, await created(target));
+              }
             }
-          }
-          if (
-            n[1] === 'directory' &&
-            (remaining.size ||
-              (deriveGroups && (components.length > 1 || (mask & (mask - 1n)) !== 0n)))
-          ) {
-            const owners = new Set<string>();
-            for await (const edge of physical.children(n))
-              if (edge[1] === 'file') await select(edge[2], native, remaining, next, owners);
             if (
-              deriveGroups &&
-              owners.size &&
-              (n[2] === 'repository' || n[2].startsWith('repository/'))
-            )
-              coordinateHead = await scratch.append([
-                'coordinate',
-                coordinateHead,
-                n[2],
-                [...owners],
-              ]);
-            for await (const edge of physical.children(n))
-              if (edge[1] === 'directory') await select(edge[2], native, remaining, next);
-            for (const [p] of remaining) {
-              await chmod(
-                store.root.resolve(plans.get(p)!.root + '/payload/' + n[2]),
-                native[6] & 0o777,
-              );
-              store.root.work.modeChanges++;
+              n[1] === 'directory' &&
+              (remaining.size ||
+                (deriveGroups && (components.length > 1 || (mask & (mask - 1n)) !== 0n)))
+            ) {
+              const owners = new Set<string>();
+              for await (const edge of physical.children(n))
+                if (edge[1] === 'file') await select(edge[2], native, remaining, next, owners);
+              if (
+                deriveGroups &&
+                owners.size &&
+                (n[2] === 'repository' || n[2].startsWith('repository/'))
+              )
+                coordinateHead = await scratch.append([
+                  'coordinate',
+                  coordinateHead,
+                  n[2],
+                  [...owners],
+                ]);
+              for await (const edge of physical.children(n))
+                if (edge[1] === 'directory') await select(edge[2], native, remaining, next);
+              for (const [p] of remaining) {
+                await chmod(
+                  store.root.resolve(plans.get(p)!.root + '/payload/' + n[2]),
+                  native[6] & 0o777,
+                );
+                store.root.work.modeChanges++;
+              }
             }
+          } finally {
+            releaseFrame();
+            entry.release();
+          }
+        }
+        const rootEntry = await physical.node(physical.index);
+        try {
+          const parents = new Map(
+            [...stageParents].filter(([p]) => component.partitions.includes(p)),
+          );
+          // Coordinate rows are preorder and linked backwards, giving descending directory paths.
+          const owners = new Set<string>();
+          for await (const edge of physical.children(rootEntry.node))
+            await select(edge[2], rootEntry.node[3] as NativeIdentity, parents, 0n, owners);
+        } finally {
+          rootEntry.release();
+        }
+        coordinates.push(coordinateHead);
+      }
+      await scratch.flush();
+      if (deriveGroups) {
+        type Coordinate = readonly ['coordinate', number | null, string, string[]];
+        const heads: (Coordinate | null)[] = [],
+          charges: (() => void)[] = coordinates.map(() => () => {});
+        async function coordinate(
+          offset: number | null,
+          index: number,
+        ): Promise<Coordinate | null> {
+          charges[index]();
+          charges[index] = () => {};
+          if (offset === null) return null;
+          const row = await scratch.record(offset);
+          try {
+            charges[index] = options.budget.holdRecord(512 + encodeRecord(row.value).length * 4);
+            return structuredClone(row.value) as Coordinate;
+          } finally {
+            row.release();
+          }
+        }
+        try {
+          for (const [i, offset] of coordinates.entries()) heads.push(await coordinate(offset, i));
+          while (heads.some((head) => head !== null)) {
+            let path: string | undefined;
+            for (const head of heads)
+              if (
+                head &&
+                (path === undefined ||
+                  compareMembership(['member', 'unit', head[2]], ['member', 'unit', path]) > 0)
+              )
+                path = head[2];
+            const owners: string[] = [];
+            for (let i = 0; i < heads.length; i++)
+              if (heads[i]?.[2] === path) {
+                owners.push(...heads[i]![3]);
+                heads[i] = await coordinate(heads[i]![1], i);
+              }
+            groups.observe(owners);
           }
         } finally {
-          releaseFrame();
-          entry.release();
+          for (const release of charges) release();
         }
       }
-      const rootEntry = await physical.node(physical.index);
-      try {
-        const parents = new Map(
-          [...stageParents].filter(([p]) => component.partitions.includes(p)),
-        );
-        // Coordinate rows are preorder and linked backwards, giving descending directory paths.
-        const owners = new Set<string>();
-        for await (const edge of physical.children(rootEntry.node))
-          await select(edge[2], rootEntry.node[3] as NativeIdentity, parents, 0n, owners);
-      } finally {
-        rootEntry.release();
-      }
-      coordinates.push(coordinateHead);
-    }
-    await scratch.flush();
-    if (deriveGroups) {
-      type Coordinate = readonly ['coordinate', number | null, string, string[]];
-      const heads: (Coordinate | null)[] = [],
-        charges: (() => void)[] = coordinates.map(() => () => {});
-      async function coordinate(offset: number | null, index: number): Promise<Coordinate | null> {
-        charges[index]();
-        charges[index] = () => {};
-        if (offset === null) return null;
-        const row = await scratch.record(offset);
-        try {
-          charges[index] = options.budget.holdRecord(512 + encodeRecord(row.value).length * 4);
-          return structuredClone(row.value) as Coordinate;
-        } finally {
-          row.release();
-        }
-      }
-      try {
-        for (const [i, offset] of coordinates.entries()) heads.push(await coordinate(offset, i));
-        while (heads.some((head) => head !== null)) {
-          let path: string | undefined;
-          for (const head of heads)
-            if (
-              head &&
-              (path === undefined ||
-                compareMembership(['member', 'unit', head[2]], ['member', 'unit', path]) > 0)
-            )
-              path = head[2];
-          const owners: string[] = [];
-          for (let i = 0; i < heads.length; i++)
-            if (heads[i]?.[2] === path) {
-              owners.push(...heads[i]![3]);
-              heads[i] = await coordinate(heads[i]![1], i);
-            }
-          groups.observe(owners);
-        }
-      } finally {
-        for (const release of charges) release();
-      }
-    }
-    await scratch.flush();
+      await scratch.flush();
+      return groups;
+    });
     let confirmed = true;
     for (const plan of plans.values()) {
       let eligible = false;
@@ -460,36 +467,49 @@ async function publishAttempt(
       let attempted = 0,
         cursor = plan.head;
       try {
-        while (cursor !== null) {
-          signal.throwIfAborted();
-          source.assertPartition(plan.partition);
-          const held = await readMove(cursor),
-            row = held.row;
-          try {
-            const e = await endpoints(row);
-            if (!e.original || !sameNative(row[4], e.original, true) || e.staged)
-              throw new Error('Evacuation endpoint changed.');
-            attempted++; // Own the actual native attempt before rename and its after-stat.
-            await store.root.renameAbsent(row[2], row[3], row[4]);
-            cursor = row[1];
-            await store.fail('metadata-source-evacuated');
-          } finally {
-            held.release();
+        await timed(options, `partition staging [partition=${plan.partition}]`, async () => {
+          while (cursor !== null) {
+            signal.throwIfAborted();
+            source.assertPartition(plan.partition);
+            const held = await readMove(cursor),
+              row = held.row;
+            try {
+              const e = await endpoints(row);
+              if (!e.original || !sameNative(row[4], e.original, true) || e.staged)
+                throw new Error('Evacuation endpoint changed.');
+              attempted++; // Own the actual native attempt before rename and its after-stat.
+              await store.root.renameAbsent(row[2], row[3], row[4]);
+              cursor = row[1];
+              await store.fail('metadata-source-evacuated');
+            } finally {
+              held.release();
+            }
           }
-        }
+        });
         signal.throwIfAborted();
         // Never race SDK source readers against foreground cancellation.
         const paths = metadataBaseObjectPaths(store, plan.root),
           archiveRoot = store.root.resolve(plan.root);
         let id: number | undefined;
         try {
-          id = await backend.saveCache(paths, plan.reference[2], { archiveRoot });
+          id = await timed(
+            options,
+            `base SDK save [partition=${plan.partition}]`,
+            () => backend.saveCache(paths, plan.reference[2], { archiveRoot }),
+            (id) => (Number.isSafeInteger(id) && id! > 0 ? 'confirmed' : 'abandoned/unconfirmed'),
+            () => 'abandoned/unconfirmed',
+          );
         } catch {
           confirmed = false;
         }
         if (!Number.isSafeInteger(id) || id! <= 0) confirmed = false;
       } finally {
-        await returnRoots(plan, attempted);
+        await timed(
+          { ...options, signal: undefined },
+          `source return [partition=${plan.partition}]`,
+          () => returnRoots(plan, attempted),
+          () => (failures ? 'failed' : 'success'),
+        );
       }
       if (failures)
         throw new AggregateError(
@@ -509,7 +529,7 @@ async function publishAttempt(
       source.assert();
       // Source staging and all empty-shell retirement must succeed before the record attempt.
       try {
-        await cleanShells();
+        await timed({ ...options, signal: undefined }, 'staging cleanup', () => cleanShells());
       } catch (error) {
         shellCleanupFailed = true;
         throw new Error('Staging cleanup failed; retained ' + store.root.resolve(stage), {
@@ -538,7 +558,13 @@ async function publishAttempt(
       let id: number | undefined;
       try {
         if (!unavailable())
-          id = await backend.saveCache([recordPath], generation[11], { archiveRoot });
+          id = await timed(
+            options,
+            'generation SDK save',
+            () => backend.saveCache([recordPath], generation[11], { archiveRoot }),
+            (id) => (Number.isSafeInteger(id) && id! > 0 ? 'confirmed' : 'abandoned/unconfirmed'),
+            () => 'abandoned/unconfirmed',
+          );
       } catch {
         /* A lost response may already have published remotely; never discover/read it back. */
       }
@@ -551,7 +577,7 @@ async function publishAttempt(
   }
   if (cleanupSafe && !shellCleanupFailed) {
     try {
-      await cleanShells();
+      await timed({ ...options, signal: undefined }, 'staging cleanup', () => cleanShells());
     } catch (error) {
       localFailure('Staging cleanup failed; retained ' + store.root.resolve(stage));
       failure = new AggregateError(

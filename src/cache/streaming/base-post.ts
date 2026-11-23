@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { timed, timingDecision } from '../../util/timing';
 import type { Value } from './encoding';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
 import type { LifecycleOptions } from './lifecycle-options';
@@ -81,7 +82,12 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       await attempt.guard();
       answer = { outcome: terminal[1] as BasePostResult['outcome'], key: terminal[2] };
     } else {
-      const gate = await ExclusiveWindow.establish(store, request.budget, request);
+      const gate = await timed(
+        request,
+        'required quiescence',
+        () => ExclusiveWindow.establish(store, request.budget, request),
+        (r) => r.status,
+      );
       if (gate.status !== 'ready') {
         if (request.required || role === 'distributed-aggregator')
           throw new Error('Required base post is not quiescent: ' + gate.message);
@@ -114,12 +120,14 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
         };
         await request.removeHooks(store);
         await attempt.guard();
-        const observation = await captureObservations(store, {
-          ...options,
-          retainIndex: true,
-          summaries: request.summaries,
-          purgeWindow: attempt.handoff.header[6] === 'enabled' ? window.purgeWindow : undefined,
-        });
+        const observation = await timed(options, 'observation capture and index construction', () =>
+          captureObservations(store, {
+            ...options,
+            retainIndex: true,
+            summaries: request.summaries,
+            purgeWindow: attempt.handoff.header[6] === 'enabled' ? window!.purgeWindow : undefined,
+          }),
+        );
         captured = observation.index!;
         // Provider/confirmation admission precedes actual GC, source plans and evacuation.
         let backend: BaseCacheBackend | undefined,
@@ -152,7 +160,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           await attempt.finish(['outcome', outcome, null, null, null]);
           answer = { outcome, key: null };
         } else {
-          owner = await GcSurvivorOwner.execute(captured, options);
+          owner = await timed(options, 'GC', () => GcSurvivorOwner.execute(captured!, options));
           captured = undefined;
           const live = await MetadataPublicationSource.survivors(owner);
           sources.push(live);
@@ -179,31 +187,37 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
             )
               throw new Error('Missing independent authoritative snapshot root.');
           let set = MetadataPublicationSet.select(live, overrides);
-          const choices: MetadataPublicationChoice[] = [];
-          for (const entry of attempt.handoff.entries) {
-            const partition = entry[1],
-              summary = set.summary(partition),
-              pin = entry[3],
-              descriptor = entry[4];
-            const compatibleOrigin =
-              !descriptor ||
-              (descriptor[4][0] === 'base' && pin !== null && same(descriptor[4][1], pin[7])) ||
-              (descriptor[4][0] === 'empty' &&
-                descriptor[4][1] === 'generation' &&
-                pin?.[7] === null);
-            const reuse =
-              pin !== null &&
-              compatibleOrigin &&
-              same(pin[8], metadataSummaryProfile()) &&
-              same(pin[9], summary);
-            if (reuse)
-              choices.push(pin[7] === null ? ['empty', partition] : ['reuse', partition, pin[7]]);
-            else
-              choices.push(
-                summary[3] === 0 && summary[4] === 0 ? ['empty', partition] : ['new', partition],
-              );
-          }
-          for (const choice of choices) request.summaries?.choice(choice[1], choice[0]);
+          const choices = await timed(options, 'partition reuse planning', async () => {
+            const choices: MetadataPublicationChoice[] = [];
+            for (const entry of attempt.handoff.entries) {
+              const partition = entry[1],
+                summary = set.summary(partition),
+                pin = entry[3],
+                descriptor = entry[4];
+              const compatibleOrigin =
+                !descriptor ||
+                (descriptor[4][0] === 'base' && pin !== null && same(descriptor[4][1], pin[7])) ||
+                (descriptor[4][0] === 'empty' &&
+                  descriptor[4][1] === 'generation' &&
+                  pin?.[7] === null);
+              const reuse =
+                pin !== null &&
+                compatibleOrigin &&
+                same(pin[8], metadataSummaryProfile()) &&
+                same(pin[9], summary);
+              if (reuse)
+                choices.push(pin[7] === null ? ['empty', partition] : ['reuse', partition, pin[7]]);
+              else
+                choices.push(
+                  summary[3] === 0 && summary[4] === 0 ? ['empty', partition] : ['new', partition],
+                );
+            }
+            for (const choice of choices) {
+              request.summaries?.choice(choice[1], choice[0]);
+              timingDecision(options, `partition publication [partition=${choice[1]}]`, choice[0]);
+            }
+            return choices;
+          });
           const prior = attempt.generation,
             entries = choices.map((choice) =>
               choice[0] === 'reuse' ? ['object', choice[1], choice[2]] : choice,
@@ -230,31 +244,39 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
                 }
               }
             set = MetadataPublicationSet.select(live, overrides);
-            const result = await publishMetadataBase(set, backend!, {
-              lineage,
-              writer: invocation,
-              decision: H('metadata-publication', [
-                invocation,
-                model.id,
-                model.family,
-                policyId(attempt.bindings[8]),
-                choices,
-              ]),
-              choices,
-              summaries: request.summaries,
-              ...(unchanged && prior ? { groups: prior[9] } : {}),
-              onWarning: request.onWarning,
-            });
+            const result = await timed(
+              options,
+              'base publication',
+              () =>
+                publishMetadataBase(set, backend!, {
+                  lineage,
+                  writer: invocation,
+                  decision: H('metadata-publication', [
+                    invocation,
+                    model.id,
+                    model.family,
+                    policyId(attempt.bindings[8]),
+                    choices,
+                  ]),
+                  choices,
+                  summaries: request.summaries,
+                  ...(unchanged && prior ? { groups: prior[9] } : {}),
+                  onWarning: request.onWarning,
+                }),
+              (r) => r.outcome,
+            );
             answer = { outcome: result.outcome, key: result.generation?.[11] ?? null };
           }
-          await settleNativeCleanup([
-            ...sources
-              .splice(0)
-              .reverse()
-              .map((source) => () => source.dispose()),
-            ...snapshots.splice(0).map((snapshot) => () => snapshot.retire()),
-            () => owner?.dispose(),
-          ]);
+          await timed(request, 'cleanup and retirement', () =>
+            settleNativeCleanup([
+              ...sources
+                .splice(0)
+                .reverse()
+                .map((source) => () => source.dispose()),
+              ...snapshots.splice(0).map((snapshot) => () => snapshot.retire()),
+              () => owner?.dispose(),
+            ]),
+          );
           owner = undefined;
           await attempt.finish(['outcome', answer.outcome, answer.key, null, null]);
         }
@@ -264,14 +286,16 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
     failure = error;
   }
   try {
-    await settleNativeCleanup(
-      [
-        ...sources.reverse().map((source) => () => source.dispose()),
-        ...snapshots.map((snapshot) => () => snapshot.dispose()),
-        () => owner?.dispose(),
-        () => captured?.dispose(),
-      ],
-      failure,
+    await timed(request, 'cleanup and retirement', () =>
+      settleNativeCleanup(
+        [
+          ...sources.reverse().map((source) => () => source.dispose()),
+          ...snapshots.map((snapshot) => () => snapshot.dispose()),
+          () => owner?.dispose(),
+          () => captured?.dispose(),
+        ],
+        failure,
+      ),
     );
   } finally {
     window?.close();

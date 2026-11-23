@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { timed } from '../../util/timing';
 import { randomUUID } from 'node:crypto';
 import { opendir } from 'node:fs/promises';
 import type { BaseCacheBackend } from '../backend';
@@ -117,65 +118,76 @@ export class MetadataBaseRestore {
           allowed.push(nameSchema.parse(refs.defaultRef));
         const prefixes = allowed.map((ref) => lineagePrefix(model.family, lineageId(ref))),
           owner = await result.root();
-        const key = await backend.restoreCache(
-          baseRecordPaths(store, owner.path),
-          prefixes[0],
-          prefixes.slice(1),
-          { archiveRoot: store.root.resolve(owner.path) },
+        const key = await timed(
+          options,
+          'generation SDK restore',
+          () =>
+            backend.restoreCache(
+              baseRecordPaths(store, owner.path),
+              prefixes[0],
+              prefixes.slice(1),
+              { archiveRoot: store.root.resolve(owner.path) },
+            ),
+          (key) => (key === undefined ? 'miss' : 'hit'),
         );
         signal.throwIfAborted();
         await result.checkedExtraction(owner, key !== undefined);
         if (key !== undefined) {
-          if (!prefixes.some((prefix) => key.startsWith(prefix)))
-            throw new Error('Unauthorized generation lineage.');
-          const file = owner.path + '/record.json',
-            before = await nativeBaseFile(store, file, 65536);
-          const release = options.budget.holdRecord(Number(before[5]));
-          try {
-            const chunks: Buffer[] = [];
-            for await (const bytes of store.root.read(file, before)) {
-              signal.throwIfAborted();
-              chunks.push(bytes);
-            }
-            if (!sameNative(before, await nativeBaseFile(store, file, 65536), true))
-              throw new Error('Generation changed during control admission.');
-            const bytes = Buffer.concat(chunks),
-              generation = decodeMetadataGeneration(bytes, model, key);
-            if (!allowed.map(lineageId).includes(generation[5]))
+          await timed(options, 'generation control admission', async () => {
+            if (!prefixes.some((prefix) => key.startsWith(prefix)))
               throw new Error('Unauthorized generation lineage.');
-            store.root.work.nativeListings++;
-            let recordSeen = false;
-            for await (const entry of await opendir(store.root.resolve(owner.path), {
-              bufferSize: 2,
-            })) {
-              if (recordSeen || entry.name !== 'record.json')
-                throw new Error('Unexpected generation extraction member.');
-              recordSeen = true;
+            const file = owner.path + '/record.json',
+              before = await nativeBaseFile(store, file, 65536);
+            const release = options.budget.holdRecord(Number(before[5]));
+            try {
+              const chunks: Buffer[] = [];
+              for await (const bytes of store.root.read(file, before)) {
+                signal.throwIfAborted();
+                chunks.push(bytes);
+              }
+              if (!sameNative(before, await nativeBaseFile(store, file, 65536), true))
+                throw new Error('Generation changed during control admission.');
+              const bytes = Buffer.concat(chunks),
+                generation = decodeMetadataGeneration(bytes, model, key);
+              if (!allowed.map(lineageId).includes(generation[5]))
+                throw new Error('Unauthorized generation lineage.');
+              store.root.work.nativeListings++;
+              let recordSeen = false;
+              for await (const entry of await opendir(store.root.resolve(owner.path), {
+                bufferSize: 2,
+              })) {
+                if (recordSeen || entry.name !== 'record.json')
+                  throw new Error('Unexpected generation extraction member.');
+                recordSeen = true;
+              }
+              if (!recordSeen) throw new Error('Missing generation extraction record.');
+              result.generation = generation;
+              result.key = key;
+              result.record = await store.write(
+                'generation',
+                (async function* () {
+                  yield bytes;
+                })(),
+                signal,
+              );
+            } finally {
+              release();
             }
-            if (!recordSeen) throw new Error('Missing generation extraction record.');
-            result.generation = generation;
-            result.key = key;
-            result.record = await store.write(
-              'generation',
-              (async function* () {
-                yield bytes;
-              })(),
-              signal,
-            );
-          } finally {
-            release();
-          }
+          });
         }
       }
       const offered: { partition: string; root: string }[] = [];
       for (const entry of result.generation?.[8] ?? [])
         if (entry[0] === 'object') {
           const owner = await result.root();
-          const key = await backend!.restoreCache(
-            metadataBaseObjectPaths(store, owner.path),
-            entry[2][2],
-            [],
-            { archiveRoot: store.root.resolve(owner.path) },
+          const key = await timed(
+            options,
+            `base SDK restore [partition=${entry[1]}]`,
+            () =>
+              backend!.restoreCache(metadataBaseObjectPaths(store, owner.path), entry[2][2], [], {
+                archiveRoot: store.root.resolve(owner.path),
+              }),
+            (key) => (key === undefined ? 'miss' : 'hit'),
           );
           signal.throwIfAborted();
           if (key !== undefined && key !== entry[2][2])
@@ -184,7 +196,9 @@ export class MetadataBaseRestore {
           if (key !== undefined) offered.push({ partition: entry[1], root: owner.path });
         }
       result.context = result.generation
-        ? await MetadataInstallContext.discover(store, result.generation, offered, options)
+        ? await timed(options, 'shared base validation', () =>
+            MetadataInstallContext.discover(store, result.generation!, offered, options),
+          )
         : await MetadataInstallContext.empty(store, options);
       const cold = new Set(result.context.cold.flat()),
         profile = metadataSummaryProfile();

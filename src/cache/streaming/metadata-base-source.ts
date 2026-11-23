@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { TimingOptions } from '../../util/timing';
 import { opendir } from 'node:fs/promises';
 import path from 'node:path';
 import { nativeBaseFile } from './base-layout';
@@ -68,10 +69,8 @@ export async function checkMetadataBaseLayout(
   return after;
 }
 const discoveries = new WeakSet<DiscoveredMetadataBase>();
-export type MetadataDiscoveryOptions = Pick<
-  WalkOptions,
-  'budget' | 'maxDirectoryEntries' | 'signal'
->;
+export type MetadataDiscoveryOptions = TimingOptions &
+  Pick<WalkOptions, 'budget' | 'maxDirectoryEntries' | 'signal'>;
 /**
  * Genuine process-local completed native discovery, not content verification.
  * observe receives provisional metadata for the one active install/group hierarchy;

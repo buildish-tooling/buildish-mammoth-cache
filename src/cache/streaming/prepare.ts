@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { timed } from '../../util/timing';
 import { mkdir, lstat } from 'node:fs/promises';
 import { lineagePrefix } from './native-records';
 import { LocalCodec, policySchema } from './local-schema';
@@ -199,25 +200,26 @@ export async function prepareStreaming(
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cache = await request.cacheBackend(),
       unavailable = !cache.isFeatureAvailable();
-    restored = await MetadataBaseRestore.acquire(
-      store,
-      unavailable ? null : cache,
-      request,
+    restored = await timed(
       options,
+      'base discovery and admission',
+      () => MetadataBaseRestore.acquire(store, unavailable ? null : cache, request, options),
+      (r) => (unavailable ? 'unavailable' : r.key ? 'hit' : 'miss'),
     );
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
     if (requests.length) {
       if (!request.artifactBackend) throw new Error('Required artifact backend is missing.');
       const backend = await request.artifactBackend();
-      const selected = await discoverWorkerArtifacts(
-        backend,
-        request.model,
-        request.context,
-        requests,
-        { signal },
+      const selected = await timed(options, 'worker discovery', () =>
+        discoverWorkerArtifacts(backend, request.model, request.context, requests, { signal }),
       );
-      downloads.push(...(await acquireWorkerArtifacts(store, backend, selected, { signal })));
+      downloads.push(
+        ...(await acquireWorkerArtifacts(store, backend, selected, {
+          signal,
+          timing: options.timing,
+        })),
+      );
     }
     const selectedJobs = new Set(downloads.map((download) => download.context[4]));
     // Pins already refer to the exact materialized base BEFORE extras or worker overlays.
@@ -257,15 +259,17 @@ export async function prepareStreaming(
       fallback.set(entry[1], snapshot);
     }
     if (downloads.length) {
-      merged = await mergeWorkerArchives(
-        store,
-        downloads.map((download) => download.input()),
-        {
-          ...options,
-          ordinaryOrder: request.policy.ordinaryOrder,
-          ordinaryPolicy: request.policy.ordinaryPolicy,
-          snapshots: metadataSnapshotRequirements(store, required, fallback),
-        },
+      merged = await timed(options, 'shared worker validation and merge', () =>
+        mergeWorkerArchives(
+          store,
+          downloads.map((download) => download.input()),
+          {
+            ...options,
+            ordinaryOrder: request.policy.ordinaryOrder,
+            ordinaryPolicy: request.policy.ordinaryPolicy,
+            snapshots: metadataSnapshotRequirements(store, required, fallback),
+          },
+        ),
       );
       request.onWorkerWarnings?.(merged.warnings);
     }
@@ -284,11 +288,15 @@ export async function prepareStreaming(
       })
     ) {
       await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
-      const plan = await freezeMetadataInstallPlan(store, restored.context!, request.budget, {
-        ...options,
-        pruneAggregates: prune,
-      });
-      await executeInstall(store, plan, request.budget, { signal });
+      const plan = await timed(options, 'shared base install planning', () =>
+        freezeMetadataInstallPlan(store, restored!.context!, request.budget, {
+          ...options,
+          pruneAggregates: prune,
+        }),
+      );
+      await timed(options, 'base install', () =>
+        executeInstall(store, plan, request.budget, { signal }),
+      );
     }
     await store.fail('prepare-base-installed');
     if (merged) {
@@ -297,8 +305,10 @@ export async function prepareStreaming(
       for (const snapshot of accepted.snapshots) snapshots.add(snapshot);
       for (const snapshot of accepted.snapshots) fallback.set(snapshot.partition, snapshot);
       if (accepted.incoming.length)
-        await installWorkerMerge(store, accepted, request.budget, signal, () =>
-          assertLifecycleWindow(store, bindings, { signal, assertCurrent }),
+        await timed(options, 'worker install', () =>
+          installWorkerMerge(store, accepted!, request.budget, signal, () =>
+            assertLifecycleWindow(store, bindings, { signal, assertCurrent }),
+          ),
         );
     }
     await store.fail('prepare-workers-installed');
@@ -315,7 +325,9 @@ export async function prepareStreaming(
       ));
     for (const entry of restored.entries)
       entry[4] = fallback.get(entry[1])?.sourceDescriptor() ?? null;
-    await retireInstallStaging(store, installOwner, options, assertCurrent);
+    await timed(options, 'install staging retirement', () =>
+      retireInstallStaging(store, installOwner, options, assertCurrent),
+    );
     await request.installHooks(store);
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
@@ -335,22 +347,27 @@ export async function prepareStreaming(
       cutoff,
       downloads.length,
     ]);
-    const handoff = await store.writeStream(
-      'handoff',
-      { ...options, partition: null },
-      rows([header, ...restored.entries]),
-      signal,
-    );
-    // Retire operation-owned metadata before successful main/post handoff; only imported activity crosses per-file.
-    await settleNativeCleanup([
-      () => accepted?.dispose(),
-      () => restored?.dispose(),
-      ...downloads.map((download) => () => download.dispose()),
-      ...[...snapshots].map(
-        (snapshot) => () =>
-          [...fallback.values()].includes(snapshot) ? snapshot.dispose() : snapshot.retire(),
+    const handoff = await timed(options, 'handoff creation', () =>
+      store.writeStream(
+        'handoff',
+        { ...options, partition: null },
+        rows([header, ...restored!.entries]),
+        signal,
       ),
-    ]);
+    );
+
+    // Retire operation-owned metadata before successful main/post handoff; only imported activity crosses per-file.
+    await timed(options, 'cleanup and retirement', () =>
+      settleNativeCleanup([
+        () => accepted?.dispose(),
+        () => restored?.dispose(),
+        ...downloads.map((download) => () => download.dispose()),
+        ...[...snapshots].map(
+          (snapshot) => () =>
+            [...fallback.values()].includes(snapshot) ? snapshot.dispose() : snapshot.retire(),
+        ),
+      ]),
+    );
     const state = docs['local-state'].parse(await store.state()),
       oldBindings = state[5];
     const nextBindings = await store.writeDocument(bindings);
@@ -391,17 +408,19 @@ export async function prepareStreaming(
     failure = error;
   }
   try {
-    await settleNativeCleanup(
-      [
-        () => merged?.dispose(),
-        () => accepted?.dispose(),
-        () => restored?.dispose(),
-        ...downloads.map((download) => () => download.dispose()),
-        ...[...snapshots].map(
-          (snapshot) => () => (failure === undefined ? snapshot.dispose() : snapshot.retire()),
-        ),
-      ],
-      failure,
+    await timed(options, 'cleanup and retirement', () =>
+      settleNativeCleanup(
+        [
+          () => merged?.dispose(),
+          () => accepted?.dispose(),
+          () => restored?.dispose(),
+          ...downloads.map((download) => () => download.dispose()),
+          ...[...snapshots].map(
+            (snapshot) => () => (failure === undefined ? snapshot.dispose() : snapshot.retire()),
+          ),
+        ],
+        failure,
+      ),
     );
   } catch (error) {
     failure = error;

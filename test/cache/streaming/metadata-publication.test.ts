@@ -66,7 +66,11 @@ async function fixture(files = 2) {
     });
   const captureBefore = { ...f.store.root.work },
     captureCodecBefore = { ...recordEncodingWork };
-  const source = await MetadataPublicationSource.capture(f.store, '', { budget: f.budget });
+  const timingLogs: string[] = [];
+  const source = await MetadataPublicationSource.capture(f.store, '', {
+    budget: f.budget,
+    timing: { now: () => 0, info: (s) => timingLogs.push(s) },
+  });
   const initialCapture = Object.fromEntries(
     Object.entries(f.store.root.work).map(([k, v]) => [
       k,
@@ -91,7 +95,7 @@ async function fixture(files = 2) {
     lookupCache: lookup,
     isMissingPathsError: () => false,
   };
-  return { ...f, source, backend, save, restore, lookup, initialCapture, captureCodec };
+  return { timingLogs, ...f, source, backend, save, restore, lookup, initialCapture, captureCodec };
 }
 it('publishes descriptor-only multi-root objects, returning each before the next save and record last', async () => {
   const f = await fixture(),
@@ -300,6 +304,9 @@ it('keeps relocation/return work fixed as descendants grow, charging capture, na
       return save(paths, key, options);
     };
     await publishMetadataBase(f.source, sdk.backend, request);
+    expect(f.timingLogs.filter((s) => s.includes('Started base SDK save'))).toHaveLength(2);
+    expect(f.timingLogs.filter((s) => s.includes('Started partition staging'))).toHaveLength(2);
+    expect(f.timingLogs).toHaveLength(20);
     await f.source.dispose();
     const codec = Object.fromEntries(
       Object.entries(recordEncodingWork).map(([k, v]) => [

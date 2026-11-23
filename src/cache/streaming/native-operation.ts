@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import type { TimingOptions } from '../../util/timing';
+
 import type { WorkingBudget } from './tree-state';
 
-export interface NativeOperationOptions {
+export interface NativeOperationOptions extends TimingOptions {
   readonly budget: WorkingBudget;
   readonly signal?: AbortSignal;
   readonly maxDirectoryEntries?: number;

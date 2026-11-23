@@ -44,7 +44,10 @@ afterEach(async () => {
 async function fixture(readOnly = false, allowance = 100000) {
   const f = await composedFixture();
   fixtures.push(f);
+  const logs: string[] = [];
+  const timing = { now: () => 0, info: (s: string) => logs.push(s) };
   const ready = await prepareStreaming({
+    timing,
     ...f.request,
     maxDirectoryEntries: allowance,
     policy: {
@@ -56,12 +59,13 @@ async function fixture(readOnly = false, allowance = 100000) {
   const artifacts = memoryArtifacts();
   const post = (backend = artifacts.api) =>
     postStreamingWorker({
+      timing,
       anchor: ready.anchor,
       budget: f.budget,
       assertCurrent: (): undefined => {},
       artifactBackend: async () => backend,
     });
-  return { ...f, ready, artifacts, post };
+  return { ...f, ready, artifacts, post, logs };
 }
 it.each([false, true])(
   'uploads a real direct worker artifact including empty completion=%s, without a snapshot shadow',
@@ -71,6 +75,12 @@ it.each([false, true])(
     if (!empty) await f.files('', { 'data/new': 'body', 'state/mine': 'snapshot' });
     const result = await f.post();
     expect(result.outcome).toBe('worker-uploaded');
+    expect(f.logs.some((s) => s.includes('Finished worker package construction'))).toBe(true);
+    expect(
+      f.logs.some(
+        (s) => s.includes('Finished outgoing worker SDK save') && s.includes('(confirmed)'),
+      ),
+    ).toBe(true);
     expect(copy).not.toHaveBeenCalled();
     const uploadedState = f.ready.store.codec.schemas.documents['local-state'].parse(
       await f.ready.store.state(),

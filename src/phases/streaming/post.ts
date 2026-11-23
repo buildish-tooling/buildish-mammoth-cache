@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { timed } from '../../util/timing';
+import { hostTiming } from '../../host/timing';
 import {
   decideSingleRunFinalizeExecution,
   JOB_PREPARE_FAILED_STATE,
@@ -54,7 +56,7 @@ function assertCleanup(d: StreamingPostDependencies) {
 }
 // Protocol: docs/dev/cache-lifecycle-protocol.md#provider-composition-and-activation-boundary.
 // Guard graph deliberately has no provider SDK, configuration-reader or build-tool runtime import.
-export async function runStreamingPost(d: StreamingPostDependencies) {
+async function runStreamingPostImpl(d: StreamingPostDependencies) {
   const host = d.runtimeHost,
     decision = decideSingleRunFinalizeExecution(host);
   if (!decision.shouldRun) {
@@ -178,4 +180,14 @@ async function emit(
     ]);
   assertCurrent(d);
   return sink;
+}
+
+export async function runStreamingPost(input: StreamingPostDependencies) {
+  const d = { ...input, timing: input.timing ?? hostTiming(input.runtimeHost) };
+  return timed(
+    d,
+    'finalization',
+    () => runStreamingPostImpl(d),
+    (result) => result.outcome,
+  );
 }

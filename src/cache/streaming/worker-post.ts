@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { timed } from '../../util/timing';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
 import type { LifecycleOptions } from './lifecycle-options';
 import { PostAttempt } from './lifecycle-attempt';
@@ -66,11 +67,13 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
       const options = { ...request, signal: attempt.signal, attempt };
       await request.removeHooks?.();
       await attempt.guard();
-      const observation = await captureObservations(store, {
-        ...options,
-        retainIndex: true,
-        summaries: request.summaries,
-      });
+      const observation = await timed(options, 'observation capture and index construction', () =>
+        captureObservations(store, {
+          ...options,
+          retainIndex: true,
+          summaries: request.summaries,
+        }),
+      );
       captured = observation.index!;
       let backend: WorkflowArtifactBackend | undefined;
       try {
@@ -91,29 +94,41 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         await attempt.finish(['outcome', 'abandoned', null, null, null]);
         answer = { outcome: 'abandoned' };
       } else {
-        owner = await GcSurvivorOwner.execute(captured, options);
+        owner = await timed(options, 'GC', () => GcSurvivorOwner.execute(captured!, options));
         captured = undefined;
-        const archive = await freezeWorkerArtifact(
-          backend,
-          store,
-          { survivors: owner },
-          request.budget,
-          options,
+        const archive = await timed(options, 'worker package construction', () =>
+          freezeWorkerArtifact(backend, store, { survivors: owner! }, request.budget, options),
         );
         await attempt.guard();
         let receipt: Awaited<ReturnType<typeof uploadWorkerArtifact>> | undefined;
         try {
-          receipt = await uploadWorkerArtifact(backend, archive, {
-            signal: attempt.signal,
-            retentionDays: attempt.handoff.header[5],
-          });
+          receipt = await timed(
+            options,
+            'outgoing worker SDK save',
+            () =>
+              uploadWorkerArtifact(backend, archive, {
+                signal: attempt.signal,
+                retentionDays: attempt.handoff.header[5],
+              }),
+            () => 'confirmed',
+            (e) =>
+              e instanceof WorkerUploadUnconfirmed
+                ? 'abandoned/unconfirmed'
+                : options.signal?.aborted
+                  ? 'cancelled'
+                  : 'failed',
+          );
         } catch (error) {
           if (!(error instanceof WorkerUploadUnconfirmed)) throw error;
           request.onWarning?.(error.message);
         }
         if (receipt) {
           await attempt.guard();
-          await archive.retireUploaded();
+          await timed(
+            { timing: request.timing, signal: request.cleanupSignal },
+            'worker package retirement',
+            () => archive.retireUploaded(),
+          );
           await owner.dispose();
           owner = undefined;
           await attempt.finish([
@@ -136,7 +151,9 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     failure = error;
   }
   try {
-    await settleNativeCleanup([() => owner?.dispose(), () => captured?.dispose()], failure);
+    await timed(request, 'cleanup and retirement', () =>
+      settleNativeCleanup([() => owner?.dispose(), () => captured?.dispose()], failure),
+    );
   } finally {
     attempt.close();
   }

@@ -53,7 +53,21 @@ it('completes actual prepare/build/native return/record publication and reads on
   const f = await fixture(),
     ready = await f.prepare();
   await f.files(f.root, { 'data/a': 'body' });
-  const result = await post(f, ready.anchor);
+  const logs: string[] = [];
+  const result = await post(f, ready.anchor, {
+    timing: { now: () => 0, info: (s) => logs.push(s) },
+  });
+  for (const label of [
+    'required quiescence',
+    'observation capture and index construction',
+    'GC',
+    'base publication',
+    'partition staging',
+    'generation SDK save',
+    'source return',
+  ]) {
+    expect(logs.some((s) => s.includes('Finished ' + label))).toBe(true);
+  }
   expect(result.outcome).toBe('published');
   expect(result.key).toBeTruthy();
   expect(f.save).toHaveBeenCalledTimes(2);
@@ -76,7 +90,13 @@ it('reuses exact prior choices without saves on a fresh invocation', async () =>
   const first = await post(f, ready.anchor);
   const next = await f.prepare({ nonce: 'b'.repeat(32) }),
     before = f.save.mock.calls.length;
-  expect(await post(f, next.anchor)).toEqual({ outcome: 'no-change', key: first.key });
+  const logs: string[] = [];
+  expect(await post(f, next.anchor, { timing: { info: (s) => logs.push(s) } })).toEqual({
+    outcome: 'no-change',
+    key: first.key,
+  });
+  expect(logs.some((s) => s.includes('(reuse)'))).toBe(true);
+  expect(logs.some((s) => s.includes('SDK save'))).toBe(false);
   expect(f.save).toHaveBeenCalledTimes(before);
 });
 it.each([
@@ -181,4 +201,26 @@ it('checks fresh Gradle quiescence before hook removal, observation or backend c
   expect(backend).not.toHaveBeenCalled();
   expect(hooks).not.toHaveBeenCalled();
   expect(f.save).not.toHaveBeenCalled();
+});
+
+it('identifies saved and reused partitions when only one partition changes', async () => {
+  const f = await fixture(),
+    ready = await f.prepare();
+  await f.files(f.root, { 'data/a': 'first', 'state/a': 'stable' });
+  await post(f, ready.anchor);
+  const next = await f.prepare({ nonce: 'b'.repeat(32) });
+  await f.files(f.root, { 'data/a': 'changed body' });
+  const logs: string[] = [],
+    before = f.save.mock.calls.length;
+  expect(
+    (await post(f, next.anchor, { timing: { now: () => 0, info: (s) => logs.push(s) } })).outcome,
+  ).toBe('published');
+  expect(f.save.mock.calls.length - before).toBe(2);
+  expect(logs).toContain('Mammoth: partition publication [partition=state] (reuse).');
+  expect(
+    logs.some(
+      (s) => s.includes('Finished base SDK save [partition=data]') && s.includes('(confirmed)'),
+    ),
+  ).toBe(true);
+  expect(logs.some((s) => s.includes('SDK save [partition=state]'))).toBe(false);
 });
