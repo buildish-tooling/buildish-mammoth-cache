@@ -1,9 +1,9 @@
 {
-  "enabled": false,
-  "id": "issue18-r2-graph-20261123-1712",
+  "enabled": true,
+  "id": "issue18-r2-scale-20261123-1750",
   "retainedCounts": [100000],
   "reservationMiB": 2048,
-  "maximumQualificationJobs": 9,
-  "maximumAllocatedJobMinutes": 180,
-  "route": "resume-graph"
+  "maximumQualificationJobs": 1,
+  "maximumAllocatedJobMinutes": 17,
+  "route": "resume-scale"
 }
