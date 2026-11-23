@@ -24,12 +24,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const patchedTarRoot = 'build/patched-tar-stream';
 const upstream = {
-  'extract.js': 'dcdbac54ad8316508160b677e039da33698e57f5e193558899b8e040bc6325ff',
-  'headers.js': 'c357da39df0205ad01b0861af153902586237c4e6e9ab0cddd12336ce4f03e79',
+  'extract.js': '4eb36f38fc7d52cb9019ca272fe3c79104a4b36431762f2984a22cdbdc56ed48',
+  'headers.js': '68cb61b9c586da6bf7e2a1f00c217d7e7ef2d2a500003627a5b05cbb0c389c5c',
   'index.js': '0db9eceef5224dbc34c224c398b50eef4b99f937c80c81f660928615a248ed4f',
   'constants.js': '6dcd4aa7d4ab7876c54b28bc6bf281e9d6423787b17eae4353a87af34605972e',
-  'pack.js': '9885de07c3fc948aeebdec5e113f536c3e540230a3f0a24c82c3e80339bc8235',
-  'package.json': '3a3449df0cb466c4b45481691ed385d07c7c1d616bafaa7c8cf71f8bd9203045',
+  'pack.js': 'a2d3eb7e8431743c08d0ecae8897a677c9cdec0b18f81022659d1ef6c7994687',
+  'package.json': 'bcbc78fa5896d664c116de1745b819010cb968ce9d02adcee327af2f4aa1a976',
   LICENSE: '3fe8d55a98dbf260eace67c00cf9bc53edb46234e840098a0b93df3096b97fb6',
 };
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -41,7 +41,7 @@ export function prepareTarStream() {
   const files = new Map();
   for (const [name, sha] of Object.entries(upstream)) {
     const bytes = fs.readFileSync(path.join(source, name));
-    if (hash(bytes) !== sha) throw new Error(`tar-stream 3.2.2 source mismatch: ${name}`);
+    if (hash(bytes) !== sha) throw new Error(`tar-stream 3.3.0 source mismatch: ${name}`);
     files.set(name, bytes);
   }
   const patchDir = path.join(root, 'patches/tar-stream');

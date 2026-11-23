@@ -24,7 +24,7 @@
  
  const EMPTY = b4a.alloc(0)
  const MAX_HEADER_SIZE = 4 * 1024 * 1024 // arbitrary big number
-@@ -106,6 +108,8 @@
+@@ -109,6 +111,8 @@
  
      if (!opts) opts = {}
  
@@ -33,7 +33,7 @@
      this._buffer = new BufferList()
      this._offset = 0
      this._header = null
-@@ -142,7 +146,18 @@
+@@ -146,7 +150,18 @@
      this._offset = this._buffer.shifted
  
      try {
@@ -53,7 +53,7 @@
      } catch (err) {
        this._continueWrite(err)
        return false
-@@ -167,7 +182,14 @@
+@@ -171,7 +186,14 @@
      }
  
      this._locked = true
@@ -68,16 +68,24 @@
  
      if (!(this._header.size >= 0)) {
        this._continueWrite(new Error('Invalid header'))
-@@ -218,7 +240,7 @@
-         this._paxGlobal = headers.decodePax(buf)
+@@ -222,9 +244,13 @@
+         this._paxGlobal = validatePax(headers.decodePax(buf))
          break
        case 'pax-header':
 -        this._pax = this._paxGlobal === null
-+        this._pax = this._mammothStrict ? mammoth.decodePax(buf) : this._paxGlobal === null
-           ? headers.decodePax(buf)
-           : Object.assign({}, this._paxGlobal, headers.decodePax(buf))
+-          ? validatePax(headers.decodePax(buf))
+-          : Object.assign({}, this._paxGlobal, validatePax(headers.decodePax(buf)))
++        if (this._mammothStrict) {
++          this._pax = validatePax(mammoth.decodePax(buf))
++        } else {
++          this._pax = this._paxGlobal === null
++            ? validatePax(headers.decodePax(buf))
++            : Object.assign({}, this._paxGlobal, validatePax(headers.decodePax(buf)))
++        }
          break
-@@ -276,7 +298,13 @@
+     }
+   }
+@@ -288,7 +314,13 @@
          }
  
          const ignore = this._buffer.shiftFirst(this._missing)
@@ -92,7 +100,7 @@
          continue
        }
  
-@@ -300,7 +328,8 @@
+@@ -312,7 +344,8 @@
    }
  
    _final (cb) {

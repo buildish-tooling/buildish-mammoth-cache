@@ -17,17 +17,17 @@ limitations under the License.
 # Mammoth tar-stream patch
 
 This directory owns the opt-in worker TAR profile described in
-`docs/dev/cache-protocol.md#tar-profile`. `tar-stream` is pinned to 3.2.2.
+`docs/dev/cache-protocol.md#tar-profile`. `tar-stream` is pinned to 3.3.0.
 The installed package is never modified. `scripts/prepare-tar-stream.mjs` verifies
 upstream source hashes and applies `extract.patch` with Git into the ignored
 `build/patched-tar-stream/` directory, alongside `mammoth.cjs` and the narrow types.
 Compilation, Vitest configuration and distribution legal analysis prepare this copy.
 Build inputs include the patch, so an incremental build notices changes.
 
-The 3.2.2 parser/packer JavaScript and license are unchanged from 3.2.0; the
-extraction patch applies unchanged. The generated copy intentionally uses our
-narrow `index.d.ts`, including the patched API, in place of the upstream declarations
-added in 3.2.1. Upstream's package exports resolve to that generated declaration file.
+The patch checks padding within 3.3.0's guarded extraction loop and uses upstream's
+PAX path validation after strict PAX decoding. The worker writer still uses local
+PAX for fractional or post-2038 timestamps. The generated copy uses the narrow
+`index.d.ts` with the patched API at the upstream package's types export.
 
 `mammothStrict: true` selects the profile on an individual extractor; absent/false
 uses upstream behavior. Application grammar and model ownership belong to the worker

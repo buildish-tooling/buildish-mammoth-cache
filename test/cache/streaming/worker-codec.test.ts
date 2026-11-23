@@ -220,13 +220,22 @@ async function* simpleEvents(time = 0, used = 'b'): AsyncGenerator<WorkerEvent> 
   yield { type: 'dir-close', path: '' };
   yield { type: 'channel-close' };
 }
-it.each([2147483648000, 1700000000123, Number.MAX_SAFE_INTEGER])(
-  'emits exact PAX time %i without Date/2038 truncation',
-  async (time) => {
+it.each([
+  [2147483647000, null],
+  [2147483648000, '2147483648'],
+  [1700000000123, '1700000000.123'],
+  [8589934592000, '8589934592'],
+  [Number.MAX_SAFE_INTEGER, '9007199254740.991'],
+] as const)(
+  'preserves the wire representation and exact milliseconds for timestamp %i',
+  async (time, paxTime) => {
     const out = await write(
       { ...simple(), snapshots: [], assertStable: guard },
       simpleEvents(time),
     );
+    const raw = gunzipSync(out.bytes);
+    expect(raw.includes(' mtime=')).toBe(paxTime !== null);
+    if (paxTime !== null) expect(raw.includes(` mtime=${paxTime}\n`)).toBe(true);
     let actual = -1;
     const opts = simple();
     await readWorkerArchive(byteSource(out.bytes), {

@@ -60,6 +60,26 @@ describe('opt-in worker TAR profile', () => {
     await expect(parse(bytes)).rejects.toThrow('duplicate PAX');
     expect(await parse(tarMember('plain'), false)).toHaveLength(1);
   });
+  it('continues through buffered entries and TAR ends after synchronous acknowledgments', async () => {
+    const ex = extract({ mammothStrict: true });
+    const names: string[] = [];
+    ex.on('entry', (header, body, next) => {
+      names.push(header.name);
+      body.resume();
+      next();
+    });
+    const expected = ['payload/aggregate/a', 'payload/aggregate/b', 'payload/aggregate/c'];
+    const bytes = Buffer.concat([...expected.map((name) => tarMember(name)), ends]);
+    await pipeline(Readable.from([bytes]), ex);
+    expect(names).toEqual(expected);
+  });
+  it('forwards an entry consumer cancellation to the extractor', async () => {
+    const ex = extract({ mammothStrict: true });
+    const reason = new Error('entry consumer canceled');
+    ex.on('entry', (_header, body) => body.destroy(reason));
+    const bytes = Buffer.concat([tarMember('payload/aggregate/f', Buffer.from('abc')), ends]);
+    await expect(pipeline(Readable.from([bytes]), ex)).rejects.toBe(reason);
+  });
   it('rejects unknown/duplicate keys before decoding their invalid values', () => {
     expect(() => helper.decodePax(paxRecord('other', Buffer.from([255])))).toThrow('PAX key');
     expect(() =>
