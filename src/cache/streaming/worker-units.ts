@@ -199,7 +199,9 @@ export async function mergeCompleteUnit(
     if (new Set(comparisons).size > 1) {
       if ([...policies][0] !== 'choose-worker-directory')
         throw new Error('Prohibited complete-unit conflict.');
-      context.warning('Selected complete worker unit at ' + root);
+      context.warning(
+        `Worker contributions differ at ${root}; selected complete unit from worker ${winner!.input.job} (choose-worker-directory).`,
+      );
     }
   } finally {
     await cleanup();

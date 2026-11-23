@@ -532,7 +532,9 @@ it('preserves bounded differing-contribution diagnostics from the real worker me
   expect(warnings).toHaveBeenCalledTimes(1);
   expect(warnings.mock.calls[0][0]).toEqual({
     count: 1,
-    details: ['Selected complete worker unit at repository/org/example/lib/1'],
+    details: [
+      'Worker contributions differ at repository/org/example/lib/1; selected complete unit from worker A (choose-worker-directory).',
+    ],
   });
   expect(await readFile(f.store.root.resolve('repository/org/example/lib/1/shared'), 'utf8')).toBe(
     'A',
