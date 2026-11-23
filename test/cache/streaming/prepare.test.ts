@@ -569,12 +569,18 @@ it('restores v2 native objects with exact fallback lineage and independent selec
       state: { 'state/new': 'snapshot' },
     });
   await f.files('', { 'data/old': 'prune', 'state/old': 'replace' });
+  const artifacts = memoryArtifacts();
   const ready = await prepareStreaming({
     ...f.request,
     cacheBackend: async () => source.api,
+    artifactBackend: async () => artifacts.api,
     currentRef: 'refs/heads/feature',
     defaultRef: 'refs/heads/main',
-    policy: { ...f.request.policy, restoreCleanup: 'prune-managed' },
+    policy: {
+      ...f.request.policy,
+      role: 'distributed-aggregator',
+      restoreCleanup: 'prune-managed',
+    },
   });
   expect(ready.restoreStatus).toBe('fallback-lineage-hit');
   expect(ready.restoredKey).toBe(generation[11]);

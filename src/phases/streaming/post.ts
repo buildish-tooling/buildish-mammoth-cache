@@ -104,13 +104,17 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
   const warnings: string[] = [];
   const onWarning = (message: string) => {
     warnings.push(message);
+    // Retained paths must remain visible even if cancellation or reporting fails later.
+    host.warning(message);
   };
   try {
     const removeHooks = async () => {
       assertCurrent(d);
-      warnings.push(
-        ...(await d.removeHooks(opened.store.root.path, opened.store.codec.options.context[7])),
-      );
+      for (const warning of await d.removeHooks(
+        opened.store.root.path,
+        opened.store.codec.options.context[7],
+      ))
+        onWarning(warning);
       assertCurrent(d);
     };
     const result =
@@ -134,24 +138,19 @@ export async function runStreamingPost(d: StreamingPostDependencies) {
               removeHooks,
             });
     if (result.outcome === 'skipped-not-quiescent') {
-      host.warning('Cache save skipped: ' + (result.message ?? 'consumers remain.'));
+      if (!result.message || !warnings.includes(result.message))
+        host.warning('Cache save skipped: ' + (result.message ?? 'consumers remain.'));
       return result;
     }
     if (
       result.outcome === 'feature-unavailable' &&
       !warnings.includes('Cache save skipped: cache backend is unavailable.')
     )
-      warnings.push('Cache save skipped: cache backend is unavailable.');
+      onWarning('Cache save skipped: cache backend is unavailable.');
     if (result.outcome === 'read-only') await removeHooks();
-    if (opened.store.codec.options.role === 'distributed-aggregator')
-      for (const p of opened.store.codec.options.model.partitions)
-        if (p[3] === 'single-writer' && p[4] === null)
-          host.warning(
-            `Partition '${p[0]}' has no configured snapshot writer; preserving its prepared snapshot.`,
-          );
     // Core recovery, observation/purge, source return and receipt precede these content/provider reads.
     const report = await d.loadReport(opened.store.codec.options.context[7], facts.header[4]);
-    const sink = await emit(host, d, report, warnings, result.outcome);
+    const sink = await emit(host, d, report, [], result.outcome);
     summaries?.emit(host, sink);
     return result;
   } finally {

@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { ownsLocalSnapshot } from './model';
 import { tuple, type Value } from './encoding';
 import type { OwnedStore } from './owned-store';
 import type { NativeIdentity } from './native';
@@ -75,7 +76,7 @@ export class WorkerSources {
       channels: WorkerSpool[] = [],
       snapshots = Object.freeze(
         store.codec.options.model.partitions
-          .filter((p) => p[3] === 'single-writer' && p[4] === store.codec.options.context[4])
+          .filter((p) => ownsLocalSnapshot(p, store.codec.options))
           .map((p) => p[0]),
       ),
       result = new WorkerSources(store, budget, owner, channels, snapshots, release);

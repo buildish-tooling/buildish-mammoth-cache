@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { ownsLocalSnapshot } from './model';
 import type { PostAttempt } from './lifecycle-attempt';
 import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore, Reference } from './owned-store';
@@ -321,8 +322,7 @@ export async function captureObservations(
         mark(e.path, false);
         const p = owner(e.path)!;
         const imported = await activity.take('file', e.path),
-          localSnapshot =
-            p[3] === 'single-writer' && (p[4] === null || p[4] === codec.options.context[4]);
+          localSnapshot = ownsLocalSnapshot(p, codec.options);
         const act: Activity =
           localSnapshot ||
           imported === 'upsert' ||

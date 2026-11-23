@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import type { LocalOptions } from './local-schema';
 import { createCacheGlobMatcher } from '../manifest';
 import { validatePartitionConflictHandling, type CacheModel } from '../model';
 import { isCacheMetadataPath } from '../metadata-paths';
@@ -66,6 +67,20 @@ export const partitionDefinitionSchema = z
     }
   });
 export type Partition = z.infer<typeof partitionDefinitionSchema>;
+/** The writable job whose complete local snapshot is authoritative for publication. */
+export function ownsLocalSnapshot(
+  partition: Partition,
+  options: Pick<LocalOptions, 'role' | 'access' | 'context'>,
+): boolean {
+  return (
+    options.access === 'writable' &&
+    partition[3] === 'single-writer' &&
+    (options.role === 'standalone' ||
+      partition[4] === options.context[4] ||
+      (options.role === 'distributed-aggregator' && partition[4] === null))
+  );
+}
+
 export const modelSchema = z
   .tuple([
     z.literal('model'),

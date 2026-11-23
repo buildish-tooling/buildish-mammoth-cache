@@ -34,7 +34,7 @@ Integrated review, complete-pipeline resource/platform qualification, release
 cleanup and final cutover review remain release gates. Implementation does not
 establish large-cache scale, throughput or RSS/paging qualification, or additional
 platform support. This page does not describe the released worker format or
-announce availability. The `v1` profile names below identify the proposed protocol,
+announce availability. The profile names below identify the proposed protocol,
 independently of the Mammoth release number. Mixed old/new workers are unsupported;
 old base caches start cold under a new cache family. All cooperating jobs must
 upgrade together.
@@ -614,8 +614,10 @@ active `native-metadata-v2`, `generation-v2` and `local-v2` family cut. SDK obje
 contain only the bounded identity descriptor and literal native payload. Original
 metadata discovery feeds one active hierarchy and local metadata summary; no base
 body hashes, archived file lists or main/post per-file replay recipes survive.
-The strict worker v1 body/header hashes, conflicts, every losing contribution,
-late seals and clean archive EOF remain mandatory.
+The `worker-tar-v2` profile still requires content SHA-256 checks, effective header
+facts in both channel and archive event digests, immediate `file-meta` pairing,
+conflict checks, validation of every losing contribution, late seals and clean
+archive EOF.
 
 ### Save and restore lifecycle boundaries
 

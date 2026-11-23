@@ -295,9 +295,21 @@ it.each(['disabled', 'read-only'] as const)(
     expect(f.loadReport).toHaveBeenCalledTimes(1);
   },
 );
-it('a denied Gradle window does not load report/sink/backend SDK dependencies', async () => {
+it('a denied Gradle window reports retained activity once without report/sink/backend SDK dependencies', async () => {
   const f = await fixture('gradle');
   await runStreamingPrepare(f.deps);
+  const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
+  if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  const opened = await OpenedInvocation.open(anchor, f.budget);
+  const facts = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
+  let activityPath: string;
+  try {
+    activityPath = opened.store.root.resolve(facts.header[9][2]);
+  } finally {
+    facts.close();
+  }
+  const original = await readFile(activityPath);
+  const warning = vi.spyOn(f.host, 'warning');
   expect(
     (
       await runStreamingPost({
@@ -306,6 +318,13 @@ it('a denied Gradle window does not load report/sink/backend SDK dependencies', 
       })
     ).outcome,
   ).toBe('skipped-not-quiescent');
+  expect(warning).toHaveBeenCalledTimes(1);
+  expect(warning.mock.calls[0][0]).toMatch(/^Cache save skipped: /);
+  expect(warning.mock.calls[0][0]).toContain(activityPath);
+  expect(warning.mock.calls[0][0]).toContain(
+    'owned snapshots/activity retained for manual handling',
+  );
+  expect(await readFile(activityPath)).toEqual(original);
   expect(f.backend).not.toHaveBeenCalled();
   expect(f.loadReport).not.toHaveBeenCalled();
   expect(f.sink.publishSummary).not.toHaveBeenCalled();
@@ -557,3 +576,99 @@ it('routes an actual local return failure through the GitHub entrypoint to setFa
     vi.doUnmock('../../../src/ci/github/streaming');
   }
 });
+
+it('publishes an unassigned aggregator snapshot without a false preservation warning', async () => {
+  const f = await fixture('maven', {
+    'job-mode': 'distributed-aggregator',
+    'cache-partitions': JSON.stringify([{ id: 'data', publication: 'single-writer' }]),
+  });
+  await runStreamingPrepare(f.deps);
+  await mkdir(path.join(f.home, 'data'), { recursive: true });
+  await writeFile(path.join(f.home, 'data/local'), 'local');
+  const warning = vi.spyOn(f.host, 'warning');
+  expect((await runStreamingPost(f.post)).outcome).toBe('published');
+  expect(warning).not.toHaveBeenCalled();
+});
+
+it.each(['cancel', 'report', 'sink-factory', 'sink-publish'] as const)(
+  'reports a retained real worker package once despite later %s failure',
+  async (stage) => {
+    const f = await fixture('maven', { 'job-mode': 'distributed-worker' });
+    await runStreamingPrepare(f.deps);
+    await mkdir(f.home + '/data');
+    await writeFile(f.home + '/data/a', 'body');
+    const warning = vi.spyOn(f.host, 'warning'),
+      controller = new AbortController();
+    let started!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let packagePath = '',
+      original: Buffer | undefined;
+    f.artifacts.upload.mockImplementationOnce(async (_name, files) => {
+      packagePath = files[0];
+      original = await readFile(packagePath);
+      started();
+      await gate; // Raw backend cannot be cancelled while settling this upload.
+      throw new Error('upload response lost');
+    });
+    const later = new Error(stage + ' failed');
+    const pending = runStreamingPost({
+      ...f.post,
+      signal: controller.signal,
+      loadReport:
+        stage === 'report'
+          ? async () => {
+              throw later;
+            }
+          : f.post.loadReport,
+      reportSink:
+        stage === 'sink-factory'
+          ? async () => {
+              throw later;
+            }
+          : stage === 'sink-publish'
+            ? async () => ({
+                ...f.sink,
+                publishSummary: async () => {
+                  throw later;
+                },
+              })
+            : f.post.reportSink,
+    });
+    const rejected = expect(pending).rejects.toThrow(
+      stage === 'cancel' ? 'cancel publication' : later.message,
+    );
+    try {
+      await entered;
+      expect(original!.length).toBeGreaterThan(0);
+      expect(warning).not.toHaveBeenCalled();
+      if (stage === 'cancel') controller.abort(new Error('cancel publication'));
+    } finally {
+      release();
+    }
+    await rejected;
+    expect(warning.mock.calls.map(([message]) => message)).toEqual([
+      'Raw worker upload unconfirmed; retain immutable package at ' + packagePath,
+    ]);
+    expect(await readFile(packagePath)).toEqual(original);
+    expect(f.artifacts.upload).toHaveBeenCalledTimes(1);
+    expect(f.artifacts.objects.size).toBe(0);
+    expect(f.artifacts.list).not.toHaveBeenCalled();
+    expect(f.artifacts.get).not.toHaveBeenCalled();
+    expect(f.artifacts.download).not.toHaveBeenCalled();
+    const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
+    if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+    const opened = await OpenedInvocation.open(anchor, f.budget);
+    expect(opened.state[7]).toEqual(
+      stage === 'cancel' ? null : ['outcome', 'abandoned', null, null, null],
+    );
+    expect(opened.state[4]).toBe(stage === 'cancel' ? 'post-active' : 'completed');
+    if (stage === 'cancel') expect(f.loadReport).not.toHaveBeenCalled();
+    if (stage === 'cancel' || stage === 'report' || stage === 'sink-factory')
+      expect(f.sink.publishSummary).not.toHaveBeenCalled();
+  },
+);

@@ -44,7 +44,7 @@ To publish metadata updates in distributed mode, designate a writer: prefer an e
 whose dependency resolution is representative, and use matching partition settings everywhere. Its snapshot covers that
 worker's resolution view, not a union of all workers' metadata indexes. Other workers' downloaded
 artifacts can aggregate while their metadata still needs online refill. With no writer configured,
-the previous snapshot is retained with a warning. Follow the
+the aggregator publishes its own complete snapshot. Follow the
 [metadata writer and optional-writer examples](../distributed-jobs/#gradle-metadata-writer).
 
 ## Preserve write policy and participation

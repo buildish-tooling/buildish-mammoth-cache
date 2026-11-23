@@ -39,7 +39,6 @@ import { OpenedInvocation } from '../../../src/cache/streaming/invocation';
 import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot';
 import { WorkerNativeIndex } from '../../../src/cache/streaming/worker-native';
 import { NativeRoot } from '../../../src/cache/streaming/native';
-import * as gcExecution from '../../../src/cache/streaming/gc-execute';
 import * as observationCapture from '../../../src/cache/streaming/observation-capture';
 import { RecoveryGroups } from '../../../src/cache/streaming/native-records';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
@@ -236,7 +235,7 @@ it('joins actual worker post body production, required archive merge/install and
   await assertNoCatalogue(merged, true);
 });
 
-function snapshotModel() {
+function snapshotModel(writer: string | null = 'A') {
   const hard = ['.mammoth/**'];
   return resolveModel(
     [
@@ -246,7 +245,7 @@ function snapshotModel() {
       hard,
       [
         ['data', ['data/**'], hard, 'aggregate', null, 'default'],
-        ['state', ['state/**'], hard, 'single-writer', 'A', 'default'],
+        ['state', ['state/**'], hard, 'single-writer', writer, 'default'],
       ],
     ],
     'snapshot-lifecycle-',
@@ -280,7 +279,11 @@ async function seedSnapshots(sdk: Awaited<ReturnType<typeof backend>>) {
 it('retires successful post snapshot/activity owners and completed diagnostics never reopen their stale refs', async () => {
   const sdk = await backend();
   await seedSnapshots(sdk);
-  const f = await prepare(sdk.api, '2'.repeat(32), { model: snapshotModel() }),
+  const f = await prepare(sdk.api, '2'.repeat(32), {
+      model: snapshotModel(),
+      role: 'distributed-aggregator',
+      artifacts: memoryArtifacts().api,
+    }),
     data = await handoff(f),
     snapshot = data.entries.find((entry) => entry[1] === 'state')![4]!;
   expect(await readFile(f.store.root.resolve(snapshot[1] + '/state/shared/a'), 'utf8')).toBe(
@@ -309,7 +312,11 @@ it('retires successful post snapshot/activity owners and completed diagnostics n
 it('treats outgoing availability throws as abandonment and retires only current known snapshot/activity data', async () => {
   const sdk = await backend();
   await seedSnapshots(sdk);
-  const f = await prepare(sdk.api, '3'.repeat(32), { model: snapshotModel() }),
+  const f = await prepare(sdk.api, '3'.repeat(32), {
+      model: snapshotModel(),
+      role: 'distributed-aggregator',
+      artifacts: memoryArtifacts().api,
+    }),
     data = await handoff(f),
     warnings: string[] = [];
   const admit = vi.spyOn(MetadataSnapshot, 'admit'),
@@ -334,37 +341,53 @@ it('treats outgoing availability throws as abandonment and retires only current 
   expect(await readdir(f.store.root.resolve(f.store.prefix + 'snapshots'))).toEqual([]);
   await assertNoCatalogue(f, true);
 });
-it('reports exact retained current paths when no safe quiescent window exists', async () => {
-  const sdk = await backend();
-  await seedSnapshots(sdk);
-  const f = await prepare(sdk.api, '4'.repeat(32), { model: snapshotModel() }),
-    data = await handoff(f),
-    snapshot = data.entries.find((entry) => entry[4] !== null)![4]!;
-  const result = await postStreamingBase({
-    anchor: f.anchor,
-    budget: f.budget,
-    cacheBackend: async () => {
-      throw new Error('No SDK before window');
-    },
-    removeHooks: async () => {},
-    assertCurrent: (): undefined => {},
-    lifecycle: async () => ({
-      tool: 'maven',
-      prepareCapture: async () => {},
-      quiesce: async () => {
-        throw new Error('consumers remain');
+it.each(['standalone', 'distributed-aggregator'] as const)(
+  'retains current snapshot/activity ownership when %s has no safe quiescent window',
+  async (role) => {
+    const sdk = await backend();
+    await seedSnapshots(sdk);
+    const f = await prepare(sdk.api, '4'.repeat(32), {
+        model: snapshotModel(),
+        role,
+        artifacts: memoryArtifacts().api,
+      }),
+      data = await handoff(f);
+    const pending = postStreamingBase({
+      anchor: f.anchor,
+      budget: f.budget,
+      cacheBackend: async () => {
+        throw new Error('No SDK before window');
       },
-      verifyRecoveryConsumers: async () => {},
-      removeKnownHooks: async () => [],
-    }),
-  });
-  expect(result.outcome).toBe('skipped-not-quiescent');
-  expect(result.message).toContain(f.store.root.resolve(snapshot[1]));
-  expect(result.message).toContain(f.store.root.resolve(data.header[9][2]));
-  expect(await f.store.root.stat(snapshot[1])).not.toBeNull();
-  expect(await f.store.root.stat(data.header[9][2])).not.toBeNull();
-  expect(f.budget.retained).toBe(0);
-});
+      removeHooks: async () => {},
+      assertCurrent: (): undefined => {},
+      lifecycle: async () => ({
+        tool: 'maven',
+        prepareCapture: async () => {},
+        quiesce: async () => {
+          throw new Error('consumers remain');
+        },
+        verifyRecoveryConsumers: async () => {},
+        removeKnownHooks: async () => [],
+      }),
+    });
+    if (role === 'standalone') {
+      const result = await pending;
+      expect(result.outcome).toBe('skipped-not-quiescent');
+      expect(result.message).toContain(f.store.root.resolve(data.header[9][2]));
+    } else {
+      await expect(pending).rejects.toThrow(
+        'Required base post is not quiescent: consumers remain',
+      );
+      const snapshot = data.entries.find((entry) => entry[1] === 'state')![4]!;
+      expect(await f.store.root.stat(snapshot[1])).not.toBeNull();
+      expect(await readFile(f.store.root.resolve(snapshot[1] + '/state/shared/a'), 'utf8')).toBe(
+        'base-state',
+      );
+    }
+    expect(await f.store.root.stat(data.header[9][2])).not.toBeNull();
+    expect(f.budget.retained).toBe(0);
+  },
+);
 it('keeps actual survivor and copied snapshot indices alive through delayed SDK settlement after foreground cancellation', async () => {
   const sdk = await backend(),
     f = await prepare(sdk.api, '5'.repeat(32), { job: 'A', model: snapshotModel() });
@@ -568,7 +591,7 @@ it('writes one lineage-only bounded record using exact prior groups with no payl
   ).toBe(false);
   await assertNoCatalogue(feature, true);
 });
-it('publishes actual GC survivors from the original hierarchy with one counted post-mutation reconciliation', async () => {
+it('publishes actual GC survivors from the original hierarchy without recapture', async () => {
   const sdk = await backend(),
     root = await directory('gc-root');
   await mkdir(root + '/data/shared', { recursive: true });
@@ -578,20 +601,15 @@ it('publishes actual GC survivors from the original hierarchy with one counted p
   }
   const f = await prepare(sdk.api, 'c1'.repeat(16), { root, gcAgeMs: 60000 });
   await readFile(root + '/data/shared/used');
-  const execute = gcExecution.GcSurvivorOwner.execute;
-  let work: { directories: number; entries: number } | undefined;
-  vi.spyOn(gcExecution.GcSurvivorOwner, 'execute').mockImplementation(async (...args) => {
-    const owner = await execute(...args);
-    work = { ...owner.work };
-    return owner;
-  });
   const capture = vi.spyOn(MetadataPublicationSource, 'capture');
   expect((await post(f, sdk.api)).outcome).toBe('published');
   expect(await f.store.root.stat('data/shared/delete')).toBeNull();
   expect(await readFile(root + '/data/shared/used', 'utf8')).toBe('used');
-  expect(work?.directories).toBe(3);
   expect(capture).not.toHaveBeenCalled();
   await assertNoCatalogue(f, true);
+  const reader = await prepare(sdk.api, 'c2'.repeat(16));
+  expect(await reader.store.root.stat('data/shared/delete')).toBeNull();
+  expect(await readFile(reader.store.root.resolve('data/shared/used'), 'utf8')).toBe('used');
 });
 it('keeps original activity and actual pre-freeze purge outcomes without a base catalogue', async () => {
   const sdk = await backend(),
@@ -684,3 +702,114 @@ it('ignores directory own-clock changes in a real unchanged post', async () => {
   expect(sdk.saves).toHaveBeenCalledTimes(saves);
   await assertNoCatalogue(warm, true);
 });
+
+it.each([
+  ['standalone', 'remote', 'prior'],
+  ['standalone', 'remote', 'empty'],
+  ['standalone', 'remote', 'miss'],
+  ['distributed-aggregator', null, 'prior'],
+  ['distributed-aggregator', 'parent', 'prior'],
+  ['distributed-aggregator', null, 'empty'],
+  ['distributed-aggregator', null, 'miss'],
+] as const)(
+  'publishes local snapshot changes for %s writer=%s baseline=%s through a fresh post and reader',
+  async (role, writer, baseline) => {
+    const sdk = await backend(),
+      model = snapshotModel(writer);
+    if (baseline !== 'miss') {
+      const seed = await prepare(sdk.api, 'a4'.repeat(16), { model, job: writer ?? 'parent' });
+      if (baseline === 'prior')
+        await buildFiles(seed, {
+          'state/shared/change': 'previous',
+          'state/shared/delete': 'removed',
+        });
+      await post(seed, sdk.api);
+    }
+    const copy = vi.spyOn(MetadataSnapshot, 'copy'),
+      admit = vi.spyOn(MetadataSnapshot, 'admit');
+    const local = await prepare(sdk.api, 'a5'.repeat(16), { model, role });
+    expect(copy).not.toHaveBeenCalled();
+    expect((await handoff(local)).entries.find((e) => e[1] === 'state')![4]).toBeNull();
+    expect(await local.store.root.stat(local.store.prefix + 'snapshots')).toBeNull();
+    await rm(local.store.root.resolve('state/shared/delete'), { force: true });
+    await buildFiles(local, { 'state/shared/change': 'local-change', 'state/shared/add': 'added' });
+    expect((await post(local, sdk.api)).outcome).toBe('published');
+    expect(admit).not.toHaveBeenCalled();
+    expect(copy).toHaveBeenCalledTimes(1);
+    const reader = await prepare(sdk.api, 'a6'.repeat(16), { model });
+    expect(await readFile(reader.store.root.resolve('state/shared/change'), 'utf8')).toBe(
+      'local-change',
+    );
+    expect(await readFile(reader.store.root.resolve('state/shared/add'), 'utf8')).toBe('added');
+    expect(await reader.store.root.stat('state/shared/delete')).toBeNull();
+    // A complete local deletion publishes an explicit empty selection.
+    await rm(reader.store.root.resolve('state'), { recursive: true });
+    expect((await post(reader, sdk.api)).outcome).toBe('published');
+    const empty = await prepare(sdk.api, 'a7'.repeat(16), { model });
+    expect((await handoff(empty)).entries.find((e) => e[1] === 'state')![2]).toBe('empty');
+    expect(await empty.store.root.stat('state')).toBeNull();
+  },
+);
+
+it('omits an unassigned ordinary worker snapshot while its aggregate contribution is merged', async () => {
+  const sdk = await backend(),
+    model = snapshotModel(null),
+    artifacts = memoryArtifacts();
+  const worker = await prepare(sdk.api, 'b4'.repeat(16), {
+    model,
+    job: 'A',
+    role: 'distributed-worker',
+  });
+  await buildFiles(worker, { 'state/shared/a': 'unassigned', 'data/shared/a': 'worker' });
+  await postStreamingWorker({
+    anchor: worker.anchor,
+    budget: worker.budget,
+    artifactBackend: async () => artifacts.api,
+    assertCurrent: (): undefined => {},
+  });
+  const aggregator = await prepare(sdk.api, 'b5'.repeat(16), {
+    model,
+    role: 'distributed-aggregator',
+    order: ['A'],
+    artifacts: artifacts.api,
+  });
+  expect(await readFile(aggregator.store.root.resolve('data/shared/a'), 'utf8')).toBe('worker');
+  expect(await aggregator.store.root.stat('state')).toBeNull();
+  await post(aggregator, sdk.api);
+  const reader = await prepare(sdk.api, 'b6'.repeat(16), { model });
+  expect((await handoff(reader)).entries.find((e) => e[1] === 'state')![2]).toBe('empty');
+});
+
+it.each(['prior', 'empty', 'miss'] as const)(
+  'preserves the remote writer fallback over aggregator changes with a %s baseline',
+  async (baseline) => {
+    const sdk = await backend(),
+      model = snapshotModel();
+    if (baseline !== 'miss') {
+      const seed = await prepare(sdk.api, 'c4'.repeat(16), { model, job: 'A' });
+      if (baseline === 'prior') await buildFiles(seed, { 'state/shared/a': 'base-state' });
+      await post(seed, sdk.api);
+    }
+    const aggregator = await prepare(sdk.api, 'c5'.repeat(16), {
+      model,
+      role: 'distributed-aggregator',
+      artifacts: memoryArtifacts().api,
+    });
+    await buildFiles(aggregator, {
+      'state/shared/a': 'ignored-local-change',
+      'state/shared/extra': 'ignored-addition',
+    });
+    const descriptor = (await handoff(aggregator)).entries.find((e) => e[1] === 'state')![4]!;
+    expect(descriptor[4][0]).toBe(baseline === 'prior' ? 'base' : 'empty');
+    if (baseline !== 'prior')
+      expect(descriptor[4][1]).toBe(baseline === 'empty' ? 'generation' : 'miss');
+    await post(aggregator, sdk.api);
+    const reader = await prepare(sdk.api, 'c6'.repeat(16), { model });
+    if (baseline === 'prior')
+      expect(await readFile(reader.store.root.resolve('state/shared/a'), 'utf8')).toBe(
+        'base-state',
+      );
+    else expect((await handoff(reader)).entries.find((e) => e[1] === 'state')![2]).toBe('empty');
+    expect(await reader.store.root.stat('state/shared/extra')).toBeNull();
+  },
+);

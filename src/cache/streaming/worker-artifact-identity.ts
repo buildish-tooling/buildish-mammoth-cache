@@ -30,7 +30,7 @@ import {
   uintSchema,
   type Context,
 } from './schema';
-import type { ResolvedModel } from './model';
+import { ownsLocalSnapshot, type ResolvedModel } from './model';
 import type { WorkerSourceView } from './worker-walk';
 // Protocol: docs/dev/cache-protocol.md#worker-artifact-names-and-discovery.
 export function workerArtifactPrefix(model: ResolvedModel, context: Context): string {
@@ -58,9 +58,7 @@ export function workerArtifactName(
   const decision = H('worker-decision', [
     'decision',
     survivor.index.reference[4],
-    model.partitions
-      .filter((p) => p[3] === 'single-writer' && p[4] === context[4])
-      .map((p) => p[0]),
+    model.partitions.filter((p) => ownsLocalSnapshot(p, owner)).map((p) => p[0]),
   ]);
   return workerArtifactPrefix(model, context) + context[5] + '-d' + decision + '.tar.gz';
 }

@@ -27,7 +27,7 @@ import { MetadataSnapshot } from './metadata-snapshot';
 import { publishMetadataBase, type MetadataPublicationChoice } from './metadata-publication';
 import { metadataSummaryProfile } from './partition-metadata';
 import { H, encodeRecord } from './encoding';
-import { lineageId } from './model';
+import { ownsLocalSnapshot, lineageId } from './model';
 import { policyId } from './local-schema';
 import { settleNativeCleanup } from './native-operation';
 import type { BaseCacheBackend } from '../backend';
@@ -63,7 +63,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
     snapshots: MetadataSnapshot[] = [];
   let failure: unknown, answer: BasePostResult | undefined;
   try {
-    const { role, access, model, context, invocation } = store.codec.options;
+    const { role, access, model, invocation } = store.codec.options;
     if (access !== 'writable' || role === 'distributed-worker')
       throw new Error('Base post requires writable base role.');
     if (attempt.state[4] === 'completed') {
@@ -92,6 +92,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           store.root.resolve(attempt.handoff.header[9][2]),
         ];
         const message =
+          'Cache save skipped: ' +
           gate.message +
           (retained.length
             ? '; owned snapshots/activity retained for manual handling: ' + retained.join(', ')
@@ -161,8 +162,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
               const partition = model.partitions.find((p) => p[0] === entry[1])!;
               if (
                 partition[3] !== 'single-writer' ||
-                partition[4] === null ||
-                partition[4] === context[4]
+                ownsLocalSnapshot(partition, store.codec.options)
               )
                 throw new Error('Unexpected retained snapshot source selection.');
               const snapshot = await MetadataSnapshot.admit(store, entry[4], options);
@@ -174,8 +174,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           for (const partition of model.partitions)
             if (
               partition[3] === 'single-writer' &&
-              partition[4] !== null &&
-              partition[4] !== context[4] &&
+              !ownsLocalSnapshot(partition, store.codec.options) &&
               !overrides.some(([p]) => p === partition[0])
             )
               throw new Error('Missing independent authoritative snapshot root.');
@@ -217,10 +216,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
             for (const choice of choices)
               if (choice[0] === 'new') {
                 const partition = model.partitions.find((p) => p[0] === choice[1])!;
-                if (
-                  partition[3] === 'single-writer' &&
-                  (partition[4] === null || partition[4] === context[4])
-                ) {
+                if (ownsLocalSnapshot(partition, store.codec.options)) {
                   const snapshot = await MetadataSnapshot.copy(
                     live,
                     partition[0],

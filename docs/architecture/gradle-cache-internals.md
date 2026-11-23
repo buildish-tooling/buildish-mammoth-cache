@@ -59,8 +59,9 @@ Mammoth caches artifact files in `modules` and resolution metadata in the separa
 enabled-by-default `dependency-metadata` partition. In standalone mode, the current job owns
 metadata publication. Distributed mode accepts one complete snapshot from the partition's
 configured `writer`; other jobs' local updates are omitted. If the writer contributes no snapshot,
-Mammoth carries forward the previous snapshot. With no writer configured, it also emits a warning
-and explains the retained metadata in the GitHub summary.
+Mammoth carries forward the previous snapshot. With no writer configured, or with the aggregator
+itself named, the aggregator publishes its own complete metadata snapshot. Ordinary workers
+export metadata only when explicitly named as writer.
 
 A snapshot replaces the entire configured metadata file set, including removals. An explicit empty
 snapshot clears it; an absent contribution preserves it. Before restore, Mammoth removes preexisting

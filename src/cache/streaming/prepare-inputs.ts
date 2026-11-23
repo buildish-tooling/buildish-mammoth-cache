@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { ownsLocalSnapshot } from './model';
 import type { MetadataSnapshot } from './metadata-snapshot';
 import type { Policy } from './local-schema';
 import type { OwnedStore } from './owned-store';
@@ -30,7 +31,7 @@ export function metadataWorkerRequests(
     jobs = [...required],
     snapshots = new Map<string, string[]>();
   for (const p of model.partitions)
-    if (p[3] === 'single-writer' && p[4] !== null && p[4] !== context[4]) {
+    if (p[3] === 'single-writer' && p[4] !== null && !ownsLocalSnapshot(p, store.codec.options)) {
       if (!snapshots.has(p[4])) snapshots.set(p[4], []);
       snapshots.get(p[4])!.push(p[0]);
       if (!jobs.includes(p[4])) jobs.push(p[4]);
@@ -50,7 +51,8 @@ export function metadataSnapshotRequirements(
 ): readonly WorkerSnapshotRequirement[] {
   return store.codec.options.model.partitions
     .filter(
-      (p) => p[3] === 'single-writer' && p[4] !== null && p[4] !== store.codec.options.context[4],
+      (p) =>
+        p[3] === 'single-writer' && p[4] !== null && !ownsLocalSnapshot(p, store.codec.options),
     )
     .map((p) => ({
       partition: p[0],

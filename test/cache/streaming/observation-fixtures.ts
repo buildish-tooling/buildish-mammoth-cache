@@ -178,5 +178,5 @@ export async function executeFixtureGc(store: OwnedStore, options: GcOptions) {
   if (!context?.index) throw new Error('Absent original fixture capture');
   context.owner = await GcSurvivorOwner.execute(context.index, options);
   context.index = undefined;
-  return { cursor: context.owner.cursor, work: context.owner.work, owner: context.owner };
+  return { cursor: context.owner.cursor, owner: context.owner };
 }

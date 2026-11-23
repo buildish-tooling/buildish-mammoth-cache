@@ -89,8 +89,9 @@ artifact downloads still aggregate normally; their local dependency-metadata upd
 Choose a writer whose build resolves the dependencies you want covered. Metadata learned only by
 other jobs may need resolution again later. A validated snapshot qualifies even if its build failed.
 
-An aggregator can instead name itself as `writer`. In that case its own post-build metadata wins;
-without explicitly naming it, running Gradle in the aggregator does not grant metadata ownership.
+An aggregator owns the complete snapshot when no `writer` is configured or when it names itself.
+In either case its own post-build metadata wins. If another job is named, that job's snapshot or
+the prepared fallback remains authoritative despite the aggregator's local changes.
 
 ### Complete workflow with an existing worker as writer
 

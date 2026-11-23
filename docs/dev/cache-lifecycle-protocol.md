@@ -1,7 +1,7 @@
 ---
 title: Local Cache Lifecycle Protocol
 weight: 17
-description: Draft exact local state, stream, intent, cursor, identity, receipt and crash-recovery schemas for streaming caches.
+description: Single-attempt local state, streams, native identity, handoff and receipt schemas for streaming caches.
 ---
 
 <!--
@@ -23,7 +23,7 @@ limitations under the License.
 ## Status and reference rules
 
 This is the active incompatible, unreleased `local-v2` lifecycle. It composes the
-[worker v1 wire](../cache-protocol/) with the
+[worker v2 wire](../cache-protocol/) with the
 [metadata-only native base](../native-base-protocol/). One successful main handoff
 may be admitted by a fresh post process. An interrupted main or active post is
 refused; no old namespace, journal, cursor, source package or replay recipe resumes.
@@ -228,11 +228,11 @@ A failure retains actual partial effects and grants no completion/survivor owner
 
 ### Shared GC parent projections
 
-No-op GC transfers the original hierarchy with zero reconciliation. Actual GC
-mutation performs one counted final survivor reconciliation and retains only actual
-changed-parent N in its existing parent ledger. Publication uses a lazy selected
-view over that SAME index and ledger; it does not spool full survivor facts or build
-another index. A loan prevents index disposal through SDK settlement and return,
+GC transfers the original hierarchy after all selected deletions and parent barriers
+complete. Actual changed-parent N remains in the existing parent ledger; unrelated
+retained trees are not listed or statted again to establish survivor ownership.
+Publication uses a lazy selected view over that SAME index and ledger; it does not
+spool full survivor facts or build another index. A loan prevents index disposal through SDK settlement and return,
 including after foreground/window cancellation. Missing/foreign/replaced endpoints
 remain errors. Original observation scratch retires when its last active consumer
 ends, with no main/post persistence.

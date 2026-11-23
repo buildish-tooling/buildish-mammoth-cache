@@ -197,8 +197,8 @@ parts, store/root/partition/budget/bounds and active stage lifetime. Independent
 copied snapshots remain independent bytes and carry their own output identities.
 
 An active GC survivor owner borrows the original complete capture index and a lazy
-changed-parent ledger. No-op GC transfers it without reconciliation. Real mutation
-performs one counted final survivor check; no full facts/index copy follows. The
-owner remains alive through SDK settlement and source return even after foreground
+changed-parent ledger. Selected-target and parent checks, successful native deletions
+and completed parent barriers establish survivor ownership without rechecking
+unrelated retained trees. No full facts/index copy follows. The owner remains alive through SDK settlement and source return even after foreground
 cancellation. Typed static receipt checks reject absent/copied/fabricated owners
 before reading their fields or borrowing them.

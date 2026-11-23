@@ -25,11 +25,6 @@ import { GcProgram, type GcCursor, type GcBatch } from './gc-program';
 import { ObservationIndex } from './observation-index';
 import { claimCapturedObservationIndex } from './observation-capture';
 import type { PostAttempt } from './lifecycle-attempt';
-import {
-  checkGcProjection,
-  type GcProjectionWork,
-  type GcProjectionObserver,
-} from './gc-projection';
 import type { OwnedStore } from './owned-store';
 import { settleNativeCleanup, type NativeOperationOptions } from './native-operation';
 export interface GcOptions extends NativeOperationOptions {
@@ -43,7 +38,6 @@ async function apply(
   evidence: AsyncIterable<Value>,
   index: ObservationIndex,
   phase: InstallParentPhase,
-  mutated: () => void = () => {},
 ) {
   const signal = index.options.signal ?? defaultSignal();
   let marker: { row: readonly Value[]; release: () => void } | undefined;
@@ -71,7 +65,6 @@ async function apply(
       await unlink(store.root.resolve(path));
       store.root.work.unlinks++;
     }
-    mutated();
     await store.fail('gc-target-deleted');
     await phase.changed(path);
   };
@@ -112,9 +105,7 @@ async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttem
     phase: InstallParentPhase | undefined,
     container: string | undefined,
     native: NativeIdentity | null = null,
-    changed = false,
     failure: unknown;
-  const work: GcProjectionWork = { directories: 0, entries: 0 };
   let cursor: GcCursor | undefined;
   try {
     program = await GcProgram.create(index, {
@@ -143,22 +134,9 @@ async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttem
     for await (const value of program.batches.rows(0, program.batches.position)) {
       options.signal.throwIfAborted();
       const batch = value as GcBatch;
-      await apply(store, program.evidence(batch[1], batch[2]), index, phase, () => {
-        changed = true;
-      });
+      await apply(store, program.evidence(batch[1], batch[2]), index, phase);
     }
     cursor = program.final;
-    if (changed) {
-      const observer: GcProjectionObserver = {
-        async open(directory, actual) {
-          if (!sameNative(directory[2], actual, true)) await phase!.created(directory[1], actual);
-        },
-        async file() {},
-        async protected() {},
-        async close() {},
-      };
-      await checkGcProjection(index, cursor[2], cursor[2], undefined, work, observer);
-    }
     await attempt.guard();
     await program.close();
     program = undefined;
@@ -184,7 +162,6 @@ async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttem
   }
   return {
     cursor: Object.freeze(cursor!),
-    work: Object.freeze(work),
     phase: phase!,
     container: container!,
     native: native!,
@@ -201,7 +178,6 @@ export class GcSurvivorOwner {
     private readonly phase: InstallParentPhase,
     private readonly container: string,
     private readonly native: NativeIdentity,
-    readonly work: Readonly<GcProjectionWork>,
     readonly cursor: Readonly<GcCursor>,
   ) {
     survivorOwners.add(this);
@@ -216,14 +192,7 @@ export class GcSurvivorOwner {
       throw new Error('GC survivor original capture policy/budget mismatch.');
     const attempt = claimCapturedObservationIndex(index, index.store);
     const result = await run(index, options, attempt);
-    return new GcSurvivorOwner(
-      index,
-      result.phase,
-      result.container,
-      result.native,
-      result.work,
-      result.cursor,
-    );
+    return new GcSurvivorOwner(index, result.phase, result.container, result.native, result.cursor);
   }
   static assertReceipt(owner: GcSurvivorOwner): void {
     if (!survivorOwners.has(owner)) throw new Error('Unavailable original GC survivor receipt.');

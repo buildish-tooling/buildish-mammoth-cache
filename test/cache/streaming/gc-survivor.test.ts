@@ -38,7 +38,6 @@ it.each([false, true])(
     let source: MetadataPublicationSource | undefined;
     try {
       expect(owner.index).toBe(captured.index);
-      expect(owner.work.directories).toBe(changed ? 3 : 0);
       expect(f.store.root.work.indexBuilds).toBe(builds);
       source = await MetadataPublicationSource.survivors(owner);
       expect(f.store.root.work.indexBuilds).toBe(builds);

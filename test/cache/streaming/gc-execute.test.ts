@@ -14,17 +14,15 @@
  * limitations under the License.
  */
 
-import { utimes, writeFile, unlink, mkdir, readFile, readdir } from 'node:fs/promises';
+import { utimes, writeFile, unlink, readFile, readdir } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { GcSurvivorOwner } from '../../../src/cache/streaming/gc-execute';
 import {
   executeFixtureGc as executeGc,
   captureFixtureObservations as captureObservations,
 } from './observation-fixtures';
-import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
 import { Digest } from '../../../src/cache/streaming/encoding';
 import { InstallParentPhase } from '../../../src/cache/streaming/install-parent-phase';
-import { checkGcProjection } from '../../../src/cache/streaming/gc-projection';
 import { observationFixture } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
@@ -48,7 +46,6 @@ it('executes shared-parent complete batches and commits the real final root boun
   expect(() => result.owner.assert()).not.toThrow();
   expect(result.cursor[3]).toBeGreaterThan(0);
   expect(result.cursor[5]).toBeNull();
-  expect(result.work.directories).toBe(2); // One actual-mutation reconciliation over root/data, not a precheck per batch/file.
   for (let n = 0; n < 4; n++) expect(await f.store.root.stat('data/f0' + n)).toBeNull();
   expect(f.store.codec.schemas.documents['local-state'].parse(await f.store.state())[4]).toBe(
     'post-active',
@@ -57,7 +54,7 @@ it('executes shared-parent complete batches and commits the real final root boun
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });
-it('blocks future planned absences, unknown children, replacements and completed target recreation', async () => {
+it('rejects changed selected parents or targets and reused capture authority', async () => {
   const f = await fixture();
   await unlink(f.store.root.resolve('data/f03'));
   await expect(executeGc(f.store, { budget: f.budget })).rejects.toThrow();
@@ -109,37 +106,6 @@ it('defers Maven origin marker until all ordinary siblings and preserves protect
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });
-it('stops directory-only projection work on cancellation', async () => {
-  const f = await observationFixture();
-  fixtures.push(f);
-  for (let n = 0; n < 32; n++) await mkdir(f.store.root.resolve('data/d' + n), { recursive: true });
-  const observed = await captureObservations(f.store, { budget: f.budget }),
-    controller = new AbortController(),
-    index = await ObservationIndex.open(f.store, observed.reference, {
-      budget: f.budget,
-      signal: controller.signal,
-    });
-  let directories = 0;
-  try {
-    await expect(
-      checkGcProjection(index, 0, 0, undefined, undefined, {
-        open: async () => {
-          directories++;
-          controller.abort();
-        },
-        file: async () => {},
-        protected: async () => {},
-        close: async () => {},
-      }),
-    ).rejects.toThrow();
-  } finally {
-    await index.dispose();
-  }
-  expect(directories).toBe(1);
-  await f.finish();
-  expect(f.budget.retained).toBe(0);
-});
-
 it('retains a whole Maven coordinate with an excluded artifact sibling before any unlink', async () => {
   const f = await observationFixture('maven', { excluded: ['**/excluded.jar'] });
   fixtures.push(f);
@@ -308,4 +274,19 @@ it('counts original capture, actual selected GC and cleanup across shared-parent
   for (const key of Object.keys(results[0].encoding))
     expect(results[1].encoding[key]).toBeLessThan(results[0].encoding[key] * 4.5);
   await writeFile('build/ls2-gc-counts.json', JSON.stringify(results, null, 2) + '\n');
+});
+
+it('grants no survivor authority when the deletion barrier fails after all native removals', async () => {
+  const f = await fixture(4);
+  vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
+    if (name === 'gc-deletions-durable') throw new Error('barrier failed');
+  });
+  await expect(executeGc(f.store, { budget: f.budget })).rejects.toThrow('barrier failed');
+  for (let n = 0; n < 4; n++) expect(await f.store.root.stat('data/f0' + n)).toBeNull();
+  await expect(GcSurvivorOwner.execute(f.observed.index!, { budget: f.budget })).rejects.toThrow();
+  expect(f.store.codec.schemas.documents['local-state'].parse(await f.store.state())[4]).toBe(
+    'post-active',
+  );
+  await f.finish();
+  expect(f.budget.retained).toBe(0);
 });

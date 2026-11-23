@@ -17,6 +17,7 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { metadataFixture, type MetadataFixture } from './base-publication-fixtures';
+import { memoryArtifacts } from './memory-artifact-fixture';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 const fixtures: MetadataFixture[] = [];
 afterEach(async () => {
@@ -65,7 +66,12 @@ it.each([false, true])(
       });
     const context = [...f.request.context] as typeof f.request.context;
     context[4] = 'collector';
-    const ready = await f.prepare({ context }),
+    const artifacts = memoryArtifacts();
+    const ready = await f.prepare({
+        context,
+        policy: { ...f.request.policy, role: 'distributed-aggregator' },
+        artifactBackend: async () => artifacts.api,
+      }),
       state = ready.store.codec.schemas.documents['local-state'].parse(await ready.store.state());
     const handoff = await LifecycleHandoff.read(ready.store, state[6]!, { budget: f.budget });
     try {

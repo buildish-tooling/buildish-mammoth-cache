@@ -180,9 +180,10 @@ Each partition resolves a `publication` policy and an optional distributed `writ
 
 `aggregate` preserves the existing cutoff upsert/usage exchange and conflict checks.
 `single-writer` captures and replaces the complete configured file set, including deletions.
-Standalone jobs own their snapshots automatically. In distributed mode only the named writer's
-snapshot qualifies; all jobs can restore it and modify their local copies. A validated snapshot can
-be published even if its build failed. The aggregator can itself be explicitly named as writer.
+Standalone jobs own their snapshots automatically, regardless of the configured writer. In
+distributed mode, the aggregator owns snapshots with no configured writer or with itself named as
+writer. An ordinary worker exports a snapshot only when explicitly named. All jobs can restore
+snapshots and modify their local copies. A validated snapshot can be published even if its build failed.
 
 ```yaml
 cache-partitions:
@@ -196,8 +197,8 @@ This is config-file YAML. For a direct action input, pass the equivalent JSON st
 cache-partitions: '[{"id":"dependency-metadata","writer":"worker-a"}]'
 ```
 
-If no writer is configured or it contributes no snapshot, the previous snapshot survives unchanged.
-A warning and GitHub summary explain the fallback. A corrupt or incompatible contribution fails;
+If a different job is named as writer and contributes no snapshot, the previous snapshot survives
+unchanged. A warning and GitHub summary explain the fallback. A corrupt or incompatible contribution fails;
 it is not treated as missing. A writer's explicit empty snapshot clears the configured set.
 
 Snapshot completeness follows the user's include/exclude definition, with required hard excludes.

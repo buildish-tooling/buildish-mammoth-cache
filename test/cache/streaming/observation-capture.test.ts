@@ -20,6 +20,7 @@ import { executeFixtureGc as executeGc } from './observation-fixtures';
 import { captureFixtureObservations as captureObservations } from './observation-fixtures';
 import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
+import { resolveModel } from '../../../src/cache/streaming/model';
 import { tuple, type Value } from '../../../src/cache/streaming/encoding';
 import { observationFixture } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
@@ -308,3 +309,44 @@ it('rejects cancellation during final cleanup after durable observation commitme
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });
+
+it.each([
+  ['standalone', 'remote', 'upsert'],
+  ['distributed-aggregator', null, 'upsert'],
+  ['distributed-aggregator', 'local', 'upsert'],
+  ['distributed-aggregator', 'remote', 'none'],
+  ['distributed-worker', null, 'none'],
+  ['distributed-worker', 'local', 'upsert'],
+] as const)(
+  'classifies snapshot activity for %s writer=%s as %s',
+  async (role, writer, expected) => {
+    const hard = ['.mammoth/**'];
+    const model = resolveModel(
+      [
+        'model',
+        1,
+        'maven',
+        hard,
+        [['state', ['state/**'], hard, 'single-writer', writer, 'default']],
+      ],
+      'snapshot-activity-',
+      1,
+    );
+    const f = await fixture('maven', { model, role, job: 'local' });
+    await old(f, 'state/a');
+    const out = await captureObservations(f.store, { budget: f.budget });
+    const files: Value[] = [];
+    await f.store.readStream(
+      out.reference,
+      'observations',
+      { budget: f.budget, partition: null },
+      async (row) => {
+        if (tuple(row)[0] === 'file') files.push(row);
+      },
+    );
+    expect(files).toHaveLength(1);
+    expect(tuple(files[0])[4]).toBe(expected);
+    expect(tuple(files[0])[5]).toBe('retain');
+    await f.finish();
+  },
+);

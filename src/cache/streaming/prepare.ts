@@ -18,7 +18,7 @@ import { mkdir, lstat } from 'node:fs/promises';
 import { lineagePrefix } from './native-records';
 import { LocalCodec, policySchema } from './local-schema';
 import type { Role, Access } from './local-schema';
-import { invocationId, lineageId, type ResolvedModel } from './model';
+import { ownsLocalSnapshot, invocationId, lineageId, type ResolvedModel } from './model';
 import { contextSchema, type Context } from './schema';
 import { NativeRoot, missing, type Failpoint } from './native';
 import { OwnedStore, completedPreviousOwner } from './owned-store';
@@ -228,9 +228,8 @@ export async function prepareStreaming(
         request.policy.role === 'distributed-worker' ||
         request.policy.access === 'read-only' ||
         partition[3] !== 'single-writer' ||
-        partition[4] === null ||
-        partition[4] === request.context[4] ||
-        selectedJobs.has(partition[4])
+        ownsLocalSnapshot(partition, store.codec.options) ||
+        selectedJobs.has(partition[4]!)
       )
         continue;
       let snapshot: MetadataSnapshot;
