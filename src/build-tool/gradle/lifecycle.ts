@@ -33,6 +33,31 @@ export function createGradleLifecycle(
   const deps = Object.freeze({ ...dependencies });
   return Object.freeze({
     tool: 'gradle' as const,
+    async assertRestoreConsumersAbsent(signal) {
+      signal.throwIfAborted();
+      const unavailable = (cause?: unknown) =>
+        new Error(
+          'Could not establish that Gradle daemons are absent before restore. ' +
+            'Use a runner with working process inspection and run Mammoth before Gradle.',
+          { cause },
+        );
+      let result: DaemonInspection;
+      try {
+        const inspect = deps.inspect ?? (await import('./process-inspection')).inspectGradleDaemons;
+        signal.throwIfAborted();
+        result = await inspect(signal);
+      } catch (cause) {
+        signal.throwIfAborted();
+        throw unavailable(cause);
+      }
+      signal.throwIfAborted();
+      if (result.remaining)
+        throw new Error(
+          'A running Gradle daemon was detected before restore. ' +
+            'Use a runner without active Gradle daemons and run Mammoth before Gradle.',
+        );
+      if (result.uncertain) throw unavailable();
+    },
     async prepareCapture(store, context, ordinaryHooks) {
       if (
         store.codec.options.access === 'writable' &&

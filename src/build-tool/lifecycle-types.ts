@@ -23,6 +23,7 @@ import type { CiJobContext } from '../ci/types';
 /** Tool operations only; shared cache code retains lifecycle/mutation authority. */
 export interface BuildToolLifecycle {
   readonly tool: Context[7];
+  assertRestoreConsumersAbsent(signal: AbortSignal): Promise<void>;
   prepareCapture(
     store: OwnedStore,
     context: Pick<CiJobContext, 'tempDirectory'>,

@@ -27,6 +27,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
+import { mavenLifecycle } from '../../../src/build-tool/maven/lifecycle';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import { prepareStreaming } from '../../../src/cache/streaming/prepare';
 import { postStreamingWorker } from '../../../src/cache/streaming/worker-post';
@@ -107,6 +108,7 @@ async function prepare(
     defaultRef?: string;
     gcAgeMs?: number;
     root?: string;
+    now?: () => number;
     budget?: WorkingBudget;
     hooks?: () => Promise<void>;
   } = {},
@@ -148,6 +150,7 @@ async function prepare(
     currentRef: config.currentRef ?? 'refs/heads/main',
     defaultRef: config.defaultRef,
     captureTempDirectory: null,
+    now: config.now,
     artifactRetentionDays: 7,
     cleanupEnabled: true,
     saveAnchor() {},
@@ -361,12 +364,10 @@ it.each(['standalone', 'distributed-aggregator'] as const)(
       removeHooks: async () => {},
       assertCurrent: (): undefined => {},
       lifecycle: async () => ({
-        tool: 'maven',
-        prepareCapture: async () => {},
+        ...mavenLifecycle,
         quiesce: async () => {
           throw new Error('consumers remain');
         },
-        removeKnownHooks: async () => [],
       }),
     });
     if (role === 'standalone') {
@@ -592,14 +593,19 @@ it('writes one lineage-only bounded record using exact prior groups with no payl
 });
 it('publishes actual GC survivors from the original hierarchy without recapture', async () => {
   const sdk = await backend(),
-    root = await directory('gc-root');
-  await mkdir(root + '/data/shared', { recursive: true });
+    initial = await prepare(sdk.api, 'c0'.repeat(16));
+  await mkdir(initial.root + '/data/shared', { recursive: true });
   for (const name of ['delete', 'used']) {
-    await writeFile(root + '/data/shared/' + name, name);
-    await utimes(root + '/data/shared/' + name, 1.234, 1.234);
+    await writeFile(initial.root + '/data/shared/' + name, name);
+    await utimes(initial.root + '/data/shared/' + name, 1.234, 1.234);
   }
-  const f = await prepare(sdk.api, 'c1'.repeat(16), { root, gcAgeMs: 60000 });
-  await readFile(root + '/data/shared/used');
+  expect((await post(initial, sdk.api)).outcome).toBe('published');
+  const cutoff = Date.now() + 10000;
+  const f = await prepare(sdk.api, 'c1'.repeat(16), { gcAgeMs: 60000, now: () => cutoff });
+  const root = f.root;
+  expect(f.restoreStatus).toBe('current-lineage-hit');
+  await utimes(root + '/data/shared/delete', 1.234, 1.234);
+  await utimes(root + '/data/shared/used', Math.ceil(cutoff / 1000) + 1, 1.234);
   const capture = vi.spyOn(MetadataPublicationSource, 'capture');
   expect((await post(f, sdk.api)).outcome).toBe('published');
   expect(await f.store.root.stat('data/shared/delete')).toBeNull();
@@ -627,8 +633,8 @@ it('keeps original activity and actual pre-freeze purge outcomes without a base 
   );
   await mkdir(root + '/data/purge', { recursive: true });
   await writeFile(root + '/data/purge/old', 'obsolete');
-  await writeFile(root + '/data/keep', 'keep');
   const f = await prepare(sdk.api, 'c2'.repeat(16), { root, model });
+  await writeFile(root + '/data/keep', 'keep');
   const capture = observationCapture.captureObservations;
   let deleted = 0;
   vi.spyOn(observationCapture, 'captureObservations').mockImplementation(async (...args) => {

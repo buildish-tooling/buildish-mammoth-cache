@@ -109,7 +109,7 @@ it.each([false, true])(
   async (available) => {
     const f = await installFixture('maven');
     fixtures.push(f);
-    await f.files('', { 'data/old': 'preserve' });
+    await f.files('', { 'data/keep.lock': 'preserve' });
     const ready = await prepareStreaming({
       root: f.root,
       model: f.model,
@@ -141,7 +141,7 @@ it.each([false, true])(
       assertCurrent: (): undefined => {},
     });
     expect(ready.restoreStatus).toBe(available ? 'miss' : 'feature-unavailable');
-    expect(await readFile(f.store.root.resolve('data/old'), 'utf8')).toBe('preserve');
+    expect(await readFile(f.store.root.resolve('data/keep.lock'), 'utf8')).toBe('preserve');
   },
 );
 it('uses the existing shared current inventory with linear work at widths4/16', async () => {

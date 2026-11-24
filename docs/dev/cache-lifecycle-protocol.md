@@ -113,7 +113,7 @@ policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|nul
 The header is followed by exactly one ordered row per model partition. All bounded
 controls are O(P), with P at most 64 and worker count at most 16. The exact generation
 key, family, cold groups and original per-partition object refs bind pre-overlay pins.
-Pin BEFORE pre-existing extras, prune and worker application; final prepare state is
+Pin before worker application and any destination changes; final prepare state is
 never a replacement baseline. Only the actual imported used/upsert activity stream
 crosses main/post per file. Successful main ends all native/index/install scratch
 owners; no per-file current/evidence/catalogue/source-package pointer remains.
@@ -127,11 +127,23 @@ its new owner. Output facts are actual final output N, not source inode rebasing
 
 ## Build-tool lifecycle boundary
 
-Current frozen tool identity selects configuration-free capture, quiescence and
-known-hook cleanup. Gradle registration/stop/inspection is tool-owned; shared code
+After guarded owner initialization, prepare resolves the bound tool lifecycle,
+checks for active consumers, and inspects the enabled partition projection for
+selected local files. Empty directories and unmanaged contents are allowed.
+The read-only native admission walk stops at the first conflict and excludes
+irrelevant subtrees. It retains only the active directory path and partition
+candidates, and opens no payload bodies or scratch index. Admission precedes
+install staging, provisioning, backend lookup and hooks. Rejections leave
+`prepare-failed` state and preserve caller data. The existing installer still
+validates destinations and applies its ownership and identity guards.
+
+Current frozen tool identity selects capture, quiescence and known-hook cleanup. Gradle registration/stop/inspection is tool-owned; shared code
 retains post admission, exclusive-window receipt and all cache mutations. Maven
 uses the dedicated-root/completed-consumer lifetime. A tool returns installation
-metadata, never a shared mutation grant. Read-only has no daemon/GC/payload work.
+metadata. Gradle prepare uses the native inspector without installation records,
+rejecting a detected daemon or uncertain evidence. The point-in-time check
+applies to read-only restores too. Read-only post skips quiescence, GC and
+publication. Cache-disabled prepare keeps its separate control-state checks.
 
 ### Gradle installation registration
 

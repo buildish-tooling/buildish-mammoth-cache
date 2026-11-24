@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { resolveLifecycle } from '../../../src/build-tool/lifecycle';
 import { gradleResolver } from './quiescence-fixture';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -121,6 +120,7 @@ async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string
     assertCurrent: (): undefined => {},
     budget,
     nonce: 'a'.repeat(32),
+    lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
   };
   const loadReport = vi.fn(async () => ({
       anyBuildFailed: false,
@@ -430,7 +430,7 @@ it.each(['base', 'read-only', 'worker', 'disabled'] as const)(
             ? { 'cache-enabled': 'false' }
             : {},
     );
-    const resolver = vi.fn(resolveLifecycle);
+    const resolver = vi.fn(f.deps.lifecycle);
     await runStreamingPrepare({ ...f.deps, lifecycle: resolver });
     expect(resolver).toHaveBeenCalledTimes(mode === 'disabled' ? 0 : 1);
     if (mode !== 'disabled') expect(resolver).toHaveBeenCalledWith('gradle');

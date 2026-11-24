@@ -138,8 +138,10 @@ directory as upserts, keeping artifacts and origin markers in the worker's compl
 common seeded repository and one writer per changed directory under the default policy. The qualified topology uses
 Resolver's enhanced local repository manager, default `_remote.repositories` tracking filename,
 and unsplit `repository/` layout. Different artifact/version
-directories can be populated in parallel. Seed common plugins and transitives once before workers
-resolve their remaining disjoint dependencies, or use standalone mode for cold seeding.
+directories can be populated in parallel. Use a standalone build to publish common
+plugins and transitive dependencies in a Mammoth generation. Workers can then restore
+that generation into initially empty managed areas before resolving their disjoint
+dependencies.
 
 Under the default policy, different worker views of the same directory fail aggregation, including disjoint classifiers or
 local installs sharing a marker. Even equal marker entries can differ in timestamp comments and

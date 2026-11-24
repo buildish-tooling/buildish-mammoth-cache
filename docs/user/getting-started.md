@@ -21,8 +21,7 @@ limitations under the License.
 -->
 
 Gradle dependency metadata is cached by default in `dependency-metadata`. A standalone job owns
-its complete snapshot automatically. On prepare, preexisting managed metadata is replaced; cache
-misses start that partition empty, and displaced files produce a warning and GitHub summary.
+its complete snapshot automatically. On a cache miss, that partition starts empty.
 For distributed jobs, [select a metadata writer](../distributed-jobs/#gradle-metadata-writer) using the
 same partition configuration in every job. Without a configured writer, the aggregator publishes its
 own complete snapshot; ordinary workers' metadata updates are omitted.
@@ -70,16 +69,16 @@ For an existing workflow, first use [Adoption and Migration](../adoption/) to ch
 preserve write restrictions and define a small pilot.
 
 The examples below document the action contract. Pin an exact published release or candidate
-ref containing the generated `dist/` bundles, and place the action step _before_ your build
-invocation. Ordinary source branches such as `main` omit those bundles and cannot be used as
+ref containing the generated `dist/` bundles, and place the action step before the first Gradle or
+Maven invocation and before any step that populates the managed cache area. Ordinary source branches such as `main` omit those bundles and cannot be used as
 installable action refs. Available candidates and final releases are listed on
 [GitHub Releases](https://github.com/buildish-tooling/buildish-mammoth-cache/releases).
 
-> [!WARNING]
-> Do not set `cache: gradle` or `cache: maven` on `actions/setup-java` when using this action.
-> Both would restore and save the same directory through independent cache lifecycles. The competing
-> snapshots waste storage and can undo the managed state assembled by distributed jobs. Use
-> `actions/setup-java` for JDK installation only, as the examples above show.
+Leave dependency caching disabled in `actions/setup-java` and remove any other restore that
+populates the same cache area. JDK installation and settings-only setup can run before Mammoth
+when they leave the enabled partitions empty. Existing directories and settings outside those
+partitions are allowed. Mammoth rejects existing managed files and preserves them. See
+[restore admission failures](../troubleshooting/#restore-admission-failures) for dedicated-home examples.
 
 Cache and same-run delta artifact operations use job-scoped Actions runtime credentials, so they do
 not require `actions: write`. The examples grant only `contents: read` for checkout. See
@@ -88,8 +87,8 @@ not require `actions: write`. The examples grant only `contents: read` for check
 The action defaults to **read-only** on `pull_request` and `pull_request_target` events, so
 cache writes from untrusted forks are automatically suppressed. Repository config can make this
 policy stricter but cannot lower the pull-request floor; only a direct workflow input can do that.
-Distributed read-only workers upload nothing, and read-only aggregators perform no artifact
-exchange.
+Read-only jobs still restore base files and must meet the same prepare preconditions. Read-only
+workers upload nothing, and read-only aggregators skip artifact exchange.
 
 ### Gradle
 

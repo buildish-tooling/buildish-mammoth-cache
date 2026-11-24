@@ -22,26 +22,42 @@ export function createCacheGlobMatcher(patterns: readonly string[]) {
       .split('/')
       .map((segment) => (segment === '**' ? 'globstar' : { regex: compileSegmentRegex(segment) })),
   );
-  return (name: string): boolean => {
+  return (name: string, scope: 'exact' | 'descendants' | 'subtree' = 'exact'): boolean => {
     const segments = name.split('/');
-    return compiled.some((pattern) => matchesGlobSegments(segments, pattern));
+    return compiled.some(
+      (pattern) =>
+        (scope !== 'subtree' || pattern.at(-1) === 'globstar') &&
+        matchesGlobSegments(segments, pattern, scope === 'descendants'),
+    );
   };
 }
 
 function matchesGlobSegments(
   pathSegments: readonly string[],
   patternSegments: readonly GlobSegment[],
+  descendants: boolean,
   pathIndex = 0,
   patternIndex = 0,
 ): boolean {
+  if (descendants && pathIndex === pathSegments.length)
+    return patternIndex < patternSegments.length;
   if (patternIndex === patternSegments.length) {
     return pathIndex === pathSegments.length;
   }
 
   const patternSegment = patternSegments[patternIndex];
   if (patternSegment === 'globstar') {
+    if (descendants) return true;
     for (let nextPathIndex = pathIndex; nextPathIndex <= pathSegments.length; nextPathIndex += 1) {
-      if (matchesGlobSegments(pathSegments, patternSegments, nextPathIndex, patternIndex + 1)) {
+      if (
+        matchesGlobSegments(
+          pathSegments,
+          patternSegments,
+          descendants,
+          nextPathIndex,
+          patternIndex + 1,
+        )
+      ) {
         return true;
       }
     }
@@ -55,7 +71,7 @@ function matchesGlobSegments(
 
   return (
     patternSegment.regex.test(pathSegments[pathIndex]) &&
-    matchesGlobSegments(pathSegments, patternSegments, pathIndex + 1, patternIndex + 1)
+    matchesGlobSegments(pathSegments, patternSegments, descendants, pathIndex + 1, patternIndex + 1)
   );
 }
 

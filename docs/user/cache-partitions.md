@@ -266,8 +266,8 @@ No historical last-use grace is stored. `noatime`, `relatime`, coalesced timesta
 can hide use, causing useful old files to be removed and redownloaded or recomputed.
 Read-only jobs skip GC. Writable workers can run timestamp GC before packaging. `cleanup-enabled: false` and `cache-gc-mode: off` disable deletion, retaining
 writable tracking and exchange costs. Read-only post skips activity capture and
-publication. Prepare still validates restored snapshots and replaces their managed
-live files.
+publication. Prepare still validates snapshots and installs their files into the
+initially empty managed area.
 
 Aggregate partitions exchange no tombstones: locally deleted paths can return after restore
 until GC. Single-writer snapshots replace membership, so their deletions propagate without tombstones.
@@ -279,10 +279,10 @@ Use `cache-gc-mode: off` or increase grace when old dependencies must remain ava
 
 ## Restore cleanup behavior
 
-Single-writer partitions replace existing managed files with the admitted snapshot
-and start empty on a miss. This applies even with `cleanup-enabled: false`.
-Excluded files survive. Snapshots that must survive a mutable build may need
-independent local copies.
+Prepare requires all enabled partitions to start without managed files. A
+single-writer partition installs the admitted snapshot and starts empty on a
+miss, including with `cleanup-enabled: false`. Excluded files survive. Snapshots
+that must survive a mutable build may need independent local copies.
 
 For ordinary partitions, `restore-cleanup-mode: prune-managed` is opt-in.
 It acts after a base hit within the managed scope of validated objects. A

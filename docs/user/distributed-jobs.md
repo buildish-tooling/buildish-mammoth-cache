@@ -250,10 +250,9 @@ how to select a writer in the GitHub summary. Configure the same writer everywhe
 publication policy affect the cache family, so changing them starts a cold cache. Existing cache
 families are cold misses after this protocol update too.
 
-Before restore, Mammoth removes preexisting **managed** snapshot files, warning and recording the
-replacement in the summary. A miss starts those partitions empty, including on self-hosted runners
-and with ordinary cleanup disabled. User-excluded files survive. Explicit include/exclude overrides
-are allowed; their effect on Gradle's internal metadata relationships is the user's responsibility.
+The metadata partition must start without managed files. A miss leaves it empty at
+restore time. Excluded files remain. Explicit include/exclude overrides are allowed,
+and their effect on Gradle's internal metadata relationships is the user's responsibility.
 
 Authoritative snapshot bytes may be held independently of a job's mutable Gradle
 data. An assigned writer uploads its complete managed snapshot. Standalone jobs
@@ -319,8 +318,10 @@ jobs:
 Upgrade all workers, snapshot writers, aggregators and cache readers together
 when changing incompatible Action versions. The native v2 and worker TAR-v2
 profiles use a new family, so older base objects produce cold misses.
-Use dedicated cache roots and keep other processes out of the roots during
-prepare and post. See [interrupted cache operations](../troubleshooting/#interrupted-cache-operations).
+Start each worker and aggregator with an empty managed cache area and run Mammoth
+before other restores or build-tool invocations. Keep the roots exclusive through
+prepare, build and post. Read-only jobs restore base files under the same admission
+rules. See [restore admission failures](../troubleshooting/#restore-admission-failures).
 
 **Job names must be unique within the workflow run.** Delta artifacts are identified by job name.
 Two worker jobs with the same name would produce the same artifact name and the aggregator would

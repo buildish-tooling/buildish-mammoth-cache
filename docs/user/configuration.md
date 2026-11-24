@@ -232,8 +232,9 @@ or process memory guarantee.
 - Default: `none`
 - Supported values: `none`, `prune-managed`
 - `prune-managed` only acts after a base-cache hit.
-- It can remove managed leftovers covered by the selected, validated restore. A
-  missing object leaves that partition cold and supplies no cleanup authority.
+- It can remove managed leftovers covered by the selected, validated restore. Prepare rejects
+  preexisting managed files independently of this setting. A missing object leaves
+  that partition cold and supplies no cleanup authority.
 - It never deletes files outside the action-managed partition space.
 - It is intentionally an opt-in because it is more destructive and may increase restore time.
 
@@ -458,7 +459,11 @@ summary and finalize log report the exact key only after a successful publicatio
 ### `gradle-user-home`
 
 - Default: `$GRADLE_USER_HOME` when set, otherwise `$HOME/.gradle`
-- In v1, only the default Gradle user home is supported. Non-default values fail validation intentionally.
+- To use a dedicated home, set `GRADLE_USER_HOME` for both the action and the build. If
+  you also supply `gradle-user-home`, its resolved path must match that environment
+  value, or the runner default when the environment variable is unset.
+- Put required user-home `gradle.properties` and init scripts in the selected home,
+  or supply their configuration explicitly. Keep them outside enabled partitions.
 
 ### `setup-java`
 
@@ -476,8 +481,11 @@ summary and finalize log report the exact key only after a successful publicatio
 - Accepts an absolute path or a path resolved from the action process working directory.
 - The managed root contains both the Maven local repository at `repository/` and Maven Wrapper
   distributions at `wrapper/dists/`; do not pass the `repository/` directory itself.
-- Operators are responsible for ensuring a custom user home contains only intended Maven cache
-  state and is not shared across trust zones.
+- Configure Maven itself to use `-Dmaven.repo.local=<home>/repository` (or the equivalent
+  `localRepository` setting). Maven Wrapper uses `MAVEN_USER_HOME` for its distribution base.
+  To use a settings file in the dedicated home, pass its path with `-s`.
+- The managed area must start empty. Keep the selected home exclusive through
+  prepare, build and post. See [dedicated-home examples](../troubleshooting/#restore-admission-failures).
 
 ---
 

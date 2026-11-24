@@ -107,7 +107,14 @@ export interface ResolvedModel {
   readonly familyProjection: readonly ['family', 1, string, number, string, ...string[]];
   readonly partitions: readonly Partition[];
   owner(path: string): Partition;
+  admissionScope(): AdmissionScope;
   purge(path: string): readonly string[];
+}
+export interface AdmissionScope {
+  readonly hasDescendants: boolean;
+  child(path: string): AdmissionScope | undefined;
+  owner(): Partition | undefined;
+  blocksUnsafeLeaf(): boolean;
 }
 export function resolveModel(input: unknown, prefix: string, schemaVersion: number): ResolvedModel {
   return resolveModelWithProfiles(input, prefix, schemaVersion, STREAMING_PROFILES);
@@ -168,12 +175,47 @@ function resolveModelWithProfiles(
     excludes: createCacheGlobMatcher(p[2]),
     purge: createCacheGlobMatcher(p[6] ?? []),
   }));
+  const findOwner = (path: string, candidates: typeof parts) => {
+    let owner: Partition | undefined;
+    for (const item of candidates)
+      if (item.includes(path) && !item.excludes(path) && !item.purge(path)) {
+        if (owner) throw new Error('Ambiguous partition ownership.');
+        owner = item.p;
+      }
+    return owner;
+  };
+  function admissionScope(
+    path: string,
+    candidates: typeof parts,
+    descendants: typeof parts,
+  ): AdmissionScope {
+    return {
+      hasDescendants: descendants.length !== 0,
+      owner: () => findOwner(path, candidates),
+      blocksUnsafeLeaf: () => candidates.some((item) => !item.excludes(path) && !item.purge(path)),
+      child(child) {
+        if (isCacheMetadataPath(child) || hard(child, 'subtree')) return undefined;
+        const matching: typeof parts = [],
+          below: typeof parts = [];
+        for (const item of descendants) {
+          if (item.excludes(child, 'subtree') || item.purge(child, 'subtree')) continue;
+          if (item.includes(child, 'descendants')) below.push(item);
+          else if (item.includes(child) && !item.excludes(child) && !item.purge(child))
+            matching.push(item);
+        }
+        return matching.length || below.length
+          ? admissionScope(child, [...below, ...matching], below)
+          : undefined;
+      },
+    };
+  }
   return {
     tuple,
     id,
     family,
     familyProjection,
     partitions: tuple[4],
+    admissionScope: () => admissionScope('', [], parts),
     purge(path) {
       if (isCacheMetadataPath(path)) return [];
       const claims = parts.filter((item) => item.purge(path));
@@ -188,12 +230,7 @@ function resolveModelWithProfiles(
     owner(path) {
       if (isCacheMetadataPath(path) || hard(path))
         throw new Error('Reserved/excluded managed path.');
-      let owner: Partition | undefined;
-      for (const item of parts)
-        if (item.includes(path) && !item.excludes(path) && !item.purge(path)) {
-          if (owner) throw new Error('Ambiguous partition ownership.');
-          owner = item.p;
-        }
+      const owner = findOwner(path, parts);
       if (!owner) throw new Error('Unowned managed path.');
       return owner;
     },

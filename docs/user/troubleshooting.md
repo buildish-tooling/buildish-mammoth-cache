@@ -236,13 +236,43 @@ already present in the repository.
 The token is applied only to requests targeting `api.github.com` and `raw.githubusercontent.com`.
 It is never written to workflow summaries, log output, or post-action persisted state.
 
-## Interrupted cache operations
+## Restore admission failures
 
-Dedicate the Gradle or Maven user home to one active invocation at a time.
-Keep other processes out of the root while Mammoth prepares, observes or moves
-cache contents. Use the same home for the Action and the build. For example,
-set Gradle's `GRADLE_USER_HOME` to the same path as an explicit
-`gradle-user-home` input.
+Run Mammoth before Gradle, Maven and any other step that restores or populates
+the same cache area. A conflict reports the path and enabled partition. Existing
+directories, excluded files and settings outside the enabled partition selection
+can remain. Mammoth leaves conflicting files in place. Remove the competing step
+and rerun with a fresh dedicated home. The same requirement applies to read-only
+jobs and to cache misses or an unavailable backend.
+
+On self-hosted runners, make the home unique per job invocation. For example,
+with a Bash step and a trusted settings source:
+
+- **Gradle.** Create the directory with
+  `GRADLE_USER_HOME="$(mktemp -d "${RUNNER_TEMP}/gradle-home.XXXXXX")"` and write
+  `GRADLE_USER_HOME=$GRADLE_USER_HOME` to `$GITHUB_ENV` for subsequent steps.
+  Place the required `gradle.properties` and init scripts in the new home before
+  Mammoth. An explicit `gradle-user-home` must match that path.
+- **Maven.** Create and export a dedicated `MAVEN_USER_HOME` for subsequent steps
+  using the same approach, or pass the path as `maven-user-home` to the action.
+  Set `MAVEN_USER_HOME` for Maven Wrapper distribution downloads. Point Maven at
+  the managed repository and supply the settings explicitly, for example
+  `./mvnw -s "$MAVEN_USER_HOME/settings.xml" -Dmaven.repo.local="$MAVEN_USER_HOME/repository" verify`.
+  Provision the referenced settings file separately, outside the enabled partitions.
+  For a build that uses the original settings location, pass its trusted path to `-s`.
+
+Gradle prepare rejects any daemon reported by the runner's process inspector,
+including one that may belong to a different Gradle home. It also rejects uncertain
+or unavailable inspection, which can affect shared runners. Use a runner that
+can inspect processes and has no active Gradle daemon. Prepare only inspects
+processes. It leaves daemons running.
+
+Keep other processes out of the managed home throughout prepare, build and post.
+The Gradle check observes one point in time. Maven relies on the caller to keep its
+repository exclusive. A rejected prepare records failure state and leaves the root
+for inspection. After correcting the cause, retry with a fresh dedicated home.
+
+## Interrupted cache operations
 
 If the Action reports an interrupted lifecycle or an incompatible legacy intent,
 preserve the old root and start the next invocation with a fresh dedicated root.

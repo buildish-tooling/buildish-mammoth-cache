@@ -290,11 +290,11 @@ it('GC preserves protected coordinates with old marker timestamps and evicts ina
     ['gc-used', true],
     ['gc-inactive', false],
   ] as const) {
-    await cloneSeed(local);
-    for (const name of [artifact, marker]) await utimes(path.join(root, local, name), old, old);
     const f = scenario(local);
     const owner = await f.action(local, 'owner', { 'cache-gc-mode': 'timestamp' }, () => cutoff);
     await owner.prepare();
+    await cloneSeed(local);
+    for (const name of [artifact, marker]) await utimes(path.join(owner.home, name), old, old);
     if (used) {
       // Model a visible access on a noatime filesystem without changing mtime.
       await utimes(path.join(owner.home, artifact), Math.ceil(cutoff / 1000) + 1, old);
@@ -341,31 +341,26 @@ async function cloneSourcesSeed(local: string, origin: 'a' | 'b') {
   await cp(path.join(root, seed), path.join(root, local), { recursive: true });
 }
 
-it('rejects a B marker over excluded A sources before aggregation changes any bytes', async () => {
+it('rejects a worker coordinate over excluded local sources before changing repository bytes', async () => {
   await cloneSourcesSeed('excluded-target', 'a');
   await cloneSourcesSeed('excluded-worker', 'b');
-  // A missing artifact can still have an entry in Resolver's marker. The destination may
-  // retain an excluded copy, so source-side validation alone cannot protect aggregation.
+  // The fresh managed area can contain excluded artifacts. A marker from another origin
+  // must never be installed alongside those protected artifacts.
+  await rm(path.join(root, 'excluded-target', marker));
+  await rm(path.join(root, 'excluded-target', artifact));
   await rm(path.join(root, 'excluded-worker', sourcesArtifact));
   const f = scenario('excluded-merge', excludeSources);
   await f.worker('excluded-worker', 'excluded-worker');
   const parent = await f.aggregator('excluded-target', 'excluded-worker');
-  const before = await readFile(path.join(parent.home, marker), 'utf8');
   await expect(parent.prepare()).rejects.toThrow(/Incomplete Maven repository directory/u);
-  expect(await readFile(path.join(parent.home, marker), 'utf8')).toBe(before);
-  expect(await readFile(path.join(parent.home, artifact), 'utf8')).toBe('A');
-  expect(await resolve('excluded-target', sourcesCoordinates, { offline: true })).toBe('A-SOURCES');
-  await expect(
-    resolve('excluded-target', sourcesCoordinates, {
-      offline: true,
-      id: 'origin-b',
-      remote: 'remote-b',
-    }),
-  ).rejects.toThrow(/offline mode/u);
+  await expect(readFile(path.join(parent.home, marker))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(readFile(path.join(parent.home, artifact))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  expect(await readFile(path.join(parent.home, sourcesArtifact), 'utf8')).toBe('A-SOURCES');
 });
 
 it('retains the complete Maven coordinate when excluded sources would survive GC', async () => {
-  await cloneSourcesSeed('excluded-gc', 'a');
   const cutoff = Date.now() + 10000;
   const f = scenario('excluded-gc', excludeSources);
   const owner = await f.action(
@@ -374,9 +369,10 @@ it('retains the complete Maven coordinate when excluded sources would survive GC
     { 'cache-gc-mode': 'timestamp' },
     () => cutoff,
   );
+  await owner.prepare();
+  await cloneSourcesSeed('excluded-gc', 'a');
   for (const file of [artifact, marker, sourcesArtifact])
     await utimes(path.join(owner.home, file), 1700000000, 1700000000);
-  await owner.prepare();
   const before = await readFile(path.join(owner.home, marker), 'utf8');
   expect((await owner.post()).outcome).toBe('published');
   expect(await readFile(path.join(owner.home, sourcesArtifact), 'utf8')).toBe('A-SOURCES');

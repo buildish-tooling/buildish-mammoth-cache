@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
@@ -80,6 +80,7 @@ it.each(['prepare-base-installed', 'prepare-workers-installed', 'prepare-ready']
 it('runs successful local-v2 main and post in distinct actual OS processes', async () => {
   const value = await root();
   run('success', value);
+  await writeFile(value + '/data/keep', 'ordinary');
   const budget = new WorkingBudget(),
     prepared = await OpenedInvocation.current(value, budget);
   expect(prepared?.state[4]).toBe('build-ready');
@@ -93,6 +94,7 @@ it('runs successful local-v2 main and post in distinct actual OS processes', asy
 it('rejects actual interrupted post after SDK source evacuation without replaying publication', async () => {
   const value = await root();
   run('success', value);
+  await writeFile(value + '/data/keep', 'ordinary');
   crash('post-crash', value, 'unused');
   const budget = new WorkingBudget(),
     interrupted = await OpenedInvocation.current(value, budget);

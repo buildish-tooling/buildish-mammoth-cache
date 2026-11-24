@@ -32,15 +32,15 @@ async function fixture() {
   fixtures.push(f);
   return f;
 }
-it('installs v2 base projections through actual prepare while preserving aggregate extras and authoritative empty replacement', async () => {
+it('installs v2 base projections through actual prepare while preserving exclusions and an authoritative empty snapshot', async () => {
   const f = await fixture(),
     seeded = await f.seed({ data: { 'data/base': 'remote' } });
-  await f.files(f.root, { 'data/local': 'extra', 'state/stale': 'remove' });
+  await f.files(f.root, { 'data/local.lock': 'protected', 'state/local.lock': 'protected' });
   const ready = await f.prepare();
   expect(ready.restoreStatus).toBe('current-lineage-hit');
   expect(await readFile(f.root + '/data/base', 'utf8')).toBe('remote');
-  expect(await readFile(f.root + '/data/local', 'utf8')).toBe('extra');
-  await expect(readFile(f.root + '/state/stale')).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(f.root + '/data/local.lock', 'utf8')).toBe('protected');
+  expect(await readFile(f.root + '/state/local.lock', 'utf8')).toBe('protected');
   const state = ready.store.codec.schemas.documents['local-state'].parse(await ready.store.state());
   expect(state).toHaveLength(8);
   expect(state[4]).toBe('build-ready');
@@ -49,7 +49,7 @@ it('installs v2 base projections through actual prepare while preserving aggrega
     expect(handoff.entries[0][3]![7]).toEqual(
       seeded.entries[0][0] === 'object' ? seeded.entries[0][2] : null,
     );
-    expect(handoff.entries[0][3]![9][3]).toBe(1); // pin describes remote payload before local extra overlay
+    expect(handoff.entries[0][3]![9][3]).toBe(1); // pin describes remote payload without local excluded files
     expect(handoff.entries[1][2]).toBe('empty');
   } finally {
     handoff.close();

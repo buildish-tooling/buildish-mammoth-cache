@@ -54,7 +54,7 @@ it.each(['maven', 'gradle'] as const)(
     await j.write('data/a', 'body');
     await j.run('post');
     expect((await j.trace()).filter(([name]) => name === 'process-inspection')).toHaveLength(
-      tool === 'gradle' ? 1 : 0,
+      tool === 'gradle' ? 2 : 0,
     );
     expect((await j.trace()).some(([name]) => name === 'cache-save')).toBe(true);
     expect(await readFile(j.home + '/data/a', 'utf8')).toBe('body');
@@ -65,15 +65,20 @@ it.each(['maven', 'gradle'] as const)(
   30000,
 );
 it.each(['maven', 'gradle'] as const)(
-  'actual %s disabled and read-only preserve useful summaries without process/upload work',
+  'actual %s disabled and read-only preserve useful summaries without post inspection or upload work',
   async (tool) => {
     for (const mode of ['disabled', 'read-only']) {
       const j = await entrypointJob(root, tool, mode, {
         ...toolInputs,
         ...(mode === 'disabled' ? { 'cache-enabled': 'false' } : { 'read-only': 'true' }),
       });
-      await j.run('main');
-      await j.write('data/keep', 'keep');
+      if (mode === 'disabled') await j.write('data/keep', 'keep');
+      await j.run('main', { MAMMOTH_TEST_PROCESS: mode === 'disabled' ? 'remaining' : 'clean' });
+      expect((await j.trace()).filter(([name]) => name === 'process-inspection')).toHaveLength(
+        tool === 'gradle' && mode === 'read-only' ? 1 : 0,
+      );
+      await j.clearTrace();
+      if (mode === 'read-only') await j.write('data/keep', 'keep');
       await j.run('post', {
         'INPUT_CONFIG-FILE': '/missing/config',
         GITHUB_EVENT_PATH: '/missing/event.json',

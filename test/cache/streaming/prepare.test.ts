@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { chmod, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
+import { chmod, link, mkdir, rm, symlink, writeFile, readFile } from 'node:fs/promises';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -23,7 +23,11 @@ import {
   prepareStreaming,
   type StreamingPrepareRequest,
 } from '../../../src/cache/streaming/prepare';
-import { resolveModel, type ResolvedModel } from '../../../src/cache/streaming/model';
+import {
+  resolveCacheModel,
+  resolveModel,
+  type ResolvedModel,
+} from '../../../src/cache/streaming/model';
 import { OpenedInvocation, decodeInvocationAnchor } from '../../../src/cache/streaming/invocation';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 import { metadataFixture, type MetadataFixture } from './base-publication-fixtures';
@@ -39,6 +43,17 @@ import {
   freezeWorkerArtifact,
   uploadWorkerArtifact,
 } from '../../../src/cache/streaming/worker-service';
+import { createCachePartitions } from '../../../src/cache/model';
+import { MavenBuildToolAdapter } from '../../../src/build-tool/maven/adapter';
+import {
+  normalizeMavenActionConfig,
+  readMavenActionInputs,
+} from '../../../src/build-tool/maven/config';
+import { NativeRoot } from '../../../src/cache/streaming/native';
+import { walkWork } from '../../../src/cache/streaming/native-walk';
+import { assertEmptyManagedArea } from '../../../src/cache/streaming/prepare-admission';
+import { gradleResolver } from './quiescence-fixture';
+import { fixtureCi } from '../../support/ci-fixture';
 import * as workerMerge from '../../../src/cache/streaming/worker-merge';
 const metadataFixtures: MetadataFixture[] = [];
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
@@ -97,7 +112,7 @@ async function fixture(overrides: Partial<StreamingPrepareRequest> = {}, model?:
   };
   return { ...f, request, backend, provision, hooks, saved: () => saved };
 }
-it('prepares a genuine cold invocation, clears stale snapshots, preserves ordinary data and freezes cutoff last', async () => {
+it('prepares a genuine cold invocation, preserves settings and freezes cutoff last', async () => {
   const order: string[] = [],
     f = await fixture({
       now: () => 42,
@@ -114,14 +129,14 @@ it('prepares a genuine cold invocation, clears stale snapshots, preserves ordina
         order.push('hooks');
       },
     });
-  await f.files('', { 'data/keep': 'ordinary', 'state/stale': 'must-clear' });
+  await f.files('', { 'settings.xml': 'settings' });
+  await mkdir(f.store.root.resolve('state'));
   const ready = await prepareStreaming(f.request);
   expect(order).toEqual(['provision', 'hooks']);
   expect(ready.cutoff).toBe(42);
   expect(ready.restoredKey).toBeNull();
   expect(ready.workerCount).toBe(0);
-  expect(await f.store.root.stat('state/stale')).toBeNull();
-  expect(await readFile(f.store.root.resolve('data/keep'), 'utf8')).toBe('ordinary');
+  expect(await readFile(f.store.root.resolve('settings.xml'), 'utf8')).toBe('settings');
   const anchor = decodeInvocationAnchor(f.saved());
   expect(anchor[0]).toBe('streaming-lifecycle');
   const reopened = await OpenedInvocation.open(ready.anchor, f.budget);
@@ -204,7 +219,6 @@ async function workerArtifacts(
 it('composes two real worker archives in configured order, installing complete snapshot authority', async () => {
   const f = await fixture(),
     { service, request } = await workerArtifacts(f);
-  await f.files('', { 'data/local': 'keep local aggregate', 'state/stale': 'old' });
   const logs: string[] = [];
   const warnings = vi.fn(),
     ready = await prepareStreaming({
@@ -218,11 +232,9 @@ it('composes two real worker archives in configured order, installing complete s
     'data/only-A': 'A',
     'data/only-B': 'B',
     'data/shared': 'equivalent',
-    'data/local': 'keep local aggregate',
     'state/from-A': 'complete snapshot',
   }))
     expect(await readFile(f.store.root.resolve(name), 'utf8')).toBe(body);
-  expect(await f.store.root.stat('state/stale')).toBeNull();
   expect(ready.workerCount).toBe(2);
   for (const worker of ['A', 'B'])
     expect(
@@ -415,9 +427,9 @@ it('validates a late worker seal before clearing/installing any live base or sna
     size: value.bytes.length,
     digest: 'sha256:' + createHash('sha256').update(value.bytes).digest('hex'),
   };
-  await f.files('', { 'data/live': 'ordinary', 'state/stale': 'untouched on invalid worker' });
+  await f.files('', { 'settings.xml': 'untouched on invalid worker' });
   await expect(prepareStreaming(request)).rejects.toThrow();
-  expect(await readFile(f.store.root.resolve('state/stale'), 'utf8')).toBe(
+  expect(await readFile(f.store.root.resolve('settings.xml'), 'utf8')).toBe(
     'untouched on invalid worker',
   );
   expect(await f.store.root.stat('data/only-A')).toBeNull();
@@ -443,9 +455,10 @@ it('blocks incompatible prior destructive state before provisioning or backend c
 it('restores read-only without discovering dependent artifacts', async () => {
   const f = await fixture(),
     artifacts = vi.fn(async () => memoryArtifacts().api);
-  await f.files('', { 'state/stale': 'stale' });
+  const { source } = await seeded(f, { data: { 'data/restored': 'base' } });
   const ready = await prepareStreaming({
     ...f.request,
+    cacheBackend: async () => source.api,
     policy: {
       ...f.request.policy,
       access: 'read-only',
@@ -456,7 +469,7 @@ it('restores read-only without discovering dependent artifacts', async () => {
   });
   expect(ready.workerCount).toBe(0);
   expect(artifacts).not.toHaveBeenCalled();
-  expect(await f.store.root.stat('state/stale')).toBeNull();
+  expect(await readFile(f.store.root.resolve('data/restored'), 'utf8')).toBe('base');
 });
 
 it.skipIf(process.platform === 'win32')(
@@ -495,7 +508,7 @@ it('checks the caller lifetime after complete worker merge before the first base
     revoked = true;
     return result;
   });
-  await f.files('', { 'state/stale': 'stale' });
+  await f.files('', { 'settings.xml': 'settings' });
   await expect(
     prepareStreaming({
       ...request,
@@ -506,7 +519,7 @@ it('checks the caller lifetime after complete worker merge before the first base
   ).rejects.toThrow();
   expect(revoked).toBe(true);
   expect(await f.store.root.stat('data/only-A')).toBeNull();
-  expect(await readFile(f.store.root.resolve('state/stale'), 'utf8')).toBe('stale');
+  expect(await readFile(f.store.root.resolve('settings.xml'), 'utf8')).toBe('settings');
 });
 
 it('preserves bounded differing-contribution diagnostics from the real worker merge', async () => {
@@ -585,7 +598,7 @@ it('restores v2 native objects with exact fallback lineage and independent selec
       data: { 'data/new': 'base' },
       state: { 'state/new': 'snapshot' },
     });
-  await f.files('', { 'data/old': 'prune', 'state/old': 'replace' });
+  await f.files('', { 'data/keep.lock': 'protected', 'state/keep.lock': 'protected' });
   const artifacts = memoryArtifacts();
   const ready = await prepareStreaming({
     ...f.request,
@@ -602,8 +615,8 @@ it('restores v2 native objects with exact fallback lineage and independent selec
   expect(ready.restoreStatus).toBe('fallback-lineage-hit');
   expect(ready.restoredKey).toBe(generation[11]);
   expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('base');
-  expect(await f.store.root.stat('data/old')).toBeNull();
-  expect(await f.store.root.stat('state/old')).toBeNull();
+  for (const name of ['data/keep.lock', 'state/keep.lock'])
+    expect(await readFile(f.store.root.resolve(name), 'utf8')).toBe('protected');
   const opened = await OpenedInvocation.open(ready.anchor, f.budget),
     handoff = await LifecycleHandoff.read(ready.store, opened.state[6]!, { budget: f.budget });
   try {
@@ -663,7 +676,7 @@ it('checks caller lifetime after awaited v2 base acquisition before live install
       return result;
     },
   };
-  await f.files('', { 'data/old': 'old', 'state/stale': 'untouched' });
+  await f.files('', { 'settings.xml': 'untouched' });
   await expect(
     prepareStreaming({
       ...f.request,
@@ -675,7 +688,7 @@ it('checks caller lifetime after awaited v2 base acquisition before live install
   ).rejects.toThrow();
   expect(revoked).toBe(true);
   expect(await f.store.root.stat('data/new')).toBeNull();
-  expect(await readFile(f.store.root.resolve('state/stale'), 'utf8')).toBe('untouched');
+  expect(await readFile(f.store.root.resolve('settings.xml'), 'utf8')).toBe('untouched');
 });
 it('rejects lifetime revocation after the actual durable ready commit', async () => {
   const f = await fixture();
@@ -716,3 +729,266 @@ it.each(['cold', 'empty', 'mixed'] as const)(
     expect(ready.restoredKey).toBe(kind === 'cold' ? null : generation[11]);
   },
 );
+
+it.each([
+  ['standalone', 'writable'],
+  ['distributed-worker', 'writable'],
+  ['distributed-aggregator', 'read-only'],
+] as const)(
+  'rejects populated %s %s before provision, restore, purge or hooks',
+  async (role, access) => {
+    const f = await fixture();
+    const cache = vi.fn(f.request.cacheBackend);
+    const artifacts = vi.fn(async () => memoryArtifacts().api);
+    await f.files('', { 'data/prewarmed': 'keep', 'settings.xml': 'settings' });
+    await expect(
+      prepareStreaming({
+        ...f.request,
+        cacheBackend: cache,
+        artifactBackend: artifacts,
+        policy: { ...f.request.policy, role, access, restoreCleanup: 'prune-managed' },
+      }),
+    ).rejects.toThrow('Managed cache path "data/prewarmed" already exists in partition "data"');
+    expect(cache).not.toHaveBeenCalled();
+    expect(artifacts).not.toHaveBeenCalled();
+    expect(f.provision).not.toHaveBeenCalled();
+    expect(f.hooks).not.toHaveBeenCalled();
+    const opened = await OpenedInvocation.current(f.root, f.budget);
+    expect(opened?.state[4]).toBe('prepare-failed');
+    expect(await opened?.store.root.stat(opened.store.prefix + 'install')).toBeNull();
+    expect(await readFile(f.store.root.resolve('data/prewarmed'), 'utf8')).toBe('keep');
+    expect(await readFile(f.store.root.resolve('settings.xml'), 'utf8')).toBe('settings');
+  },
+);
+
+it('uses effective partition overrides and allows settings, exclusions and scaffolding', async () => {
+  const f = await fixture();
+  const inputs = JSON.stringify([
+    { id: 'repository', includes: [] },
+    { id: 'custom', includes: ['custom/**'], excludes: ['custom/protected/**'] },
+  ]);
+  const config = normalizeMavenActionConfig(
+    readMavenActionInputs({ getInput: (key) => (key === 'cache-partitions' ? inputs : '') }),
+    { phase: 'prepare', ciContext: fixtureCi(f.root), env: { MAVEN_USER_HOME: f.root } },
+  );
+  const adapter = new MavenBuildToolAdapter(config);
+  const hard = adapter.getHardCacheExcludeGlobs();
+  const model = resolveCacheModel(
+    {
+      buildToolId: 'maven',
+      hardCacheExcludeGlobs: hard,
+      partitions: createCachePartitions(
+        config.cachePartitions,
+        adapter.getBuiltInPartitionPresets(),
+        hard,
+      ),
+    },
+    'effective-admission-',
+    1,
+  );
+  await f.files('', {
+    'repository/org/a.jar': 'disabled',
+    'settings.xml': 'allowed',
+    'custom/protected/data': 'excluded',
+    'custom/allowed.lock': 'hard excluded',
+    'wrapper/dists/empty': null,
+  });
+  await assertEmptyManagedArea(f.store.root, model, f.request);
+  await f.files('', { 'custom/selected': 'selected' });
+  await expect(assertEmptyManagedArea(f.store.root, model, f.request)).rejects.toThrow(
+    'Managed cache path "custom/selected" already exists in partition "custom"',
+  );
+
+  const customSettings = resolveModel(
+    [
+      'model',
+      1,
+      'maven',
+      hard,
+      [['custom', ['settings.xml/**'], hard, 'aggregate', null, 'default']],
+    ],
+    'custom-settings-',
+    1,
+  );
+  await expect(assertEmptyManagedArea(f.store.root, customSettings, f.request)).rejects.toThrow(
+    'Managed cache path "settings.xml" already exists in partition "custom"',
+  );
+});
+
+it('keeps excluded symlinks and rejects managed aliases and unsafe structural ancestors', async () => {
+  const f = await fixture();
+  const model = resolveModel(
+    [
+      'model',
+      1,
+      'maven',
+      ['**/*.lock'],
+      [['custom', ['branch/managed/**'], ['**/*.lock'], 'aggregate', null, 'default']],
+    ],
+    'unsafe-admission-',
+    1,
+  );
+  const outside = f.root + '/outside';
+  await mkdir(outside);
+  await writeFile(outside + '/source', 'keep');
+  await mkdir(f.root + '/branch/managed', { recursive: true });
+  await link(outside + '/source', f.root + '/branch/managed/alias');
+  await expect(assertEmptyManagedArea(f.store.root, model, f.request)).rejects.toThrow(
+    'Managed cache path "branch/managed/alias"',
+  );
+  await rm(f.root + '/branch', { recursive: true });
+  await symlink(outside, f.root + '/branch', 'junction');
+  await expect(assertEmptyManagedArea(f.store.root, model, f.request)).rejects.toThrow(
+    'Unsafe native entry "branch"',
+  );
+  await rm(f.root + '/branch');
+  await mkdir(f.root + '/branch/managed', { recursive: true });
+  await symlink(outside, f.root + '/branch/managed/keep.lock', 'junction');
+  await assertEmptyManagedArea(f.store.root, model, f.request);
+  expect(await readFile(outside + '/source', 'utf8')).toBe('keep');
+});
+
+it('walks shared managed directories once with linear metadata work and no payload IO or index', async () => {
+  const hard = ['.mammoth/**', '**/*.lock'];
+  const model = resolveModel(
+    [
+      'model',
+      1,
+      'maven',
+      hard,
+      [
+        [
+          'left',
+          ['shared/units/*/left/**'],
+          [...hard, 'shared/units/*/left/pruned/**'],
+          'aggregate',
+          null,
+          'default',
+        ],
+        ['right', ['shared/units/*/right/**'], hard, 'aggregate', null, 'default'],
+      ],
+    ],
+    'admission-work-',
+    1,
+  );
+  for (const width of [4, 16]) {
+    const f = await fixture({}, model);
+    for (let unit = 0; unit < width; unit++) {
+      const prefix = `shared/units/unit-${unit}/`;
+      await f.files('', {
+        [prefix + 'left/pruned/more/ignored']: 'pruned',
+        [prefix + 'left/keep.lock']: 'protected',
+        [prefix + 'right/empty']: null,
+        [prefix + 'other/more/ignored']: 'unmanaged',
+      });
+    }
+    await f.files('', { 'unrelated/deep/nested/file': 'never read' });
+    const root = await NativeRoot.bind(f.root);
+    const work = walkWork();
+    await assertEmptyManagedArea(root, model, f.request, work);
+    expect(work.listings).toBe(3 + 4 * width);
+    expect(work.stats).toBe(work.listings * 2 + width);
+    for (const key of [
+      'opens',
+      'indexBuilds',
+      'scratchLogicalWriteBytes',
+      'bodyHashCalls',
+      'unlinks',
+    ] as const)
+      expect(root.work[key]).toBe(0);
+  }
+});
+
+it('stops at the first selected file even in a directory over the breadth limit', async () => {
+  const f = await fixture();
+  await f.files(
+    '',
+    Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`data/f${i}`, 'keep'])),
+  );
+  const work = walkWork();
+  await expect(
+    assertEmptyManagedArea(
+      f.store.root,
+      f.model,
+      { budget: f.budget, maxDirectoryEntries: 2 },
+      work,
+    ),
+  ).rejects.toThrow(/Managed cache path "data\/f\d+" already exists in partition "data"/);
+  expect(work).toMatchObject({ listings: 2, entries: 2, stats: 3 });
+});
+
+it.each(['absent', 'running', 'uncertain', 'error', 'abort'] as const)(
+  'handles %s Gradle daemon evidence before all cache operations',
+  async (kind) => {
+    const f = await fixture();
+    const controller = new AbortController();
+    const reason = new Error('prepare canceled');
+    const inspect = vi.fn(async () => {
+      if (kind === 'error') throw new Error('process record unavailable');
+      if (kind === 'abort') controller.abort(reason);
+      return { remaining: kind === 'running', uncertain: kind === 'uncertain' };
+    });
+    const stop = vi.fn(async () => {});
+    const cache = vi.fn(f.request.cacheBackend);
+    const root = f.root + '/new-home';
+    const model = resolveModel(
+      [
+        'model',
+        1,
+        'gradle',
+        ['**/*.lock'],
+        [['data', ['data/**'], ['**/*.lock'], 'aggregate', null, 'default']],
+      ],
+      'gradle-admission-',
+      1,
+    );
+    const result = prepareStreaming({
+      ...f.request,
+      root,
+      context: [...f.request.context.slice(0, 7), 'gradle'] as StreamingPrepareRequest['context'],
+      model,
+      lifecycle: gradleResolver({ inspect, stop }),
+      signal: controller.signal,
+      cacheBackend: cache,
+    });
+    if (kind === 'absent') {
+      expect((await result).restoreStatus).toBe('miss');
+      expect(cache).toHaveBeenCalledOnce();
+      expect(f.provision).toHaveBeenCalledOnce();
+      expect(f.hooks).toHaveBeenCalledOnce();
+    } else {
+      if (kind === 'abort') await expect(result).rejects.toBe(reason);
+      else
+        await expect(result).rejects.toThrow(
+          kind === 'running'
+            ? 'A running Gradle daemon was detected'
+            : 'Could not establish that Gradle daemons are absent',
+        );
+      expect(cache).not.toHaveBeenCalled();
+      expect(f.provision).not.toHaveBeenCalled();
+      expect(f.hooks).not.toHaveBeenCalled();
+      expect((await OpenedInvocation.current(root, f.budget))?.state[4]).toBe('prepare-failed');
+    }
+    expect(inspect).toHaveBeenCalledExactlyOnceWith(controller.signal);
+    expect(stop).not.toHaveBeenCalled();
+  },
+);
+
+it('skips descendants of an exact-only include when it names a directory', async () => {
+  const f = await fixture();
+  const hard = ['.mammoth/**'];
+  const model = resolveModel(
+    ['model', 1, 'maven', hard, [['exact', ['selected'], hard, 'aggregate', null, 'default']]],
+    'exact-admission-',
+    1,
+  );
+  await f.files('', { 'selected/one': 'unmanaged', 'selected/two': 'unmanaged' });
+  const work = walkWork();
+  await assertEmptyManagedArea(
+    f.store.root,
+    model,
+    { budget: f.budget, maxDirectoryEntries: 1 },
+    work,
+  );
+  expect(work).toMatchObject({ listings: 1, entries: 1 });
+});

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { prepareStreaming } from '../../../src/cache/streaming/prepare';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import { OpenedInvocation } from '../../../src/cache/streaming/invocation';
@@ -64,8 +64,6 @@ if (mode === 'post' || mode === 'post-crash') {
   if (mode === 'start' || mode === 'success') {
     await mkdir(root + '/data', { recursive: true });
     await mkdir(root + '/state', { recursive: true });
-    await writeFile(root + '/data/keep', 'ordinary');
-    await writeFile(root + '/state/stale', 'old');
   }
   await prepareStreaming({
     root,

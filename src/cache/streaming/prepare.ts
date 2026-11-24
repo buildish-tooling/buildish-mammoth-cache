@@ -15,6 +15,8 @@
  */
 
 import { timed } from '../../util/timing';
+import { resolveLifecycle } from '../../build-tool/lifecycle';
+import type { BuildToolLifecycle } from '../../build-tool/lifecycle-types';
 import { mkdir, lstat } from 'node:fs/promises';
 import { lineagePrefix } from './native-records';
 import { LocalCodec, policySchema } from './local-schema';
@@ -42,6 +44,7 @@ import { handoffSchemas, type HandoffHeader } from './lifecycle-handoff';
 import { metadataWorkerRequests, metadataSnapshotRequirements } from './prepare-inputs';
 import { retireInstallStaging } from './owned-retirement';
 import { settleNativeCleanup } from './native-operation';
+import { assertEmptyManagedArea } from './prepare-admission';
 import type { BaseCacheBackend } from '../backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
@@ -68,7 +71,7 @@ export interface StreamingPrepareRequest extends LifecycleOptions {
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   readonly artifactBackend?: () => Promise<WorkflowArtifactBackend>;
   readonly provision: () => Promise<void>;
-  readonly installHooks: (store: OwnedStore) => Promise<void>;
+  readonly installHooks: (store: OwnedStore, lifecycle: BuildToolLifecycle) => Promise<void>;
   readonly now?: () => number;
   readonly fail?: Failpoint;
 }
@@ -164,10 +167,6 @@ export async function prepareStreaming(
     options.maxDirectoryEntries,
     request.policy.ordinaryOrder,
   ]);
-  await store.makeParents(store.prefix + 'install/pending');
-  const installOwner = (await store.root.stat(store.prefix + 'install'))!;
-  if (installOwner[3] !== store.root.binding[3])
-    throw new Error('Cross-filesystem install staging.');
   const model = await store.writeStream(
     'model',
     { ...options, partition: null },
@@ -196,6 +195,21 @@ export async function prepareStreaming(
     downloads: DownloadedWorkerArchive[] = [];
   let failure: unknown, answer: StreamingPrepareResult | undefined;
   try {
+    const lifecycle = await timed(options, 'restore preconditions', async () => {
+      await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
+      const lifecycle = await resolveLifecycle(request.context[7], options.lifecycle);
+      assertCurrent();
+      await lifecycle.assertRestoreConsumersAbsent(signal);
+      assertCurrent();
+      await assertEmptyManagedArea(store.root, request.model, options);
+      return lifecycle;
+    });
+    await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
+    await store.makeParents(store.prefix + 'install/pending');
+    const installOwner = (await store.root.stat(store.prefix + 'install'))!;
+    if (installOwner[3] !== store.root.binding[3])
+      throw new Error('Cross-filesystem install staging.');
+    assertCurrent();
     await request.provision();
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cache = await request.cacheBackend(),
@@ -328,7 +342,7 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
-    await request.installHooks(store);
+    await request.installHooks(store, lifecycle);
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
     bindings = docs.bindings.parse(bindings);

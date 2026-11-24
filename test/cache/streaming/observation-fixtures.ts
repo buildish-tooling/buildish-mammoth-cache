@@ -125,6 +125,7 @@ export async function initializeObservationFixture(
   ) {
     const lifecycle: LifecycleResolver = async (tool) => ({
       tool,
+      assertRestoreConsumersAbsent: async () => {},
       prepareCapture: async () => {},
       removeKnownHooks: async () => [],
       quiesce: async (input) =>

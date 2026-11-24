@@ -29,6 +29,7 @@ export async function quiescenceFixture(options: Parameters<typeof composedFixtu
   const f = await composedFixture({}, undefined, options, 'gradle');
   const ready = await prepareStreaming({
     ...f.request,
+    lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
     policy: {
       ...f.request.policy,
       role: f.store.codec.options.role,

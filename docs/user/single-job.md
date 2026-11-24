@@ -25,6 +25,10 @@ workflow runs one build job at a time. The action restores the newest compatible
 generation before the build and publishes a new complete generation only when managed state
 materially changes.
 
+Run Mammoth before any Gradle or Maven invocation or competing cache restore.
+Use a [fresh dedicated home](../troubleshooting/#restore-admission-failures) on persistent runners.
+Prepare requires empty managed partitions even when the job is read-only.
+
 ## Gradle
 
 For Gradle, the prepare step additionally provisions any missing wrapper JARs before handing off

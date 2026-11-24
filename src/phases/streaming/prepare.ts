@@ -16,7 +16,6 @@
 
 import { timed } from '../../util/timing';
 import { hostTiming } from '../../host/timing';
-import { resolveLifecycle } from '../../build-tool/lifecycle';
 import { randomBytes } from 'node:crypto';
 import { createCachePartitions } from '../../cache/model';
 import { resolveCacheModel, lineageId } from '../../cache/streaming/model';
@@ -145,8 +144,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       cacheBackend: d.cacheBackend,
       artifactBackend: d.artifactBackend,
       provision,
-      installHooks: async (store) => {
-        const lifecycle = await resolveLifecycle(store.codec.options.context[7], d.lifecycle);
+      installHooks: async (store, lifecycle) => {
         await lifecycle.prepareCapture(store, ci, () => adapter.installBuildHooks(ci));
       },
     });

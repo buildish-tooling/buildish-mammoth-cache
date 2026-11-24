@@ -19,6 +19,9 @@ import type { BuildToolLifecycle } from '../lifecycle-types';
 /** Maven retains the caller's completed-consumer lifetime and ordinary hooks. */
 export const mavenLifecycle: BuildToolLifecycle = Object.freeze({
   tool: 'maven',
+  async assertRestoreConsumersAbsent() {
+    // The caller supplies the exclusive Maven window.
+  },
   async prepareCapture(_store, _context, ordinaryHooks) {
     await ordinaryHooks();
   },

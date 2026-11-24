@@ -118,8 +118,12 @@ it.each(['maven', 'gradle'] as const)(
     const consumer = await entrypointJob(root, tool, 'consumer', partition, a.store);
     await consumer.run('main');
     expect(await readFile(consumer.home + '/snapshot/value', 'utf8')).toBe('A');
-    expect((await a.trace()).filter(([name]) => name === 'process-inspection')).toEqual([]);
-    expect((await b.trace()).filter(([name]) => name === 'process-inspection')).toEqual([]);
+    expect((await a.trace()).filter(([name]) => name === 'process-inspection')).toHaveLength(
+      tool === 'gradle' ? 1 : 0,
+    );
+    expect((await b.trace()).filter(([name]) => name === 'process-inspection')).toHaveLength(
+      tool === 'gradle' ? 1 : 0,
+    );
   },
   40000,
 );
@@ -399,5 +403,43 @@ it.each(['maven', 'gradle'] as const)(
     );
     expect(await readFile(path.join(job.home, 'data/shared/4'), 'utf8')).toBe('retained');
     expect((await job.trace()).some(([event]) => event === 'cache-save')).toBe(false);
+  },
+);
+
+it('actual read-only prepare preserves a prewarmed home without querying a seeded backend', async () => {
+  const writer = await entrypointJob(root, 'maven', 'seed', inputs);
+  await writer.run('main');
+  await writer.write('data/base', 'cached');
+  await writer.run('post');
+
+  const reader = await entrypointJob(
+    root,
+    'maven',
+    'prewarmed',
+    { ...inputs, 'read-only': 'true' },
+    writer.store,
+  );
+  await reader.write('data/prewarmed', 'keep');
+  await expect(reader.run('main')).rejects.toThrow('Managed cache path "data/prewarmed"');
+  await reader.run('post');
+  expect(await readFile(reader.home + '/data/prewarmed', 'utf8')).toBe('keep');
+  await expect(readFile(reader.home + '/data/base')).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await reader.trace()).filter(([name]) => name !== 'native-work')).toEqual([]);
+});
+
+it.each(['remaining', 'uncertain'] as const)(
+  'actual Gradle prepare rejects %s process evidence even when cache is unavailable',
+  async (evidence) => {
+    const j = await entrypointJob(root, 'gradle', 'process-' + evidence, inputs);
+    await expect(
+      j.run('main', {
+        MAMMOTH_TEST_PROCESS: evidence,
+        MAMMOTH_TEST_UNAVAILABLE: '1',
+      }),
+    ).rejects.toThrow(evidence === 'remaining' ? 'A running Gradle daemon' : 'Could not establish');
+    await j.run('post');
+    expect((await j.trace()).filter(([name]) => name !== 'native-work')).toEqual([
+      ['process-inspection', null],
+    ]);
   },
 );

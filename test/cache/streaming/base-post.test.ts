@@ -90,7 +90,7 @@ it('reuses exact prior choices without saves on a fresh invocation', async () =>
     ready = await f.prepare();
   await f.files(f.root, { 'data/a': 'body' });
   const first = await post(f, ready.anchor);
-  const next = await f.prepare({ nonce: 'b'.repeat(32) }),
+  const next = await f.prepare({ nonce: 'b'.repeat(32), root: f.directory + '/fresh' }),
     before = f.save.mock.calls.length;
   const logs: string[] = [];
   expect(await post(f, next.anchor, { timing: { info: (s) => logs.push(s) } })).toEqual({
@@ -144,8 +144,11 @@ it.each([
     });
     const first = await post(f, initial.anchor);
     expect(first.outcome).toBe('published');
+    const fresh = f.directory + '/fresh';
+    for (let unit = 0; unit < units; unit++)
+      await f.files(fresh, { [`repository/group/unit-${unit}/0-version/keep.lock`]: 'protected' });
     const saves = f.save.mock.calls.length,
-      next = await f.prepare({ nonce: 'b'.repeat(32) });
+      next = await f.prepare({ nonce: 'b'.repeat(32), root: fresh });
     const directories = 3 + units * 2, // root, repository, group, and two directories per coordinate
       filesPerPartition = units * width + 1,
       files = filesPerPartition * partitions.length,
@@ -194,7 +197,7 @@ it.each([
       false,
     );
     expect(f.save).toHaveBeenCalledTimes(saves);
-    expect(await readFile(f.root + '/repository/group/unit-0/0-version/keep.lock', 'utf8')).toBe(
+    expect(await readFile(fresh + '/repository/group/unit-0/0-version/keep.lock', 'utf8')).toBe(
       'protected',
     );
   },
@@ -289,7 +292,9 @@ it('checks fresh Gradle quiescence before hook removal, observation or backend c
       1,
     ),
     f = await fixture(model),
-    ready = await f.prepare();
+    ready = await f.prepare({
+      lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
+    });
   const backend = vi.fn(async () => f.api),
     hooks = vi.fn(async () => {});
   const result = await post(f, ready.anchor, {
@@ -308,8 +313,8 @@ it('identifies saved and reused partitions when only one partition changes', asy
     ready = await f.prepare();
   await f.files(f.root, { 'data/a': 'first', 'state/a': 'stable' });
   await post(f, ready.anchor);
-  const next = await f.prepare({ nonce: 'b'.repeat(32) });
-  await f.files(f.root, { 'data/a': 'changed body' });
+  const next = await f.prepare({ nonce: 'b'.repeat(32), root: f.directory + '/fresh' });
+  await f.files(next.store.root.path, { 'data/a': 'changed body' });
   const logs: string[] = [],
     before = f.save.mock.calls.length;
   expect(

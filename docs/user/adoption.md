@@ -52,7 +52,8 @@ the aggregator publishes its own complete snapshot. Follow the
 Keep the workflow's existing trusted event/ref restrictions. The default read-only policy for
 pull-request events does not restrict every other event to your intended writers; set explicit
 gates or `read-only` inputs where needed. Give Mammoth sole cache ownership of each managed root,
-including disabling overlapping caching in setup actions while retaining their tool setup.
+including disabling overlapping caching in setup actions while retaining their tool setup. Run
+Mammoth before any Gradle or Maven invocation in the job.
 
 In distributed mode, assign stable, unique producer names to matrix jobs. Align `github-job-name`,
 `dependent-jobs`, the metadata writer identity and the aggregator's `needs`. Required producers
@@ -69,9 +70,12 @@ copying a topology.
 ## Prepare for an incompatible upgrade
 
 Use one Action revision across participating workers, aggregators and readers.
-An older family starts cold under the new profiles. Give each invocation a
-dedicated cache root and preserve any previously interrupted root until you
-have inspected the retained paths.
+An older family starts cold under the new profiles. Prepare now rejects prewarmed
+files selected by any enabled partition, even on a cache miss or in a read-only job.
+Remove competing restores and give each invocation a fresh dedicated home on persistent
+runners. Copy or generate only the settings the build needs, outside the enabled
+partition selections. Preserve interrupted roots for inspection. See
+[restore admission failures](../troubleshooting/#restore-admission-failures).
 
 ## Account for costs and recovery
 
