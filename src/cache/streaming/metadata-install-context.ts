@@ -17,8 +17,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { add, encodeRecord, equal, type Value } from './encoding';
-import { DiscoveredMetadataBase, type MetadataDiscoveryOptions } from './metadata-base-source';
+import {
+  DiscoveredMetadataBase,
+  type BaseSourceMode,
+  type MetadataDiscoveryOptions,
+} from './metadata-base-source';
 import { decodeMetadataGeneration, type MetadataGeneration } from './metadata-base-records';
+import { BaseMoveBoundaries } from './base-move-boundaries';
 import { InstallScratch } from './install-scratch';
 import {
   buildObservedInstallIndex,
@@ -352,7 +357,7 @@ export class MetadataInstallContext {
     store: OwnedStore,
     supplied: MetadataGeneration,
     materialized: readonly { readonly partition: string; readonly root: string }[],
-    options: MetadataDiscoveryOptions,
+    options: MetadataDiscoveryOptions & { baseSourceMode?: BaseSourceMode },
   ): Promise<MetadataInstallContext> {
     const generation = decodeMetadataGeneration(encodeRecord(supplied), store.codec.options.model);
     if (
@@ -371,13 +376,30 @@ export class MetadataInstallContext {
     );
     const signal = options.signal ?? new AbortController().signal,
       available = new Set<string>();
+    const model = store.codec.options.model;
+    let boundaries: BaseMoveBoundaries | undefined;
     try {
+      if (options.baseSourceMode && model.tuple[2] === 'gradle' && materialized.length)
+        boundaries = new BaseMoveBoundaries(
+          store,
+          options.budget,
+          materialized,
+          context.maxDirectoryEntries,
+          signal,
+        );
       for (const entry of generation[8]) {
         const offered = materialized.find((p) => p.partition === entry[1]);
         if (entry[0] === 'object' && !offered) continue;
         let discovery: DiscoveredMetadataBase | undefined,
           ordinal = 0,
           nativeRoot = '';
+        const reduction =
+          offered &&
+          boundaries &&
+          options.baseSourceMode &&
+          model.partitions.find((p) => p[0] === entry[1])?.[3] === 'aggregate'
+            ? { mode: options.baseSourceMode, canOmit: await boundaries.begin(entry[1]) }
+            : undefined;
         const index = await buildObservedInstallIndex(
           context.scratch,
           store.codec.options.model,
@@ -390,14 +412,16 @@ export class MetadataInstallContext {
                 offered!.root,
                 entry[2],
                 options,
-                async (row) => {
+                async (row, intact) => {
                   await accept({
                     value: row,
+                    intact,
                     start: ordinal,
                     end: add(ordinal),
                     record: ordinal++,
                   });
                 },
+                reduction,
               );
               context.discoveries.push(discovery);
               nativeRoot = discovery.nativeRoot;
@@ -413,7 +437,7 @@ export class MetadataInstallContext {
               await accept({ value: ['dir-close', '', native], start: 1, end: 2, record: 1 });
             }
           },
-          { trackDirectFiles: store.codec.options.model.tuple[2] === 'maven' },
+          { trackDirectFiles: model.tuple[2] === 'maven', checkSourceAliases: !reduction },
         );
         context.sources.set(
           entry[1],
@@ -440,6 +464,8 @@ export class MetadataInstallContext {
         });
       }
       throw error;
+    } finally {
+      boundaries?.close();
     }
   }
 }

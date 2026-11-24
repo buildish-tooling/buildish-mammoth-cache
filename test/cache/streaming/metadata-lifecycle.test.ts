@@ -45,8 +45,13 @@ import { RecoveryGroups } from '../../../src/cache/streaming/native-records';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 import { MetadataPublicationSource } from '../../../src/cache/streaming/metadata-publication-source';
 import type { BaseCacheBackend } from '../../../src/cache/backend';
+import { registrationDirectory } from '../../../src/build-tool/gradle/registrations';
+import { gradleResolver } from './quiescence-fixture';
 import type { Context } from '../../../src/cache/streaming/schema';
 const roots: string[] = [];
+const gradleLifecycle = gradleResolver({
+  inspect: async () => ({ remaining: false, uncertain: false }),
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
@@ -153,17 +158,22 @@ async function prepare(
     now: config.now,
     artifactRetentionDays: 7,
     cleanupEnabled: true,
+    lifecycle: model.tuple[2] === 'gradle' ? gradleLifecycle : undefined,
     saveAnchor() {},
     cacheBackend: async () => api,
     artifactBackend: config.artifacts ? async () => config.artifacts! : undefined,
     provision: async () => {},
-    installHooks: config.hooks ?? (async () => {}),
+    installHooks: async (store) => {
+      if (model.tuple[2] === 'gradle' && config.role !== 'distributed-worker')
+        await store.makeParents(registrationDirectory(store) + '/placeholder');
+      await config.hooks?.();
+    },
     assertCurrent: (): undefined => {},
   });
   return { ...result, root, budget };
 }
 async function post(f: Awaited<ReturnType<typeof prepare>>, api: BaseCacheBackend) {
-  // Fresh bound store/model/codec: only the actual persisted v2 handoff crosses.
+  // Fresh bound store/model/codec: only the actual persisted handoff crosses.
   const opened = await OpenedInvocation.open(f.anchor, f.budget);
   expect(opened.store).not.toBe(f.store);
   expect(opened.state).toHaveLength(8);
@@ -173,6 +183,7 @@ async function post(f: Awaited<ReturnType<typeof prepare>>, api: BaseCacheBacken
     budget: f.budget,
     cacheBackend: async () => api,
     removeHooks: async () => {},
+    lifecycle: f.store.codec.options.model.tuple[2] === 'gradle' ? gradleLifecycle : undefined,
     assertCurrent: (): undefined => {},
   });
 }
@@ -514,12 +525,12 @@ it('explicitly permits same-metadata aggregate worker body rewrites to reuse the
     seed = await prepare(sdk.api, 'a1'.repeat(16));
   await buildFiles(seed, { 'data/shared/a': 'base' });
   await chmod(seed.store.root.resolve('data/shared/a'), 0o644);
-  await utimes(seed.store.root.resolve('data/shared/a'), 1.2345, 1.2345);
+  await utimes(seed.store.root.resolve('data/shared/a'), 1, 1);
   await post(seed, sdk.api);
   const artifacts = memoryArtifacts(),
     worker = await prepare(sdk.api, 'a2'.repeat(16), { job: 'A', role: 'distributed-worker' });
   await writeFile(worker.store.root.resolve('data/shared/a'), 'else');
-  await utimes(worker.store.root.resolve('data/shared/a'), 1.2345, 1.2345);
+  await utimes(worker.store.root.resolve('data/shared/a'), 1, 1);
   await postStreamingWorker({
     anchor: worker.anchor,
     budget: worker.budget,
@@ -818,3 +829,59 @@ it.each(['prior', 'empty', 'miss'] as const)(
     expect(await reader.store.root.stat('state/shared/extra')).toBeNull();
   },
 );
+
+it('preserves unchanged Gradle objects through a real worker overlay and fresh writable post', async () => {
+  const sdk = await backend(),
+    artifacts = memoryArtifacts();
+  const hard = ['.mammoth/**'];
+  const model = resolveModel(
+    [
+      'model',
+      1,
+      'gradle',
+      hard,
+      [
+        ['data', ['data/**'], hard, 'aggregate', null, 'default'],
+        ['stable', ['stable/**'], hard, 'aggregate', null, 'default'],
+      ],
+    ],
+    'gradle-overlay-reuse-',
+    1,
+  );
+  const seed = await prepare(sdk.api, 'e1'.repeat(16), { model });
+  await buildFiles(seed, { 'data/base': 'base', 'stable/source': 'stable' });
+  expect((await post(seed, sdk.api)).outcome).toBe('published');
+  const worker = await prepare(sdk.api, 'e2'.repeat(16), {
+    model,
+    job: 'A',
+    role: 'distributed-worker',
+  });
+  expect(worker.restoreStatus).toBe('current-lineage-hit');
+  await buildFiles(worker, { 'data/from-worker': 'worker' });
+  expect(
+    (
+      await postStreamingWorker({
+        anchor: worker.anchor,
+        budget: worker.budget,
+        artifactBackend: async () => artifacts.api,
+        assertCurrent: () => undefined,
+      })
+    ).outcome,
+  ).toBe('worker-uploaded');
+  const merged = await prepare(sdk.api, 'e3'.repeat(16), {
+    model,
+    role: 'distributed-aggregator',
+    order: ['A'],
+    artifacts: artifacts.api,
+  });
+  expect(merged.workerCount).toBe(1);
+  expect(await readFile(merged.store.root.resolve('data/from-worker'), 'utf8')).toBe('worker');
+  const publishedCount = sdk.saves.mock.calls.length;
+  expect((await post(merged, sdk.api)).outcome).toBe('published');
+  expect(sdk.saves).toHaveBeenCalledTimes(publishedCount + 2);
+  const consumer = await prepare(sdk.api, 'e4'.repeat(16), { model });
+  expect(await readFile(consumer.store.root.resolve('data/from-worker'), 'utf8')).toBe('worker');
+  expect(await readFile(consumer.store.root.resolve('stable/source'), 'utf8')).toBe('stable');
+  expect((await post(consumer, sdk.api)).outcome).toBe('no-change');
+  expect(sdk.saves).toHaveBeenCalledTimes(publishedCount + 2);
+});

@@ -24,16 +24,12 @@ import { settleNativeCleanup } from './native-operation';
 import { lineageId } from './model';
 import { lineagePrefix } from './native-records';
 import { decodeMetadataGeneration, type MetadataGeneration } from './metadata-base-records';
-import { metadataBaseObjectPaths } from './metadata-base-source';
+import { metadataBaseObjectPaths, type BaseSourceMode } from './metadata-base-source';
 import { MetadataInstallContext } from './metadata-install-context';
 import { nativeBaseFile, baseRecordPaths } from './base-layout';
 import { sameNative, sameObject, type NativeIdentity } from './native';
 import { retireOwnedDirectory } from './owned-retirement';
-import {
-  emptyPartitionMetadata,
-  metadataSummaryProfile,
-  type PinnedPartitionMetadata,
-} from './partition-metadata';
+import { emptyPartitionMetadata, metadataSummaryProfile } from './partition-metadata';
 import { nameSchema } from './schema';
 import type { HandoffEntry } from './lifecycle-handoff';
 
@@ -104,7 +100,7 @@ export class MetadataBaseRestore {
     store: OwnedStore,
     backend: BaseCacheBackend | null,
     refs: { currentRef: string; defaultRef?: string },
-    options: NativeOperationOptions,
+    options: NativeOperationOptions & { baseSourceMode?: BaseSourceMode },
   ): Promise<MetadataBaseRestore> {
     const result = new MetadataBaseRestore(store, Object.freeze({ ...options }));
     const signal = options.signal ?? new AbortController().signal,
@@ -204,7 +200,7 @@ export class MetadataBaseRestore {
         profile = metadataSummaryProfile();
       for (const partition of model.partitions) {
         const selected = result.generation?.[8].find((entry) => entry[1] === partition[0]);
-        let pin: PinnedPartitionMetadata | null = null;
+        let pin: HandoffEntry[3] = null;
         const status: HandoffEntry[2] = !selected
           ? 'miss'
           : cold.has(partition[0])
@@ -216,7 +212,7 @@ export class MetadataBaseRestore {
           const input = result.context.source(partition[0]);
           if (input?.upstream.kind !== 'native-metadata')
             throw new Error('Missing admitted native pin source.');
-          pin = input.upstream.source.pin();
+          pin = input.upstream.source.pin() ?? ['restored-object', input.upstream.source.reference];
         } else if (status === 'empty')
           pin = [
             'pinned-partition-metadata',

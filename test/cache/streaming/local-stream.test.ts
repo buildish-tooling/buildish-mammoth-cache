@@ -69,7 +69,7 @@ function fixture(purpose: LocalPurpose, model?: ReturnType<typeof resolveModel>)
       break;
     case 'handoff':
       rows = [
-        ['handoff', 2, 'key', null, null, 1, 'disabled', null, null, f.q('activity'), 0, 0],
+        ['handoff', 3, 'key', null, null, 1, 'disabled', null, null, f.q('activity'), 0, 0],
         ...o.model.partitions.map((p) => ['partition', p[0], 'miss', null, null] as Value),
       ];
       break;

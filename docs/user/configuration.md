@@ -196,6 +196,13 @@ per-directory bounds. A directory beyond the limit fails the affected phase
 with its logical path and the configured allowance. Narrow managed directories
 or increase the allowance when the diagnostic indicates directory breadth.
 
+For an ordinary aggregate Gradle base restore, a read-only job or distributed
+worker can move an intact staged directory without listing its descendants.
+The limit applies to directories that restore actually enumerates, including
+merge boundaries. A writable standalone job or aggregator also enumerates
+restored entries when building the publication comparison, so it can hit the
+limit deeper in the same cached subtree.
+
 The active name and decoded-record working budgets are independent of this
 setting. Wide, deep, long-name or high-fan-in workloads can exhaust those
 budgets at a lower entry count. This input gives no repository-wide file limit

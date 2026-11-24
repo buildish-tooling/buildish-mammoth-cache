@@ -49,7 +49,8 @@ it('installs v2 base projections through actual prepare while preserving exclusi
     expect(handoff.entries[0][3]![7]).toEqual(
       seeded.entries[0][0] === 'object' ? seeded.entries[0][2] : null,
     );
-    expect(handoff.entries[0][3]![9][3]).toBe(1); // pin describes remote payload without local excluded files
+    const pin = handoff.entries[0][3];
+    expect(pin?.[0] === 'pinned-partition-metadata' && pin[9][3]).toBe(1); // pin describes remote payload without local excluded files
     expect(handoff.entries[1][2]).toBe('empty');
   } finally {
     handoff.close();

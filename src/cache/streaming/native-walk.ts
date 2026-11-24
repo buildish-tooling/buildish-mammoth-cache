@@ -62,6 +62,10 @@ export interface WalkOptions {
   readonly logicalRoot?: string;
   /** Live projections exclude reserved metadata; sealed staging must reject it. */
   readonly metadata?: 'exclude' | 'reject';
+  /** Trusted base sources may retain an intact directory without visiting its children. */
+  readonly intactDirectory?: (path: string) => 'intact' | 'workspace' | undefined;
+  /** Within trusted intact roots, only the summary uses these file observations. */
+  readonly summaryOnlyFile?: (path: string) => boolean;
   /** Prune only when the complete subtree is outside the requested projection. */
   readonly prune?: (path: string) => boolean;
   /** Synchronous protected-child inventory. Returning prune never follows that object. */
@@ -75,6 +79,7 @@ export type WalkEvent =
   | {
       readonly tag: 'directory-open' | 'directory-close';
       readonly activityTimes?: readonly [string, string];
+      readonly directJars?: true;
       readonly path: string;
       readonly nativePath: string;
       readonly identity: NativeIdentity;
@@ -191,12 +196,33 @@ export async function* walkNative(
       if (before[2] === 'file') {
         filePathSchema.parse(path);
         yield { tag: 'file', path, nativePath, identity: before, links: String(raw.nlink) };
-        if (!sameNative(before, await stat(nativePath), true))
+        if (!options.summaryOnlyFile?.(path) && !sameNative(before, await stat(nativePath), true))
           throw new Error('Native file changed during traversal.');
         return;
       }
       const activityTimes = options.purge ? ([before[8], before[9]] as const) : undefined;
       if (!options.purge) yield { tag: 'directory-open', path, nativePath, identity: before };
+      const intact = options.intactDirectory?.(path);
+      if (intact) {
+        let directJars: true | undefined;
+        if (intact === 'workspace') {
+          work.listings++;
+          root.work.nativeListings++;
+          let entries = 0;
+          for await (const entry of await opendir(root.resolve(nativePath), { bufferSize: 32 })) {
+            signal.throwIfAborted();
+            work.entries++;
+            if (++entries > max) throw directoryBreadthError(path, max, 'native walk');
+            if ((entry.name === 'classes.jar' || entry.name === 'sources.jar') && entry.isFile())
+              directJars = true;
+          }
+        }
+        const after = await stat(nativePath);
+        if (!sameNative(before, after, true))
+          throw new Error('Native directory changed during traversal.');
+        yield { tag: 'directory-close', path, nativePath, identity: after, directJars };
+        return;
+      }
       const children: (Child | undefined)[] = [];
       const names = new Set<string>();
       let charge = 0,

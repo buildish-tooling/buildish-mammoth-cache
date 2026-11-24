@@ -260,10 +260,15 @@ secret-free-content guarantee, secret scanner or additional confidentiality boun
 provided by workspace selection. _(documented)_
 
 Workspace membership and deterministic whole-producer selection protect complete-unit
-consistency within the existing trusted-producer model. Base restore validates metadata
-digests, ownership, membership, regular-file types and sizes, but does not hash payload
-bytes, including snapshot initialization. Same-size base payload corruption is not
-detected; authorized producers and the cache service are trusted for these bytes.
+consistency within the existing trusted-producer model. Ordinary aggregate Gradle
+base restore trusts the exact selected Mammoth-published object's partition projection
+and SDK extraction. Publication enforces ownership, exclusions and workspace
+completeness. Restore checks the envelope, staged roots and the native paths at
+move and merge boundaries. The filesystem and the tools writing the files determine
+filename portability within intact subtrees. Other base paths retain full structural
+discovery. Base restore does not hash payload bytes, including snapshot
+initialization. Same-size base payload corruption is not detected. Authorized
+producers and the cache service are trusted for these bytes.
 Incoming worker archives validate each payload SHA-256, including losing bodies,
 and require full stream and unit acceptance before live installation. Native
 base observation uses metadata and can miss a byte change that preserves the
@@ -439,13 +444,13 @@ Wave 1 - publishability and production posture:
 
 Wave 2 - trust roles and adversaries:
 
-| Question                                                                                                                                                                 | Proposed answer                                                                                                                                      | Lands in   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| Is a trusted-branch repository contributor considered trusted for cache contents?                                                                                        | Yes; repository branch protection determines that trust.                                                                                             | §2, §7     |
-| Should malicious build scripts in untrusted PRs be explicitly in scope only for cache poisoning/exfiltration through this action, not for arbitrary workflow compromise? | Yes. The action should not be modeled as a build sandbox.                                                                                            | §3, §7, §9 |
-| Is a compromised GitHub cache/artifact service out of scope?                                                                                                             | Yes; structural checks and worker payload hashes remain, while base payload bytes rely on authorized producers and GitHub service trust/permissions. | §3, §7, §9 |
-| Is dependency provenance intentionally left to Maven/Gradle and repository policy?                                                                                       | Yes. This action manages transport/reuse of cache files, not package authenticity.                                                                   | §9, §10    |
-| Should self-hosted runner persistence across repositories be called out more strongly?                                                                                   | Yes, as an operator responsibility for cache roots and temp/workspace cleanup.                                                                       | §5, §10    |
+| Question                                                                                                                                                                 | Proposed answer                                                                                                                                                                          | Lands in   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Is a trusted-branch repository contributor considered trusted for cache contents?                                                                                        | Yes; repository branch protection determines that trust.                                                                                                                                 | §2, §7     |
+| Should malicious build scripts in untrusted PRs be explicitly in scope only for cache poisoning/exfiltration through this action, not for arbitrary workflow compromise? | Yes. The action should not be modeled as a build sandbox.                                                                                                                                | §3, §7, §9 |
+| Is a compromised GitHub cache/artifact service out of scope?                                                                                                             | Yes. Base restore relies on authorized producers and GitHub service trust and permissions. It retains move-boundary checks. Incoming workers retain strict admission and payload hashes. | §3, §7, §9 |
+| Is dependency provenance intentionally left to Maven/Gradle and repository policy?                                                                                       | Yes. This action manages transport/reuse of cache files, not package authenticity.                                                                                                       | §9, §10    |
+| Should self-hosted runner persistence across repositories be called out more strongly?                                                                                   | Yes, as an operator responsibility for cache roots and temp/workspace cleanup.                                                                                                           | §5, §10    |
 
 Wave 3 - side effects and non-findings:
 

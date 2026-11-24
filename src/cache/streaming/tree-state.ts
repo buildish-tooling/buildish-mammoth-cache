@@ -42,14 +42,28 @@ export class WorkingBudget {
   private names = 0;
   private records = 0;
   private peak = 0;
+  private releaseOptionalNames?: () => void;
   constructor(readonly limit = 16 * 1024 * 1024) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Invalid working budget.');
   }
   retain(bytes: number): void {
-    if (this.names + bytes > this.limit)
+    if (this.tryRetainNames(bytes)) return;
+    this.releaseOptionalNames?.();
+    if (!this.tryRetainNames(bytes))
       throw new Error('Active metadata/name working budget exceeded.');
+  }
+  tryRetainNames(bytes: number): boolean {
+    if (this.names + bytes > this.limit) return false;
     this.names += bytes;
     this.peak = Math.max(this.peak, this.retained);
+    return true;
+  }
+  onNamePressure(release: () => void): () => void {
+    if (this.releaseOptionalNames) throw new Error('Optional name scope already active.');
+    this.releaseOptionalNames = release;
+    return () => {
+      if (this.releaseOptionalNames === release) this.releaseOptionalNames = undefined;
+    };
   }
   release(bytes: number): void {
     this.names -= bytes;
@@ -78,6 +92,11 @@ export class WorkingBudget {
 }
 export function compareName(a: string, b: string): number {
   return Buffer.compare(Buffer.from(a), Buffer.from(b));
+}
+export function nativeAliasKey(name: string, platform = process.platform): string {
+  if (platform === 'darwin') return name.normalize('NFD').toUpperCase();
+  if (platform === 'win32') return name.toUpperCase();
+  return name;
 }
 export function parentPath(path: string): string {
   const slash = path.lastIndexOf('/');

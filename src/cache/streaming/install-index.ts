@@ -18,9 +18,11 @@ import { abortableValues } from './abort';
 import { sameObject, type NativeIdentity } from './native';
 import type { Value } from './encoding';
 import type { LocalRow } from './local-stream';
-import { baseName, parentPath, compareName } from './tree-state';
+import { baseName, parentPath, compareName, nativeAliasKey } from './tree-state';
 import type { ResolvedModel } from './model';
 import type { InstallScratch } from './install-scratch';
+
+export type IntactDirectory = 'intact' | 'intact-jars';
 
 // Scratch nodes are a hierarchical, operation-local spool, never a global resident index.
 export type IndexedNode = readonly [
@@ -35,7 +37,7 @@ export type IndexedNode = readonly [
   number,
   number,
   number,
-  ...hasDirectFiles: [] | [1],
+  ...directoryFlag: [] | [1 | IntactDirectory],
 ];
 // fields: tag,kind,path,N/protected fact,sha,owner-mask,protected-count,childrenStart,childrenEnd,sourceStart,sourceEnd,Maven direct files
 interface Frame {
@@ -48,6 +50,9 @@ interface Frame {
   protectedCount: number;
   hasDirectFiles?: true;
   release: () => void;
+}
+export function nodeIsIntact(node: IndexedNode): boolean {
+  return node[11] === 'intact' || node[11] === 'intact-jars';
 }
 export function nodeMask(node: IndexedNode): bigint {
   return BigInt('0x' + node[5]);
@@ -85,8 +90,16 @@ export async function buildObservedInstallIndex(
   model: ResolvedModel,
   partition: string | null,
   signal: AbortSignal,
-  produce: (accept: (row: LocalRow) => Promise<void>) => Promise<void>,
-  { trackDirectFiles = false }: { trackDirectFiles?: boolean } = {},
+  produce: (
+    accept: (row: LocalRow & { intact?: IntactDirectory }) => Promise<void>,
+  ) => Promise<void>,
+  {
+    trackDirectFiles = false,
+    checkSourceAliases = true,
+  }: {
+    trackDirectFiles?: boolean;
+    checkSourceAliases?: boolean;
+  } = {},
 ): Promise<number> {
   signal.throwIfAborted();
   scratch.store.root.work.indexBuilds++;
@@ -109,12 +122,14 @@ export async function buildObservedInstallIndex(
     parent.protectedCount += node[6];
     if (trackDirectFiles && node[1] === 'file') parent.hasDirectFiles = true;
   }
-  async function close(end: number) {
+  async function close(end: number, intact?: IntactDirectory) {
     const frame = frames.pop();
     if (!frame) throw new Error('Unbalanced index.');
     let charge = 0;
     const entries: { name: string; kind: string; offset: number }[] = [];
     try {
+      if (intact && (partition === null || !frame.path || frame.count))
+        throw new Error('Invalid retained intact source directory.');
       let at = frame.tail;
       while (at !== null) {
         signal.throwIfAborted();
@@ -133,9 +148,12 @@ export async function buildObservedInstallIndex(
       }
       // Coarse insertion skips recursive output selection. Preserve its native alias
       // check while this already-bounded source name page is available.
-      if (partition !== null && (process.platform === 'win32' || process.platform === 'darwin')) {
-        const key = (name: string) =>
-          process.platform === 'darwin' ? name.normalize('NFD').toUpperCase() : name.toUpperCase();
+      if (
+        checkSourceAliases &&
+        partition !== null &&
+        (process.platform === 'win32' || process.platform === 'darwin')
+      ) {
+        const key = (name: string) => nativeAliasKey(name);
         entries.sort((a, b) => compareName(key(a.name), key(b.name)));
         for (let n = 1; n < entries.length; n++)
           if (key(entries[n - 1].name) === key(entries[n].name))
@@ -167,7 +185,7 @@ export async function buildObservedInstallIndex(
         finish,
         frame.start,
         end,
-        ...(frame.hasDirectFiles ? ([1] as const) : ([] as const)),
+        ...(intact ? ([intact] as const) : frame.hasDirectFiles ? ([1] as const) : ([] as const)),
       ];
       const offset = await scratch.append(node, claim.token);
       await child(offset, node);
@@ -213,7 +231,7 @@ export async function buildObservedInstallIndex(
             throw new Error('Indexed directory replaced during production.');
           frame.native = native;
         }
-        await close(record.end);
+        await close(record.end, record.intact);
       } else if (tag === 'file') {
         const mask =
           partition === null ? ownerBit(model, String(row[1])) : partitionBit(model, partition);
@@ -272,6 +290,7 @@ export async function* indexedChildren(
   node: IndexedNode,
 ): AsyncGenerator<readonly [string, number]> {
   if (node[1] !== 'directory') return;
+  if (nodeIsIntact(node)) throw new Error('Intact source directory cannot be expanded.');
   for await (const value of scratch.rows(node[7], node[8])) {
     const row = value as readonly Value[];
     yield [String(row[1]), Number(row[3])];
@@ -283,6 +302,7 @@ export async function* indexedEntries(
   node: IndexedNode,
 ): AsyncGenerator<readonly [string, IndexedNode[1], number]> {
   if (node[1] !== 'directory') return;
+  if (nodeIsIntact(node)) throw new Error('Intact source directory cannot be expanded.');
   for await (const value of scratch.rows(node[7], node[8])) {
     const row = value as readonly Value[];
     yield [String(row[1]), row[2] as IndexedNode[1], Number(row[3])];

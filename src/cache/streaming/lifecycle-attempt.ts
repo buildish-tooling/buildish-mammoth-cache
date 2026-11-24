@@ -92,7 +92,7 @@ export class PostAttempt {
       const generation = handoff.header[8]
         ? await readMetadataGeneration(store, handoff.header[8][1], handoff.header[8][0], options)
         : null;
-      handoff.checkGeneration(store, generation);
+      handoff.checkGeneration(store, generation, bindings[8]);
       release = options.budget.holdRecord(
         generation ? 512 + encodeRecord(generation).length * 8 : 0,
       );

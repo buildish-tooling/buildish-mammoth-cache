@@ -109,7 +109,7 @@ it.each([2, 8])(
 it('pins the exact pre-overlay materialized ref and original profile, with no per-file handoff', async () => {
   const f = await fixture(),
     source = await discover(f),
-    pin = source.pin();
+    pin = source.pin()!;
   const bytes = encodePinnedPartitionMetadata(pin),
     invocation = f.store.codec.options.invocation;
   expect(

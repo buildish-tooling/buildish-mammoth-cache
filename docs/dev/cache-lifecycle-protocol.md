@@ -104,17 +104,21 @@ Old destructive markers are conservatively refused, never executed or adopted.
 ```text
 policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|null,
           ordinaryPolicy,maxDirectoryEntries,ordinaryJobOrder]
-["handoff",2,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+["handoff",3,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef]|null,
  actualActivityRef,originalBuildCutoff,selectedWorkerCount]
-["partition",partitionId,available|empty|cold|miss,pin|null,snapshotDescriptor|null]
+["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
+provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
 
 The header is followed by exactly one ordered row per model partition. All bounded
 controls are O(P), with P at most 64 and worker count at most 16. The exact generation
 key, family, cold groups and original per-partition object refs bind pre-overlay pins.
-Pin before worker application and any destination changes; final prepare state is
-never a replacement baseline. Only the actual imported used/upsert activity stream
+Pin the summary before worker application and destination changes. A read-only
+job or distributed worker can use an exact restored-object reference without a
+summary for an ordinary aggregate Gradle partition. Main and post bind the
+absence of a summary to the invocation policy and check the exact reference
+against the selected generation. Only the actual imported used/upsert activity stream
 crosses main/post per file. Successful main ends all native/index/install scratch
 owners; no per-file current/evidence/catalogue/source-package pointer remains.
 

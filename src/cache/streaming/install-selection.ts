@@ -22,6 +22,7 @@ import type { InstallScratch } from './install-scratch';
 import {
   indexedNode,
   indexedEntries,
+  nodeIsIntact,
   nodeMask,
   partitionBit,
   type IndexedNode,
@@ -169,6 +170,11 @@ export async function selectInstall(
         throw new Error('Selected desired file/directory collision.');
       if (old?.[1] === 'protected' && sources.length)
         throw new Error('Selected outcome overlaps protected native entry.');
+      if (
+        sources.some((source) => nodeIsIntact(source.node)) &&
+        (old || sources.length !== 1 || dirs.length !== 1 || pruneAggregates)
+      )
+        throw new Error('Intact source directory is no longer eligible.');
       const mask = sources.reduce((m, s) => m | nodeMask(s.node), 0n),
         single = partition(mask);
       let scope = workspace;
@@ -184,9 +190,13 @@ export async function selectInstall(
           ...dirs.map((s) => s.node),
           ...(pruneAggregates && old?.[1] === 'directory' ? [old] : []),
         ])
-          for await (const child of indexedEntries(scratch, node))
-            if (child[1] === 'file' && (child[0] === 'classes.jar' || child[0] === 'sources.jar'))
-              jar = true;
+          if (nodeIsIntact(node)) {
+            jar ||= node[11] === 'intact-jars';
+          } else {
+            for await (const child of indexedEntries(scratch, node))
+              if (child[1] === 'file' && (child[0] === 'classes.jar' || child[0] === 'sources.jar'))
+                jar = true;
+          }
         scope = [workspaceKind(path, jar ? [path + '/classes.jar'] : []), path, 'subtree'];
       }
       let directHere: InstallUnit | null = null;

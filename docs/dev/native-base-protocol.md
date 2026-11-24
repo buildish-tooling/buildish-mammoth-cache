@@ -111,11 +111,18 @@ clock sidecar or unit manifest. Empty selected partitions use an explicit genera
 `empty` entry rather than manufacturing an object.
 
 SDK transport recursively archives the literal native payload. Restore validates
-the bounded descriptor, native names/types/link/device acceptance, model ownership
-and complete units during one native discovery. It feeds one operation-local index,
-partition summary and unit/group facts from that discovery. Available malformed
-objects reject prepare. Missing objects make their entire declared group cold.
-All availability/cold/exact group checks precede live installation.
+the bounded descriptor and isolated staged layout for every available object.
+For ordinary aggregate Gradle base objects, the exact published reference and
+successful SDK extraction establish the payload projection. Publication applies
+ownership, exclusions and complete-unit rules. Restore checks native identities
+and conflicts at selected move and merge boundaries and retains detailed
+installation records only where selection descends. A directory eligible for an
+intact move can stop at its checked root. Read-only jobs and distributed workers
+omit the reuse summary. Writable standalone jobs and distributed aggregators
+collect the consumer-native metadata summary before changing the live tree.
+Maven, single-writer sources and authoritative pruning keep full discovery and
+their existing detailed checks. Missing objects make their declared group cold.
+Availability and exact-reference checks finish before live installation.
 
 ## Generation record
 
@@ -166,9 +173,10 @@ The result is `["partition-metadata",1,digest,fileCount,meaningfulDirCount,total
 Full original native identities still serve activity, selected mutation and cleanup
 consumers within their operation; they do not cross main/post per file.
 
-Successful restore pins `(invocation,family,model,partition,exact selected object-ref
-or declared-empty,profile,summary)` BEFORE existing extras, pruning or worker
-application. Missing/cold partitions have no reusable pin. The build/post view is
+Where publishing requires a baseline, successful restore pins
+`(invocation,family,model,partition,exact selected object-ref or declared-empty,profile,summary)`
+before existing extras, pruning or worker application. A summary-free aggregate
+restore carries the exact object reference and availability in the local handoff. Missing/cold partitions have no reusable pin. The build/post view is
 compared with these original pins; never reset the pin to the final prepare view.
 
 This is deliberately metadata equality: body changes that preserve size, native

@@ -193,7 +193,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
             for (const entry of attempt.handoff.entries) {
               const partition = entry[1],
                 summary = set.summary(partition),
-                pin = entry[3],
+                pin = entry[3]?.[0] === 'pinned-partition-metadata' ? entry[3] : null,
                 descriptor = entry[4];
               const compatibleOrigin =
                 !descriptor ||

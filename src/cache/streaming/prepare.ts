@@ -40,7 +40,7 @@ import { acceptWorkerMerge, installWorkerMerge, type AcceptedWorkerMerge } from 
 import { MetadataSnapshot } from './metadata-snapshot';
 import { MetadataPublicationSource } from './metadata-publication-source';
 import { lifecycleDocuments } from './lifecycle-documents';
-import { handoffSchemas, type HandoffHeader } from './lifecycle-handoff';
+import { checkHandoffGeneration, handoffSchemas, type HandoffHeader } from './lifecycle-handoff';
 import { metadataWorkerRequests, metadataSnapshotRequirements } from './prepare-inputs';
 import { retireInstallStaging } from './owned-retirement';
 import { settleNativeCleanup } from './native-operation';
@@ -217,7 +217,17 @@ export async function prepareStreaming(
     restored = await timed(
       options,
       'base discovery and admission',
-      () => MetadataBaseRestore.acquire(store, unavailable ? null : cache, request, options),
+      () =>
+        MetadataBaseRestore.acquire(store, unavailable ? null : cache, request, {
+          ...options,
+          baseSourceMode:
+            request.policy.restoreCleanup === 'none'
+              ? request.policy.access === 'read-only' ||
+                request.policy.role === 'distributed-worker'
+                ? 'trusted-boundaries'
+                : 'trusted-summary'
+              : undefined,
+        }),
       (r) => (unavailable ? 'unavailable' : r.key ? 'hit' : 'miss'),
     );
     const requests = metadataWorkerRequests(store, policy),
@@ -250,13 +260,13 @@ export async function prepareStreaming(
         continue;
       let snapshot: MetadataSnapshot;
       const source = restored.context!.source(entry[1]);
-      if (entry[2] === 'available' && source) {
+      if (entry[2] === 'available' && source?.upstream.kind === 'native-metadata') {
         const publication = MetadataPublicationSource.borrow(source);
         try {
           snapshot = await MetadataSnapshot.copy(
             publication,
             entry[1],
-            ['base', entry[3]![7]],
+            ['base', source.upstream.source.reference],
             options,
           );
         } finally {
@@ -349,7 +359,7 @@ export async function prepareStreaming(
     bindings[8][7] = cutoff;
     const header: HandoffHeader = handoffSchemas(codec).header.parse([
       'handoff',
-      2,
+      3,
       request.currentRef,
       request.defaultRef ?? null,
       request.captureTempDirectory,
@@ -361,6 +371,7 @@ export async function prepareStreaming(
       cutoff,
       downloads.length,
     ]);
+    checkHandoffGeneration(store, header, restored.entries, restored.generation, bindings[8]);
     const handoff = await timed(options, 'handoff creation', () =>
       store.writeStream(
         'handoff',

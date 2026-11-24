@@ -17,6 +17,7 @@
 import type { TimingOptions } from '../../util/timing';
 import { opendir } from 'node:fs/promises';
 import path from 'node:path';
+import { workspaceKind, workspaceRoot } from '../immutable-workspaces';
 import { nativeBaseFile } from './base-layout';
 import { add } from './encoding';
 import {
@@ -27,6 +28,7 @@ import {
 import { sameNative, sameObject, type NativeIdentity } from './native';
 import { walkNative, type WalkOptions } from './native-walk';
 import { objectRefSchema, type ObjectRef } from './native-records';
+import type { IntactDirectory } from './install-index';
 import type { OwnedStore } from './owned-store';
 import {
   metadataSummaryProfile,
@@ -69,6 +71,7 @@ export async function checkMetadataBaseLayout(
   return after;
 }
 const discoveries = new WeakSet<DiscoveredMetadataBase>();
+export type BaseSourceMode = 'trusted-summary' | 'trusted-boundaries';
 export type MetadataDiscoveryOptions = TimingOptions &
   Pick<WalkOptions, 'budget' | 'maxDirectoryEntries' | 'signal'>;
 /**
@@ -83,7 +86,7 @@ export class DiscoveredMetadataBase {
     readonly nativeRoot: string,
     private readonly ref: ObjectRef,
     private readonly control: MetadataDescriptor,
-    private readonly metadata: PartitionMetadata,
+    private readonly metadata: PartitionMetadata | null,
     private readonly profile: MetadataSummaryProfile,
     private readonly nativeIdentity: NativeIdentity,
     private readonly parentIdentity: NativeIdentity,
@@ -98,6 +101,7 @@ export class DiscoveredMetadataBase {
     return structuredClone(this.control);
   }
   get summary(): PartitionMetadata {
+    if (!this.metadata) throw new Error('Base source has no reuse summary.');
     return structuredClone(this.metadata);
   }
   get partition(): string {
@@ -108,8 +112,9 @@ export class DiscoveredMetadataBase {
       throw new Error('Metadata source is not an active discovery receipt.');
   }
   /** Successful initial materialization only. No caller-supplied identity or summary. */
-  pin(): PinnedPartitionMetadata {
+  pin(): PinnedPartitionMetadata | null {
     DiscoveredMetadataBase.assertReceipt(this);
+    if (!this.metadata) return null;
     const o = this.store.codec.options;
     return pinnedPartitionMetadataSchema.parse([
       'pinned-partition-metadata',
@@ -148,7 +153,8 @@ export class DiscoveredMetadataBase {
     root: string,
     input: ObjectRef,
     options: MetadataDiscoveryOptions,
-    observe: (row: NativeMetadataRow) => Promise<void>,
+    observe: (row: NativeMetadataRow, intact?: IntactDirectory) => Promise<void>,
+    reduction?: { mode: BaseSourceMode; canOmit: (path: string) => Promise<boolean> },
   ): Promise<DiscoveredMetadataBase> {
     const model = store.codec.options.model;
     assertMetadataModel(model);
@@ -167,26 +173,43 @@ export class DiscoveredMetadataBase {
       chunks.push(chunk);
     }
     const descriptor = decodeMetadataDescriptor(Buffer.concat(chunks, bytes), ref, model);
+    const trusted = reduction !== undefined;
+    const boundaryOnly = reduction?.mode === 'trusted-boundaries';
     const profile = metadataSummaryProfile(),
-      summary = new PartitionMetadataSummary(
-        model,
-        ref[1][2],
-        options.budget,
-        profile,
-        options.maxDirectoryEntries,
-      );
+      summary = boundaryOnly
+        ? undefined
+        : new PartitionMetadataSummary(
+            model,
+            ref[1][2],
+            options.budget,
+            profile,
+            options.maxDirectoryEntries,
+            !trusted,
+          );
     const nativeRoot = root + '/payload';
     let payloadIdentity: NativeIdentity | undefined;
+    let intact: { path: string; kind: IntactDirectory } | undefined;
     try {
       for await (const event of walkNative(store.root, nativeRoot, {
         ...options,
         logicalRoot: '',
         metadata: 'reject',
+        intactDirectory: boundaryOnly
+          ? (path) => {
+              if (path !== intact?.path) return undefined;
+              return workspaceRoot(path) === path &&
+                workspaceKind(path) === 'kotlin-accessor-directories'
+                ? 'workspace'
+                : 'intact';
+            }
+          : undefined,
+        summaryOnlyFile: trusted ? () => !!intact : undefined,
       })) {
         if (event.tag === 'protected-child') throw new Error('Protected metadata base child.');
         if (
-          event.identity[3] !== store.root.binding[3] ||
-          (event.tag === 'file' && event.links !== '1')
+          (!trusted || !intact) &&
+          (event.identity[3] !== store.root.binding[3] ||
+            (event.tag === 'file' && event.links !== '1'))
         )
           throw new Error('Aliased/cross-filesystem metadata base source.');
         if (event.tag === 'directory-open' && event.path === '')
@@ -196,12 +219,25 @@ export class DiscoveredMetadataBase {
           event.path,
           event.identity,
         ];
-        summary.accept(row);
+        summary?.accept(row);
         // Observers may spool/reuse their input; they cannot rewrite the walker's identities.
-        await observe(structuredClone(row));
+        if (!intact) {
+          if (event.tag === 'directory-open' && reduction && (await reduction.canOmit(event.path)))
+            intact = { path: event.path, kind: 'intact' };
+          await observe(structuredClone(row));
+        } else if (event.tag === 'directory-close' && event.path === intact.path) {
+          await observe(structuredClone(row), event.directJars ? 'intact-jars' : intact.kind);
+          intact = undefined;
+        } else if (
+          event.tag === 'file' &&
+          (event.path === intact.path + '/classes.jar' ||
+            event.path === intact.path + '/sources.jar')
+        ) {
+          intact.kind = 'intact-jars';
+        }
         signal.throwIfAborted();
       }
-      const result = summary.finish();
+      const result = summary?.finish() ?? null;
       const controlAfter = await nativeBaseFile(store, envelope, 65536),
         layoutAfter = await store.root.stat(root);
       if (
@@ -223,7 +259,7 @@ export class DiscoveredMetadataBase {
         layout,
       );
     } finally {
-      summary.dispose();
+      summary?.dispose();
     }
   }
 }

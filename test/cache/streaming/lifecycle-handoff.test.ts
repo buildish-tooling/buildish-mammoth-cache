@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { policySchema } from '../../../src/cache/streaming/local-schema';
 import { vectors } from './protocol-fixtures';
 import { localOptions } from './local-fixtures';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
@@ -24,6 +25,7 @@ import { installFixture } from './install-fixture';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import {
   LifecycleHandoff,
+  checkHandoffGeneration,
   type HandoffEntry,
   type HandoffHeader,
 } from '../../../src/cache/streaming/lifecycle-handoff';
@@ -72,7 +74,7 @@ async function fixture() {
   );
   const header: HandoffHeader = [
     'handoff',
-    2,
+    3,
     'refs/heads/main',
     null,
     null,
@@ -108,11 +110,13 @@ it('round-trips only bounded invocation handoff data with charged lifetime and s
     expect(handoff.header).toEqual(f.header);
     expect(handoff.entries).toEqual(f.entries);
     expect(Object.isFrozen(handoff.entries[0])).toBe(true);
-    handoff.checkGeneration(f.store, null);
+    handoff.checkGeneration(f.store, null, policySchema.parse(f.bindings[8]));
   } finally {
     handoff.close();
   }
-  expect(() => handoff.checkGeneration(f.store, null)).toThrow('Closed');
+  expect(() => handoff.checkGeneration(f.store, null, policySchema.parse(f.bindings[8]))).toThrow(
+    'Closed',
+  );
   for (const values of [
     [f.header, f.entries[0]],
     [f.header, ...[...f.entries].reverse()],
@@ -161,9 +165,25 @@ it('binds declared-empty pins to exact v2 generation and invocation, rejecting m
       generation[8],
       generation[9],
     );
-    expect(() => handoff.checkGeneration(f.store, different)).toThrow();
-    handoff.checkGeneration(f.store, generation);
-    expect(() => handoff.checkGeneration(f.store, null)).toThrow('generation mismatch');
+    expect(() =>
+      handoff.checkGeneration(f.store, different, policySchema.parse(f.bindings[8])),
+    ).toThrow();
+    handoff.checkGeneration(f.store, generation, policySchema.parse(f.bindings[8]));
+    const cold = structuredClone(f.entries);
+    cold[0][2] = 'cold';
+    cold[0][3] = null;
+    expect(() =>
+      checkHandoffGeneration(
+        f.store,
+        f.header,
+        cold,
+        generation,
+        policySchema.parse(f.bindings[8]),
+      ),
+    ).toThrow('Cold recovery group has no restorable object.');
+    expect(() => handoff.checkGeneration(f.store, null, policySchema.parse(f.bindings[8]))).toThrow(
+      'generation mismatch',
+    );
   } finally {
     handoff.close();
   }

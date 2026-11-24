@@ -634,6 +634,9 @@ jobs:
           java-version: ${{ matrix.reader.java }}
           maven: 'false'
 
+      - name: Verify native aggregate restore boundaries
+        run: npm test -- test/cache/streaming/base-move-boundaries.test.ts -t 'restores a trusted aggregate|keeps the accessor workspace kind'
+
       - name: Verify runner architecture
         run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
 

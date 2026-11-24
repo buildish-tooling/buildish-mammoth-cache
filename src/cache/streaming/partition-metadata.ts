@@ -114,6 +114,7 @@ export class PartitionMetadataSummary {
     budget: WorkingBudget,
     profile = metadataSummaryProfile(),
     maxDirectoryEntries?: number,
+    private readonly validateMembers = true,
   ) {
     this.profile = metadataSummaryProfileSchema.parse(profile);
     if (!model.partitions.some((p) => p[0] === partition))
@@ -136,7 +137,7 @@ export class PartitionMetadataSummary {
     const [tag, path, n] = row;
     if (tag === 'dir-open') {
       this.tree.open(path);
-      if (isWorkspaceRoot(this.model, path)) {
+      if (this.validateMembers && isWorkspaceRoot(this.model, path)) {
         if (this.workspace) throw new Error('Nested workspace root.');
         const kind = workspaceKind(path),
           unit: Unit = [kind, path, 'subtree'];
@@ -158,7 +159,7 @@ export class PartitionMetadataSummary {
       }
     } else if (tag === 'file') {
       this.tree.file(path);
-      this.owner(path);
+      if (this.validateMembers) this.owner(path);
       const size = uintSchema.parse(Number(n[5]));
       this.files = add(this.files);
       this.bytes = add(this.bytes, size);
@@ -172,7 +173,12 @@ export class PartitionMetadataSummary {
       )
         this.workspace.hasJar = true;
     } else {
-      if (path && this.tree.leaf && !isWorkspaceScaffolding(this.model, path))
+      if (
+        this.validateMembers &&
+        path &&
+        this.tree.leaf &&
+        !isWorkspaceScaffolding(this.model, path)
+      )
         this.owner(path + '/.workspace-directory-probe');
       if (this.workspace?.unit[1] === path) {
         (this.workspace.hasJar && this.workspace.jars

@@ -31,7 +31,7 @@ function fixture() {
     rows: Value[] = [
       [
         'handoff',
-        2,
+        3,
         'refs/heads/main',
         null,
         null,

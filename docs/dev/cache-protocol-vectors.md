@@ -456,11 +456,11 @@ handoff framing plus its Q (each record is canonical JSON plus LF):
 
 ```text
 ["local-stream",1,"handoff","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23",null]
-["handoff",2,"refs/heads/main",null,null,7,"enabled",null,null,["ref","activity",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/activity",369,"0fe4a82f6364415aa590427fcc3eff49059dc05e148dd6eab8c07d82a886760b"],1234,0]
+["handoff",3,"refs/heads/main",null,null,7,"enabled",null,null,["ref","activity",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/activity",369,"0fe4a82f6364415aa590427fcc3eff49059dc05e148dd6eab8c07d82a886760b"],1234,0]
 ["partition","data","miss",null,null]
 ["partition","metadata","miss",null,null]
-["local-end",3,"221292ab33d01c09a01e871e67a26db50b5902fda8b21e6714f15a2143f5f4d2"]
-["ref","handoff",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/handoff",670,"3fb01e634a5b8c5b67a58aea9fdacc9acc66e7cd698025a466a7e86e3ff7795e"]
+["local-end",3,"f8cfc3da1791bb2c3e355414229971e1570dd0bda45151db4d9d19ba8d0380fc"]
+["ref","handoff",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/handoff",670,"c0cd0b7891c6f5a4c17eaa456d5caf9248749d358a95bf175f6a1be444f342d7"]
 ```
 
 The activity Q names this exact empty activity stream:

@@ -81,7 +81,7 @@ export async function initializeObservationFixture(
     rows([
       [
         'handoff',
-        2,
+        3,
         'refs/heads/main',
         null,
         null,

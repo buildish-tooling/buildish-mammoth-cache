@@ -15,7 +15,12 @@
  */
 
 import { z } from 'zod';
-import { nativeIdentitySchema, ownedPathSchema, type LocalCodec } from './local-schema';
+import {
+  nativeIdentitySchema,
+  ownedPathSchema,
+  type LocalCodec,
+  type Policy,
+} from './local-schema';
 import { nameSchema, positiveSchema, uintSchema } from './schema';
 import { objectRefSchema, keySchema } from './native-records';
 import { pinnedPartitionMetadataSchema, decodePinnedPartitionMetadata } from './partition-metadata';
@@ -55,7 +60,7 @@ export function handoffSchemas(codec: LocalCodec) {
   const header = z
     .tuple([
       z.literal('handoff'),
-      z.literal(2),
+      z.literal(3),
       nameSchema,
       nameSchema.nullable(),
       nameSchema.nullable(),
@@ -73,14 +78,27 @@ export function handoffSchemas(codec: LocalCodec) {
       z.literal('partition'),
       partition,
       z.enum(['available', 'empty', 'cold', 'miss']),
-      pinnedPartitionMetadataSchema.nullable(),
+      z
+        .union([
+          pinnedPartitionMetadataSchema,
+          z.tuple([z.literal('restored-object'), objectRefSchema]),
+        ])
+        .nullable(),
       snapshot.nullable(),
     ])
     .superRefine((row, ctx) => {
       const bad = (message: string) => ctx.addIssue({ code: 'custom', message });
       if ((row[2] === 'available' || row[2] === 'empty') !== (row[3] !== null))
         bad('Availability/pin mismatch.');
-      if (row[3]) {
+      if (row[3]?.[0] === 'restored-object') {
+        if (
+          row[2] !== 'available' ||
+          codec.options.model.tuple[2] !== 'gradle' ||
+          model.partitions.find((p) => p[0] === row[1])?.[3] !== 'aggregate' ||
+          (codec.options.access !== 'read-only' && codec.options.role !== 'distributed-worker')
+        )
+          bad('Unexpected omitted base reuse summary.');
+      } else if (row[3]) {
         equal(
           row[3].slice(3, 7),
           [invocation, model.family, model.id, row[1]],
@@ -172,41 +190,66 @@ export class LifecycleHandoff {
       throw error;
     }
   }
-  checkGeneration(store: OwnedStore, generation: MetadataGeneration | null): void {
+  checkGeneration(store: OwnedStore, generation: MetadataGeneration | null, policy: Policy): void {
     if (this.#closed) throw new Error('Closed handoff.');
-    if ((generation === null) !== (this.header[8] === null))
-      throw new Error('Handoff generation mismatch.');
-    if (generation) {
-      equal(generation[11], this.header[8]![0], 'exact frozen generation key');
-      equal(
-        generation.slice(3, 5),
-        [store.codec.options.model.family, store.codec.options.model.id],
-        'handoff generation family/model',
-      );
-    }
-    if (generation)
-      for (const group of generation[9]) {
-        const cold = group.filter((p) => this.entries.find((row) => row[1] === p)?.[2] === 'cold');
-        if (cold.length && cold.length !== group.length)
-          throw new Error('Partial recovery-group availability.');
-      }
-    for (const [i, row] of this.entries.entries()) {
-      if (!generation) {
-        if (row[2] !== 'miss' || row[3] !== null) throw new Error('Miss acquired reusable pin.');
-      } else if (row[3]) {
-        decodePinnedPartitionMetadata(
-          encodeRecord(row[3]),
-          store.codec.options.model,
-          store.codec.options.invocation,
-          generation[8][i],
-        );
-      } else if (row[2] !== 'cold') throw new Error('Selected generation missing availability.');
-    }
+    checkHandoffGeneration(store, this.header, this.entries, generation, policy);
   }
   close(): void {
     if (!this.#closed) {
       this.#closed = true;
       this.release();
     }
+  }
+}
+
+export function checkHandoffGeneration(
+  store: OwnedStore,
+  header: HandoffHeader,
+  entries: readonly HandoffEntry[],
+  generation: MetadataGeneration | null,
+  policy: Policy,
+): void {
+  if ((generation === null) !== (header[8] === null))
+    throw new Error('Handoff generation mismatch.');
+  if (generation) {
+    equal(generation[11], header[8]![0], 'exact frozen generation key');
+    equal(
+      generation.slice(3, 5),
+      [store.codec.options.model.family, store.codec.options.model.id],
+      'handoff generation family/model',
+    );
+  }
+  if (generation)
+    for (const group of generation[9]) {
+      const cold = group.filter((p) => entries.find((row) => row[1] === p)?.[2] === 'cold');
+      if (cold.length && cold.length !== group.length)
+        throw new Error('Partial recovery-group availability.');
+      if (
+        cold.length &&
+        !generation[8].some((entry) => entry[0] === 'object' && group.includes(entry[1]))
+      )
+        throw new Error('Cold recovery group has no restorable object.');
+    }
+  for (const [i, row] of entries.entries()) {
+    if (!generation) {
+      if (row[2] !== 'miss' || row[3] !== null) throw new Error('Miss acquired reusable pin.');
+    } else if (row[3]?.[0] === 'restored-object') {
+      const selected = generation[8][i];
+      if (
+        policy[4] !== 'none' ||
+        row[2] !== 'available' ||
+        selected[0] !== 'object' ||
+        (policy[3] !== 'read-only' && policy[2] !== 'distributed-worker')
+      )
+        throw new Error('Unexpected omitted base reuse summary.');
+      equal(row[3][1], selected[2], 'exact restored object');
+    } else if (row[3]) {
+      decodePinnedPartitionMetadata(
+        encodeRecord(row[3]),
+        store.codec.options.model,
+        store.codec.options.invocation,
+        generation[8][i],
+      );
+    } else if (row[2] !== 'cold') throw new Error('Selected generation missing availability.');
   }
 }
