@@ -324,7 +324,9 @@ export async function prepareStreaming(
     }
     await store.fail('prepare-base-installed');
     if (merged) {
-      accepted = await acceptWorkerMerge(store, merged, request.budget, signal);
+      accepted = await timed(options, 'worker acceptance', () =>
+        acceptWorkerMerge(store, merged!, request.budget, signal, options.timing),
+      );
       merged = undefined;
       for (const snapshot of accepted.snapshots) snapshots.add(snapshot);
       for (const snapshot of accepted.snapshots) fallback.set(snapshot.partition, snapshot);

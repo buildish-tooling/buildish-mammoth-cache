@@ -58,13 +58,23 @@ it('unions usage, suppresses selected upserts and installs through actual V4a wi
       'data/read',
       'data/other',
     ]);
+  const logs: string[] = [];
   const result = await merge(f.store, [a, b], {
       budget: f.budget,
       ordinaryOrder: ['A', 'B'],
       ordinaryPolicy: 'strict',
     }),
     hashBefore = f.store.root.work.bodyHashCalls,
-    accepted = await acceptWorkerMerge(f.store, result, f.budget);
+    accepted = await acceptWorkerMerge(f.store, result, f.budget, signal(), {
+      now: () => 0,
+      info: (message) => logs.push(message),
+    });
+  expect(logs.filter((message) => message.includes('Finished '))).toEqual([
+    'Mammoth: Finished worker staging publication after 00:00.000 (success).',
+    'Mammoth: Finished worker native validation and index construction after 00:00.000 (success).',
+    'Mammoth: Finished worker selected activity preparation after 00:00.000 (success).',
+    'Mammoth: Finished worker merge retirement after 00:00.000 (success).',
+  ]);
   expect(accepted.incoming[0].nativeRoot).toBe(f.store.prefix + 'install/data');
   expect(accepted.work.activityDirectoryListings).toBe(0);
   expect(accepted.work.activityIndexDirectories).toBe(2);
@@ -163,7 +173,19 @@ it.each(['file', 'directory'])(
       await rmdir(f.store.root.resolve(part.nativeRoot + '/data/empty'));
       await mkdir(f.store.root.resolve(part.nativeRoot + '/data/empty'));
     }
-    await expect(acceptWorkerMerge(f.store, result, f.budget)).rejects.toThrow(/Selected worker/);
+    const logs: string[] = [];
+    await expect(
+      acceptWorkerMerge(f.store, result, f.budget, signal(), {
+        now: () => 0,
+        info: (message) => logs.push(message),
+      }),
+    ).rejects.toThrow(/Selected worker/);
+    expect(logs).toContain(
+      'Mammoth: Finished worker native validation and index construction after 00:00.000 (failed).',
+    );
+    expect(logs).toContain(
+      'Mammoth: Finished worker acceptance failure cleanup after 00:00.000 (success).',
+    );
     expect(await f.store.root.stat('data/x')).toBe(null);
     expect(await f.store.root.stat(f.store.prefix + 'install/data')).toBe(null);
     expect(f.budget.retained).toBe(0);
