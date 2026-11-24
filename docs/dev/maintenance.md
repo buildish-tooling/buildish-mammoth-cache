@@ -136,17 +136,6 @@ The default tests cover exact reuse, worker validation, GC and source return.
 The installation-work regressions count activity across partitions and shared
 directories. Product logs include elapsed phase timing for diagnosis.
 
-For an explicit local check of the dormant distributed-correctness helper in a
-Git checkout, run:
-
-```sh
-node --test test/qualification/distributed-correctness/helpers.test.mjs
-```
-
-This checks local helper logic without hosted SDK calls. The workflow recipe is
-outside workflow discovery and both primary release archives omit the helper.
-A hosted exercise requires a separately reviewed, fresh whole-graph admission.
-
 ## Adding a new CI provider
 
 See [CI Abstraction Layer](../../architecture/ci-abstraction/) for the interfaces a new provider

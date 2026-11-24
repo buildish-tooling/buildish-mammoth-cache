@@ -72,16 +72,15 @@ For version `X.Y.Z`, successful packaging writes only:
   `buildish-mammoth-cache-X.Y.Z-github-action/`.
 
 The source archive comes from the tracked tree S and the Action archive comes
-from M. Both omit the dormant internal graph under
-`test/qualification/distributed-correctness/`. The packager requires M's files, modes, and Git blob identities
+from M. The packager requires M's files, modes, and Git blob identities
 outside `dist/` to match S; S must not already contain generated `dist/`. This catches
 changed source or legal files hidden in materialization. Lifecycle source authorization
 and the retained evidence tying S to M remain Release Tooling/workflow responsibilities.
 
 Git creates the archive containers. Before exposing output, the packager checks their
 actual entries, file sizes, executable bits, and blob bytes against the selected
-commits after that one path exclusion. Export attributes that omit or substitute
-any other committed files fail. Untracked/dirty checkout files
+commits. Export attributes that omit or substitute committed files fail.
+Untracked/dirty checkout files
 are not archive inputs. Tracked `docs/releases/` history is rejected in either tree.
 The initial packager accepts regular files/directories and rejects Git symlinks,
 submodules, absolute/traversal paths, backslashes, colons, and `.git` path segments.
