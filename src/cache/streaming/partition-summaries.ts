@@ -16,8 +16,8 @@
 
 import type { HostReporter, ReportSink } from '../../host/types';
 import type { ResolvedModel, Partition } from './model';
-import type { WorkingBudget } from './tree-state';
-import { add } from './encoding';
+import type { NativeChild } from './native-walk';
+import { WorkingBudget } from './tree-state';
 
 type Action = 'new' | 'reuse' | 'empty';
 type Hint =
@@ -30,6 +30,41 @@ interface Samples {
   releases: (() => void)[];
 }
 const samples = (): Samples => ({ paths: [], bytes: 0, truncated: false, releases: [] });
+const exclusions = () => ({ file: 0, directory: 0, symlink: 0, other: 0, housekeeping: 0 });
+type Exclusions = ReturnType<typeof exclusions>;
+function describeExcluded(c: Exclusions) {
+  return `observed-excluded=${c.file} files/${c.directory} directories/${c.symlink + c.other} other entries, housekeeping=${c.housekeeping} files`;
+}
+const escapePathCharacter = /[\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+function displayPath(path: string) {
+  const suffix = '… [truncated]';
+  const limit = 1024 - Buffer.byteLength(suffix);
+  let displayed = '',
+    bytes = 0;
+  for (const character of path) {
+    const escaped =
+      character === '\\'
+        ? '\\\\'
+        : escapePathCharacter.test(character)
+          ? '\\u{' + character.codePointAt(0)!.toString(16) + '}'
+          : character;
+    bytes += Buffer.byteLength(escaped);
+    if (bytes > limit) return displayed + suffix;
+    displayed += escaped;
+  }
+  return displayed;
+}
+function releaseSamples(s: Samples) {
+  for (const release of s.releases) release();
+  s.releases.length = s.paths.length = s.bytes = 0;
+}
+function report(write: ((message: string) => void) | undefined, message: string) {
+  try {
+    write?.(message);
+  } catch {
+    // Reporting cannot change an operation outcome or mask its error.
+  }
+}
 // Protocol: docs/dev/cache-lifecycle-protocol.md#pre-freeze-purge-configuration.
 // Operation-local diagnostics only. Never evidence, authority or persistent state.
 export class PartitionSummaries {
@@ -44,17 +79,30 @@ export class PartitionSummaries {
       deleted: number;
       missing: number;
       unsupported: number;
+      capturedFiles: number;
+      logicalBytes: bigint;
+      excluded: Exclusions;
+      unsupportedLayouts: number;
       hints: Set<Hint>;
       examples: Samples;
     }
   >();
   private readonly opaque = samples();
-  private opaqueCount = 0;
+  private readonly unknown = samples();
+  private readonly unattributed = exclusions();
+  private readonly sampleBudget: WorkingBudget;
+  private prunedDirectories = 0;
+  private unknownCount = 0;
+  private capturing = false;
   private closed = false;
   constructor(
     private readonly model: ResolvedModel,
-    private readonly budget: WorkingBudget,
+    budget: WorkingBudget,
+    private readonly analytics = true,
   ) {
+    // Samples cannot consume record capacity needed later by the operation.
+    this.sampleBudget = new WorkingBudget(Math.min(budget.limit, 512 * 1024));
+    if (!analytics) return;
     for (const config of model.partitions)
       this.cells.set(config[0], {
         config,
@@ -64,6 +112,10 @@ export class PartitionSummaries {
         deleted: 0,
         missing: 0,
         unsupported: 0,
+        capturedFiles: 0,
+        logicalBytes: 0n,
+        excluded: exclusions(),
+        unsupportedLayouts: 0,
         hints: new Set(),
         examples: samples(),
       });
@@ -80,42 +132,115 @@ export class PartitionSummaries {
   }
   capture(enabled: boolean) {
     this.assert(this.model);
+    this.capturing = true;
     for (const c of this.cells.values())
       c.purge = c.config[6]?.length ? (enabled ? 'executed' : 'skipped') : 'not applicable';
   }
   purge(id: string, outcome: Outcome) {
-    const c = this.cell(id);
-    c[outcome] = add(c[outcome]);
+    if (this.analytics) this.cell(id)[outcome]++;
   }
-  private sample(to: Samples, path: string) {
-    if (to.paths.some((p) => path === p || path.startsWith(p + '/'))) return;
-    const size = Buffer.byteLength(path);
-    if (to.paths.length >= 8 || to.bytes + size > 4096) {
+  capturedFile(id: string, size: string) {
+    if (!this.analytics) return;
+    const c = this.cell(id);
+    c.capturedFiles++;
+    c.logicalBytes += BigInt(size);
+  }
+  excluded(kind: NativeChild['type'], id?: string, housekeeping = false) {
+    if (!this.analytics) return;
+    const counts = id === undefined ? this.unattributed : this.cell(id).excluded;
+    counts[kind]++;
+    if (housekeeping) counts.housekeeping++;
+  }
+  unsupportedLayout(id: string, path: string) {
+    this.excluded('file', id);
+    if (this.analytics) this.cell(id).unsupportedLayouts++;
+    this.unknownCount++;
+    this.sample(this.unknown, path, id + ': ');
+  }
+  private sample(to: Samples, path: string, displayPrefix?: string) {
+    if (to.truncated) return;
+    if (to.paths.length >= 8) {
       to.truncated = true;
       return;
     }
-    const release = this.budget.holdRecord(128 + size);
-    to.paths.push(path);
+    const example = displayPrefix === undefined ? path : displayPrefix + displayPath(path);
+    if (to.paths.some((p) => example === p || example.startsWith(p + '/'))) return;
+    const size = Buffer.byteLength(example) + (displayPrefix === undefined ? 0 : 3);
+    if (to.bytes + size > 4096) {
+      to.truncated = true;
+      return;
+    }
+    try {
+      to.releases.push(this.sampleBudget.holdRecord(128 + size));
+    } catch {
+      to.truncated = true;
+      return;
+    }
+    to.paths.push(example);
     to.bytes += size;
-    to.releases.push(release);
   }
-  opaqueScope(path: string) {
-    this.assert(this.model);
-    this.opaqueCount = add(this.opaqueCount);
-    this.sample(this.opaque, path);
+  prunedDirectory(path: string) {
+    if (!this.analytics) return;
+    this.prunedDirectories++;
+    this.sample(this.opaque, path, '');
+  }
+  finishCapture(
+    complete: boolean,
+    info?: (message: string) => void,
+    warning?: (message: string) => void,
+  ) {
+    if (!this.capturing) return;
+    this.capturing = false;
+    try {
+      if (this.unknownCount) {
+        const files = this.unknownCount === 1 ? 'file' : 'files';
+        const scope = complete ? '' : ' (partial capture)';
+        const omitted = this.unknown.truncated
+          ? '\nAdditional examples omitted (bounded sample).'
+          : '';
+        const examples = this.unknown.paths.map((p) => '\n  ' + p).join('');
+        report(
+          warning,
+          `Omitted ${this.unknownCount} Gradle ${files} outside a supported workspace${scope}.${examples}${omitted}\nFiles in recognized workspaces remain eligible.`,
+        );
+      }
+      if (!this.analytics || !info) return;
+      report(info, 'Mammoth capture summary (' + (complete ? 'complete' : 'partial') + '):');
+      for (const [id, c] of this.cells) {
+        const purge =
+          c.purge === 'executed'
+            ? `purged=${c.deleted} files (shared claims credited once), missing=${c.missing}, unsupported=${c.unsupported}`
+            : `purge=${c.purge}`;
+        report(
+          info,
+          `${id}: captured=${c.capturedFiles} files/${c.logicalBytes} logical bytes, ${describeExcluded(c.excluded)}, unsupported-layout=${c.unsupportedLayouts} files, ${purge}`,
+        );
+      }
+      report(
+        info,
+        `Unattributed: ${describeExcluded(this.unattributed)}, pruned=${this.prunedDirectories} directories (descendant counts unknown)`,
+      );
+      for (const path of this.opaque.paths) report(info, '  skipped scope: ' + path);
+      if (this.opaque.truncated) report(info, '  additional scopes omitted (bounded sample)');
+    } finally {
+      releaseSamples(this.opaque);
+      releaseSamples(this.unknown);
+    }
   }
   root(id: string, kind: 'file' | 'directory') {
+    if (!this.analytics) return;
     const c = this.cell(id);
-    if (kind === 'file') c.files = add(c.files);
-    else c.directories = add(c.directories);
+    if (kind === 'file') c.files++;
+    else c.directories++;
   }
   hint(id: string, reason: Hint, path: string) {
+    if (!this.analytics) return;
     const c = this.cell(id);
     c.hints.add(reason);
     this.sample(c.examples, path);
   }
   choice(id: string, action: Action) {
-    this.cell(id).action = action;
+    if (this.analytics) this.cell(id).action = action;
   }
   snapshot() {
     this.assert(this.model);
@@ -128,6 +253,10 @@ export class PartitionSummaries {
       deleted: c.deleted,
       missing: c.missing,
       unsupported: c.unsupported,
+      capturedFiles: c.capturedFiles,
+      logicalBytes: c.logicalBytes,
+      excluded: { ...c.excluded },
+      unsupportedLayouts: c.unsupportedLayouts,
       hints: [...c.hints],
       examples: [...c.examples.paths],
       truncated: c.examples.truncated,
@@ -135,18 +264,15 @@ export class PartitionSummaries {
   }
   emit(reporter: Pick<HostReporter, 'info'>, sink?: Pick<ReportSink, 'publishLogGroup'>) {
     this.assert(this.model);
+    if (!this.analytics) return;
     for (const [id, c] of this.cells) {
       const roots =
-          c.action === 'new'
-            ? `planned-roots=${c.directories} directories/${c.files} files`
-            : c.action
-              ? 'no upload moves planned'
-              : 'planning incomplete',
-        purged =
-          c.purge === 'executed'
-            ? `purged=${c.deleted} files (shared matches credited once), missing=${c.missing}, unsupported=${c.unsupported}`
-            : `purge=${c.purge}`;
-      reporter.info(`${id}: action=${c.action ?? 'unplanned'}, ${roots}, ${purged}`);
+        c.action === 'new'
+          ? `planned-roots=${c.directories} directories/${c.files} files`
+          : c.action
+            ? 'no upload moves planned'
+            : 'planning incomplete';
+      reporter.info(`${id}: action=${c.action ?? 'unplanned'}, ${roots}`);
       if (c.action === 'new' && c.hints.size) {
         reporter.info('  finer-grained moves: ' + [...c.hints].join('; '));
         for (const p of c.examples.paths) reporter.info('  example: ' + p);
@@ -169,21 +295,12 @@ export class PartitionSummaries {
         (line) => reporter.info(line),
       );
     }
-    if (this.opaqueCount) {
-      reporter.info(
-        `purge scope: ${this.opaqueCount} hard-pruned directories not inspected; descendant match counts unknown`,
-      );
-      for (const p of this.opaque.paths) reporter.info('  skipped scope: ' + p);
-      if (this.opaque.truncated) reporter.info('  additional scopes omitted (bounded sample)');
-    }
   }
   dispose() {
     if (this.closed) return;
     this.closed = true;
-    for (const s of [this.opaque, ...[...this.cells.values()].map((c) => c.examples)]) {
-      for (const release of s.releases) release();
-      s.releases = [];
-      s.paths = [];
-    }
+    releaseSamples(this.opaque);
+    releaseSamples(this.unknown);
+    for (const c of this.cells.values()) releaseSamples(c.examples);
   }
 }

@@ -273,7 +273,10 @@ it.each(['standalone', 'distributed-worker'] as const)(
     await j.write('data/a', 'valid-content');
     await j.write(unknown, 'keep-unknown-local');
     const post = await j.run('post');
-    expect(post.stdout).toContain('Skipped unrecognized Gradle cache tree: caches/transforms-3/');
+    expect(post.stdout).toContain('Omitted 1 Gradle file outside a supported workspace');
+    expect(post.stdout).toContain(unknown);
+    expect(post.stdout).toContain('Mammoth capture summary (complete)');
+    expect(post.stdout).toContain('captured=1 files/13 logical bytes');
     expect(await readFile(j.home + '/' + unknown, 'utf8')).toBe('keep-unknown-local');
     expect(await readFile(j.home + '/data/a', 'utf8')).toBe('valid-content');
     expect(

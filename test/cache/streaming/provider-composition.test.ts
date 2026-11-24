@@ -30,6 +30,7 @@ import {
   type StreamingPostDependencies,
 } from '../../../src/phases/streaming/post';
 import { decodeInvocationAnchor, OpenedInvocation } from '../../../src/cache/streaming/invocation';
+import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 import {
   installGradleBuildResultCapture,
@@ -96,6 +97,7 @@ async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string
         description: '',
         defaultEnabled: true,
         relativeIncludeGlobs: ['data/**'],
+        purgeableGlobs: ['data/runtime.lock'],
         relativeExcludeGlobs: [],
       },
     ],
@@ -150,6 +152,8 @@ async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string
     state,
     outputs,
     host,
+    info,
+    warning,
     ci,
     config,
     budget,
@@ -164,6 +168,11 @@ async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string
     backend,
     sink,
   };
+}
+function captureLines(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.info.mock.calls
+    .flat()
+    .filter((line) => /^(?:Mammoth capture summary|data: captured=)/.test(line));
 }
 it.each(['maven', 'gradle'] as const)(
   'uses the guarded %s prepare/post composition and reports only after frozen post completion',
@@ -182,6 +191,11 @@ it.each(['maven', 'gradle'] as const)(
           inspect: async () => ({ remaining: false, uncertain: false }),
         }),
       };
+    f.backend.mockImplementationOnce(async () => {
+      expect(captureLines(f)[0]).toBe('Mammoth capture summary (complete):');
+      expect(captureLines(f)[1]).toContain('captured=1 files/5 logical bytes');
+      return f.sdk.backend;
+    });
     f.loadReport.mockImplementation(async () => {
       const a = decodeInvocationAnchor(raw);
       if (a[0] !== 'streaming-lifecycle') throw new Error('anchor');
@@ -282,6 +296,7 @@ it.each(['disabled', 'read-only'] as const)(
     await runStreamingPrepare(f.deps);
     expect(f.provision).toHaveBeenCalledTimes(1);
     expect((await runStreamingPost(f.post)).outcome).toBe(mode);
+    expect(captureLines(f)).toEqual([]);
     expect(f.backend).not.toHaveBeenCalled();
     expect(f.artifacts.upload).not.toHaveBeenCalled();
     expect(f.loadReport).toHaveBeenCalledTimes(1);
@@ -636,6 +651,10 @@ it.each(['cancel', 'report', 'sink-factory', 'sink-publish'] as const)(
     );
     try {
       await entered;
+      expect(captureLines(f)).toEqual([
+        'Mammoth capture summary (complete):',
+        expect.stringMatching(/data: captured=1 files\/4 logical bytes.*purge=skipped$/),
+      ]);
       expect(original!.length).toBeGreaterThan(0);
       expect(warning).not.toHaveBeenCalled();
       if (stage === 'cancel') controller.abort(new Error('cancel publication'));
@@ -643,6 +662,7 @@ it.each(['cancel', 'report', 'sink-factory', 'sink-publish'] as const)(
       release();
     }
     await rejected;
+    expect(captureLines(f)).toHaveLength(2);
     expect(warning.mock.calls.map(([message]) => message)).toEqual([
       'Raw worker upload unconfirmed; retain immutable package at ' + packagePath,
     ]);
@@ -662,5 +682,56 @@ it.each(['cancel', 'report', 'sink-factory', 'sink-publish'] as const)(
     if (stage === 'cancel') expect(f.loadReport).not.toHaveBeenCalled();
     if (stage === 'cancel' || stage === 'report' || stage === 'sink-factory')
       expect(f.sink.publishSummary).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['failure', 'cancel', 'analytics-disabled'] as const)(
+  'reports bounded capture diagnostics in the Gradle worker %s path',
+  async (mode) => {
+    const f = await fixture('gradle', {
+      'job-mode': 'distributed-worker',
+      'cache-partitions': JSON.stringify([{ id: 'data', includes: ['data/**', 'caches/**'] }]),
+    });
+    await runStreamingPrepare(f.deps);
+    const member = 'caches/9.9.2/kotlin-dsl/ic/unknown.bin';
+    await mkdir(f.home + '/data', { recursive: true });
+    await mkdir(path.dirname(f.home + '/' + member), { recursive: true });
+    await writeFile(f.home + '/data/a', 'built');
+    await writeFile(f.home + '/data/runtime.lock', 'retained worker lock');
+    await writeFile(f.home + '/' + member, 'local only');
+    const reason = new Error(mode + ' at index construction');
+    const controller = new AbortController();
+    const write = ObservationIndex.write;
+    if (mode !== 'analytics-disabled')
+      vi.spyOn(ObservationIndex, 'write').mockImplementationOnce(async (...args) => {
+        if (mode === 'failure') throw reason;
+        const index = await write.apply(ObservationIndex, args);
+        controller.abort(reason);
+        return index;
+      });
+    const post = runStreamingPost({
+      ...f.post,
+      signal: controller.signal,
+      analytics: mode !== 'analytics-disabled',
+    });
+    if (mode === 'analytics-disabled') {
+      expect((await post).outcome).toBe('worker-uploaded');
+      expect(captureLines(f)).toEqual([]);
+      expect(f.sink.publishLogGroup).not.toHaveBeenCalled();
+    } else {
+      await expect(post).rejects.toBe(reason);
+      expect(captureLines(f)).toEqual([
+        'Mammoth capture summary (partial):',
+        expect.stringMatching(
+          /captured=1 files\/5 logical bytes.*unsupported-layout=1 files, purge=skipped/,
+        ),
+      ]);
+      expect(f.warning.mock.calls[0][0]).toContain('(partial capture)');
+      expect(f.loadReport).not.toHaveBeenCalled();
+      expect(f.artifacts.upload).not.toHaveBeenCalled();
+    }
+    expect(f.warning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('data: ' + member));
+    expect(await readFile(f.home + '/' + member, 'utf8')).toBe('local only');
+    expect(await readFile(f.home + '/data/runtime.lock', 'utf8')).toBe('retained worker lock');
   },
 );

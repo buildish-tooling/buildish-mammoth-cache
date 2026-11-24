@@ -16,7 +16,7 @@
 
 import { ownsLocalSnapshot, type Partition } from './model';
 import type { PostAttempt } from './lifecycle-attempt';
-import type { PartitionSummaries } from './partition-summaries';
+import { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore, Reference } from './owned-store';
 import { InstallScratch } from './install-scratch';
 import { Digest, equal, tuple, type Value } from './encoding';
@@ -90,6 +90,7 @@ export interface ObservationCaptureOptions extends NativeOperationOptions {
   /** Operation-local progress, including completed deletions if capture subsequently fails. No logs per file. */
   readonly onPurge?: (partition: string, outcome: 'deleted' | 'missing' | 'unsupported') => void;
   readonly onOpaqueScope?: (path: string) => void;
+  readonly onCaptureInfo?: (message: string) => void;
   readonly onWarning?: (message: string) => void;
 }
 export interface FrozenObservation {
@@ -119,9 +120,29 @@ export function claimCapturedObservationIndex(
   return attempt;
 }
 
+export async function captureObservations(
+  store: OwnedStore,
+  input: ObservationCaptureOptions,
+): Promise<FrozenObservation> {
+  const fallback =
+    !input.summaries && input.onWarning
+      ? new PartitionSummaries(store.codec.options.model, input.budget, false)
+      : undefined;
+  const summaries = input.summaries ?? fallback;
+  let complete = false;
+  try {
+    const result = await capture(store, { ...input, summaries });
+    complete = true;
+    return result;
+  } finally {
+    summaries?.finishCapture(complete, input.onCaptureInfo, input.onWarning);
+    fallback?.dispose();
+  }
+}
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas.
 // The caller owns a current exclusive cache window. This does not stop Gradle/V5.
-export async function captureObservations(
+async function capture(
   store: OwnedStore,
   input: ObservationCaptureOptions,
 ): Promise<FrozenObservation> {
@@ -210,18 +231,15 @@ export async function captureObservations(
     }
   };
   let workspace: { root: string; markers: [boolean, string][] } | null = null;
-  const skippedLayouts = new Set<string>();
-  const warnUnknownLayout = (path: string) => {
-    if (!options.onWarning || skippedLayouts.size >= 10) return;
-    const parts = path.split('/'),
-      sample = parts
-        .slice(0, parts[1]?.startsWith('transforms-') ? 3 : 4)
-        .join('/')
-        .slice(0, 256);
-    if (skippedLayouts.has(sample)) return;
-    skippedLayouts.add(sample);
-    options.onWarning('Skipped unrecognized Gradle cache tree: ' + sample);
-  };
+  const summaries = options.summaries;
+  // Only label known cleanup marker locations, and only after an existing omission decision.
+  const housekeeping = (c: NativeChild) =>
+    c.type === 'file' &&
+    c.name === 'gc.properties' &&
+    model.tuple[2] === 'gradle' &&
+    /^caches\/(?:modules-[^/]+\/(?:.*\/)?|transforms-[^/]+\/|[^/]+\/(?:kotlin-dsl|groovy-dsl|transforms)\/)gc\.properties$/u.test(
+      c.path,
+    );
   const mark = (path: string, directory: boolean) => {
     if (!workspace) return;
     const relative = path.slice(workspace.root.length + 1);
@@ -242,21 +260,28 @@ export async function captureObservations(
       offset: null,
     });
     if (c.pruned || hard(c.path) || hard(c.path + '/.workspace-directory-probe')) {
-      if (configured && c.type === 'directory' && !isCacheMetadataPath(c.path)) {
-        purge.opaqueScopes++;
-        options.summaries?.opaqueScope(c.path);
-        options.onOpaqueScope?.(c.path);
+      summaries?.excluded(c.type, undefined, housekeeping(c));
+      if (c.type === 'directory') {
+        summaries?.prunedDirectory(c.path);
+        if (configured && !isCacheMetadataPath(c.path)) {
+          purge.opaqueScopes++;
+          options.onOpaqueScope?.(c.path);
+        }
       }
       return 'prune';
     }
     if (c.type === 'directory') return;
-    if (!owner(c.path) || (model.tuple[2] === 'maven' && isMavenTransientFile(c.name)))
+    const partition = owner(c.path);
+    if (!partition || (model.tuple[2] === 'maven' && isMavenTransientFile(c.name))) {
+      summaries?.excluded(c.type, partition?.[0], housekeeping(c));
       return 'prune';
+    }
     if (c.type !== 'file') throw new Error('Unsupported managed observation child.');
     // Local discovery may omit unknown layouts; imported contribution validators stay strict.
     // The existing physical child projection still protects these files from whole-tree moves.
     if (isWorkspaceScaffolding(model, c.path)) {
-      warnUnknownLayout(c.path);
+      if (housekeeping(c)) summaries?.excluded('file', partition[0], true);
+      else summaries?.unsupportedLayout(partition[0], c.path);
       return 'prune';
     }
   };
@@ -310,8 +335,8 @@ export async function captureObservations(
     work,
   );
   try {
+    summaries?.capture(!!options.purgeWindow);
     await activity.start();
-    options.summaries?.capture(!!options.purgeWindow);
     for await (const e of walk) {
       signal.throwIfAborted();
       if (e.tag === 'protected-child') continue;
@@ -391,6 +416,7 @@ export async function captureObservations(
           1,
           p,
         );
+        summaries?.capturedFile(p[0], e.identity[5]);
       } else {
         const frame = frames.pop()!;
         try {

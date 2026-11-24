@@ -37,6 +37,7 @@ export interface WorkerPostRequest extends LifecycleOptions {
   readonly removeHooks?: () => Promise<void>;
   readonly artifactBackend: () => Promise<WorkflowArtifactBackend>;
   readonly summaries?: PartitionSummaries;
+  readonly onCaptureInfo?: (message: string) => void;
   readonly onWarning?: (message: string) => void;
 }
 /** One fresh post operation; no source/package pointer can authorize replay or upload retry. */

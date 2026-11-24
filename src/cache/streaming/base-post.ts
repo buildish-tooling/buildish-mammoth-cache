@@ -42,6 +42,7 @@ export interface BasePostRequest extends LifecycleOptions {
   readonly removeHooks: (store: OwnedStore) => Promise<void>;
   readonly summaries?: PartitionSummaries;
   readonly required?: boolean;
+  readonly onCaptureInfo?: (message: string) => void;
   readonly onWarning?: (message: string) => void;
 }
 export interface BasePostResult {

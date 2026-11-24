@@ -23,6 +23,7 @@ import { installFixture } from './install-fixture';
 import { initializeObservationFixture } from './observation-fixtures';
 import { type ObservationCaptureOptions } from '../../../src/cache/streaming/observation-capture';
 import { tuple, type Value } from '../../../src/cache/streaming/encoding';
+import { PartitionSummaries } from '../../../src/cache/streaming/partition-summaries';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 
 const counts = vi.hoisted(() => ({
@@ -257,7 +258,18 @@ it('preserves hardlinked candidates and ordinary excluded siblings', async () =>
     ['data/runtime.lock'],
   );
   await link(f.store.root.resolve('data/runtime.lock'), f.store.root.resolve('alias'));
-  const out = await captureObservations(f.store, { budget: f.budget, purgeWindow: f.grant });
+  const summaries = new PartitionSummaries(f.model, f.budget),
+    info = vi.fn();
+  cleanup.push(() => summaries.dispose());
+  const out = await captureObservations(f.store, {
+    budget: f.budget,
+    purgeWindow: f.grant,
+    summaries,
+    onCaptureInfo: info,
+  });
+  const text = info.mock.calls.flat().join('\n');
+  expect(text).toContain('purged=0 files (shared claims credited once), missing=0, unsupported=1');
+  expect(text).toContain('Unattributed: observed-excluded=3 files/1 directories');
   expect(out.purge).toMatchObject({ deleted: 0, unsupported: 1 });
   expect(await f.store.root.stat('data/runtime.lock')).not.toBeNull();
   expect(await f.store.root.stat('data/keep.lock')).not.toBeNull();

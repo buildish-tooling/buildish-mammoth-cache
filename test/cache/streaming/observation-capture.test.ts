@@ -18,6 +18,7 @@ import { symlink, utimes, writeFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { executeFixtureGc as executeGc } from './observation-fixtures';
 import { captureFixtureObservations as captureObservations } from './observation-fixtures';
+import { PartitionSummaries } from '../../../src/cache/streaming/partition-summaries';
 import { InstallScratch } from '../../../src/cache/streaming/install-scratch';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 import { resolveModel } from '../../../src/cache/streaming/model';
@@ -44,8 +45,11 @@ it('captures once with complete protected projections, frozen decisions and no b
   await old(f, 'data/kept.lock');
   const read = vi.spyOn(NativeReadPhase.prototype, 'read'),
     before = await f.store.root.stat('data/a');
-  const out = await captureObservations(f.store, { budget: f.budget }),
+  const summaries = new PartitionSummaries(f.model, f.budget);
+  const out = await captureObservations(f.store, { budget: f.budget, summaries }),
     values: Value[] = [];
+  expect(summaries.snapshot()[0]).toMatchObject({ capturedFiles: 2, logicalBytes: 2n });
+  summaries.dispose();
   await f.store.readStream(
     out.reference,
     'observations',
@@ -78,6 +82,83 @@ it('captures once with complete protected projections, frozen decisions and no b
   await f.finish();
   expect(f.budget.retained).toBe(0);
 });
+it('reports actual omitted Kotlin DSL members while admitting recognized scripts and accessors', async () => {
+  const f = await fixture('gradle', { excluded: ['data/pruned/**'] });
+  const dsl = 'caches/9.9.2/kotlin-dsl';
+  const admitted = {
+    [dsl + '/scripts/' + 'a'.repeat(32) + '/metadata.bin']: 'script',
+    [dsl + '/scripts/' + 'a'.repeat(32) + '/classes/member.class']: 'class',
+    [dsl + '/accessors/' + 'b'.repeat(32) + '-PS/classes.jar']: 'accessor',
+  };
+  const unknown = [
+    dsl + '/accessors/loose.member',
+    dsl + '/scripts/auxiliary.member',
+    dsl + '/ic/cache.bin',
+    dsl + '/classpath-snapshots/snapshot.bin',
+  ];
+  const housekeeping = dsl + '/gc.properties';
+  await f.files('', {
+    ...admitted,
+    ...Object.fromEntries(unknown.map((path) => [path, 'local'])),
+    [housekeeping]: 'marker',
+    'data/pruned/nested/file': 'never inspected',
+    'data/runtime.lock': 'excluded',
+    'unmanaged/file': 'unowned',
+  });
+  const summaries = new PartitionSummaries(f.model, f.budget);
+  const info = vi.fn(),
+    warning = vi.fn();
+  try {
+    const out = await captureObservations(f.store, {
+      budget: f.budget,
+      summaries,
+      onCaptureInfo: info,
+      onWarning: warning,
+    });
+    const files: string[] = [];
+    await f.store.readStream(
+      out.reference,
+      'observations',
+      { budget: f.budget, partition: null },
+      async (v) => {
+        if (tuple(v)[0] === 'file') files.push(String(tuple(v)[1]));
+      },
+    );
+    expect(files.sort()).toEqual(
+      Object.keys(admitted)
+        .map((p) => p.slice(p.lastIndexOf('/') + 1))
+        .sort(),
+    );
+    expect(warning).toHaveBeenCalledTimes(1);
+    const examples = warning.mock.calls[0][0];
+    for (const path of unknown) {
+      expect(examples).toContain('data: ' + path);
+      expect(await f.store.root.stat(path)).not.toBeNull();
+    }
+    expect(examples).not.toContain('gc.properties');
+    expect(await f.store.root.stat(housekeeping)).not.toBeNull();
+    const text = info.mock.calls.flat().join('\n');
+    expect(text).toContain('captured=3 files/19 logical bytes');
+    expect(text).toContain(
+      'observed-excluded=5 files/0 directories/0 other entries, housekeeping=1 files, unsupported-layout=4 files',
+    );
+    expect(text).toContain('Unattributed: observed-excluded=2 files/2 directories/0 other entries');
+    expect(text).toContain('pruned=2 directories (descendant counts unknown)');
+    expect(text).not.toContain('nested');
+  } finally {
+    summaries.dispose();
+  }
+});
+
+it('keeps essential layout warnings for capture callers without a summary collector', async () => {
+  const f = await fixture('gradle');
+  const path = 'caches/9.9.2/kotlin-dsl/ic/actual.file';
+  await f.files('', { [path]: 'local only' });
+  const warning = vi.fn();
+  await captureObservations(f.store, { budget: f.budget, onWarning: warning });
+  expect(warning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('data: ' + path));
+});
+
 it('promotes direct Maven siblings together while keeping nested coordinate decisions independent', async () => {
   const f = await fixture('maven', {}, [
     ['dir-open', ''],

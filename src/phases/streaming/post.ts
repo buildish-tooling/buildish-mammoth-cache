@@ -99,10 +99,8 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
       ...options,
       maxDirectoryEntries: opened.bindings[8][9],
     }),
-    summaries =
-      d.analytics === false
-        ? undefined
-        : new PartitionSummaries(opened.store.codec.options.model, budget);
+    summaries = new PartitionSummaries(opened.store.codec.options.model, budget, d.analytics);
+  const onCaptureInfo = (message: string) => host.info(message);
   const warnings: string[] = [];
   const onWarning = (message: string) => {
     warnings.push(message);
@@ -128,6 +126,7 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
               anchor,
               artifactBackend: d.artifactBackend,
               summaries,
+              onCaptureInfo,
               onWarning,
               removeHooks,
             })
@@ -136,6 +135,7 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
               anchor,
               cacheBackend: () => d.cacheBackend(opened.store.root.path),
               summaries,
+              onCaptureInfo,
               onWarning,
               removeHooks,
             });
@@ -153,10 +153,14 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
     // Core recovery, observation/purge, source return and receipt precede these content/provider reads.
     const report = await d.loadReport(opened.store.codec.options.context[7], facts.header[4]);
     const sink = await emit(host, d, report, [], result.outcome);
-    summaries?.emit(host, sink);
+    try {
+      summaries.emit(host, sink);
+    } catch {
+      // Partition diagnostics must not change the finalization outcome.
+    }
     return result;
   } finally {
-    summaries?.dispose();
+    summaries.dispose();
     facts.close();
   }
 }
