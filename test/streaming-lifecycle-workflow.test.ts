@@ -19,6 +19,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { metadataFixture } from './cache/streaming/base-publication-fixtures';
+import { gradleResolver } from './cache/streaming/quiescence-fixture';
+import { resolveModel } from '../src/cache/streaming/model';
+import { postStreamingReadOnly } from '../src/cache/streaming/passive-lifecycle';
 
 type Step = {
   uses?: string;
@@ -338,5 +342,47 @@ it('observes the invocation bound to this job and rejects unsuccessful automatic
     expect(run().status).toBe(1);
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+it('observes the exact restored generation from a completed read-only Gradle restore', async () => {
+  const hard = ['.mammoth/**'];
+  const model = resolveModel(
+    ['model', 1, 'gradle', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default']]],
+    'observer-',
+    1,
+  );
+  const f = await metadataFixture(model);
+  try {
+    const { generation } = await f.seed({ data: { 'data/deep/file': 'restored' } });
+    const revision = 'b'.repeat(40);
+    const ready = await f.prepare({
+      context: ['github', 'example/repo', 'CI', '123', 'reader-windows', 2, revision, 'gradle'],
+      lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
+      policy: { ...f.request.policy, access: 'read-only' },
+    });
+    expect(ready.restoredKey).toBe(generation[11]);
+    await postStreamingReadOnly(ready.anchor, { budget: f.budget, assertCurrent: () => undefined });
+
+    const summary = path.join(f.directory, 'summary.md');
+    await writeFile(summary, '');
+    const observed = spawnSync(process.execPath, ['.github/actions/it-observe/observe.mjs'], {
+      env: {
+        ...process.env,
+        STATE_observer: JSON.stringify({ tool: 'gradle', job: 'reader-windows', stage: 'reader' }),
+        GITHUB_REPOSITORY: 'example/repo',
+        GITHUB_SHA: revision,
+        GITHUB_WORKFLOW: 'CI',
+        GITHUB_RUN_ID: '123',
+        GITHUB_RUN_ATTEMPT: '2',
+        GITHUB_STEP_SUMMARY: summary,
+        GRADLE_USER_HOME: f.root,
+      },
+      encoding: 'utf8',
+    });
+    expect(observed.status, observed.stderr).toBe(0);
+    expect(await readFile(summary, 'utf8')).toContain(generation[11]);
+  } finally {
+    await f.close();
   }
 });

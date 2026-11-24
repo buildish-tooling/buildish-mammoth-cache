@@ -136,7 +136,7 @@ export async function completion(home, expected, prepare, inspectBase = false, i
     .map((line) => JSON.parse(line));
   assert.equal(frame.length, 7);
   assert.deepEqual(frame.slice(0, 4), ['local-stream', 1, 'handoff', locator[2]]);
-  assert.deepEqual(handoff.slice(0, 2), ['handoff', 2]);
+  assert.deepEqual(handoff.slice(0, 2), ['handoff', 3]);
   const restored = handoff[8]?.[0];
   assert(typeof restored === 'string' && restored.length > 0 && restored.length <= 512);
   if (prepare) {
