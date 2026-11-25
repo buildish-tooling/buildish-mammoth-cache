@@ -51,6 +51,7 @@ import { checkHandoffGeneration, handoffSchemas, type HandoffHeader } from './li
 import { metadataWorkerRequests, metadataSnapshotRequirements } from './prepare-inputs';
 import {
   installGradleSeed,
+  gradleDependencySources,
   retireGradleSeed,
   gradleLayerCandidate,
   type GradleSeedDescriptor,
@@ -58,13 +59,8 @@ import {
 import { retireInstallStaging } from './owned-retirement';
 import { settleNativeCleanup } from './native-operation';
 import { assertEmptyManagedArea } from './prepare-admission';
-import {
-  activateGradleOverlay,
-  gradleOverlayCandidate,
-  overlaySource,
-  retireGradleOverlay,
-  type GradleOverlay,
-} from './gradle-overlay';
+import { activateOverlay, retireOverlay, type Overlay } from './overlay';
+import { gradleOverlayCandidate } from './gradle-overlay';
 import type { BaseCacheBackend } from '../backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
@@ -119,7 +115,7 @@ export interface StreamingPrepareResult {
   readonly restoredKey: string | null;
   readonly workerCount: number;
   readonly gradleSeed: GradleSeedDescriptor | null;
-  readonly gradleOverlay: GradleOverlay | null;
+  readonly overlay: Overlay | null;
 }
 
 const rows = async function* (values: readonly Value[]) {
@@ -198,7 +194,7 @@ export async function prepareStreaming(
     store = await OwnedStore.bind(root, codec, request.fail),
     docs = lifecycleDocuments(codec.options);
   await store.makeParents(CACHE_METADATA_LOCATOR);
-  const anchor = invocationAnchor(store.root, request.context, request.nonce);
+  let anchor = invocationAnchor(store.root, request.context, request.nonce);
   request.saveAnchor(encodeInvocationAnchor(anchor));
   if (await store.root.stat(store.prefix.slice(0, -1))) {
     throw new Error(
@@ -242,7 +238,7 @@ export async function prepareStreaming(
   ]);
   await store.initialize(bindings);
   let seed: GradleSeedDescriptor | undefined;
-  let overlay: GradleOverlay | undefined;
+  let overlay: Overlay | undefined;
   let restored: MetadataBaseRestore | undefined,
     merged: WorkerMergeResult | undefined,
     accepted: AcceptedWorkerMerge | undefined;
@@ -292,15 +288,14 @@ export async function prepareStreaming(
     ) {
       seed = await installGradleSeed(store, restored, options);
     }
-    const overlayTree =
+    const mountHome =
       request.overlayFs &&
       request.overlayMount &&
       !request.existingGradleLayer &&
       request.policy.restoreCleanup === 'none' &&
       request.hasGradleWrapper?.() &&
-      gradleOverlayCandidate(store)
-        ? await overlaySource(store, restored, request.overlayMount)
-        : undefined;
+      gradleOverlayCandidate(store) &&
+      !!(await gradleDependencySources(store, restored));
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
@@ -438,23 +433,31 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
-    if (overlayTree) {
-      overlay = await activateGradleOverlay(store, overlayTree, request.overlayMount!);
+    if (mountHome) {
+      overlay = await activateOverlay(store, '', store.root.binding, request.overlayMount!);
+      if (overlay) {
+        anchor = invocationAnchor(store.root, request.context, request.nonce);
+        request.saveAnchor(encodeInvocationAnchor(anchor));
+      }
     }
     await request.installHooks(store, lifecycle, !!(seed || overlay));
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
     bindings = docs.bindings.parse(bindings);
     bindings[8][7] = cutoff;
+    if (accepted?.incompleteUsage) {
+      bindings[8][5] = 'off';
+      bindings[8][6] = null;
+    }
     const header: HandoffHeader = handoffSchemas(codec).header.parse([
       'handoff',
-      overlay ? 5 : 4,
+      overlay ? 6 : 4,
       request.currentRef,
       request.defaultRef ?? null,
       request.captureTempDirectory,
       request.artifactRetentionDays,
       request.cleanupEnabled ? 'enabled' : 'disabled',
-      age,
+      accepted?.incompleteUsage ? null : age,
       restored.key && restored.record ? [restored.key, restored.record] : null,
       activity,
       cutoff,
@@ -520,7 +523,7 @@ export async function prepareStreaming(
       restoredKey: key,
       workerCount: downloads.length,
       gradleSeed: seed ?? null,
-      gradleOverlay: overlay ?? null,
+      overlay: overlay ?? null,
     };
   } catch (error) {
     failure = error;
@@ -546,7 +549,7 @@ export async function prepareStreaming(
   if (failure !== undefined) {
     if (overlay) {
       try {
-        await retireGradleOverlay(store, overlay, request.overlayMount!);
+        await retireOverlay(store, overlay, request.overlayMount!);
       } catch (cleanup) {
         failure = new AggregateError(
           [failure, cleanup],

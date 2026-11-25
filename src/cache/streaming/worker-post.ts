@@ -16,7 +16,8 @@
 
 import { ExclusiveWindow } from './quiescence';
 import { retireGradleSeed, gradleSeedPath, validateGradleSeedOwner } from './gradle-layer';
-import { projectGradleOverlay, retireGradleOverlay, verifyGradleOverlay } from './gradle-overlay';
+import { projectOverlay, retireOverlay, verifyOverlay, type OverlayCapture } from './overlay';
+import { gradleOverlayCapture } from './gradle-overlay';
 import { timed } from '../../util/timing';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
 import type { LifecycleOptions } from './lifecycle-options';
@@ -52,18 +53,24 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     store = attempt.store;
   let captured: ObservationIndex | undefined, owner: GcSurvivorOwner | undefined;
   const [, , , , , , , , , , , , seed, overlay] = attempt.handoff.header;
+  let overlayCapture: OverlayCapture | undefined;
   let clearProjection: (() => void) | undefined;
   let overlayRetired = false;
   let overlayRetirementStarted = false;
   let seedSettled = false,
     settledConsumers = false;
-  const finish = async (terminal: Parameters<PostAttempt['finish']>[0]) => {
+  const clearCapture = () => {
     clearProjection?.();
     clearProjection = undefined;
+    overlayCapture?.dispose();
+    overlayCapture = undefined;
+  };
+  const finish = async (terminal: Parameters<PostAttempt['finish']>[0]) => {
+    clearCapture();
     if (overlay) {
       attempt.assert();
       overlayRetirementStarted = true;
-      await retireGradleOverlay(store, overlay, request.overlayMount!);
+      await retireOverlay(store, overlay, request.overlayMount!);
       overlayRetired = true;
     }
     if (seed && !seedSettled) {
@@ -101,7 +108,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
           if (!request.overlayMount) {
             throw new Error('OverlayFS mount driver unavailable in post.');
           }
-          await verifyGradleOverlay(store, overlay, request.overlayMount);
+          await verifyOverlay(store, overlay, request.overlayMount);
         }
         const gate = await ExclusiveWindow.establish(store, request.budget, {
           ...request,
@@ -109,7 +116,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         });
         if (gate.status !== 'ready') {
           throw new Error(
-            'Gradle layer consumers could not settle; ' +
+            'Layer consumers could not settle; ' +
               (seed
                 ? 'seed retained at ' + gradleSeedPath(store, seed)
                 : 'OverlayFS state retained at ' + store.root.resolve(overlay![2])) +
@@ -119,19 +126,27 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         }
         attempt.attachWindow(gate.window);
         settledConsumers = true;
-        if (overlay) {
-          await verifyGradleOverlay(store, overlay, request.overlayMount!);
-          clearProjection = projectGradleOverlay(store, overlay);
-        }
       }
       const options = { ...request, signal: attempt.signal, attempt };
       await request.removeHooks?.();
       await attempt.guard();
+      if (overlay) {
+        await verifyOverlay(store, overlay, request.overlayMount!);
+        overlayCapture = await gradleOverlayCapture(
+          store,
+          overlay,
+          request.budget,
+          request.maxDirectoryEntries,
+          attempt.signal,
+        );
+        clearProjection = projectOverlay(store, overlay, overlayCapture.useMerged);
+      }
       const observation = await timed(options, 'observation capture and index construction', () =>
         captureObservations(store, {
           ...options,
           retainIndex: true,
           summaries: request.summaries,
+          overlayCapture,
         }),
       );
       captured = observation.index!;
@@ -157,7 +172,13 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         owner = await timed(options, 'GC', () => GcSurvivorOwner.execute(captured!, options));
         captured = undefined;
         const archive = await timed(options, 'worker package construction', () =>
-          freezeWorkerArtifact(backend, store, { survivors: owner! }, request.budget, options),
+          freezeWorkerArtifact(
+            backend,
+            store,
+            { survivors: owner!, incompleteUsage: !!overlayCapture },
+            request.budget,
+            options,
+          ),
         );
         await attempt.guard();
         let receipt: Awaited<ReturnType<typeof uploadWorkerArtifact>> | undefined;
@@ -240,13 +261,11 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         [
           () => owner?.dispose(),
           () => captured?.dispose(),
-          () => {
-            clearProjection?.();
-          },
+          clearCapture,
           async () => {
             if (failure !== undefined && overlay && !overlayRetirementStarted && settledConsumers) {
               attempt.assert();
-              await retireGradleOverlay(store, overlay, request.overlayMount!);
+              await retireOverlay(store, overlay, request.overlayMount!);
               overlayRetired = true;
             }
           },
@@ -269,8 +288,8 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
   return answer!;
 }
 
-/** Failed main may have exposed a live seed to later steps. Owning post settles it without capture or upload. */
-export async function postFailedPrepareGradleLayer(
+/** Failed main may have exposed a live layer to later steps. Owning post settles it without capture or upload. */
+export async function postFailedPrepareLayer(
   input: LifecycleOptions & {
     readonly anchor: InvocationAnchor;
     readonly advertisedInvocation: string;
@@ -303,7 +322,7 @@ export async function postFailedPrepareGradleLayer(
     if (seed) {
       await validateGradleSeedOwner(store, seed);
     } else if (overlay && input.overlayMount) {
-      await verifyGradleOverlay(store, overlay, input.overlayMount);
+      await verifyOverlay(store, overlay, input.overlayMount);
     } else {
       throw new Error('OverlayFS mount driver unavailable in post.');
     }
@@ -312,7 +331,7 @@ export async function postFailedPrepareGradleLayer(
       layeredWorker: attempt.handoff,
     });
     if (gate.status !== 'ready') {
-      throw new Error('Failed-prepare Gradle consumers could not settle: ' + gate.message);
+      throw new Error('Failed-prepare consumers could not settle: ' + gate.message);
     }
     attempt.attachWindow(gate.window);
     await input.removeHooks();
@@ -320,7 +339,7 @@ export async function postFailedPrepareGradleLayer(
     if (seed) {
       await retireGradleSeed(store, seed, input);
     } else {
-      await retireGradleOverlay(store, overlay!, input.overlayMount!);
+      await retireOverlay(store, overlay!, input.overlayMount!);
     }
     await attempt.finish(['outcome', 'abandoned', null, null, null]);
   } catch (error) {

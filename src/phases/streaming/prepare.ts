@@ -180,9 +180,9 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       },
     });
     layerPreparation = result;
-    if (result.gradleOverlay) {
+    if (result.overlay) {
       host.saveState(STREAMING_LAYER_ADVERTISEMENT_STATE, result.store.codec.options.invocation);
-      host.info('Gradle files-2.1 OverlayFS is active.');
+      host.info('Gradle user home OverlayFS is active.');
     }
     for (const warning of provisioning?.warnings ?? []) {
       host.warning(warning);
@@ -349,7 +349,7 @@ export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
         STREAMING_LAYER_ACTIVATED_STATE,
         result.store.codec.options.invocation,
       );
-    } else if ('gradleOverlay' in result && result.gradleOverlay) {
+    } else if ('overlay' in result && result.overlay) {
       d.signal?.throwIfAborted();
       if (d.assertCurrent() !== undefined) {
         throw new Error('OverlayFS activation lifetime assertion must be synchronous.');

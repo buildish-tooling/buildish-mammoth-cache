@@ -23,7 +23,8 @@ import {
   type Policy,
 } from './local-schema';
 import { gradleSeedSchema, checkGradleSeed } from './gradle-layer';
-import { gradleOverlayCandidate, overlaySchema } from './gradle-overlay';
+import { gradleOverlayCandidate } from './gradle-overlay';
+import { overlaySchema } from './overlay';
 import { nameSchema, positiveSchema, uintSchema } from './schema';
 import { objectRefSchema, keySchema } from './native-records';
 import { pinnedPartitionMetadataSchema, decodePinnedPartitionMetadata } from './partition-metadata';
@@ -77,7 +78,7 @@ export function handoffSchemas(codec: LocalCodec) {
   const header = z
     .union([
       z.tuple([z.literal('handoff'), z.literal(4), ...headerFields]),
-      z.tuple([z.literal('handoff'), z.literal(5), ...headerFields, overlaySchema(invocation)]),
+      z.tuple([z.literal('handoff'), z.literal(6), ...headerFields, overlaySchema(invocation)]),
     ])
     .refine((row) => row[2] !== row[3]);
   const entry = z
@@ -253,9 +254,14 @@ export function checkHandoffGeneration(
 ): void {
   if (
     header[13] &&
-    (header[12] || !generation || policy[4] !== 'none' || !gradleOverlayCandidate(store))
+    (header[12] ||
+      !generation ||
+      policy[4] !== 'none' ||
+      header[13][10] !== '' ||
+      !header[13][11] ||
+      !gradleOverlayCandidate(store))
   ) {
-    throw new Error('Invalid Gradle OverlayFS handoff.');
+    throw new Error('Invalid OverlayFS handoff.');
   }
   if (header[12]) {
     checkGradleSeed(store, header[12], generation?.[11] ?? null);

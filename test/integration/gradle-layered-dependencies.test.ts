@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { retireGradleOverlay } from '../../src/cache/streaming/gradle-overlay';
+import { retireOverlay } from '../../src/cache/streaming/overlay';
 import { linuxOverlayMount } from '../../src/cache/streaming/overlay-mount';
 import { GRADLE_ARTIFACTS } from '../../src/cache/streaming/gradle-layer';
 import { test, expect, vi } from 'vitest';
@@ -25,18 +25,31 @@ import {
   JOB_PREPARE_FAILED_STATE,
   JOB_SINGLE_RUN_OWNER_TOKEN_STATE,
 } from '../../src/guard/job-single-run';
-import { encodeInvocationAnchor } from '../../src/cache/streaming/invocation';
+import { encodeInvocationAnchor, OpenedInvocation } from '../../src/cache/streaming/invocation';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rm, unlink, writeFile, utimes } from 'node:fs/promises';
+import {
+  mkdir,
+  lstat,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+  utimes,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { metadataFixture } from '../cache/streaming/base-publication-fixtures';
 import { gradleResolver } from '../cache/streaming/quiescence-fixture';
 import { memoryArtifacts } from '../cache/streaming/memory-artifact-fixture';
 import { GradleBuildToolAdapter } from '../../src/build-tool/gradle/adapter';
+import { stopGradleInstallation } from '../../src/build-tool/gradle/stop-client';
 import {
   normalizeGradleActionConfig,
   readGradleActionInputs,
@@ -197,8 +210,10 @@ tasks.register('resolveMiss') { doLast { assert configurations.missing.singleFil
 tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
 `,
     );
+    const stop = vi.fn(stopGradleInstallation);
     const lifecycle = gradleResolver({
       inspect: async () => ({ remaining: false, uncertain: false }),
+      stop,
     });
     async function prepare(
       name: string,
@@ -255,13 +270,13 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
         assertCurrent: (): undefined => {},
       });
     }
-    async function workerPost(ready: Awaited<ReturnType<typeof prepare>>) {
+    async function workerPost(ready: Awaited<ReturnType<typeof prepare>>, backend = artifacts.api) {
       return postStreamingWorker({
         overlayMount,
         anchor: ready.anchor,
         budget: f.budget,
         lifecycle,
-        artifactBackend: async () => artifacts.api,
+        artifactBackend: async () => backend,
         removeHooks: async () => {
           await cleanupGradleBuildResultCapture(ready.store.root.path);
         },
@@ -282,6 +297,32 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
       await writeFile(member, 'inherited fixture ' + i);
       await utimes(member, aged, aged);
     }
+    const workspace = 'caches/transforms-4/' + 'a'.repeat(32);
+    const untouchedWorkspace = 'caches/transforms-4/' + 'b'.repeat(32);
+    const inheritedMetadata = 'caches/modules-2/metadata-proof/retained.bin';
+    const put = async (home: string, relative: string, body: string) => {
+      const file = path.join(home, relative);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, body);
+      return file;
+    };
+    for (const unit of [workspace, untouchedWorkspace]) {
+      await put(producer.store.root.path, unit + '/metadata.bin', 'transform metadata');
+      await put(producer.store.root.path, unit + '/results.bin', 'transform results');
+      await put(
+        producer.store.root.path,
+        unit + '/transformed/retained',
+        unit === workspace ? 'inherited workspace member' : 'untouched workspace member',
+      );
+    }
+    for (const member of ['metadata.bin', 'results.bin', 'transformed/retained']) {
+      await utimes(
+        producer.store.root.resolve(untouchedWorkspace + '/' + member),
+        new Date(),
+        aged,
+      );
+    }
+    await put(producer.store.root.path, inheritedMetadata, 'untouched metadata member');
     const initial = await basePost(producer);
     expect(initial.outcome).toBe('published');
     const worker = await prepare('worker', 'distributed-worker');
@@ -305,20 +346,37 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     expect(raw.includes(oldBody)).toBe(false);
     expect(raw.includes(newBody)).toBe(true);
     expect(await worker.store.root.stat(worker.gradleSeed![2])).toBeNull();
+    const unmanaged = await put(
+      f.directory + '/writer',
+      'local/settings',
+      'inherited local settings',
+    );
     const writer = await prepare('writer', 'distributed-worker', {
       overlayFs: useOverlay,
       overlayMount,
     });
     writerMount = writer;
-    const mountedPath = path.join(writer.store.root.path, GRADLE_ARTIFACTS);
-    expect(!!writer.gradleOverlay).toBe(useOverlay);
+    const mountedPath = writer.store.root.path;
+    expect(!!writer.overlay).toBe(useOverlay);
     expect(!!(await overlayMount?.inspect(mountedPath))).toBe(useOverlay);
 
     expect(writer.gradleSeed).toBeNull();
+    expect(await readFile(unmanaged, 'utf8')).toBe('inherited local settings');
+    const untouchedMember = untouchedWorkspace + '/transformed/retained';
+    expect(await readFile(writer.store.root.resolve(untouchedMember), 'utf8')).toBe(
+      'untouched workspace member',
+    );
     expect(await readFile(writer.store.root.resolve(old))).toEqual(oldBody);
     await build(writer.store.root.path, 'resolveSeed', '', true);
     await build(writer.store.root.path, 'resolveMiss');
     if (useOverlay) {
+      await writeFile(unmanaged, 'temporary local settings');
+      await symlink('settings', path.join(path.dirname(unmanaged), 'temp-link'));
+      await put(writer.store.root.path, workspace + '/transformed/added', 'new workspace member');
+      const staged = 'wrapper/dists/fixture/download-tmp';
+      const distribution = 'wrapper/dists/fixture/downloaded';
+      await put(writer.store.root.path, staged + '/member', 'wrapper distribution member');
+      await rename(writer.store.root.resolve(staged), writer.store.root.resolve(distribution));
       await unlink(writer.store.root.resolve(inherited(0)));
       const opaque = path.dirname(inherited(1));
       await rm(writer.store.root.resolve(opaque), { recursive: true });
@@ -330,7 +388,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
 
       if (width === 4) {
         await expect(
-          retireGradleOverlay(writer.store, writer.gradleOverlay!, {
+          retireOverlay(writer.store, writer.overlay!, {
             ...overlayMount!,
             unmount: async () => {
               throw new Error('mount is busy');
@@ -338,7 +396,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
           }),
         ).rejects.toThrow('mount is busy');
         expect(await overlayMount!.inspect(mountedPath)).not.toBeNull();
-        expect(await writer.store.root.stat(writer.gradleOverlay![2])).not.toBeNull();
+        expect(await writer.store.root.stat(writer.overlay![2])).not.toBeNull();
       }
       const visited: string[] = [];
       const walk = nativeWalk.walkNative;
@@ -371,16 +429,43 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     }
     expect((await overlayMount?.inspect(mountedPath)) ?? null).toBeNull();
     if (useOverlay) {
+      expect(stop).toHaveBeenCalledWith(
+        expect.objectContaining({ gradleUserHome: mountedPath }),
+        expect.any(AbortSignal),
+        expect.any(Number),
+      );
       const writerArchive = gunzipSync([...artifacts.objects.values()][1].bytes);
       expect(writerArchive.includes(oldBody)).toBe(false);
       expect(writerArchive.includes(newBody)).toBe(true);
+      expect(writerArchive.includes('inherited workspace member')).toBe(true);
+      expect(writerArchive.includes('new workspace member')).toBe(true);
+      expect(writerArchive.includes('untouched workspace member')).toBe(false);
+      expect(writerArchive.includes('untouched metadata member')).toBe(true);
+      expect(writerArchive.includes('wrapper distribution member')).toBe(true);
+      expect(writerArchive.includes('temporary local settings')).toBe(false);
+      expect(await readFile(unmanaged, 'utf8')).toBe('inherited local settings');
+      await expect(lstat(writer.store.root.resolve('local/temp-link'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(lstat(writer.store.root.resolve(writer.overlay![2]))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect((await OpenedInvocation.open(writer.anchor, f.budget)).state[4]).toBe('completed');
     }
     const aggregator = await prepare('aggregator', 'distributed-aggregator', {
       now: () => Date.now() + 10000,
     });
     expect(aggregator.workerCount).toBe(2);
+    expect((await OpenedInvocation.open(aggregator.anchor, f.budget)).bindings[8][5]).toBe(
+      useOverlay ? 'off' : 'timestamp',
+    );
     const published = await basePost(aggregator);
     expect(published.outcome).toBe('published');
+    if (useOverlay) {
+      expect(await readFile(aggregator.store.root.resolve(untouchedMember), 'utf8')).toBe(
+        'untouched workspace member',
+      );
+    }
     expect(await readFile(aggregator.store.root.resolve(old))).toEqual(oldBody);
     expect(await readFile(aggregator.store.root.resolve(inherited(0)), 'utf8')).toBe(
       'inherited fixture 0',
@@ -398,6 +483,20 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
       assertCurrent: (): undefined => {},
     });
     if (useOverlay && width === 4) {
+      const idleArtifacts = memoryArtifacts();
+      const idle = await prepare('writer', 'distributed-worker', {
+        root: f.directory + '/idle-writer',
+        overlayFs: true,
+        overlayMount,
+      });
+      writerMount = idle;
+      expect(idle.overlay).not.toBeNull();
+      expect(await idle.store.root.stat(idle.overlay![2] + '/upper/caches')).toBeNull();
+      expect((await workerPost(idle, idleArtifacts.api)).outcome).toBe('worker-uploaded');
+      const idleArchive = gunzipSync([...idleArtifacts.objects.values()][0].bytes);
+      expect(idleArchive.includes('untouched metadata member')).toBe(true);
+      expect(idleArchive.includes(oldBody)).toBe(false);
+
       // Simulate failure of the first host advertisement write after successful core prepare.
       const failed = await prepare('writer', 'distributed-worker', {
         root: f.directory + '/failed-writer',
@@ -405,7 +504,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
         overlayMount,
       });
       writerMount = failed;
-      expect(failed.gradleOverlay).not.toBeNull();
+      expect(failed.overlay).not.toBeNull();
       const state = new Map([
         [JOB_PREPARE_FAILED_STATE, 'true'],
         [JOB_SINGLE_RUN_OWNER_TOKEN_STATE, 'fixture-owner'],
@@ -440,9 +539,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
           },
         }),
       ).resolves.toEqual({ outcome: 'skipped' });
-      expect(
-        await overlayMount!.inspect(path.join(failed.store.root.path, GRADLE_ARTIFACTS)),
-      ).toBeNull();
+      expect(await overlayMount!.inspect(failed.store.root.path)).toBeNull();
     }
     completed = true;
   } finally {
@@ -461,10 +558,10 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     }
     if (
       overlayMount &&
-      writerMount?.gradleOverlay &&
-      (await overlayMount.inspect(path.join(writerMount.store.root.path, GRADLE_ARTIFACTS)))
+      writerMount?.overlay &&
+      (await overlayMount.inspect(writerMount.store.root.path))
     ) {
-      await retireGradleOverlay(writerMount.store, writerMount.gradleOverlay, overlayMount);
+      await retireOverlay(writerMount.store, writerMount.overlay, overlayMount);
     }
     server.closeAllConnections();
     if (server.listening) {

@@ -186,7 +186,9 @@ function nativeRelative(relative: string): string {
 }
 export class NativeRoot {
   private metadataIdentity: NativeIdentity | null = null;
-  private projection: { logical: string; physical: string } | undefined;
+  private projection:
+    { logical: string; physical: string; useMerged?: (path: string) => boolean } | undefined;
+  mountedBinding: NativeIdentity | undefined;
 
   private constructor(
     readonly path: string,
@@ -195,7 +197,11 @@ export class NativeRoot {
     private readonly metadataDirectory: string,
   ) {}
 
-  static async bind(root: string, work = nativeWork()): Promise<NativeRoot> {
+  static async bind(
+    root: string,
+    work = nativeWork(),
+    overlay?: { readonly original: NativeIdentity; readonly mounted: NativeIdentity },
+  ): Promise<NativeRoot> {
     const canonical = await realpath(root),
       stat = nativeIdentity(await lstat(canonical, { bigint: true }));
     work.stats++;
@@ -205,7 +211,18 @@ export class NativeRoot {
     if (nodePath.dirname(canonical) === canonical) {
       throw new Error('Mammoth requires a managed home below the filesystem root.');
     }
-    const native = new NativeRoot(canonical, stat, work, cacheMetadataDirectory(canonical));
+    const original = overlay?.original ?? stat;
+    const native = new NativeRoot(canonical, original, work, cacheMetadataDirectory(canonical));
+    if (sameObject(original, stat)) {
+      if (original[6] !== stat[6]) {
+        throw new Error('Managed home mode changed.');
+      }
+    } else {
+      if (!overlay || !sameObject(overlay.mounted, stat) || overlay.mounted[6] !== stat[6]) {
+        throw new Error('Mounted home binding changed.');
+      }
+      native.mountedBinding = overlay.mounted;
+    }
     native.metadataIdentity = await native.readMetadataIdentity();
     return native;
   }
@@ -266,39 +283,58 @@ export class NativeRoot {
 
   resolve(relative: string): string {
     nativeRelative(relative);
+    const parts = relative.split('/');
+    if (parts[0] === CACHE_METADATA_DIRECTORY) {
+      return nodePath.join(this.metadataDirectory, ...parts.slice(1));
+    }
     const projection = this.projection;
-    if (projection) {
+    if (projection && !projection.useMerged?.(relative)) {
       if (relative === projection.logical) {
         return projection.physical;
+      }
+      if (projection.logical === '') {
+        return nodePath.join(projection.physical, relative);
       }
       if (relative.startsWith(projection.logical + '/')) {
         return nodePath.join(projection.physical, relative.slice(projection.logical.length + 1));
       }
     }
-    const parts = relative.split('/');
-    if (parts[0] === CACHE_METADATA_DIRECTORY) {
-      return nodePath.join(this.metadataDirectory, ...parts.slice(1));
-    }
     return nodePath.join(this.path, ...parts);
   }
 
+  expectedDevice(relative: string): string {
+    if (
+      relative !== CACHE_METADATA_DIRECTORY &&
+      !relative.startsWith(CACHE_METADATA_DIRECTORY + '/') &&
+      this.mountedBinding &&
+      (!this.projection || this.projection.useMerged?.(relative))
+    ) {
+      return this.mountedBinding[3];
+    }
+    return this.binding[3];
+  }
+
   /** Redirect one logical subtree for the original, quiescent capture and replay. */
-  project(logical: string, ownedSource: string): () => void {
+  project(logical: string, ownedSource: string, useMerged?: (path: string) => boolean): () => void {
     if (this.projection || !ownedSource.startsWith(CACHE_METADATA_DIRECTORY + '/')) {
       throw new Error('Invalid projected observation source.');
     }
     nativeRelative(logical);
-    this.projection = { logical, physical: this.resolve(ownedSource) };
+    this.projection = { logical, physical: this.resolve(ownedSource), useMerged };
     return () => {
       this.projection = undefined;
     };
   }
 
-  async verifyRoot(): Promise<void> {
+  async verifyRoot(checkMode = false): Promise<void> {
     this.work.stats++;
     const current = nativeIdentity(await lstat(this.path, { bigint: true }));
-    if (!sameObject(this.binding, current)) {
-      throw new Error('Managed root was replaced.');
+    const expected = this.mountedBinding ?? this.binding;
+    if (
+      !sameObject(expected, current) ||
+      ((checkMode || this.mountedBinding) && expected[6] !== current[6])
+    ) {
+      throw new Error(checkMode ? 'Managed root binding changed.' : 'Managed root was replaced.');
     }
   }
 

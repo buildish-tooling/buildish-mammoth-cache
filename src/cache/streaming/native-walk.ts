@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-import type { BigIntStats } from 'node:fs';
+import type { BigIntStats, Dirent } from 'node:fs';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { lstat, opendir, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   nativeIdentity,
   nativeIds,
@@ -56,6 +57,11 @@ export interface NativePurge {
   checkpoint(phase: 'before-unlink' | 'unlinked' | 'refreshed'): Promise<void>;
 }
 
+interface AdditionalDirectories {
+  readonly names: ReadonlySet<string>;
+  readonly only?: boolean;
+}
+
 export interface WalkOptions {
   readonly budget: WorkingBudget;
   readonly purge?: NativePurge;
@@ -73,6 +79,8 @@ export interface WalkOptions {
   /** Synchronous protected-child inventory. Returning prune never follows that object. */
   readonly inspectChild?: (child: NativeChild) => 'prune' | void;
   readonly ignoreEntry?: (path: string, raw: BigIntStats) => Promise<boolean>;
+  /** Complete units can require directories present only in the merged view. */
+  readonly extraDirectories?: (path: string) => AdditionalDirectories | undefined;
   readonly signal?: AbortSignal;
   /** Immediate parent held by a caller's checked ancestor scope. Rechecked at both boundaries. */
   readonly parentNative?: NativeIdentity;
@@ -134,7 +142,7 @@ export async function* walkNative(
     signal.throwIfAborted();
     work.stats++;
     root.work.stats++;
-    return lstat(path ? root.resolve(path) : root.path, { bigint: true });
+    return lstat(root.resolve(path), { bigint: true });
   };
   const stat = async (path: string) => nativeIdentity(await rawStat(path));
   signal.throwIfAborted();
@@ -155,6 +163,23 @@ export async function* walkNative(
     await checkParent();
   } else if (relative) {
     await root.parents(relative);
+  }
+  async function* projectedListing(
+    physical: string,
+    extra: AdditionalDirectories,
+  ): AsyncGenerator<Pick<Dirent, 'name' | 'isDirectory' | 'isFile'>> {
+    if (!extra.only) {
+      for await (const entry of await opendir(physical, { bufferSize: 32 })) {
+        signal.throwIfAborted();
+        work.entries++;
+        if (!extra.names.has(entry.name)) {
+          yield entry;
+        }
+      }
+    }
+    for (const name of extra.names) {
+      yield { name, isDirectory: () => true, isFile: () => false };
+    }
   }
   async function* visit(
     nativePath: string,
@@ -255,20 +280,29 @@ export async function* walkNative(
       let charge = 0,
         entries = 0;
       try {
-        work.listings++;
-        root.work.nativeListings++;
-        const directory = await opendir(nativePath ? root.resolve(nativePath) : root.path, {
-          bufferSize: 32,
-        });
-        // for-await closes the directory on EOF, errors and early return, before recursion.
-        for await (const entry of directory) {
+        const physical = root.resolve(nativePath);
+        const extra = options.extraDirectories?.(path);
+        if (!extra?.only) {
+          work.listings++;
+          root.work.nativeListings++;
+        }
+        const listing = extra
+          ? projectedListing(physical, extra)
+          : await opendir(physical, {
+              bufferSize: 32,
+            });
+        // Close the physical directory before descending.
+        for await (const entry of listing) {
           signal.throwIfAborted();
-          work.entries++;
+          if (!extra) {
+            work.entries++;
+          }
+          const entryName = entry.name;
           if (++entries > max) {
             throw directoryBreadthError(path, max, 'native walk');
           }
-          componentSchema.parse(entry.name);
-          const childPath = joinPath(path, entry.name);
+          componentSchema.parse(entryName);
+          const childPath = joinPath(path, entryName);
           // Count every physical child; inventories additionally keep protected IDs.
           let pruned = false;
           if (isCacheMetadataPath(childPath)) {
@@ -286,25 +320,43 @@ export async function* walkNative(
           if (!pruned) {
             pathSchema.parse(childPath);
           }
-          if (names.has(entry.name)) {
+          if (names.has(entryName)) {
             throw new Error('Duplicate decoded native child name.');
           }
           let isDirectory = entry.isDirectory();
-          if (!entry.isFile() && !isDirectory) {
-            const raw = await rawStat(joinPath(nativePath, entry.name));
+          const regular = entry.isFile();
+          if (
+            options.ignoreEntry &&
+            !isDirectory &&
+            join(physical, entryName) !== root.resolve(joinPath(nativePath, entryName))
+          ) {
+            // A whiteout can occupy an upper name whose complete-unit view is merged.
+            work.stats++;
+            root.work.stats++;
+            if (
+              await options.ignoreEntry(
+                childPath,
+                await lstat(join(physical, entryName), { bigint: true }),
+              )
+            ) {
+              continue;
+            }
+          }
+          if (!regular && !isDirectory) {
+            const raw = await rawStat(joinPath(nativePath, entryName));
             if (!options.inspectChild) {
               nativeIdentity(raw);
             }
             isDirectory = raw.isDirectory();
           }
-          const bytes = 128 + 4 * Buffer.byteLength(entry.name);
+          const bytes = 128 + 4 * Buffer.byteLength(entryName);
           options.budget.retain(bytes);
           charge += bytes;
           retained += bytes;
           work.peakNames = Math.max(work.peakNames, retained);
-          const name = Buffer.from(entry.name).toString('utf8');
+          const name = Buffer.from(entryName).toString('utf8');
           names.add(name);
-          children.push({ name, directory: isDirectory, regular: entry.isFile(), pruned });
+          children.push({ name, directory: isDirectory, regular, pruned });
         }
         if (!sameNative(before, await stat(nativePath), true)) {
           throw new Error('Native directory changed while listing.');

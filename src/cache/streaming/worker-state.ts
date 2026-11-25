@@ -71,15 +71,17 @@ export interface WorkerContext {
   readonly membership: MembershipSpool;
 }
 
-const identitySchema = z.tuple([
-  z.literal('identity'),
-  z.literal(1),
+const identityFields = [
   z.literal(STREAMING_PROFILES.worker),
   z.literal('gzip'),
   contextSchema,
   shaSchema,
   familySchema,
   z.array(partitionSchema).max(64),
+] as const;
+const identitySchema = z.union([
+  z.tuple([z.literal('identity'), z.literal(1), ...identityFields]),
+  z.tuple([z.literal('identity'), z.literal(2), ...identityFields, z.literal('incomplete-usage')]),
 ]);
 const summarySchema = z.tuple([
   uintSchema,
@@ -287,16 +289,17 @@ export class WorkerState {
     ];
   }
 
-  identityTuple(snapshots: readonly string[]): Value[] {
+  identityTuple(snapshots: readonly string[], incompleteUsage = false): Value[] {
     return [
       'identity',
-      1,
+      incompleteUsage ? 2 : 1,
       STREAMING_PROFILES.worker,
       'gzip',
       this.options.context,
       this.options.model.id,
       this.options.model.family,
       snapshots,
+      ...(incompleteUsage ? ['incomplete-usage'] : []),
     ];
   }
 

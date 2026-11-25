@@ -251,7 +251,7 @@ it.each([false, true])(
       unmount: vi.fn(async () => {}),
     };
     const ready = await f.prepare({ context, overlayFs: enabled, overlayMount });
-    expect(ready.gradleOverlay).toBeNull();
+    expect(ready.overlay).toBeNull();
     expect(ready.gradleSeed).toBeNull();
     expect(overlayMount.mount).toHaveBeenCalledTimes(enabled ? 1 : 0);
     if (!enabled) {

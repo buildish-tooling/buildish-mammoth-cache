@@ -134,10 +134,12 @@ async function retireTree(
               overlayRoot &&
               (child.startsWith(overlayRoot + '/upper/') ||
                 child.startsWith(overlayRoot + '/work/work/')) &&
-              raw.isCharacterDevice() &&
-              raw.rdev === 0n
-                ? now.isCharacterDevice() &&
-                  now.rdev === 0n &&
+              !raw.isFile() &&
+              !raw.isDirectory()
+                ? // These are private overlay entries after unmount. Unlink by
+                  // name without opening whiteouts, links or unmanaged sockets.
+                  now.mode === raw.mode &&
+                  now.rdev === raw.rdev &&
                   now.ino === raw.ino &&
                   now.ctimeNs === raw.ctimeNs
                 : sameNative(identityOf(raw), identityOf(now), true);

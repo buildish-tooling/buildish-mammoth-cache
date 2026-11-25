@@ -25,7 +25,7 @@ import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-
 import { type NativeIdentity } from './native';
 import { createCacheGlobMatcher } from '../glob';
 import { isCacheMetadataPath } from '../metadata-paths';
-import { isOverlayArtifact, isOverlayWhiteout } from './gradle-overlay';
+import { isOverlayWhiteout, type OverlayCapture } from './overlay';
 import { isMavenTransientFile } from '../maven-repository';
 import { workspaceKind } from '../immutable-workspaces';
 import { UnitMarkers } from './unit-markers';
@@ -86,6 +86,7 @@ export interface ObservationCaptureOptions extends NativeOperationOptions {
   readonly retainIndex?: boolean;
   readonly attempt: PostAttempt;
   readonly summaries?: PartitionSummaries;
+  readonly overlayCapture?: OverlayCapture;
   /** Verified by the trusted lifecycle caller, not by persisted quiescence. Synchronous lifetime assertions only. */
   readonly purgeWindow?: {
     readonly root: OwnedStore['root'];
@@ -365,8 +366,10 @@ async function capture(
             }
           : undefined,
       inspectChild: child,
-      ignoreEntry: options.attempt.handoff.header[13]
-        ? (path, raw) => isOverlayWhiteout(store, path, raw)
+      extraDirectories: options.overlayCapture?.extraDirectories,
+      ignoreEntry: options.overlayCapture
+        ? async (path, raw) =>
+            String(raw.dev) === store.root.binding[3] && (await isOverlayWhiteout(store, path, raw))
         : undefined,
     },
     work,
@@ -379,7 +382,10 @@ async function capture(
       if (e.tag === 'protected-child') {
         continue;
       }
-      if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1')) {
+      if (
+        e.identity[3] !== store.root.expectedDevice(e.path) ||
+        (e.tag === 'file' && e.links !== '1')
+      ) {
         throw new Error('Aliased/cross-device observation source.');
       }
       if (e.tag === 'directory-open') {
@@ -423,7 +429,7 @@ async function capture(
           localSnapshot = ownsLocalSnapshot(p, codec.options);
         const act: Activity =
           localSnapshot ||
-          (options.attempt.handoff.header[13] && isOverlayArtifact(e.path)) ||
+          options.overlayCapture ||
           imported === 'upsert' ||
           BigInt(e.identity[8]) >= cutoff ||
           BigInt(e.identity[9]) >= cutoff

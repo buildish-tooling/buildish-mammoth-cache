@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import { lstat } from 'node:fs/promises';
-import { sameObject, nativeIdentity, type NativeIdentity } from './native';
+import { sameObject, type NativeIdentity } from './native';
 import type { OwnedStore } from './owned-store';
 
 /** Existing frozen-root check; orchestration may supply one fresh root observation. */
@@ -46,11 +45,7 @@ export async function assertLifecycleWindow(
     }
   };
   check();
-  store.root.work.stats++;
-  checkPostRootBinding(
-    store,
-    bindings,
-    nativeIdentity(await lstat(store.root.path, { bigint: true })),
-  );
+  await store.root.verifyRoot(true);
+  checkPostRootBinding(store, bindings);
   check();
 }

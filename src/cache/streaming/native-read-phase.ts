@@ -31,7 +31,7 @@ export class NativeReadPhase {
 
   private async stat(path: string): Promise<NativeIdentity> {
     this.root.work.stats++;
-    const raw = await lstat(path ? this.root.resolve(path) : this.root.path, { bigint: true });
+    const raw = await lstat(this.root.resolve(path), { bigint: true });
     if (raw.isFile() && raw.nlink !== 1n) {
       throw new Error('Aliased selected preimage is unsupported.');
     }
@@ -43,7 +43,7 @@ export class NativeReadPhase {
     if (!sameNative(actual, expected, true)) {
       throw new Error('Frozen native preimage changed.');
     }
-    if (actual[3] !== this.root.binding[3]) {
+    if (actual[3] !== this.root.expectedDevice(path)) {
       throw new Error('Cross-filesystem native preimage.');
     }
   }

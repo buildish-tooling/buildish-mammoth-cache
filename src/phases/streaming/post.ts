@@ -22,15 +22,16 @@ import {
   JOB_SINGLE_RUN_OWNER_TOKEN_STATE,
   JOB_SINGLE_RUN_DUPLICATE_STATE,
 } from '../../guard/job-single-run';
-import { decodeInvocationAnchor, OpenedInvocation } from '../../cache/streaming/invocation';
+import {
+  bindInvocationRoot,
+  decodeInvocationAnchor,
+  OpenedInvocation,
+} from '../../cache/streaming/invocation';
 import { WorkingBudget } from '../../cache/streaming/tree-state';
 import { LifecycleHandoff } from '../../cache/streaming/lifecycle-handoff';
 import { type LifecycleOptions } from '../../cache/streaming/lifecycle-options';
 import { postStreamingBase } from '../../cache/streaming/base-post';
-import {
-  postStreamingWorker,
-  postFailedPrepareGradleLayer,
-} from '../../cache/streaming/worker-post';
+import { postStreamingWorker, postFailedPrepareLayer } from '../../cache/streaming/worker-post';
 import { postStreamingReadOnly } from '../../cache/streaming/passive-lifecycle';
 import { PartitionSummaries } from '../../cache/streaming/partition-summaries';
 import {
@@ -87,7 +88,11 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
           if (!advertisedInvocation && d.overlayMount) {
             // The mount can already be visible when the first host state write fails.
             const budget = d.budget ?? new WorkingBudget();
-            const current = await OpenedInvocation.current(anchor[2], budget, d.cleanupSignal);
+            const current = await OpenedInvocation.current(
+              await bindInvocationRoot(anchor),
+              budget,
+              d.cleanupSignal,
+            );
             if (current?.state[4] === 'build-ready') {
               const opened = await OpenedInvocation.open(anchor, budget, d.cleanupSignal);
               const handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, {
@@ -105,7 +110,7 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
             }
           }
           if (advertisedInvocation) {
-            await postFailedPrepareGradleLayer({
+            await postFailedPrepareLayer({
               ...d,
               signal: d.cleanupSignal,
               budget: d.budget ?? new WorkingBudget(),
@@ -166,7 +171,7 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
     host.getState(STREAMING_LAYER_ACTIVATED_STATE) !== opened.store.codec.options.invocation
   ) {
     facts.close();
-    await postFailedPrepareGradleLayer({
+    await postFailedPrepareLayer({
       ...d,
       signal: d.cleanupSignal,
       budget,

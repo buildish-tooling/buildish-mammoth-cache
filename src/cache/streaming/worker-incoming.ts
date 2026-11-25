@@ -32,6 +32,7 @@ export interface AcceptedWorkerMerge {
   readonly incoming: readonly IndexedMetadataInput[];
   readonly snapshots: readonly MetadataSnapshot[];
   readonly activity: Reference;
+  readonly incompleteUsage: boolean;
   readonly work: Readonly<{
     snapshotCopyBytes: number;
     activityDirectoryListings: number;
@@ -150,6 +151,7 @@ export async function acceptWorkerMerge(
       incoming: Object.freeze(incoming),
       snapshots: Object.freeze(snapshots),
       activity,
+      incompleteUsage: result.summaries.some((summary) => summary.identity[1] === 2),
       work: Object.freeze({
         snapshotCopyBytes,
         activityDirectoryListings: activityWork.listings,

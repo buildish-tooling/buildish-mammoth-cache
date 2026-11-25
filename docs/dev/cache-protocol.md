@@ -285,6 +285,7 @@ The first effective member is `.mammoth-meta/identity.json`, containing:
 
 ```text
 ["identity",1,"worker-tar-v2","gzip",context,modelId,familyId,snapshotPartitions]
+["identity",2,"worker-tar-v2","gzip",context,modelId,familyId,snapshotPartitions,"incomplete-usage"]
 context = [provider,repository,workflow,runId,jobName,attempt,revision,buildTool]
 ```
 
@@ -292,6 +293,11 @@ Context fields are nonempty strings except `attempt`, which is `positive`;
 `buildTool` is `gradle` or `maven`. IDs must match the expected context, not just
 syntactic validation. `snapshotPartitions` is a bounded array of unique authorized
 single-writer partition IDs in model order; it contains no member paths.
+
+An upper-layer capture uses identity version 2 to report that lower-only reads can
+be absent from its usage channel. The aggregator consumes the validated contribution
+normally and skips timestamp GC if any accepted worker reports incomplete usage.
+Ordinary captures continue to write identity version 1.
 
 All intermediate controls have names `.mammoth-meta/<sequence>.json`, where sequence
 starts at 1 and increases by exactly 1, using decimal digits without leading zeros.

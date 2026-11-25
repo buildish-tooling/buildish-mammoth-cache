@@ -40,14 +40,21 @@ import { readModelStream } from './local-stream';
 import type { WorkingBudget } from './tree-state';
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#ci-invocation-anchor-and-cold-reopening.
-const anchorSchema = z.tuple([
-  z.literal('streaming-lifecycle'),
-  z.literal(2),
+const anchorFields = [
   nativePathSchema,
   nativeIdentitySchema.refine((n) => n[2] === 'directory'),
   contextSchema,
   nonceSchema,
   z.tuple([nativePathSchema, nativeIdentitySchema.refine((n) => n[2] === 'directory')]),
+] as const;
+const anchorSchema = z.union([
+  z.tuple([z.literal('streaming-lifecycle'), z.literal(2), ...anchorFields]),
+  z.tuple([
+    z.literal('streaming-lifecycle'),
+    z.literal(3),
+    ...anchorFields,
+    nativeIdentitySchema.refine((n) => n[2] === 'directory'),
+  ]),
 ]);
 export type InvocationAnchor = z.infer<typeof anchorSchema>;
 
@@ -75,12 +82,13 @@ export function invocationAnchor(
   }
   return anchorSchema.parse([
     'streaming-lifecycle',
-    2,
+    root.mountedBinding ? 3 : 2,
     root.path,
     root.binding,
     context,
     nonce,
     control,
+    ...(root.mountedBinding ? [root.mountedBinding] : []),
   ]);
 }
 export const encodeInvocationAnchor = (anchor: z.infer<typeof lifecycleAnchorSchema>): string =>
@@ -96,6 +104,23 @@ function verifyControlBinding(
   if (!actual || actual[0] !== expected[0] || !sameObject(actual[1], expected[1])) {
     throw new Error('External Mammoth control binding changed.');
   }
+}
+
+export async function bindInvocationRoot(anchor: InvocationAnchor): Promise<NativeRoot> {
+  const root = await NativeRoot.bind(
+    anchor[2],
+    undefined,
+    anchor[1] === 3 ? { original: anchor[3], mounted: anchor[7] } : undefined,
+  );
+  if (
+    root.path !== anchor[2] ||
+    !sameObject(root.binding, anchor[3]) ||
+    root.binding[6] !== anchor[3][6]
+  ) {
+    throw new Error('Lifecycle root binding changed.');
+  }
+  verifyControlBinding(anchor[6], root.externalMetadataBinding);
+  return root;
 }
 
 export class OpenedInvocation {
@@ -121,15 +146,7 @@ export class OpenedInvocation {
     signal = new AbortController().signal,
   ) {
     anchor = anchorSchema.parse(anchor);
-    const root = await NativeRoot.bind(anchor[2]);
-    if (
-      root.path !== anchor[2] ||
-      !sameObject(root.binding, anchor[3]) ||
-      root.binding[6] !== anchor[3][6]
-    ) {
-      throw new Error('Lifecycle root binding changed.');
-    }
-    verifyControlBinding(anchor[6], root.externalMetadataBinding);
+    const root = await bindInvocationRoot(anchor);
     const result = await OpenedInvocation.current(root, budget, signal);
     if (!result) {
       throw new Error('Prepare did not publish an invocation.');

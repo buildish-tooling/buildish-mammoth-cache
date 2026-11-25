@@ -154,6 +154,7 @@ export interface WorkerWriteWork {
 export interface WorkerWriter extends WorkerContext {
   readonly work?: WorkerWriteWork;
   readonly snapshots: readonly string[];
+  readonly incompleteUsage?: boolean;
   assertStable(signal: AbortSignal): Promise<void>;
 }
 
@@ -227,7 +228,7 @@ export async function writeWorkerArchive(
   try {
     signal.throwIfAborted();
     await withAbort(options.assertStable(signal), signal);
-    await control(state.identityTuple(options.snapshots));
+    await control(state.identityTuple(options.snapshots, options.incompleteUsage));
     iterator = events(signal)[Symbol.asyncIterator]();
     while (true) {
       pendingNext = true;

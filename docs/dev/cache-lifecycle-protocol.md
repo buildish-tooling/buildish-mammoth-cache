@@ -82,6 +82,7 @@ the target; header/context bytes cannot form an empty prefix batch.
 
 ```text
 ["streaming-lifecycle",2,absoluteRoot,rootN,context,nonce,[absoluteControlRoot,controlN]]
+["streaming-lifecycle",3,absoluteRoot,rootN,context,nonce,[absoluteControlRoot,controlN],mountedRootN]
 ["current",1,invocationId,".mammoth/v1/"+invocationId+"/state.json"]
 ["bindings",2,invocationId,context,nonce,[absoluteRoot,rootN],modelRef,familyProjection,policy]
 ["local-state",2,invocationId,revision,status,bindingsRef,handoffRef|null,terminal|null]
@@ -114,9 +115,9 @@ policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|nul
 ["handoff",4,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef]|null,
  actualActivityRef,originalBuildCutoff,selectedWorkerCount,gradleSeedDescriptor|null]
-["handoff",5,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+["handoff",6,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef],
- actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,gradleOverlayDescriptor]
+ actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,overlayDescriptor]
 ["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
 provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
@@ -157,16 +158,26 @@ marker takes the same cleanup-only post, even if interruption left only the
 advertisement marker or neither host marker and no generic prepare-failed flag. Private failures before
 advertisement can retire immediately.
 
-The version 5 handoff is for the Linux Gradle worker that owns dependency metadata.
-It binds `files-2.1` to the exact admitted artifact tree installed intact. The
-descriptor records the owned container, the original mountpoint and three backing
-directory identities, and the mount ID and namespace. Post checks the live mount
-options and backing paths, settles Gradle, and maps the physical upper entries
-to the original artifact paths for observation and worker packaging. Whiteouts
-stay local. After capture, post unmounts, returns the lower tree to its ordinary
-path, and retires the upper and work directories. Busy or uncertain mounts retain
-their backing state. The ordinary worker archive and aggregator path consume the
-same upserts and complete metadata snapshot.
+The version 6 handoff is for the Linux Gradle worker that owns dependency metadata.
+The build-tool-independent descriptor records the target relative to the managed
+home, the placeholder and backing directory identities, and the mount ID and
+namespace. An empty target means the managed home itself. Its version 3 invocation
+anchor carries the visible root identity alongside the original root and external
+control identities. Post verifies the original home in lower separately from the
+mounted view.
+
+Post verifies the live mount, settles Gradle and removes its hook before capture.
+The upper layer selects ordinary files and changed workspaces. Affected workspaces
+and the complete owned metadata snapshot use the merged view. Whiteouts stay local
+and affect the merged view of complete units. After capture, post unmounts,
+restores the lower home, and retires the upper and work directories. A busy or
+uncertain mount retains its backing state. The worker archive and aggregator
+continue to use the existing payload and snapshot channels.
+
+Upper-layer workers declare incomplete usage in their worker identity. After
+accepting all selected archives, aggregator prepare freezes timestamp GC as
+disabled if any of those identities reports incomplete usage. Restore cleanup
+and authoritative snapshot selection keep their existing policies.
 
 The header is followed by exactly one ordered row per model partition. All bounded
 controls are O(P), with P at most 64 and worker count at most 16. The exact generation

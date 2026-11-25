@@ -37,9 +37,11 @@ import type { IndexedMetadataInput } from './metadata-install-context';
 import type { OwnedStore } from './owned-store';
 import type { NativeOperationOptions } from './native-operation';
 
-const MODULES = 'caches/modules-2';
-export const GRADLE_ARTIFACTS = MODULES + '/files-2.1';
+export const GRADLE_MODULES = 'caches/modules-2';
+export const GRADLE_ARTIFACTS = GRADLE_MODULES + '/files-2.1';
+
 const METADATA = /^metadata-[^/]+$/u;
+
 export function gradleSeedSchema(invocation: string) {
   const prefix = cacheInvocationSeedPrefix(invocation);
   return z.tuple([
@@ -60,6 +62,7 @@ export function gradleSeedSchema(invocation: string) {
     z.literal('9.6.1').nullable(),
   ]);
 }
+
 export type GradleSeedDescriptor = z.infer<ReturnType<typeof gradleSeedSchema>>;
 
 export function gradleLayerCandidate(
@@ -161,17 +164,17 @@ export async function gradleDependencySources(
     (p) =>
       p[3] === 'single-writer' &&
       p[1].length === 1 &&
-      (p[1][0] === MODULES + '/metadata-*/**' ||
-        (p[1][0].startsWith(MODULES + '/') &&
+      (p[1][0] === GRADLE_MODULES + '/metadata-*/**' ||
+        (p[1][0].startsWith(GRADLE_MODULES + '/') &&
           p[1][0].endsWith('/**') &&
-          METADATA.test(p[1][0].slice(MODULES.length + 1, -3)))),
+          METADATA.test(p[1][0].slice(GRADLE_MODULES.length + 1, -3)))),
   );
   if (!artifact || !metadata) {
     return undefined;
   }
   const selected: Selection[] = [];
   for (const [partition, path] of [
-    [metadata, MODULES],
+    [metadata, GRADLE_MODULES],
     [artifact, GRADLE_ARTIFACTS],
   ] as const) {
     if (
@@ -215,7 +218,7 @@ export async function gradleDependencySources(
           return undefined;
         }
       }
-      const modules = await directories.directory(MODULES);
+      const modules = await directories.directory(GRADLE_MODULES);
       if (!modules || modules[6] !== 0 || nodeIsIntact(modules)) {
         return undefined;
       }
@@ -223,7 +226,7 @@ export async function gradleDependencySources(
       for await (const edge of indexedEntries(context.scratch, modules)) {
         if (
           edge[1] !== 'directory' ||
-          (path === MODULES ? !METADATA.test(edge[0]) : edge[0] !== 'files-2.1')
+          (path === GRADLE_MODULES ? !METADATA.test(edge[0]) : edge[0] !== 'files-2.1')
         ) {
           return undefined;
         }
@@ -232,7 +235,7 @@ export async function gradleDependencySources(
       if (!count || (path === GRADLE_ARTIFACTS && count !== 1)) {
         return undefined;
       }
-      const node = path === MODULES ? modules : await directories.directory(path);
+      const node = path === GRADLE_MODULES ? modules : await directories.directory(path);
       if (!node || node[6] !== 0 || nodeMask(node) !== partitionBit(model, partition[0])) {
         return undefined;
       }
@@ -326,7 +329,7 @@ export async function installGradleSeed(
           if (!after || !sameRename(before, after)) {
             throw new Error('Seed rename identity changed.');
           }
-          if (path === MODULES) {
+          if (path === GRADLE_MODULES) {
             targetFacts.set(to, after);
           }
           await source.changed(from);

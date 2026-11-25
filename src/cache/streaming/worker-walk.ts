@@ -32,6 +32,7 @@ import type { WorkerEvent } from './worker-codec';
 
 export interface WorkerSourceView {
   readonly survivors: GcSurvivorOwner;
+  readonly incompleteUsage?: boolean;
 }
 
 interface Frame {

@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-import { lstat } from 'node:fs/promises';
 import type { OwnedStore, Reference } from './owned-store';
 import { checkGradleSeed } from './gradle-layer';
 import type { LifecycleHandoff } from './lifecycle-handoff';
 import { equal } from './encoding';
-import { nativeIdentity } from './native';
 import { checkPostRootBinding } from './post-admission';
 import type { WorkingBudget } from './tree-state';
 import { resolveLifecycle } from '../../build-tool/lifecycle';
@@ -97,7 +95,7 @@ export class ExclusiveWindow {
       input.layeredWorker!.assertBound(store);
       const seed = input.layeredWorker!.header[12];
       if (!seed && !input.layeredWorker!.header[13]) {
-        throw new Error('Worker window requires a frozen Gradle layer owner.');
+        throw new Error('Worker window requires a frozen layer owner.');
       }
       if (seed) {
         checkGradleSeed(store, seed, input.layeredWorker!.header[8]?.[0] ?? null);
@@ -119,12 +117,8 @@ export class ExclusiveWindow {
       );
     store.codec.checkStateBindings(initial, bindings);
     const checkRoot = async () => {
-      store.root.work.stats++;
-      checkPostRootBinding(
-        store,
-        bindings,
-        nativeIdentity(await lstat(store.root.path, { bigint: true })),
-      );
+      await store.root.verifyRoot(true);
+      checkPostRootBinding(store, bindings);
     };
     await checkRoot();
     if (['prepare-pending', 'prepare-failed', 'completed'].includes(initial[4])) {

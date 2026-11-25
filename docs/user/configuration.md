@@ -120,9 +120,14 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Defaults to `true`. Accepts `true` or `false`.
 - Set `overlay-fs: false` in the action inputs or repository configuration to skip mount probing
   and use the ordinary cache path.
-- OverlayFS can currently accelerate a warm, writable Linux Gradle wrapper worker that owns the
-  dependency metadata snapshot. Mammoth overlays the `files-2.1` artifact directory and captures
-  artifact changes from its upper layer. Gradle writes its metadata at the usual path.
+- OverlayFS can accelerate a warm, writable Linux Gradle wrapper worker that owns the dependency
+  metadata snapshot. Mammoth mounts the job's Gradle user home and uses the upper layer to find
+  changes. It captures affected workspaces and the complete dependency metadata from the merged view.
+- Existing unmanaged files remain visible to the build. Post unmounts the home and discards the
+  build's local changes after cache capture. Use `overlay-fs: false` if you need those changes to
+  remain on disk after post. Workers that use `GRADLE_RO_DEP_CACHE` keep their existing cache path.
+- OverlayFS workers can miss reads of inherited files. An aggregator that accepts one of these
+  workers' artifacts skips timestamp GC for that invocation.
 - On GitHub-hosted Linux, Mammoth uses noninteractive `sudo` for mount operations. On other Linux
   runners, it uses the action process's existing permissions. If the mount is unavailable before
   activation, Mammoth uses ordinary restore and capture.
