@@ -407,9 +407,11 @@ it('qualifies warm writable Gradle layers on every native main-branch runner aft
     'macos-15',
   ]);
   const prepare = workers.steps.find((step) => step.id === 'prepare')!;
+  const seedPrepare = producer.steps.find((step) => step.id === 'prepare')!;
   expect(prepare.with!['job-mode']).toBe('distributed-worker');
   expect(prepare.with!['read-only']).toBe(false);
-  expect(prepare.with!['dependency-cache-layer']).toBe(true);
+  expect(prepare.with!['dependency-cache-layer']).toBeUndefined();
+  expect(seedPrepare.with!['dependency-cache-layer']).toBeUndefined();
   const check = workers.steps.findIndex((step) => step.run?.includes('fixture.mjs layer gradle'));
   const build = workers.steps.findIndex((step) => step.run?.includes('./gradlew --offline'));
   expect(check).toBeGreaterThan(workers.steps.indexOf(prepare));

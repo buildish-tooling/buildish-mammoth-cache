@@ -18,6 +18,8 @@ limitations under the License.
 
 ## Unreleased
 
+- Enable the Gradle dependency layer by default. Set `dependency-cache-layer: false` across
+  cooperating jobs to keep the ordinary cache family and its timestamp GC policy.
 - Let Gradle select among the metadata layouts in the read-only dependency seed, removing the
   exact Gradle 9.6.1 requirement.
 

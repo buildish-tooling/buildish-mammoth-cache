@@ -49,8 +49,8 @@ partition covers and why certain directories are excluded.
 The built-in `dependency-artifacts` partition covers the exact `modules-2/files-2.1` store.
 `dependency-metadata` separately covers every `caches/modules-2/metadata-*/**` version with
 single-writer publication. Other `modules-*` and `files-*` roots require explicit custom includes.
-Both dependency partitions default to `read-only-layer: true`; this marks eligibility and does
-not activate a layer. The Gradle-only `dependency-cache-layer` input opts into that behavior.
+Both dependency partitions default to `read-only-layer: true` to mark them as eligible. The
+Gradle-only `dependency-cache-layer` input controls the family's layering and retention policy.
 `module-support` remains writable.
 
 The retired `modules` preset is rejected with a migration diagnostic. Replace writer or other
@@ -336,7 +336,7 @@ Allow space for extraction, independent snapshots, archives and temporary metada
 See the [base cache design](../../architecture/base-cache/) and
 [troubleshooting](../troubleshooting/#interrupted-cache-operations).
 
-In the opt-in dependency-layer family, publishers retain aggregate partitions marked
+In the dependency-layer family, publishers retain aggregate partitions marked
 `read-only-layer: true` instead of applying timestamp GC, even when a particular worker cannot
 activate a seed. Single-writer metadata keeps its designated-writer snapshot semantics. There is
 no seed sweep or capacity eviction in this release; backend retention still applies.

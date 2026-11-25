@@ -21,6 +21,8 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
+import { normalizeGradleActionConfig } from '../../src/build-tool/gradle/config';
+import { normalizeMavenActionConfig } from '../../src/build-tool/maven/config';
 import { parseCachePartitionsInput } from '../../src/config/shared';
 import { readActionInputs, resolveActionInputsFromConfigFile } from '../../src/config/inputs';
 import { normalizeSharedActionConfig } from '../../src/config/normalize';
@@ -228,7 +230,7 @@ it.each([true, false])(
                   : String(descriptor.inputs[name]?.default ?? ''),
           });
           const resolved = await resolveActionInputsFromConfigFile('gradle', direct, { workspace });
-          const config = normalizeSharedActionConfig(resolved, {
+          const config = normalizeGradleActionConfig(resolved, {
             phase: 'prepare',
             ciContext: fixtureCi(workspace),
           });
@@ -247,16 +249,18 @@ it.each([true, false])(
   },
 );
 
-it('defaults the family layer policy off and validates explicit Action values', () => {
+it('defaults the layer on for Gradle and off for Maven, and validates explicit Gradle values', () => {
   const raw = readActionInputs('gradle', { getInput: () => '' });
   const options = { phase: 'prepare' as const, ciContext: fixtureCi('/cache') };
-  expect(normalizeSharedActionConfig(raw, options).dependencyCacheLayer).toBe(false);
+  expect(normalizeGradleActionConfig(raw, options).dependencyCacheLayer).toBe(true);
   expect(
-    normalizeSharedActionConfig({ ...raw, dependencyCacheLayer: 'true' }, options)
+    normalizeGradleActionConfig({ ...raw, dependencyCacheLayer: 'false' }, options)
       .dependencyCacheLayer,
-  ).toBe(true);
+  ).toBe(false);
+  const maven = readActionInputs('maven', { getInput: () => '' });
+  expect(normalizeMavenActionConfig(maven, options).dependencyCacheLayer).toBe(false);
   expect(() =>
-    normalizeSharedActionConfig({ ...raw, dependencyCacheLayer: 'yes' }, options),
+    normalizeGradleActionConfig({ ...raw, dependencyCacheLayer: 'yes' }, options),
   ).toThrow('dependency-cache-layer');
 });
 

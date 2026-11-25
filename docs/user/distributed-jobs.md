@@ -420,18 +420,19 @@ cache-partitions:
 
 ## Gradle dependency layer
 
-Set `dependency-cache-layer: true` on all cooperating Gradle jobs. A writable distributed worker
-can then consume an invocation-owned read-only dependency seed while keeping misses in its
-ordinary writable user home. Standalone and aggregator jobs publish the same retained family;
-they do not activate a seed. The designated dependency-metadata writer also uses an ordinary
-writable installation. This is an opt-in configuration of the existing Action, with no new launcher.
+The Gradle dependency layer is enabled by default. An eligible writable distributed worker can
+consume an invocation-owned read-only dependency seed while keeping misses in its writable user
+home. Standalone jobs and aggregators can publish to the same retained family. The designated
+dependency-metadata writer uses an ordinary writable installation.
+
+Keep the same setting across cooperating jobs. To use the ordinary cache family and timestamp GC
+policy, set `dependency-cache-layer: false` on every publisher and worker.
 
 ```yaml
 - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
   id: mammoth
   with:
     job-mode: distributed-worker
-    dependency-cache-layer: true
     wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
 - run: ./gradlew build
 ```
@@ -460,5 +461,5 @@ Inherited dependency bytes still download and extract once into the seed. They a
 capture and worker-delta upload; new dependencies use the writable head. Publishers retain marked
 aggregate dependency partitions instead of timestamp eviction in this family. This can grow backend
 storage; seed sweeps and capacity eviction are deferred. Metadata retains its complete snapshot and
-designated-writer semantics. The family and protocol transition starts cold, including ordinary
-Maven generations; Maven layering is not exposed.
+designated-writer semantics. Gradle workflows moving from the ordinary family start the layered
+family cold unless a previous opt-in has already populated it.

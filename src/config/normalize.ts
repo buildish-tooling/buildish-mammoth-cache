@@ -39,6 +39,7 @@ import {
 export function normalizeSharedActionConfig(
   rawInputs: RawSharedActionInputs,
   options: NormalizeActionConfigOptions,
+  dependencyCacheLayerDefault = 'false',
 ): NormalizedActionConfig {
   const jobMode = parseEnumInput(rawInputs.jobMode || 'standalone', JOB_MODES, 'job-mode');
   const dependentJobs = parseListInput(rawInputs.dependentJobs).map((jobName) =>
@@ -53,7 +54,7 @@ export function normalizeSharedActionConfig(
     baseDirectory: normalizeRelativePath(rawInputs.baseDirectory || '.', 'base-directory'),
     cacheEnabled: parseBooleanInput(rawInputs.cacheEnabled || 'true', 'cache-enabled'),
     dependencyCacheLayer: parseBooleanInput(
-      rawInputs.dependencyCacheLayer || 'false',
+      rawInputs.dependencyCacheLayer || dependencyCacheLayerDefault,
       'dependency-cache-layer',
     ),
     exportLayerEnvironment: parseBooleanInput(

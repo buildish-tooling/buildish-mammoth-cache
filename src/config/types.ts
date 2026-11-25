@@ -44,6 +44,7 @@ export type JobMode = (typeof JOB_MODES)[number];
 export const CACHE_SCHEMA_VERSION = 8;
 
 export const DEFAULT_MAX_DIRECTORY_ENTRIES = 100_000;
+export const DEFAULT_GRADLE_DEPENDENCY_CACHE_LAYER = 'true';
 
 /**
  * How wrapper property files should be selected after input normalization.

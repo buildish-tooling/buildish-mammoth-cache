@@ -26,6 +26,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+  DEFAULT_GRADLE_DEPENDENCY_CACHE_LAYER,
   type NormalizedGradleConfig,
   type RawGradleActionInputs,
   type WrapperSelectionMode,
@@ -79,7 +80,11 @@ export function normalizeGradleActionConfig(
   rawInputs: RawGradleActionInputs,
   options: NormalizeActionConfigOptions,
 ): NormalizedGradleConfig {
-  const sharedConfig = normalizeSharedActionConfig(rawInputs, options);
+  const sharedConfig = normalizeSharedActionConfig(
+    rawInputs,
+    options,
+    DEFAULT_GRADLE_DEPENDENCY_CACHE_LAYER,
+  );
   const processAllWrapperFiles = parseBooleanInput(
     rawInputs.processAllWrapperFiles || 'false',
     'process-all-wrapper-files',

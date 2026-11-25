@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { DEFAULT_MAX_DIRECTORY_ENTRIES } from './types';
+import { DEFAULT_GRADLE_DEPENDENCY_CACHE_LAYER, DEFAULT_MAX_DIRECTORY_ENTRIES } from './types';
 
 /** Build-tool action variants covered by the public contract. */
 export type ActionBuildTool = 'gradle' | 'maven';
@@ -124,7 +124,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'dependency-cache-layer',
     property: 'dependencyCacheLayer',
     tools: GRADLE,
-    runtimeDefault: 'false',
+    runtimeDefault: DEFAULT_GRADLE_DEPENDENCY_CACHE_LAYER,
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description:

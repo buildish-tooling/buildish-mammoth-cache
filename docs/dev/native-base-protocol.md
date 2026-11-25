@@ -39,8 +39,8 @@ control bytes; it makes no assertion about native payload contents.
 partition = [id,includes,ordinaryExcludes,publication,writer,conflict,readOnlyLayer,purgeableGlobs?]
 ```
 
-`familyPolicy` is canonically omitted for ordinary GC. Gradle's explicit
-`dependency-cache-layer` opt-in appends `"retain-dependencies"`. This shared policy
+`familyPolicy` is canonically omitted for ordinary GC. Gradle's enabled
+`dependency-cache-layer` policy appends `"retain-dependencies"`. This shared policy
 changes the model and family identities with identical partition definitions;
 partition seed eligibility alone never enables it. All cooperating jobs use the
 same policy, including standalone/default-ref publishers and workers that fall

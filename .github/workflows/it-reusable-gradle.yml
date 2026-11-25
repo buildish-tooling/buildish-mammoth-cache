@@ -960,7 +960,6 @@ jobs:
           base-directory: build/integration-fixtures/layer-seed
           job-mode: standalone
           read-only: false
-          dependency-cache-layer: true
           cache-partitions: ${{ env.LAYER_CACHE_PARTITIONS }}
           cache-key-prefix: it-gradle-layer-${{ github.run_id }}-a${{ github.run_attempt }}-
           github-event-name: ${{ inputs.caller-event-name }}
@@ -1034,7 +1033,6 @@ jobs:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
           read-only: false
-          dependency-cache-layer: true
           cache-partitions: ${{ env.LAYER_CACHE_PARTITIONS }}
           cache-key-prefix: it-gradle-layer-${{ github.run_id }}-a${{ needs.layer_seed.outputs.attempt }}-
           github-event-name: ${{ inputs.caller-event-name }}

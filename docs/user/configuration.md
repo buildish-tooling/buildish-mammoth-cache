@@ -42,7 +42,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `config-file`                           | Gradle, Maven | `event-dependent or unset`                    | no          | Optional workspace-relative JSON or YAML configuration file. Direct action inputs override file values; secrets and GitHub context inputs are direct-only.                   |
 | `base-directory`                        | Gradle, Maven | `.`                                           | yes         | Repository-relative project base directory. Rooted paths and paths that escape the workspace are rejected.                                                                   |
 | `cache-enabled`                         | Gradle, Maven | `true`                                        | yes         | Enables cache orchestration. Accepted values: true or false.                                                                                                                 |
-| `dependency-cache-layer`                | Gradle        | `false`                                       | yes         | Enables eligible Gradle wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value.  |
+| `dependency-cache-layer`                | Gradle        | `true`                                        | yes         | Enables eligible Gradle wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value.  |
 | `export-layer-environment`              | Gradle        | `true`                                        | yes         | Exports the activated Gradle dependency seed as GRADLE_RO_DEP_CACHE for later steps. False emits only the seed-path output; the workflow configures every consumer.          |
 | `read-only`                             | Gradle, Maven | `event-dependent or unset`                    | yes         | Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor. |
 | `job-mode`                              | Gradle, Maven | `standalone`                                  | yes         | Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.                                                                                          |
@@ -445,14 +445,17 @@ summary and finalize log report the exact key only after a successful publicatio
 
 ### `dependency-cache-layer`
 
-- Default: `false`.
+- Default: `true`.
 - Use the same value in every cooperating publisher and worker. It selects a distinct cache family
   whose publishers retain eligible dependency partitions, including when no seed activates.
+- Set `false` across cooperating jobs to use the ordinary Gradle cache family and its timestamp GC
+  policy. Upgrading an ordinary family to the new default starts the layered family cold unless
+  caches from a previous opt-in are available.
 - Activation requires a writable distributed worker, a selected wrapper, `restore-cleanup-mode: none`,
   no selected single-writer ownership, and both dependency partitions in the supported layout.
   Other cases use the full ordinary installation. Gradle chooses which restored metadata it can use.
-- Direct true/false values override config-file true/false values. With neither specified the
-  feature stays off; the Action metadata supplies no default that masks a file value.
+- Direct true/false values override config-file true/false values. The runtime applies the default
+  after merging inputs so a config-file opt-out takes effect.
 - See [Gradle dependency layer](../distributed-jobs/#gradle-dependency-layer) for the consumer contract.
 
 ### `export-layer-environment`
