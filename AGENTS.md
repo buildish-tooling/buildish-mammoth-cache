@@ -29,6 +29,12 @@ rules that should apply across code, tests, docs, and release work.
 - Prefer small, reviewable changes with matching tests or validation commands.
 - Do not revert user or maintainer changes unless explicitly asked.
 
+## Release Work
+
+- When asked to prepare a release, follow [Local release preparation](buildish-release-tooling/RELEASE-PROCESS.md#local-release-preparation).
+- When asked to import or update released documentation, follow [Manual post-release import](tools/versioned-docs/README.md#manual-post-release-import).
+- Leave release candidate creation and final release promotion to human maintainers.
+
 ## Code Style
 
 - Follow the language and formatter conventions already used in the touched

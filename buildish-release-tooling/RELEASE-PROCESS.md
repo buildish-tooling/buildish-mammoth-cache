@@ -345,6 +345,23 @@ All privileged consumers verify digests against the producer's retained values b
 using downloaded state/artifacts. Merely downloading an object and its checksum from
 the same mutable location does not establish the required producer binding.
 
+## Local release preparation
+
+For the requested final version `X.Y.Z`, prepare the source changes for review:
+
+1. Set `version` in `package.json` and both the top-level `version` and
+   `packages[""].version` in `package-lock.json` to `X.Y.Z`.
+2. Add `buildish-release-tooling/release-notes/X.Y.Z.md`. Use the preceding
+   version's notes for structure and describe the changes in this release.
+3. Check that the version fields agree, the note describes the intended release,
+   and the lockfile diff contains only the two version fields. Run
+   `make release-workflow-test` and review the local diff.
+
+Local preparation ends with reviewable source changes. Commit only when separately
+requested. Human maintainers cut release candidates and promote final releases.
+Import [versioned documentation](../tools/versioned-docs/README.md#manual-post-release-import)
+after successful final publication, using the exact final tag.
+
 ## Subsequent releases
 
 Repeat the chosen execution sequence with a new exact version and reviewed S; do not
