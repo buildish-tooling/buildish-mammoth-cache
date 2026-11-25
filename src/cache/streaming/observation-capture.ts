@@ -25,6 +25,7 @@ import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-
 import { type NativeIdentity } from './native';
 import { createCacheGlobMatcher } from '../glob';
 import { isCacheMetadataPath } from '../metadata-paths';
+import { isOverlayArtifact, isOverlayWhiteout } from './gradle-overlay';
 import { isMavenTransientFile } from '../maven-repository';
 import { workspaceKind } from '../immutable-workspaces';
 import { UnitMarkers } from './unit-markers';
@@ -364,6 +365,9 @@ async function capture(
             }
           : undefined,
       inspectChild: child,
+      ignoreEntry: options.attempt.handoff.header[13]
+        ? (path, raw) => isOverlayWhiteout(store, path, raw)
+        : undefined,
     },
     work,
   );
@@ -419,6 +423,7 @@ async function capture(
           localSnapshot = ownsLocalSnapshot(p, codec.options);
         const act: Activity =
           localSnapshot ||
+          (options.attempt.handoff.header[13] && isOverlayArtifact(e.path)) ||
           imported === 'upsert' ||
           BigInt(e.identity[8]) >= cutoff ||
           BigInt(e.identity[9]) >= cutoff

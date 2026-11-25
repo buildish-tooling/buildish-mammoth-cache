@@ -264,6 +264,37 @@ it('defaults the layer on for Gradle and off for Maven, and validates explicit G
   ).toThrow('dependency-cache-layer');
 });
 
+it.each(['gradle', 'maven'] as const)(
+  'defaults %s OverlayFS to enabled and honors file and direct opt-outs',
+  async (tool) => {
+    const options = { phase: 'prepare' as const, ciContext: fixtureCi('/cache') };
+    const empty = readActionInputs(tool, { getInput: () => '' });
+    expect(normalizeSharedActionConfig(empty, options).overlayFs).toBe(true);
+    expect(normalizeSharedActionConfig({ ...empty, overlayFs: 'false' }, options).overlayFs).toBe(
+      false,
+    );
+    expect(() => normalizeSharedActionConfig({ ...empty, overlayFs: 'yes' }, options)).toThrow(
+      'overlay-fs',
+    );
+
+    await withConfigFile('cache.yml', 'overlay-fs: false\n', async (workspace) => {
+      const file = await resolveActionInputsFromConfigFile(
+        tool,
+        { ...empty, configFile: 'cache.yml' },
+        { workspace },
+      );
+      expect(normalizeSharedActionConfig(file, options).overlayFs).toBe(false);
+
+      const direct = await resolveActionInputsFromConfigFile(
+        tool,
+        { ...empty, configFile: 'cache.yml', overlayFs: 'true' },
+        { workspace },
+      );
+      expect(normalizeSharedActionConfig(direct, options).overlayFs).toBe(true);
+    });
+  },
+);
+
 it.each(['gradle'] as const)(
   'resolves %s layer environment export defaults and explicit file/direct values',
   async (tool) => {

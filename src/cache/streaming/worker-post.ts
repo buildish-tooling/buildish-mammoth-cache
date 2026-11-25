@@ -16,6 +16,7 @@
 
 import { ExclusiveWindow } from './quiescence';
 import { retireGradleSeed, gradleSeedPath, validateGradleSeedOwner } from './gradle-layer';
+import { projectGradleOverlay, retireGradleOverlay, verifyGradleOverlay } from './gradle-overlay';
 import { timed } from '../../util/timing';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
 import type { LifecycleOptions } from './lifecycle-options';
@@ -50,10 +51,21 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     attempt = await PostAttempt.open(opened, request),
     store = attempt.store;
   let captured: ObservationIndex | undefined, owner: GcSurvivorOwner | undefined;
-  const seed = attempt.handoff.header[12];
+  const [, , , , , , , , , , , , seed, overlay] = attempt.handoff.header;
+  let clearProjection: (() => void) | undefined;
+  let overlayRetired = false;
+  let overlayRetirementStarted = false;
   let seedSettled = false,
     settledConsumers = false;
   const finish = async (terminal: Parameters<PostAttempt['finish']>[0]) => {
+    clearProjection?.();
+    clearProjection = undefined;
+    if (overlay) {
+      attempt.assert();
+      overlayRetirementStarted = true;
+      await retireGradleOverlay(store, overlay, request.overlayMount!);
+      overlayRetired = true;
+    }
     if (seed && !seedSettled) {
       attempt.assert();
       await retireGradleSeed(store, seed, request);
@@ -81,22 +93,36 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
           ? { outcome: 'abandoned' }
           : { outcome: 'worker-uploaded', name: terminal[4]! };
     } else {
-      if (seed) {
-        await validateGradleSeedOwner(store, seed);
+      if (seed || overlay) {
+        if (seed) {
+          await validateGradleSeedOwner(store, seed);
+        }
+        if (overlay) {
+          if (!request.overlayMount) {
+            throw new Error('OverlayFS mount driver unavailable in post.');
+          }
+          await verifyGradleOverlay(store, overlay, request.overlayMount);
+        }
         const gate = await ExclusiveWindow.establish(store, request.budget, {
           ...request,
           layeredWorker: attempt.handoff,
         });
         if (gate.status !== 'ready') {
           throw new Error(
-            'Gradle layer consumers could not settle; seed retained at ' +
-              gradleSeedPath(store, seed) +
+            'Gradle layer consumers could not settle; ' +
+              (seed
+                ? 'seed retained at ' + gradleSeedPath(store, seed)
+                : 'OverlayFS state retained at ' + store.root.resolve(overlay![2])) +
               ': ' +
               gate.message,
           );
         }
         attempt.attachWindow(gate.window);
         settledConsumers = true;
+        if (overlay) {
+          await verifyGradleOverlay(store, overlay, request.overlayMount!);
+          clearProjection = projectGradleOverlay(store, overlay);
+        }
       }
       const options = { ...request, signal: attempt.signal, attempt };
       await request.removeHooks?.();
@@ -210,10 +236,32 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
   }
   try {
     await timed(request, 'cleanup and retirement', () =>
-      settleNativeCleanup([() => owner?.dispose(), () => captured?.dispose()], failure),
+      settleNativeCleanup(
+        [
+          () => owner?.dispose(),
+          () => captured?.dispose(),
+          () => {
+            clearProjection?.();
+          },
+          async () => {
+            if (failure !== undefined && overlay && !overlayRetirementStarted && settledConsumers) {
+              attempt.assert();
+              await retireGradleOverlay(store, overlay, request.overlayMount!);
+              overlayRetired = true;
+            }
+          },
+        ],
+        failure,
+      ),
     );
   } finally {
-    attempt.close();
+    try {
+      if (failure !== undefined && overlay && !overlayRetired) {
+        request.onWarning?.('OverlayFS state retained at ' + store.root.resolve(overlay[2]));
+      }
+    } finally {
+      attempt.close();
+    }
   }
   if (failure !== undefined) {
     throw failure;
@@ -236,14 +284,15 @@ export async function postFailedPrepareGradleLayer(
   }
   const attempt = await PostAttempt.open(opened, input);
   const store = attempt.store,
-    seed = attempt.handoff.header[12];
+    seed = attempt.handoff.header[12],
+    overlay = attempt.handoff.header[13];
   try {
     if (
-      !seed ||
+      (!seed && !overlay) ||
       store.codec.options.role !== 'distributed-worker' ||
       store.codec.options.access !== 'writable'
     ) {
-      throw new Error('Failed-prepare layer cleanup requires the frozen writable worker seed.');
+      throw new Error('Failed-prepare layer cleanup requires the frozen writable worker layer.');
     }
     if (attempt.state[4] === 'completed') {
       if (attempt.state[7]?.[1] !== 'abandoned') {
@@ -251,7 +300,13 @@ export async function postFailedPrepareGradleLayer(
       }
       return;
     }
-    await validateGradleSeedOwner(store, seed);
+    if (seed) {
+      await validateGradleSeedOwner(store, seed);
+    } else if (overlay && input.overlayMount) {
+      await verifyGradleOverlay(store, overlay, input.overlayMount);
+    } else {
+      throw new Error('OverlayFS mount driver unavailable in post.');
+    }
     const gate = await ExclusiveWindow.establish(store, input.budget, {
       ...input,
       layeredWorker: attempt.handoff,
@@ -262,11 +317,17 @@ export async function postFailedPrepareGradleLayer(
     attempt.attachWindow(gate.window);
     await input.removeHooks();
     await attempt.guard();
-    await retireGradleSeed(store, seed, input);
+    if (seed) {
+      await retireGradleSeed(store, seed, input);
+    } else {
+      await retireGradleOverlay(store, overlay!, input.overlayMount!);
+    }
     await attempt.finish(['outcome', 'abandoned', null, null, null]);
   } catch (error) {
-    if (seed) {
-      const message = 'Failed-prepare Gradle seed retained at ' + gradleSeedPath(store, seed);
+    if (seed || overlay) {
+      const message = seed
+        ? 'Failed-prepare Gradle seed retained at ' + gradleSeedPath(store, seed)
+        : 'Failed-prepare OverlayFS state retained at ' + store.root.resolve(overlay![2]);
       const errors = [error];
       try {
         input.onWarning(message);

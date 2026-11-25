@@ -15,6 +15,7 @@
  */
 
 import { GradleBuildToolAdapter } from '../../../build-tool/gradle/adapter';
+import { linuxOverlayMount } from '../../../cache/streaming/overlay-mount';
 import {
   readGradleActionInputs,
   resolveGradleActionInputsFromConfigFile,
@@ -52,6 +53,9 @@ async function main(): Promise<void> {
     runtimeHost,
     ciProvider,
     config,
+    overlayMount: linuxOverlayMount(
+      process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.GITHUB_ACTIONS === 'true',
+    ),
     buildToolAdapterFactory: () => new GradleBuildToolAdapter(config),
   });
 }

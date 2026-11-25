@@ -72,6 +72,7 @@ export interface WalkOptions {
   readonly prune?: (path: string) => boolean;
   /** Synchronous protected-child inventory. Returning prune never follows that object. */
   readonly inspectChild?: (child: NativeChild) => 'prune' | void;
+  readonly ignoreEntry?: (path: string, raw: BigIntStats) => Promise<boolean>;
   readonly signal?: AbortSignal;
   /** Immediate parent held by a caller's checked ancestor scope. Rechecked at both boundaries. */
   readonly parentNative?: NativeIdentity;
@@ -163,6 +164,9 @@ export async function* walkNative(
     pruned = false,
   ): AsyncGenerator<WalkEvent> {
     const raw = await rawStat(nativePath);
+    if (expectedKind && options.ignoreEntry && (await options.ignoreEntry(path, raw))) {
+      return;
+    }
     if (expectedKind && options.inspectChild) {
       const release = options.budget.holdRecord(
         512 + Buffer.byteLength(path) + Buffer.byteLength(nativePath),

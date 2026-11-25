@@ -53,6 +53,7 @@ export function normalizeSharedActionConfig(
     phase: options.phase,
     baseDirectory: normalizeRelativePath(rawInputs.baseDirectory || '.', 'base-directory'),
     cacheEnabled: parseBooleanInput(rawInputs.cacheEnabled || 'true', 'cache-enabled'),
+    overlayFs: parseBooleanInput(rawInputs.overlayFs || 'true', 'overlay-fs'),
     dependencyCacheLayer: parseBooleanInput(
       rawInputs.dependencyCacheLayer || dependencyCacheLayerDefault,
       'dependency-cache-layer',

@@ -42,6 +42,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `config-file`                           | Gradle, Maven | `event-dependent or unset`                    | no          | Optional workspace-relative JSON or YAML configuration file. Direct action inputs override file values; secrets and GitHub context inputs are direct-only.                   |
 | `base-directory`                        | Gradle, Maven | `.`                                           | yes         | Repository-relative project base directory. Rooted paths and paths that escape the workspace are rejected.                                                                   |
 | `cache-enabled`                         | Gradle, Maven | `true`                                        | yes         | Enables cache orchestration. Accepted values: true or false.                                                                                                                 |
+| `overlay-fs`                            | Gradle, Maven | `true`                                        | yes         | Allows OverlayFS for eligible cache operations. Set to false to use the ordinary cache path.                                                                                 |
 | `dependency-cache-layer`                | Gradle        | `true`                                        | yes         | Enables eligible Gradle wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value.  |
 | `export-layer-environment`              | Gradle        | `true`                                        | yes         | Exports the activated Gradle dependency seed as GRADLE_RO_DEP_CACHE for later steps. False emits only the seed-path output; the workflow configures every consumer.          |
 | `read-only`                             | Gradle, Maven | `event-dependent or unset`                    | yes         | Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor. |
@@ -113,6 +114,20 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Default: `true`
 - Accepted values: `true`, `false`
 - Enables or disables cache orchestration.
+
+### `overlay-fs`
+
+- Defaults to `true`. Accepts `true` or `false`.
+- Set `overlay-fs: false` in the action inputs or repository configuration to skip mount probing
+  and use the ordinary cache path.
+- OverlayFS can currently accelerate a warm, writable Linux Gradle wrapper worker that owns the
+  dependency metadata snapshot. Mammoth overlays the `files-2.1` artifact directory and captures
+  artifact changes from its upper layer. Gradle writes its metadata at the usual path.
+- On GitHub-hosted Linux, Mammoth uses noninteractive `sudo` for mount operations. On other Linux
+  runners, it uses the action process's existing permissions. If the mount is unavailable before
+  activation, Mammoth uses ordinary restore and capture.
+- Mammoth requests the default `fsync=auto` behavior explicitly on Linux 7.0 and newer. Earlier
+  kernels use their default sync behavior.
 
 ### `read-only`
 

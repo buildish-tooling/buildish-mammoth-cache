@@ -173,12 +173,17 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       artifactBackend: d.artifactBackend,
       provision,
       existingGradleLayer: host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE'),
+      overlayFs: config.overlayFs,
       hasGradleWrapper: () => !!provisioning?.items.length,
       installHooks: async (store, lifecycle, layered) => {
         await lifecycle.prepareCapture(store, ci, () => adapter.installBuildHooks(ci), layered);
       },
     });
     layerPreparation = result;
+    if (result.gradleOverlay) {
+      host.saveState(STREAMING_LAYER_ADVERTISEMENT_STATE, result.store.codec.options.invocation);
+      host.info('Gradle files-2.1 OverlayFS is active.');
+    }
     for (const warning of provisioning?.warnings ?? []) {
       host.warning(warning);
     }
@@ -340,6 +345,15 @@ export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
         d.runtimeHost.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', path);
       }
       assertActivation();
+      d.runtimeHost.saveState(
+        STREAMING_LAYER_ACTIVATED_STATE,
+        result.store.codec.options.invocation,
+      );
+    } else if ('gradleOverlay' in result && result.gradleOverlay) {
+      d.signal?.throwIfAborted();
+      if (d.assertCurrent() !== undefined) {
+        throw new Error('OverlayFS activation lifetime assertion must be synchronous.');
+      }
       d.runtimeHost.saveState(
         STREAMING_LAYER_ACTIVATED_STATE,
         result.store.codec.options.invocation,

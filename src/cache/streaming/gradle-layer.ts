@@ -38,7 +38,7 @@ import type { OwnedStore } from './owned-store';
 import type { NativeOperationOptions } from './native-operation';
 
 const MODULES = 'caches/modules-2';
-const ARTIFACTS = MODULES + '/files-2.1';
+export const GRADLE_ARTIFACTS = MODULES + '/files-2.1';
 const METADATA = /^metadata-[^/]+$/u;
 export function gradleSeedSchema(invocation: string) {
   const prefix = cacheInvocationSeedPrefix(invocation);
@@ -140,7 +140,7 @@ export async function retireGradleSeed(
 type Selection = { input: IndexedMetadataInput; path: string; native: NativeIdentity };
 
 /** Check every layout/cohort before assigning any source or moving any byte. */
-async function select(
+export async function gradleDependencySources(
   store: OwnedStore,
   restored: MetadataBaseRestore,
 ): Promise<Selection[] | undefined> {
@@ -155,7 +155,7 @@ async function select(
     return undefined;
   }
   const artifact = eligible.find(
-    (p) => p[3] === 'aggregate' && p[1].length === 1 && p[1][0] === ARTIFACTS + '/**',
+    (p) => p[3] === 'aggregate' && p[1].length === 1 && p[1][0] === GRADLE_ARTIFACTS + '/**',
   );
   const metadata = eligible.find(
     (p) =>
@@ -172,7 +172,7 @@ async function select(
   const selected: Selection[] = [];
   for (const [partition, path] of [
     [metadata, MODULES],
-    [artifact, ARTIFACTS],
+    [artifact, GRADLE_ARTIFACTS],
   ] as const) {
     if (
       partition[5] !== 'default' ||
@@ -229,7 +229,7 @@ async function select(
         }
         count++;
       }
-      if (!count || (path === ARTIFACTS && count !== 1)) {
+      if (!count || (path === GRADLE_ARTIFACTS && count !== 1)) {
         return undefined;
       }
       const node = path === MODULES ? modules : await directories.directory(path);
@@ -249,7 +249,7 @@ export async function installGradleSeed(
   restored: MetadataBaseRestore,
   options: NativeOperationOptions,
 ): Promise<GradleSeedDescriptor | undefined> {
-  const selected = await select(store, restored);
+  const selected = await gradleDependencySources(store, restored);
   if (!selected) {
     return undefined;
   }

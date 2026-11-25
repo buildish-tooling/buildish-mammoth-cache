@@ -29,6 +29,9 @@ inputs:
     description: 'Enables cache orchestration. Accepted values: true or false.'
     required: false
     default: 'true'
+  overlay-fs:
+    description: Allows OverlayFS for eligible cache operations. Set to false to use the ordinary cache path.
+    required: false
   read-only:
     description: Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor.
     required: false

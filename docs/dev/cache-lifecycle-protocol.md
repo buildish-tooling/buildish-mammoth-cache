@@ -114,6 +114,9 @@ policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|nul
 ["handoff",4,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef]|null,
  actualActivityRef,originalBuildCutoff,selectedWorkerCount,gradleSeedDescriptor|null]
+["handoff",5,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+ cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef],
+ actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,gradleOverlayDescriptor]
 ["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
 provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
@@ -153,6 +156,17 @@ last synchronous lifetime assertion. A seed-bearing handoff without that exact
 marker takes the same cleanup-only post, even if interruption left only the
 advertisement marker or neither host marker and no generic prepare-failed flag. Private failures before
 advertisement can retire immediately.
+
+The version 5 handoff is for the Linux Gradle worker that owns dependency metadata.
+It binds `files-2.1` to the exact admitted artifact tree installed intact. The
+descriptor records the owned container, the original mountpoint and three backing
+directory identities, and the mount ID and namespace. Post checks the live mount
+options and backing paths, settles Gradle, and maps the physical upper entries
+to the original artifact paths for observation and worker packaging. Whiteouts
+stay local. After capture, post unmounts, returns the lower tree to its ordinary
+path, and retires the upper and work directories. Busy or uncertain mounts retain
+their backing state. The ordinary worker archive and aggregator path consume the
+same upserts and complete metadata snapshot.
 
 The header is followed by exactly one ordered row per model partition. All bounded
 controls are O(P), with P at most 64 and worker count at most 16. The exact generation

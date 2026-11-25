@@ -127,6 +127,8 @@ export interface RawSharedActionInputs {
   readonly baseDirectory: string;
   /** Raw `cache-enabled` input. Empty string later defaults to `'true'`. */
   readonly cacheEnabled: string;
+  /** Raw `overlay-fs` input. Empty string later defaults to `'true'`. */
+  readonly overlayFs: string;
   /** Gradle-only opt-in; absent on the Maven public input surface. */
   readonly dependencyCacheLayer?: string;
   readonly exportLayerEnvironment?: string;
@@ -218,6 +220,8 @@ export interface NormalizedActionConfig {
   readonly baseDirectory: string;
   /** Whether cache restore/save logic is enabled. Defaults to `true`. */
   readonly cacheEnabled: boolean;
+  /** Whether eligible cache operations may use OverlayFS. Defaults to `true`. */
+  readonly overlayFs: boolean;
   /** Shared publisher retention family policy; Gradle-only public opt-in. */
   readonly dependencyCacheLayer: boolean;
   readonly exportLayerEnvironment: boolean;

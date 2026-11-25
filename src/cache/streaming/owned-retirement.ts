@@ -41,9 +41,16 @@ export async function retireOwnedDirectory(
   const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
   const disposable =
     parts.length === 2 &&
-    ['planning', 'admission', 'mutation', 'worker', 'base', 'snapshots', 'seed'].includes(
-      parts[0],
-    ) &&
+    [
+      'planning',
+      'admission',
+      'mutation',
+      'worker',
+      'base',
+      'snapshots',
+      'seed',
+      'overlay',
+    ].includes(parts[0]) &&
     uuid.test(parts[1]);
   const parentLedger =
     parts.length === 3 && parts[0] === 'parents' && uuid.test(parts[1]) && parts[2] === 'ledger';
@@ -55,7 +62,15 @@ export async function retireOwnedDirectory(
   if (!disposable && !parentLedger && !retired) {
     throw new Error('Not a reserved disposable container.');
   }
-  return retireTree(store, relative, expected, budget, event);
+  return retireTree(
+    store,
+    relative,
+    expected,
+    budget,
+    event,
+    undefined,
+    disposable && parts[0] === 'overlay' ? relative : undefined,
+  );
 }
 async function retireTree(
   store: OwnedStore,
@@ -64,22 +79,26 @@ async function retireTree(
   budget: WorkingBudget,
   event: string,
   check: () => void = () => {},
+  overlayRoot?: string,
 ) {
   check();
   await store.root.parents(relative);
-  async function stat(path: string) {
+  async function rawStat(path: string) {
     check();
     store.root.work.stats++;
     const raw = await lstat(store.root.resolve(path), { bigint: true });
+    if (String(raw.dev) !== store.root.binding[3]) {
+      throw new Error('Cross-filesystem disposable member.');
+    }
+    return raw;
+  }
+  function identityOf(raw: Awaited<ReturnType<typeof rawStat>>) {
     if (!raw.isFile() && !raw.isDirectory()) {
       throw new Error('Unsupported disposable member; never following links.');
     }
-    const native = nativeIdentity(raw);
-    if (native[3] !== store.root.binding[3]) {
-      throw new Error('Cross-filesystem disposable member.');
-    }
-    return native;
+    return nativeIdentity(raw);
   }
+  const stat = async (path: string) => identityOf(await rawStat(path));
   async function visit(path: string, identity: NativeIdentity, depth: number) {
     if (depth > 199) {
       throw new Error('Owned retirement depth exceeded.');
@@ -105,13 +124,24 @@ async function retireTree(
           if (!sameNative(current, before, true)) {
             throw new Error('Disposable parent changed.');
           }
-          const child = path + '/' + entry.name,
-            native = await stat(child);
-          if (native[2] === 'directory') {
-            await visit(child, native, depth + 1);
+          const child = path + '/' + entry.name;
+          const raw = await rawStat(child);
+          if (raw.isDirectory()) {
+            await visit(child, identityOf(raw), depth + 1);
           } else {
-            const now = await stat(child);
-            if (!sameNative(native, now, true)) {
+            const now = await rawStat(child);
+            const same =
+              overlayRoot &&
+              (child.startsWith(overlayRoot + '/upper/') ||
+                child.startsWith(overlayRoot + '/work/work/')) &&
+              raw.isCharacterDevice() &&
+              raw.rdev === 0n
+                ? now.isCharacterDevice() &&
+                  now.rdev === 0n &&
+                  now.ino === raw.ino &&
+                  now.ctimeNs === raw.ctimeNs
+                : sameNative(identityOf(raw), identityOf(now), true);
+            if (!same) {
               throw new Error('Disposable file changed.');
             }
             check();

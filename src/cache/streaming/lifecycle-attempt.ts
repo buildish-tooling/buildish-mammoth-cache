@@ -133,7 +133,9 @@ export class PostAttempt {
     ExclusiveWindow.assertReceipt(window, this.store);
     if (
       this.#window ||
-      (this.store.codec.options.role === 'distributed-worker' && !this.handoff.header[12])
+      (this.store.codec.options.role === 'distributed-worker' &&
+        !this.handoff.header[12] &&
+        !this.handoff.header[13])
     ) {
       throw new Error('Unexpected exclusive post window.');
     }
@@ -148,7 +150,8 @@ export class PostAttempt {
       this.#captured ||
       this.store.codec.options.access !== 'writable' ||
       ((this.store.codec.options.role !== 'distributed-worker' ||
-        this.handoff.header[12] !== null) &&
+        this.handoff.header[12] !== null ||
+        this.handoff.header[13]) &&
         !this.#window)
     ) {
       throw new Error('Post capture has no current exclusive owner.');

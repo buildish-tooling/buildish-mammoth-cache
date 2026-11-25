@@ -96,10 +96,12 @@ export class ExclusiveWindow {
     if (store.codec.options.role === 'distributed-worker') {
       input.layeredWorker!.assertBound(store);
       const seed = input.layeredWorker!.header[12];
-      if (!seed) {
-        throw new Error('Worker window requires a frozen Gradle seed owner.');
+      if (!seed && !input.layeredWorker!.header[13]) {
+        throw new Error('Worker window requires a frozen Gradle layer owner.');
       }
-      checkGradleSeed(store, seed, input.layeredWorker!.header[8]?.[0] ?? null);
+      if (seed) {
+        checkGradleSeed(store, seed, input.layeredWorker!.header[8]?.[0] ?? null);
+      }
     }
     if (input.assertCurrent.constructor.name === 'AsyncFunction') {
       throw new Error('Exclusive-window assertion must be synchronous.');

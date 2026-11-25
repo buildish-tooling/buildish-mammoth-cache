@@ -14,12 +14,23 @@
  * limitations under the License.
  */
 
-import { test, expect } from 'vitest';
+import { retireGradleOverlay } from '../../src/cache/streaming/gradle-overlay';
+import { linuxOverlayMount } from '../../src/cache/streaming/overlay-mount';
+import { GRADLE_ARTIFACTS } from '../../src/cache/streaming/gradle-layer';
+import { test, expect, vi } from 'vitest';
+import * as nativeWalk from '../../src/cache/streaming/native-walk';
+import { runStreamingPost } from '../../src/phases/streaming/post';
+import { STREAMING_INVOCATION_STATE } from '../../src/phases/streaming/state';
+import {
+  JOB_PREPARE_FAILED_STATE,
+  JOB_SINGLE_RUN_OWNER_TOKEN_STATE,
+} from '../../src/guard/job-single-run';
+import { encodeInvocationAnchor } from '../../src/cache/streaming/invocation';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, writeFile, utimes } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, unlink, writeFile, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { metadataFixture } from '../cache/streaming/base-publication-fixtures';
@@ -69,7 +80,23 @@ async function digests(root: string): Promise<Record<string, string>> {
   return result;
 }
 
-test('Gradle resolves an old dependency only from its immutable seed, contributes a writable miss, and publishes a complete offline cache', async () => {
+const overlayModes: [boolean, number][] =
+  process.env.MAMMOTH_TEST_OVERLAY === '1'
+    ? [
+        [false, 4],
+        [true, 4],
+        [true, 64],
+      ]
+    : [[false, 4]];
+test.each(overlayModes)(
+  'Gradle publishes a complete offline cache with writer overlay-fs=%s and %s inherited units',
+  proveGradleLayerAndOverlay,
+  300000,
+);
+
+async function proveGradleLayerAndOverlay(useOverlay: boolean, width: number) {
+  const overlayMount = linuxOverlayMount();
+
   const executable = process.env.BUILDISH_TEST_GRADLE_EXECUTABLE;
   if (!executable) {
     throw new Error(
@@ -129,6 +156,7 @@ test('Gradle resolves an old dependency only from its immutable seed, contribute
     response.end(request.method === 'HEAD' ? undefined : body);
   });
   let completed = false;
+  let writerMount: Awaited<ReturnType<typeof f.prepare>> | undefined;
   const homes = new Set<string>();
   try {
     const version = await exec(executable, ['--version'], {
@@ -229,6 +257,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     }
     async function workerPost(ready: Awaited<ReturnType<typeof prepare>>) {
       return postStreamingWorker({
+        overlayMount,
         anchor: ready.anchor,
         budget: f.budget,
         lifecycle,
@@ -245,6 +274,14 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
       fresh = artifactPath('miss', newBody);
     const aged = new Date(Date.now() - 30 * 86400000);
     await utimes(producer.store.root.resolve(old), aged, aged);
+    const inherited = (i: number) =>
+      GRADLE_ARTIFACTS + '/fixture/retained-' + i + '/1/hash/artifact.jar';
+    for (let i = 0; i < width; i++) {
+      const member = producer.store.root.resolve(inherited(i));
+      await mkdir(path.dirname(member), { recursive: true });
+      await writeFile(member, 'inherited fixture ' + i);
+      await utimes(member, aged, aged);
+    }
     const initial = await basePost(producer);
     expect(initial.outcome).toBe('published');
     const worker = await prepare('worker', 'distributed-worker');
@@ -268,11 +305,76 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     expect(raw.includes(oldBody)).toBe(false);
     expect(raw.includes(newBody)).toBe(true);
     expect(await worker.store.root.stat(worker.gradleSeed![2])).toBeNull();
-    const writer = await prepare('writer', 'distributed-worker');
+    const writer = await prepare('writer', 'distributed-worker', {
+      overlayFs: useOverlay,
+      overlayMount,
+    });
+    writerMount = writer;
+    const mountedPath = path.join(writer.store.root.path, GRADLE_ARTIFACTS);
+    expect(!!writer.gradleOverlay).toBe(useOverlay);
+    expect(!!(await overlayMount?.inspect(mountedPath))).toBe(useOverlay);
+
     expect(writer.gradleSeed).toBeNull();
     expect(await readFile(writer.store.root.resolve(old))).toEqual(oldBody);
+    await build(writer.store.root.path, 'resolveSeed', '', true);
     await build(writer.store.root.path, 'resolveMiss');
-    expect((await workerPost(writer)).outcome).toBe('worker-uploaded');
+    if (useOverlay) {
+      await unlink(writer.store.root.resolve(inherited(0)));
+      const opaque = path.dirname(inherited(1));
+      await rm(writer.store.root.resolve(opaque), { recursive: true });
+      await mkdir(writer.store.root.resolve(opaque));
+      await writeFile(writer.store.root.resolve(opaque + '/replacement.jar'), 'opaque replacement');
+      await (await open(writer.store.root.resolve(inherited(2)), 'r+')).close();
+      const empty = path.dirname(inherited(3)) + '/empty.jar';
+      await writeFile(writer.store.root.resolve(empty), '');
+
+      if (width === 4) {
+        await expect(
+          retireGradleOverlay(writer.store, writer.gradleOverlay!, {
+            ...overlayMount!,
+            unmount: async () => {
+              throw new Error('mount is busy');
+            },
+          }),
+        ).rejects.toThrow('mount is busy');
+        expect(await overlayMount!.inspect(mountedPath)).not.toBeNull();
+        expect(await writer.store.root.stat(writer.gradleOverlay![2])).not.toBeNull();
+      }
+      const visited: string[] = [];
+      const walk = nativeWalk.walkNative;
+      const observation = vi.spyOn(nativeWalk, 'walkNative').mockImplementation(async function* (
+        ...args
+      ) {
+        for await (const event of walk(...args)) {
+          if (
+            args[0].path === writer.store.root.path &&
+            event.tag === 'file' &&
+            event.path.startsWith(GRADLE_ARTIFACTS + '/')
+          ) {
+            visited.push(event.path);
+          }
+          yield event;
+        }
+      });
+      try {
+        expect((await workerPost(writer)).outcome).toBe('worker-uploaded');
+      } finally {
+        observation.mockRestore();
+      }
+      expect(visited.filter((member) => member.endsWith('/miss-1.0.pom'))).toHaveLength(1);
+      expect(visited.filter((member) => member.endsWith('.jar')).sort()).toEqual(
+        [fresh, opaque + '/replacement.jar', inherited(2), empty].sort(),
+      );
+      expect(visited).toHaveLength(5);
+    } else {
+      expect((await workerPost(writer)).outcome).toBe('worker-uploaded');
+    }
+    expect((await overlayMount?.inspect(mountedPath)) ?? null).toBeNull();
+    if (useOverlay) {
+      const writerArchive = gunzipSync([...artifacts.objects.values()][1].bytes);
+      expect(writerArchive.includes(oldBody)).toBe(false);
+      expect(writerArchive.includes(newBody)).toBe(true);
+    }
     const aggregator = await prepare('aggregator', 'distributed-aggregator', {
       now: () => Date.now() + 10000,
     });
@@ -280,6 +382,12 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     const published = await basePost(aggregator);
     expect(published.outcome).toBe('published');
     expect(await readFile(aggregator.store.root.resolve(old))).toEqual(oldBody);
+    expect(await readFile(aggregator.store.root.resolve(inherited(0)), 'utf8')).toBe(
+      'inherited fixture 0',
+    );
+    expect(await readFile(aggregator.store.root.resolve(inherited(1)), 'utf8')).toBe(
+      'inherited fixture 1',
+    );
     const consumer = await prepare('consumer', 'standalone', {
       policy: { ...f.request.policy, role: 'standalone', access: 'read-only' },
     });
@@ -289,6 +397,53 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
       budget: f.budget,
       assertCurrent: (): undefined => {},
     });
+    if (useOverlay && width === 4) {
+      // Simulate failure of the first host advertisement write after successful core prepare.
+      const failed = await prepare('writer', 'distributed-worker', {
+        root: f.directory + '/failed-writer',
+        overlayFs: true,
+        overlayMount,
+      });
+      writerMount = failed;
+      expect(failed.gradleOverlay).not.toBeNull();
+      const state = new Map([
+        [JOB_PREPARE_FAILED_STATE, 'true'],
+        [JOB_SINGLE_RUN_OWNER_TOKEN_STATE, 'fixture-owner'],
+        [STREAMING_INVOCATION_STATE, encodeInvocationAnchor(failed.anchor)],
+      ]);
+      await expect(
+        runStreamingPost({
+          overlayMount,
+          lifecycle,
+          budget: f.budget,
+          assertCurrent: (): undefined => {},
+          runtimeHost: {
+            getState: (name) => state.get(name) ?? '',
+            saveState: (name, value) => {
+              state.set(name, value);
+            },
+            info: () => {},
+            warning: () => {},
+          },
+          cacheBackend: async () => {
+            throw new Error('unexpected cache backend');
+          },
+          artifactBackend: async () => {
+            throw new Error('unexpected artifact backend');
+          },
+          loadReport: async () => {
+            throw new Error('unexpected report');
+          },
+          removeHooks: async (root) => {
+            await cleanupGradleBuildResultCapture(root);
+            return [];
+          },
+        }),
+      ).resolves.toEqual({ outcome: 'skipped' });
+      expect(
+        await overlayMount!.inspect(path.join(failed.store.root.path, GRADLE_ARTIFACTS)),
+      ).toBeNull();
+    }
     completed = true;
   } finally {
     if (!completed) {
@@ -304,6 +459,13 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
         }
       }
     }
+    if (
+      overlayMount &&
+      writerMount?.gradleOverlay &&
+      (await overlayMount.inspect(path.join(writerMount.store.root.path, GRADLE_ARTIFACTS)))
+    ) {
+      await retireGradleOverlay(writerMount.store, writerMount.gradleOverlay, overlayMount);
+    }
     server.closeAllConnections();
     if (server.listening) {
       await new Promise<void>((resolve, reject) =>
@@ -314,4 +476,4 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     await f.close();
     expect(retained).toBe(0);
   }
-}, 300000);
+}

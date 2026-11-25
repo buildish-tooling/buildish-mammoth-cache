@@ -23,6 +23,7 @@ import {
   type Policy,
 } from './local-schema';
 import { gradleSeedSchema, checkGradleSeed } from './gradle-layer';
+import { gradleOverlayCandidate, overlaySchema } from './gradle-overlay';
 import { nameSchema, positiveSchema, uintSchema } from './schema';
 import { objectRefSchema, keySchema } from './native-records';
 import { pinnedPartitionMetadataSchema, decodePinnedPartitionMetadata } from './partition-metadata';
@@ -60,21 +61,23 @@ export function handoffSchemas(codec: LocalCodec) {
       origin,
     ])
     .refine((row) => row[2][2] === 'directory' && row[3][2] === 'directory');
+  const headerFields = [
+    nameSchema,
+    nameSchema.nullable(),
+    nameSchema.nullable(),
+    positiveSchema,
+    z.enum(['enabled', 'disabled']),
+    positiveSchema.nullable(),
+    z.tuple([keySchema, ref('generation')]).nullable(),
+    ref('activity'),
+    uintSchema,
+    uintSchema.max(16),
+    gradleSeedSchema(invocation).nullable(),
+  ] as const;
   const header = z
-    .tuple([
-      z.literal('handoff'),
-      z.literal(4),
-      nameSchema,
-      nameSchema.nullable(),
-      nameSchema.nullable(),
-      positiveSchema,
-      z.enum(['enabled', 'disabled']),
-      positiveSchema.nullable(),
-      z.tuple([keySchema, ref('generation')]).nullable(),
-      ref('activity'),
-      uintSchema,
-      uintSchema.max(16),
-      gradleSeedSchema(invocation).nullable(),
+    .union([
+      z.tuple([z.literal('handoff'), z.literal(4), ...headerFields]),
+      z.tuple([z.literal('handoff'), z.literal(5), ...headerFields, overlaySchema(invocation)]),
     ])
     .refine((row) => row[2] !== row[3]);
   const entry = z
@@ -248,6 +251,12 @@ export function checkHandoffGeneration(
   generation: MetadataGeneration | null,
   policy: Policy,
 ): void {
+  if (
+    header[13] &&
+    (header[12] || !generation || policy[4] !== 'none' || !gradleOverlayCandidate(store))
+  ) {
+    throw new Error('Invalid Gradle OverlayFS handoff.');
+  }
   if (header[12]) {
     checkGradleSeed(store, header[12], generation?.[11] ?? null);
     if (policy[4] !== 'none') {

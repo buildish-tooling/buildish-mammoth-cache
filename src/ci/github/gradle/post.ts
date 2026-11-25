@@ -17,11 +17,15 @@
 import { createGitHubHost } from '../host';
 import { gitHubStreamingFactories } from '../streaming';
 import { runStreamingPost } from '../../../phases/streaming/post';
+import { linuxOverlayMount } from '../../../cache/streaming/overlay-mount';
 
 const runtimeHost = createGitHubHost();
 runStreamingPost({
   ...gitHubStreamingFactories(),
   runtimeHost,
+  overlayMount: linuxOverlayMount(
+    process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.GITHUB_ACTIONS === 'true',
+  ),
   // Dedicated job root/completed consumers; recovery retains its own cleanup lifetime.
   assertCurrent: (): undefined => {},
 }).catch((error: unknown) => {

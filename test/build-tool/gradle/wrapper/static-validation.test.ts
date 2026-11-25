@@ -360,6 +360,7 @@ function createConfig(overrides: Partial<NormalizedGradleConfig> = {}): Normaliz
     phase: 'prepare',
     baseDirectory: '.',
     cacheEnabled: true,
+    overlayFs: true,
     dependencyCacheLayer: false,
     exportLayerEnvironment: true,
     readOnly: false,

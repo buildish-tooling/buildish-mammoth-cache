@@ -58,6 +58,13 @@ import {
 import { retireInstallStaging } from './owned-retirement';
 import { settleNativeCleanup } from './native-operation';
 import { assertEmptyManagedArea } from './prepare-admission';
+import {
+  activateGradleOverlay,
+  gradleOverlayCandidate,
+  overlaySource,
+  retireGradleOverlay,
+  type GradleOverlay,
+} from './gradle-overlay';
 import type { BaseCacheBackend } from '../backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
@@ -86,6 +93,7 @@ export interface StreamingPrepareRequest extends LifecycleOptions {
   readonly provision: () => Promise<void>;
   readonly hasGradleWrapper?: () => boolean;
   readonly existingGradleLayer?: string;
+  readonly overlayFs?: boolean;
   readonly installHooks: (
     store: OwnedStore,
     lifecycle: BuildToolLifecycle,
@@ -111,6 +119,7 @@ export interface StreamingPrepareResult {
   readonly restoredKey: string | null;
   readonly workerCount: number;
   readonly gradleSeed: GradleSeedDescriptor | null;
+  readonly gradleOverlay: GradleOverlay | null;
 }
 
 const rows = async function* (values: readonly Value[]) {
@@ -233,6 +242,7 @@ export async function prepareStreaming(
   ]);
   await store.initialize(bindings);
   let seed: GradleSeedDescriptor | undefined;
+  let overlay: GradleOverlay | undefined;
   let restored: MetadataBaseRestore | undefined,
     merged: WorkerMergeResult | undefined,
     accepted: AcceptedWorkerMerge | undefined;
@@ -282,6 +292,15 @@ export async function prepareStreaming(
     ) {
       seed = await installGradleSeed(store, restored, options);
     }
+    const overlayTree =
+      request.overlayFs &&
+      request.overlayMount &&
+      !request.existingGradleLayer &&
+      request.policy.restoreCleanup === 'none' &&
+      request.hasGradleWrapper?.() &&
+      gradleOverlayCandidate(store)
+        ? await overlaySource(store, restored, request.overlayMount)
+        : undefined;
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
@@ -419,14 +438,17 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
-    await request.installHooks(store, lifecycle, seed !== undefined);
+    if (overlayTree) {
+      overlay = await activateGradleOverlay(store, overlayTree, request.overlayMount!);
+    }
+    await request.installHooks(store, lifecycle, !!(seed || overlay));
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
     bindings = docs.bindings.parse(bindings);
     bindings[8][7] = cutoff;
     const header: HandoffHeader = handoffSchemas(codec).header.parse([
       'handoff',
-      4,
+      overlay ? 5 : 4,
       request.currentRef,
       request.defaultRef ?? null,
       request.captureTempDirectory,
@@ -438,6 +460,7 @@ export async function prepareStreaming(
       cutoff,
       downloads.length,
       seed ?? null,
+      ...(overlay ? [overlay] : []),
     ]);
     checkHandoffGeneration(store, header, restored.entries, restored.generation, bindings[8]);
     const handoff = await timed(options, 'handoff creation', () =>
@@ -497,6 +520,7 @@ export async function prepareStreaming(
       restoredKey: key,
       workerCount: downloads.length,
       gradleSeed: seed ?? null,
+      gradleOverlay: overlay ?? null,
     };
   } catch (error) {
     failure = error;
@@ -520,6 +544,16 @@ export async function prepareStreaming(
     failure = error;
   }
   if (failure !== undefined) {
+    if (overlay) {
+      try {
+        await retireGradleOverlay(store, overlay, request.overlayMount!);
+      } catch (cleanup) {
+        failure = new AggregateError(
+          [failure, cleanup],
+          'Private OverlayFS state retained at ' + store.root.resolve(overlay[2]),
+        );
+      }
+    }
     if (seed) {
       try {
         await retireGradleSeed(store, seed, options);

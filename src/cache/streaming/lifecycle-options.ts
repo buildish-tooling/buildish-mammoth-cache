@@ -16,9 +16,11 @@
 
 import type { LifecycleResolver } from '../../build-tool/lifecycle-types';
 import type { NativeOperationOptions } from './native-operation';
+import type { OverlayMountDriver } from './overlay-mount';
 
 export interface LifecycleOptions extends NativeOperationOptions {
   readonly assertCurrent: () => undefined;
   readonly cleanupSignal?: AbortSignal;
   readonly lifecycle?: LifecycleResolver;
+  readonly overlayMount?: OverlayMountDriver;
 }

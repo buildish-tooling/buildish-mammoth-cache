@@ -24,6 +24,7 @@ export type RawActionInputProperty =
   | 'configFile'
   | 'baseDirectory'
   | 'cacheEnabled'
+  | 'overlayFs'
   | 'dependencyCacheLayer'
   | 'exportLayerEnvironment'
   | 'readOnly'
@@ -119,6 +120,16 @@ export const PUBLIC_ACTION_INPUTS = [
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description: 'Enables cache orchestration. Accepted values: true or false.',
+  },
+  {
+    name: 'overlay-fs',
+    property: 'overlayFs',
+    tools: BOTH,
+    runtimeDefault: 'true',
+    configFile: 'allowed',
+    configFileValueKind: 'boolean',
+    description:
+      'Allows OverlayFS for eligible cache operations. Set to false to use the ordinary cache path.',
   },
   {
     name: 'dependency-cache-layer',

@@ -186,6 +186,7 @@ function nativeRelative(relative: string): string {
 }
 export class NativeRoot {
   private metadataIdentity: NativeIdentity | null = null;
+  private projection: { logical: string; physical: string } | undefined;
 
   private constructor(
     readonly path: string,
@@ -265,11 +266,32 @@ export class NativeRoot {
 
   resolve(relative: string): string {
     nativeRelative(relative);
+    const projection = this.projection;
+    if (projection) {
+      if (relative === projection.logical) {
+        return projection.physical;
+      }
+      if (relative.startsWith(projection.logical + '/')) {
+        return nodePath.join(projection.physical, relative.slice(projection.logical.length + 1));
+      }
+    }
     const parts = relative.split('/');
     if (parts[0] === CACHE_METADATA_DIRECTORY) {
       return nodePath.join(this.metadataDirectory, ...parts.slice(1));
     }
     return nodePath.join(this.path, ...parts);
+  }
+
+  /** Redirect one logical subtree for the original, quiescent capture and replay. */
+  project(logical: string, ownedSource: string): () => void {
+    if (this.projection || !ownedSource.startsWith(CACHE_METADATA_DIRECTORY + '/')) {
+      throw new Error('Invalid projected observation source.');
+    }
+    nativeRelative(logical);
+    this.projection = { logical, physical: this.resolve(ownedSource) };
+    return () => {
+      this.projection = undefined;
+    };
   }
 
   async verifyRoot(): Promise<void> {

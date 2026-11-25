@@ -83,7 +83,27 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
       if (raw) {
         const anchor = decodeInvocationAnchor(raw);
         if (anchor[0] === 'streaming-lifecycle') {
-          const advertisedInvocation = host.getState(STREAMING_LAYER_ADVERTISEMENT_STATE);
+          let advertisedInvocation = host.getState(STREAMING_LAYER_ADVERTISEMENT_STATE);
+          if (!advertisedInvocation && d.overlayMount) {
+            // The mount can already be visible when the first host state write fails.
+            const budget = d.budget ?? new WorkingBudget();
+            const current = await OpenedInvocation.current(anchor[2], budget, d.cleanupSignal);
+            if (current?.state[4] === 'build-ready') {
+              const opened = await OpenedInvocation.open(anchor, budget, d.cleanupSignal);
+              const handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, {
+                budget,
+                signal: d.cleanupSignal,
+                maxDirectoryEntries: opened.bindings[8][9],
+              });
+              try {
+                if (handoff.header[13]) {
+                  advertisedInvocation = opened.store.codec.options.invocation;
+                }
+              } finally {
+                handoff.close();
+              }
+            }
+          }
           if (advertisedInvocation) {
             await postFailedPrepareGradleLayer({
               ...d,
@@ -142,7 +162,7 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
   // Build-ready precedes host advertisement. Absence of terminal activation is cleanup-only,
   // including abrupt interruptions that could not save the generic prepare-failed flag.
   if (
-    facts.header[12] &&
+    (facts.header[12] || facts.header[13]) &&
     host.getState(STREAMING_LAYER_ACTIVATED_STATE) !== opened.store.codec.options.invocation
   ) {
     facts.close();
