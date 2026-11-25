@@ -17,6 +17,7 @@
 import { mkdtemp, mkdir, writeFile, readFile, rename, rm, symlink, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+import { isCacheMetadataPath } from '../../../src/cache/metadata-paths';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import {
   NativeRoot,
@@ -51,6 +52,18 @@ async function collect(source: AsyncIterable<Uint8Array>): Promise<Buffer> {
   }
   return Buffer.concat(chunks);
 }
+it('reserves metadata path components independently of exact local path spelling', async () => {
+  const { store } = await fixture();
+  expect(store.root.resolve('.mammoth/v1/current.json')).toBe(
+    path.join(store.root.path, '.mammoth', 'v1', 'current.json'),
+  );
+  for (const reserved of ['.mammoth', 'nested/.MAMMOTH./file', '.mammoth /file']) {
+    expect(isCacheMetadataPath(reserved)).toBe(true);
+  }
+  for (const allowed of ['.mammoth-meta/file', 'mammoth/file', '.mammothExtra/file']) {
+    expect(isCacheMetadataPath(allowed)).toBe(false);
+  }
+});
 it('captures bigint native identities and distinguishes locator identity from mutable directory facts', async () => {
   const f = await fixture(),
     before = f.store.root.binding;

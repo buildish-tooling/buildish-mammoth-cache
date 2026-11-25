@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { Context } from './schema';
 import { NativeRoot } from './native';
 import { assertNoRootIntents, completedPreviousOwner } from './owned-store';
 import { lstat } from 'node:fs/promises';
@@ -42,7 +43,11 @@ export async function postStreamingReadOnly(anchor: InvocationAnchor, options: L
   }
 }
 /** Disabling a cache cannot hide an old destructive owner before provisioning. */
-export async function reconcileDisabledRoot(root: string, options: LifecycleOptions) {
+export async function reconcileDisabledRoot(
+  root: string,
+  options: LifecycleOptions,
+  buildTool?: Context[7],
+) {
   options.cleanupSignal?.throwIfAborted();
   let present = true;
   try {
@@ -54,7 +59,7 @@ export async function reconcileDisabledRoot(root: string, options: LifecycleOpti
     present = false;
   }
   if (present) {
-    const native = await NativeRoot.bind(root);
+    const native = await NativeRoot.bind(root, undefined, buildTool);
     await completedPreviousOwner(native);
     await assertNoRootIntents(native);
   }

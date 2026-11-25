@@ -14,7 +14,43 @@
  * limitations under the License.
  */
 
+import path from 'node:path';
+
 export const CACHE_METADATA_DIRECTORY = '.mammoth';
+export const CACHE_METADATA_VERSION_DIRECTORY = `${CACHE_METADATA_DIRECTORY}/v1`;
+export const CACHE_METADATA_LOCATOR_NAME = 'current.json';
+export const CACHE_METADATA_LOCATOR = `${CACHE_METADATA_VERSION_DIRECTORY}/${CACHE_METADATA_LOCATOR_NAME}`;
+
+export function cacheInvocationPrefix(invocation: string): string {
+  return `${CACHE_METADATA_VERSION_DIRECTORY}/${invocation}/`;
+}
+
+export function cacheInvocationStatePath(invocation: string): string {
+  return `${cacheInvocationPrefix(invocation)}state.json`;
+}
+
+export function cacheInvocationSeedPrefix(invocation: string): string {
+  return `${cacheInvocationPrefix(invocation)}seed/`;
+}
+
+export function cacheInvocationSnapshotPrefix(invocation: string): string {
+  return `${cacheInvocationPrefix(invocation)}snapshots/`;
+}
+
+export function cacheMetadataDirectory({
+  managedRoot,
+}: {
+  managedRoot: string;
+  buildTool: 'gradle' | 'maven' | undefined;
+}): string {
+  return path.join(managedRoot, CACHE_METADATA_DIRECTORY);
+}
+
+const reservedComponent = new RegExp(
+  `^${CACHE_METADATA_DIRECTORY.replace('.', '\\.')}(?:[ .]|$)`,
+  'iu',
+);
+
 export function isCacheMetadataPath(relativePath: string): boolean {
-  return relativePath.split('/').some((part) => /^\.mammoth(?:[ .]|$)/iu.test(part));
+  return relativePath.split('/').some((part) => reservedComponent.test(part));
 }

@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+import { CACHE_METADATA_DIRECTORY, cacheMetadataDirectory } from '../metadata-paths';
 import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, realpath, rename, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import type { z } from 'zod';
 import type { nativeIdentitySchema } from './local-schema';
-import { relativePathSchema } from './schema';
+import { relativePathSchema, type Context } from './schema';
 import { add } from './encoding';
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#native-identity-and-evidence
@@ -188,21 +189,35 @@ export class NativeRoot {
     readonly path: string,
     readonly binding: NativeIdentity,
     readonly work: NativeWork,
+    private readonly metadataDirectory: string,
   ) {}
 
-  static async bind(root: string, work = nativeWork()): Promise<NativeRoot> {
+  static async bind(
+    root: string,
+    work = nativeWork(),
+    buildTool?: Context[7],
+  ): Promise<NativeRoot> {
     const canonical = await realpath(root),
       stat = nativeIdentity(await lstat(canonical, { bigint: true }));
     work.stats++;
     if (stat[2] !== 'directory') {
       throw new Error('Managed root is not a directory.');
     }
-    return new NativeRoot(canonical, stat, work);
+    return new NativeRoot(
+      canonical,
+      stat,
+      work,
+      cacheMetadataDirectory({ managedRoot: canonical, buildTool }),
+    );
   }
 
   resolve(relative: string): string {
     nativeRelative(relative);
-    return path.join(this.path, ...relative.split('/'));
+    const parts = relative.split('/');
+    if (parts[0] === CACHE_METADATA_DIRECTORY) {
+      return path.join(this.metadataDirectory, ...parts.slice(1));
+    }
+    return path.join(this.path, ...parts);
   }
 
   async verifyRoot(): Promise<void> {
@@ -221,7 +236,7 @@ export class NativeRoot {
     let current = '';
     // Payload depth is checked by stream/tree grammars; owned native paths also
     // include the invocation/object prefix outside that logical tree.
-    if (parts.length > (parts[0] === '.mammoth' ? 199 : 99)) {
+    if (parts.length > (parts[0] === CACHE_METADATA_DIRECTORY ? 199 : 99)) {
       throw new Error('Native path depth exceeded.');
     }
     for (const part of parts) {

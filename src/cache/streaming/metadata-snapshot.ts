@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { cacheInvocationSnapshotPrefix } from '../metadata-paths';
 import { constants } from 'node:fs';
 import { mkdir, open, chmod } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -267,7 +268,7 @@ export class MetadataSnapshot {
     }
     options = Object.freeze({ ...options });
     const signal = options.signal ?? new AbortController().signal,
-      parent = store.prefix + 'snapshots/' + randomUUID(),
+      parent = cacheInvocationSnapshotPrefix(store.codec.options.invocation) + randomUUID(),
       target = parent + '/' + partition;
     let owner: NativeIdentity | null = null,
       scratch: InstallScratch | undefined;

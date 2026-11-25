@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { cacheInvocationSnapshotPrefix } from '../metadata-paths';
 import { z } from 'zod';
 import {
   nativeIdentitySchema,
@@ -40,14 +41,15 @@ export function handoffSchemas(codec: LocalCodec) {
     z.tuple([z.literal('local'), z.literal(invocation)]),
     z.tuple([z.literal('empty'), z.enum(['miss', 'cold', 'generation'])]),
   ]);
+  const snapshotPrefix = cacheInvocationSnapshotPrefix(invocation);
   const snapshot = z
     .tuple([
       z.literal('snapshot'),
       ownedPathSchema(invocation).refine((root) => {
-        const suffix = root.slice(('.mammoth/v1/' + invocation + '/snapshots/').length);
+        const suffix = root.slice(snapshotPrefix.length);
         const parts = suffix.split('/');
         return (
-          root.startsWith('.mammoth/v1/' + invocation + '/snapshots/') &&
+          root.startsWith(snapshotPrefix) &&
           parts.length === 2 &&
           /^[a-f0-9-]{36}$/.test(parts[0]) &&
           partition.safeParse(parts[1]).success

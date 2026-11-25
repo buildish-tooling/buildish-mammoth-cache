@@ -174,7 +174,7 @@ export async function prepareStreaming(
     signal.throwIfAborted();
     await mkdir(request.root, { recursive: true });
   }
-  const root = await NativeRoot.bind(request.root);
+  const root = await NativeRoot.bind(request.root, undefined, request.context[7]);
   await completedPreviousOwner(root);
   assertCurrent();
   const codec = new LocalCodec({

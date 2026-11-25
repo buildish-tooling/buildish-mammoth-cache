@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { CACHE_METADATA_LOCATOR } from '../metadata-paths';
 import { z } from 'zod';
 import { NativeRoot, sameObject } from './native';
 import { OwnedStore, locatorSchema, readFixedMetadata as fixed } from './owned-store';
@@ -98,7 +99,7 @@ export class OpenedInvocation {
     signal = new AbortController().signal,
   ) {
     anchor = anchorSchema.parse(anchor);
-    const root = await NativeRoot.bind(anchor[2]);
+    const root = await NativeRoot.bind(anchor[2], undefined, anchor[4][7]);
     if (
       root.path !== anchor[2] ||
       !sameObject(root.binding, anchor[3]) ||
@@ -106,7 +107,7 @@ export class OpenedInvocation {
     ) {
       throw new Error('Lifecycle root binding changed.');
     }
-    const result = await OpenedInvocation.current(root.path, budget, signal);
+    const result = await OpenedInvocation.current(root.path, budget, signal, anchor[4][7]);
     if (!result) {
       throw new Error('Prepare did not publish an invocation.');
     }
@@ -121,10 +122,11 @@ export class OpenedInvocation {
     path: string,
     budget: WorkingBudget,
     signal = new AbortController().signal,
+    buildTool?: Context[7],
   ): Promise<OpenedInvocation | null> {
     signal.throwIfAborted();
-    const root = await NativeRoot.bind(path),
-      locator = await fixed(root, '.mammoth/v1/current.json');
+    const root = await NativeRoot.bind(path, undefined, buildTool),
+      locator = await fixed(root, CACHE_METADATA_LOCATOR);
     signal.throwIfAborted();
     if (locator === null) {
       return null;

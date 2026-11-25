@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { cacheInvocationSnapshotPrefix } from '../metadata-paths';
 import { mkdir, open, lstat, chmod, utimes } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -289,7 +290,7 @@ export class WorkerStage {
     // Caller holds the invocation prepare window after one recover/intents preflight.
     const retained =
       kind === 'snapshot'
-        ? this.store.prefix + 'snapshots/' + randomUUID() + '/'
+        ? cacheInvocationSnapshotPrefix(this.store.codec.options.invocation) + randomUUID() + '/'
         : this.store.prefix + 'install/';
     for (const [partition, part] of this.partitions) {
       signal.throwIfAborted();

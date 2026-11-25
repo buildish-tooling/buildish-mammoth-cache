@@ -14,6 +14,14 @@
  * limitations under the License.
  */
 
+import {
+  CACHE_METADATA_DIRECTORY,
+  CACHE_METADATA_LOCATOR,
+  CACHE_METADATA_LOCATOR_NAME,
+  CACHE_METADATA_VERSION_DIRECTORY,
+  cacheInvocationPrefix,
+  cacheInvocationStatePath,
+} from '../metadata-paths';
 import type { LocalRow } from './local-stream';
 import { type BigIntStats } from 'node:fs';
 import { opendir, mkdir, open, rename, unlink } from 'node:fs/promises';
@@ -66,7 +74,7 @@ export interface WrittenLocalStream {
 
 export const locatorSchema = z
   .tuple([z.literal('current'), z.literal(1), shaSchema, z.string()])
-  .refine((r) => r[3] === `.mammoth/v1/${r[2]}/state.json`);
+  .refine((r) => r[3] === cacheInvocationStatePath(r[2]));
 export async function readFixedMetadata(root: NativeRoot, relative: string): Promise<Value | null> {
   const current = await root.stat(relative);
   if (!current) {
@@ -89,7 +97,7 @@ export async function readFixedMetadata(root: NativeRoot, relative: string): Pro
 
 /** Control records only; old payload and plans never become cleanup authority. */
 export async function completedPreviousOwner(root: NativeRoot): Promise<string | null> {
-  const raw = await readFixedMetadata(root, '.mammoth/v1/current.json');
+  const raw = await readFixedMetadata(root, CACHE_METADATA_LOCATOR);
   if (raw === null) {
     return null;
   }
@@ -166,11 +174,15 @@ export class OwnedStore {
     codec: LocalCodec,
     fail: Failpoint = noFailpoint,
   ): Promise<OwnedStore> {
-    return new OwnedStore(await NativeRoot.bind(root), codec, fail);
+    return new OwnedStore(
+      await NativeRoot.bind(root, undefined, codec.options.context[7]),
+      codec,
+      fail,
+    );
   }
 
   async makeParents(relative: string): Promise<void> {
-    if (relative !== '.mammoth/v1/current.json') {
+    if (relative !== CACHE_METADATA_LOCATOR) {
       this.codec.schemas.owned.parse(relative);
     }
     await this.root.verifyRoot();
@@ -644,7 +656,7 @@ export class OwnedStore {
   }
 
   async locator(): Promise<z.infer<typeof locatorSchema> | null> {
-    const value = await this.readFixed('.mammoth/v1/current.json');
+    const value = await this.readFixed(CACHE_METADATA_LOCATOR);
     return value === null ? null : locatorSchema.parse(value);
   }
 
@@ -692,12 +704,12 @@ export class OwnedStore {
         null,
         null,
       ];
-    await this.fixed(this.prefix + 'state.json', state);
-    await this.fixed('.mammoth/v1/current.json', [
+    await this.fixed(cacheInvocationStatePath(this.codec.options.invocation), state);
+    await this.fixed(CACHE_METADATA_LOCATOR, [
       'current',
       1,
       this.codec.options.invocation,
-      this.prefix + 'state.json',
+      cacheInvocationStatePath(this.codec.options.invocation),
     ]);
     return state;
   }
@@ -708,7 +720,7 @@ export class OwnedStore {
     if (next[3] !== before[3] + 1) {
       throw new Error('State revision did not advance once.');
     }
-    await this.fixed(this.prefix + 'state.json', next);
+    await this.fixed(cacheInvocationStatePath(this.codec.options.invocation), next);
   }
 
   async assertNoIntents(): Promise<void> {
@@ -798,27 +810,27 @@ async function checkRootIntents(root: NativeRoot) {
     'workspace-apply-v3/intent.json',
     'cutoff-state-v2/current.json',
   ]) {
-    if (await root.stat('.mammoth/' + name)) {
+    if (await root.stat(CACHE_METADATA_DIRECTORY + '/' + name)) {
       throw new Error('Incompatible legacy destructive intent/lifecycle.');
     }
   }
-  const base = '.mammoth/v1';
-  if (!(await root.stat(base))) {
+  if (!(await root.stat(CACHE_METADATA_VERSION_DIRECTORY))) {
     return;
   }
-  for await (const entry of await opendir(root.resolve(base))) {
-    if (entry.name === 'current.json' || !/^[a-f0-9]{64}$/.test(entry.name)) {
+  for await (const entry of await opendir(root.resolve(CACHE_METADATA_VERSION_DIRECTORY))) {
+    if (entry.name === CACHE_METADATA_LOCATOR_NAME || !/^[a-f0-9]{64}$/.test(entry.name)) {
       continue;
     }
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       throw new Error('Unsafe invocation discovery directory.');
     }
+    const prefix = cacheInvocationPrefix(entry.name);
     for (const file of ['install-intent.json', 'gc-intent.json']) {
-      if (await root.stat(base + '/' + entry.name + '/' + file)) {
+      if (await root.stat(prefix + file)) {
         throw new Error('Pending root-local destructive intent.');
       }
     }
-    const relocation = base + '/' + entry.name + '/relocation';
+    const relocation = prefix + 'relocation';
     if (await root.stat(relocation)) {
       for await (const marker of await opendir(root.resolve(relocation))) {
         if (marker.name.endsWith('.json')) {

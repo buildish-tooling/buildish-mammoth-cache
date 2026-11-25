@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { cacheInvocationSeedPrefix } from '../metadata-paths';
 import { randomUUID } from 'node:crypto';
 import { rename, mkdir } from 'node:fs/promises';
 import { z } from 'zod';
@@ -40,7 +41,7 @@ const MODULES = 'caches/modules-2';
 const ARTIFACTS = MODULES + '/files-2.1';
 const METADATA = /^metadata-[^/]+$/u;
 export function gradleSeedSchema(invocation: string) {
-  const prefix = '.mammoth/v1/' + invocation + '/seed/';
+  const prefix = cacheInvocationSeedPrefix(invocation);
   return z.tuple([
     z.literal('gradle-layer'),
     z.literal(1),
@@ -252,7 +253,7 @@ export async function installGradleSeed(
   if (!selected) {
     return undefined;
   }
-  const root = store.prefix + 'seed/' + randomUUID();
+  const root = cacheInvocationSeedPrefix(store.codec.options.invocation) + randomUUID();
   let descriptor: GradleSeedDescriptor | undefined;
   const phases: InstallParentPhase[] = [],
     indexes: IndexDirectories[] = [];

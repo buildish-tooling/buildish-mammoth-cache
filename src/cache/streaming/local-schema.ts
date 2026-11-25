@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { cacheInvocationPrefix } from '../metadata-paths';
 import path from 'node:path';
 import { z } from 'zod';
 import { lifecycleDocuments } from './lifecycle-documents';
@@ -104,7 +105,7 @@ export const semanticUnitSchema = z.union([
 ]);
 export function ownedPathSchema(invocation: string) {
   shaSchema.parse(invocation);
-  const prefix = '.mammoth/v1/' + invocation + '/';
+  const prefix = cacheInvocationPrefix(invocation);
   return relativePathSchema.refine(
     (p) =>
       p.startsWith(prefix) &&
@@ -150,7 +151,7 @@ export function localSchemas(options: LocalOptions) {
   roleSchema.parse(options.role);
   accessSchema.parse(options.access);
   assert(options.context[7] === options.model.tuple[2], 'Local context build tool mismatch.');
-  const prefix = '.mammoth/v1/' + options.invocation + '/',
+  const prefix = cacheInvocationPrefix(options.invocation),
     owned = ownedPathSchema(options.invocation),
     partition = partitionSchema.refine((p) =>
       options.model.partitions.some((part) => part[0] === p),
