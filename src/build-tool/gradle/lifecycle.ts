@@ -27,6 +27,7 @@ export interface GradleConsumerDependencies {
     timeoutMs: number,
   ) => Promise<void>;
 }
+
 export function createGradleLifecycle(
   dependencies: GradleConsumerDependencies = {},
 ): BuildToolLifecycle {
@@ -51,12 +52,15 @@ export function createGradleLifecycle(
         throw unavailable(cause);
       }
       signal.throwIfAborted();
-      if (result.remaining)
+      if (result.remaining) {
         throw new Error(
           'A running Gradle daemon was detected before restore. ' +
             'Use a runner without active Gradle daemons and run Mammoth before Gradle.',
         );
-      if (result.uncertain) throw unavailable();
+      }
+      if (result.uncertain) {
+        throw unavailable();
+      }
     },
     async prepareCapture(store, context, ordinaryHooks, layerVersion) {
       if (
@@ -65,7 +69,9 @@ export function createGradleLifecycle(
       ) {
         const { installGradleLifecycleCapture } = await import('./lifecycle-capture');
         await installGradleLifecycleCapture(store, context, layerVersion);
-      } else await ordinaryHooks();
+      } else {
+        await ordinaryHooks();
+      }
     },
     async quiesce(input) {
       const { quiesceGradle } = await import('./consumers');

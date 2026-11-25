@@ -56,11 +56,13 @@ async function digests(root: string): Promise<Record<string, string>> {
   async function visit(relative: string) {
     for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
       const member = relative ? relative + '/' + entry.name : entry.name;
-      if (entry.isDirectory()) await visit(member);
-      else
+      if (entry.isDirectory()) {
+        await visit(member);
+      } else {
         result[member] = createHash('sha256')
           .update(await readFile(path.join(root, member)))
           .digest('hex');
+      }
     }
   }
   await visit('');
@@ -69,10 +71,11 @@ async function digests(root: string): Promise<Record<string, string>> {
 
 test('Gradle resolves an old dependency only from its immutable seed, contributes a writable miss, and publishes a complete offline cache', async () => {
   const executable = process.env.BUILDISH_TEST_GRADLE_EXECUTABLE;
-  if (!executable)
+  if (!executable) {
     throw new Error(
       'Set BUILDISH_TEST_GRADLE_EXECUTABLE to an already installed Gradle 9.6.1 executable.',
     );
+  }
   const config = normalizeGradleActionConfig(readGradleActionInputs({ getInput: () => '' }), {
     phase: 'prepare',
     ciContext: fixtureCi('/cache'),
@@ -140,8 +143,9 @@ test('Gradle resolves an old dependency only from its immutable seed, contribute
     expect(version.stdout).toMatch(/^Gradle 9\.6\.1$/m);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
-    if (!address || typeof address === 'string')
+    if (!address || typeof address === 'string') {
       throw new Error('Local repository address unavailable');
+    }
     const project = f.directory + '/project';
     await mkdir(project);
     await writeFile(project + '/settings.gradle', "rootProject.name = 'layer-proof'\n");
@@ -292,7 +296,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     });
     completed = true;
   } finally {
-    if (!completed)
+    if (!completed) {
       for (const home of homes) {
         try {
           await exec(executable, ['--stop'], {
@@ -304,11 +308,13 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
           /* Preserve the original fixture failure. */
         }
       }
+    }
     server.closeAllConnections();
-    if (server.listening)
+    if (server.listening) {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
+    }
     const retained = f.budget.retained;
     await f.close();
     expect(retained).toBe(0);

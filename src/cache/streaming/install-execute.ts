@@ -29,22 +29,28 @@ import { retireOwnedDirectory } from './owned-retirement';
 import { retireBackup } from './install-retire';
 
 type InstallRow = ReturnType<OwnedStore['codec']['schemas']['rows']['install']['parse']>;
+
 type ParentRow = ReturnType<OwnedStore['codec']['schemas']['rows']['installParent']['parse']>;
+
 const signalDefault = () => new AbortController().signal;
 
 async function emptyParent(store: OwnedStore, row: ParentRow) {
   const source = await store.root.stat(row[3]);
-  if (!source || !sameNative(source, row[4], true) || source[3] !== store.root.binding[3])
+  if (!source || !sameNative(source, row[4], true) || source[3] !== store.root.binding[3]) {
     throw new Error('Changed parent creation source.');
+  }
   const directory = await opendir(store.root.resolve(row[3]));
   try {
-    if (await directory.read()) throw new Error('Parent source is not empty.');
+    if (await directory.read()) {
+      throw new Error('Parent source is not empty.');
+    }
   } finally {
     await directory.close();
   }
   const after = await store.root.stat(row[3]);
-  if (!after || !sameNative(source, after, true))
+  if (!after || !sameNative(source, after, true)) {
     throw new Error('Parent source changed during check.');
+  }
   const relative = row[3].slice(store.prefix.length),
     parts = relative.split('/');
   if (
@@ -54,8 +60,9 @@ async function emptyParent(store: OwnedStore, row: ParentRow) {
     !/^[a-f0-9-]{36}$/.test(parts[1]) ||
     parts[2] !== 'objects' ||
     parts[3] !== createHash('sha256').update(row[2]).digest('hex')
-  )
+  ) {
     throw new Error('Unbound parent source namespace.');
+  }
   return source;
 }
 
@@ -84,7 +91,9 @@ class Mutations {
   private ownsBackups = false;
   live!: InstallParentPhase;
   owned!: InstallParentPhase;
+
   private constructor(readonly program: InstallProgram) {}
+
   static async create(program: InstallProgram, admission: InstallAdmission, _signal: AbortSignal) {
     const self = new Mutations(program),
       store = program.store,
@@ -113,7 +122,9 @@ class Mutations {
           anchor = input.nativeRoot,
           ordinal = store.codec.options.model.partitions.findIndex((p) => p[0] === partition),
           directory = admission.sourceDirectories[ordinal];
-        if (!directory) throw new Error('Missing original admitted source hierarchy.');
+        if (!directory) {
+          throw new Error('Missing original admitted source hierarchy.');
+        }
         self.source.set(
           partition,
           await phase(anchor, async (path) => {
@@ -129,6 +140,7 @@ class Mutations {
       throw error;
     }
   }
+
   private async move(
     source: string,
     target: string,
@@ -140,20 +152,24 @@ class Mutations {
     await from.parents(source);
     await to.parents(target);
     const before = await from.stat(source);
-    if (!before || !sameNative(before, expected, true) || (await to.stat(target)))
+    if (!before || !sameNative(before, expected, true) || (await to.stat(target))) {
       throw new Error('Unexpected native rename endpoints.');
+    }
     signal.throwIfAborted();
     this.pending = { source, target, before, from, to };
     await rename(this.program.store.root.resolve(source), this.program.store.root.resolve(target));
     this.program.store.root.work.renames++;
     await this.program.store.fail('install-rename-before-stat');
     const after = await to.stat(target);
-    if (!after || !sameRename(before, after)) throw new Error('Native rename identity changed.');
+    if (!after || !sameRename(before, after)) {
+      throw new Error('Native rename identity changed.');
+    }
     await from.changed(source);
     await to.changed(target);
     this.pending = null;
     return after;
   }
+
   async parent(row: ParentRow, signal: AbortSignal) {
     signal.throwIfAborted();
     await this.live.parents(row[2]);
@@ -162,6 +178,7 @@ class Mutations {
     await this.live.created(row[2], observed);
     await this.program.store.fail('install-parent-renamed');
   }
+
   async apply(
     row: InstallRow,
     signal: AbortSignal,
@@ -172,7 +189,9 @@ class Mutations {
       await this.live.parents(row[2]);
       await this.owned.parents(row[7]!);
       const old = admittedOld;
-      if (!old) throw new Error('Missing admitted preimage.');
+      if (!old) {
+        throw new Error('Missing admitted preimage.');
+      }
       this.activeBackup = { row, before: old };
       const observed = await this.move(row[2], row[7]!, old, this.live, this.owned, signal);
       this.activeBackup.after = observed;
@@ -189,12 +208,18 @@ class Mutations {
     }
     const reader = await this.program.readers.reader(row[4]!, signal),
       source = this.source.get(reader.partition);
-    if (!source) throw new Error('Missing source parent phase.');
+    if (!source) {
+      throw new Error('Missing source parent phase.');
+    }
     await source.parents(row[3]);
     await this.live.parents(row[2]);
     const native = admittedSource;
-    if (!native) throw new Error('Missing admitted source.');
-    if (this.activeBackup) this.activeBackup.incoming = native;
+    if (!native) {
+      throw new Error('Missing admitted source.');
+    }
+    if (this.activeBackup) {
+      this.activeBackup.incoming = native;
+    }
     await this.move(row[3], row[2], native, source, this.live, signal);
     await this.program.store.fail('install-source-renamed');
     if (this.activeBackup) {
@@ -202,9 +227,13 @@ class Mutations {
       this.activeBackup = null;
     }
   }
+
   async barrier() {
-    for (const p of this.phases) await p.barrier();
+    for (const p of this.phases) {
+      await p.barrier();
+    }
   }
+
   /** Called while original readers and parent scopes still exist, never from persisted state. */
   async cleanupFailed(): Promise<void> {
     const signal = signalDefault(),
@@ -219,10 +248,11 @@ class Mutations {
         await move.from.changed(move.source);
         await move.to.changed(move.target);
         this.pending = null;
-      } else
+      } else {
         throw new Error(
           'Install cleanup endpoints ambiguous; retained at ' + move.source + ' and ' + move.target,
         );
+      }
     }
     const active = this.activeBackup;
     if (active) {
@@ -237,8 +267,9 @@ class Mutations {
           !(active.after
             ? sameNative(active.after, backup, true)
             : sameRename(active.before, backup))
-        )
+        ) {
           throw new Error('Install backup cleanup blocked; retained at ' + row[7]);
+        }
         if (row[6] !== 'delete' && !live) {
           await this.move(row[7]!, row[2], backup, this.owned, this.live, signal);
         } else if (
@@ -254,17 +285,23 @@ class Mutations {
             this.owned,
             signal,
           );
-        } else
+        } else {
           throw new Error(
             'Install return destination occupied; retained at ' + row[7] + ' and ' + row[2],
           );
+        }
         this.activeBackup = null;
       }
     }
-    if (!this.retiringBackups) await retireInstallBackups(this.program, this, signal);
+    if (!this.retiringBackups) {
+      await retireInstallBackups(this.program, this, signal);
+    }
   }
+
   async close() {
-    for (const p of this.phases) p.release();
+    for (const p of this.phases) {
+      p.release();
+    }
     await closeInstallResources([
       this.ownsBackups ? this.backups?.close() : undefined,
       this.mutablePrefix && this.mutableNative
@@ -289,15 +326,16 @@ async function runRows(
     signal.throwIfAborted();
     const accepted = value as readonly Value[],
       row = accepted[1] as readonly Value[];
-    if (row[0] === 'install-parent')
+    if (row[0] === 'install-parent') {
       await mutations.parent(program.store.codec.schemas.rows.installParent.parse(row), signal);
-    else if (row[0] === 'install')
+    } else if (row[0] === 'install') {
       await mutations.apply(
         program.store.codec.schemas.rows.install.parse(row),
         signal,
         accepted[2] as NativeIdentity | null,
         accepted[3] as NativeIdentity | null,
       );
+    }
   }
   await mutations.barrier();
 }
@@ -327,7 +365,9 @@ export async function executeInstall(
               store.root.resolve(store.prefix.slice(0, -1)),
           );
   }
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) {
+    throw failure;
+  }
   return result!;
 }
 async function executeInstallAttempt(
@@ -357,12 +397,15 @@ async function executeInstallAttempt(
       },
       admission,
     );
-    if (!canonical((await store.state())!).equals(canonical(admission.initialState)))
+    if (!canonical((await store.state())!).equals(canonical(admission.initialState))) {
       throw new Error('Install state changed.');
+    }
     mutations = await Mutations.create(program, admission, signal);
     for await (const value of program.batches.rows(0, program.batches.position)) {
       signal.throwIfAborted();
-      if ((value as readonly Value[])[0] !== 'batch') continue;
+      if ((value as readonly Value[])[0] !== 'batch') {
+        continue;
+      }
       const batch = value as InstallBatch;
       await runRows(program, batch, mutations, signal);
       await retireInstallBackups(program, mutations, signal);
@@ -401,18 +444,21 @@ async function executeInstallAttempt(
             );
     }
   }
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) {
+    throw failure;
+  }
   await store.retireInstallMetadata(frozen.plan);
 }
 
 async function closeInstallResources(resources: (Promise<unknown> | undefined)[]) {
   const results = await Promise.allSettled(resources);
   const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-  if (failed.length)
+  if (failed.length) {
     throw new AggregateError(
       failed.map((r) => r.reason),
       'Install resource cleanup failed.',
     );
+  }
 }
 
 async function retireInstallBackups(

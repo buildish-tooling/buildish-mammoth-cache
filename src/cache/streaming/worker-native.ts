@@ -40,11 +40,12 @@ async function* workerNativeRows(
         directories.return?.(undefined),
       ]),
       errors = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (errors.length)
+    if (errors.length) {
       throw new AggregateError(
         errors.map((r) => r.reason),
         'Worker evidence reader cleanup failed.',
       );
+    }
   };
   try {
     for await (const e of walkNative(store.root, part.nativeRoot, {
@@ -54,39 +55,51 @@ async function* workerNativeRows(
       logicalRoot: '',
       metadata: 'reject',
     })) {
-      if (e.tag === 'protected-child')
+      if (e.tag === 'protected-child') {
         throw new Error('Protected child in selected worker staging.');
-      if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1'))
+      }
+      if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1')) {
         throw new Error('Aliased/cross-filesystem selected staging.');
-      if (e.tag === 'directory-open') yield ['directory', e.path, e.identity];
-      else if (e.tag === 'directory-close') {
+      }
+      if (e.tag === 'directory-open') {
+        yield ['directory', e.path, e.identity];
+      } else if (e.tag === 'directory-close') {
         const next = await directories.next();
-        if (next.done) throw new Error('Extra native worker directory.');
+        if (next.done) {
+          throw new Error('Extra native worker directory.');
+        }
         const fact = tuple(next.value);
         if (
           fact[1] !== e.path ||
           !(renamed && e.path === ''
             ? sameRename(fact[2] as NativeIdentity, e.identity)
             : sameNative(fact[2] as NativeIdentity, e.identity, true))
-        )
+        ) {
           throw new Error('Selected worker directory changed.');
+        }
         yield ['dir-close', e.path, e.identity];
       } else {
-        if (e.tag !== 'file') throw new Error('Unexpected selected snapshot event.');
+        if (e.tag !== 'file') {
+          throw new Error('Unexpected selected snapshot event.');
+        }
         const next = await files.next();
-        if (next.done) throw new Error('Extra native worker file.');
+        if (next.done) {
+          throw new Error('Extra native worker file.');
+        }
         const fact = tuple(next.value);
         if (
           fact[1] !== e.path ||
           fact[2] !== part.partition ||
           !sameNative(fact[3] as NativeIdentity, e.identity, true)
-        )
+        ) {
           throw new Error('Selected worker file changed.');
+        }
         yield ['file', e.path, e.identity];
       }
     }
-    if (!(await files.next()).done || !(await directories.next()).done)
+    if (!(await files.next()).done || !(await directories.next()).done) {
       throw new Error('Missing selected worker native member.');
+    }
   } finally {
     await retire();
   }
@@ -97,6 +110,7 @@ const nativeIndexes = new WeakSet<WorkerNativeIndex>();
 export class WorkerNativeIndex {
   #active = true;
   #transferred = false;
+
   private constructor(
     readonly store: OwnedStore,
     readonly scratch: InstallScratch,
@@ -106,34 +120,46 @@ export class WorkerNativeIndex {
   ) {
     nativeIndexes.add(this);
   }
+
   static assert(source: WorkerNativeIndex, store = source.store): void {
-    if (!nativeIndexes.has(source) || !source.#active || source.store !== store)
+    if (!nativeIndexes.has(source) || !source.#active || source.store !== store) {
       throw new Error('Unavailable final worker native index.');
+    }
   }
+
   get partitions(): readonly string[] {
     WorkerNativeIndex.assert(this);
     return this.sources.map((s) => s.part.partition);
   }
+
   root(partition: string): number {
     WorkerNativeIndex.assert(this);
     const source = this.sources.find((s) => s.part.partition === partition);
-    if (!source) throw new Error('Unknown final native partition.');
+    if (!source) {
+      throw new Error('Unknown final native partition.');
+    }
     return source.index;
   }
+
   nativeRoot(partition: string): string {
     WorkerNativeIndex.assert(this);
     const source = this.sources.find((s) => s.part.partition === partition);
-    if (!source) throw new Error('Unknown final native partition.');
+    if (!source) {
+      throw new Error('Unknown final native partition.');
+    }
     return source.part.nativeRoot;
   }
+
   node(offset: number) {
     WorkerNativeIndex.assert(this);
     return indexedNode(this.scratch, offset);
   }
+
   children(node: Parameters<typeof indexedEntries>[1]) {
     WorkerNativeIndex.assert(this);
     return indexedEntries(this.scratch, node);
   }
+
   static async capture(
     store: OwnedStore,
     parts: readonly StagedPartition[],
@@ -144,8 +170,9 @@ export class WorkerNativeIndex {
     if (
       parts.length > store.codec.options.model.partitions.length ||
       new Set(parts.map((p) => p.partition)).size !== parts.length
-    )
+    ) {
       throw new Error('Duplicate/unbounded final native partitions.');
+    }
     const scratch = await InstallScratch.create(store, budget),
       sources: { part: StagedPartition; index: number }[] = [];
     try {
@@ -189,6 +216,7 @@ export class WorkerNativeIndex {
       throw error;
     }
   }
+
   static claimWorker(
     source: WorkerNativeIndex,
     store: OwnedStore,
@@ -205,10 +233,12 @@ export class WorkerNativeIndex {
       source.maxDirectoryEntries !== max ||
       completed.max !== max ||
       result.stage.budget !== budget
-    )
+    ) {
       throw new Error('Final worker index policy mismatch.');
-    for (const { part } of source.sources)
+    }
+    for (const { part } of source.sources) {
       WorkerStage.assertPublishedInstall(result.stage, store, part);
+    }
     source.#active = false;
     source.#transferred = true;
     return {
@@ -220,8 +250,11 @@ export class WorkerNativeIndex {
       })),
     };
   }
+
   async dispose(): Promise<void> {
     this.#active = false;
-    if (!this.#transferred) await this.scratch.close();
+    if (!this.#transferred) {
+      await this.scratch.close();
+    }
   }
 }

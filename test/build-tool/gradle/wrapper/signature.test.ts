@@ -282,7 +282,9 @@ describe('verifyDetachedOpenPgpSignature', () => {
           .split(/\r?\n/u)
           .filter((line) => line.startsWith('fpr:'))[1]
           ?.split(':')[9];
-        if (!signingFingerprint) throw new Error('Generated signing subkey was missing.');
+        if (!signingFingerprint) {
+          throw new Error('Generated signing subkey was missing.');
+        }
         const { stdout: armoredKey } = await runGpgCommand([
           '--homedir',
           primaryKey.gpgHome,

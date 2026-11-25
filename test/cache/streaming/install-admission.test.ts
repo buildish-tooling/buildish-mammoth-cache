@@ -25,7 +25,9 @@ import { InstallAdmission } from '../../../src/cache/streaming/install-admission
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture() {
   const f = await installFixture();
@@ -63,8 +65,11 @@ it.each(['directory', 'file'] as const)(
       ),
       plan = await freezeInstallPlan(f.store, [input], f.budget),
       renames = f.store.root.work.renames;
-    if (snapshot) await f.files('', { 'state/unexpected': 'unexpected' });
-    else await writeFile(f.store.root.resolve('data/old'), 'changed-selected-file');
+    if (snapshot) {
+      await f.files('', { 'state/unexpected': 'unexpected' });
+    } else {
+      await writeFile(f.store.root.resolve('data/old'), 'changed-selected-file');
+    }
     await expect(InstallAdmission.create(f.store, plan, f.budget)).rejects.toThrow();
     expect(f.store.root.work.renames).toBe(renames);
     expect(f.budget.retained).toBe(0);

@@ -23,6 +23,7 @@ export interface NativeOperationOptions extends TimingOptions {
   readonly signal?: AbortSignal;
   readonly maxDirectoryEntries?: number;
 }
+
 export async function settleNativeCleanup(
   actions: (() => unknown)[],
   primary?: unknown,
@@ -31,9 +32,10 @@ export async function settleNativeCleanup(
   const errors = results
     .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
     .map((r) => r.reason);
-  if (errors.length)
+  if (errors.length) {
     throw new AggregateError(
       primary === undefined ? errors : [primary, ...errors],
       'Native object cleanup failed.',
     );
+  }
 }

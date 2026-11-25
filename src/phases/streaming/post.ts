@@ -53,13 +53,18 @@ export interface StreamingPostDependencies extends Omit<LifecycleOptions, 'budge
   readonly reportSink?: () => Promise<ReportSink>;
   readonly analytics?: boolean;
 }
+
 function assertCurrent(d: StreamingPostDependencies) {
   d.signal?.throwIfAborted();
-  if (d.assertCurrent() !== undefined) throw new Error('Lifecycle assertion must be synchronous.');
+  if (d.assertCurrent() !== undefined) {
+    throw new Error('Lifecycle assertion must be synchronous.');
+  }
 }
 function assertCleanup(d: StreamingPostDependencies) {
   d.cleanupSignal?.throwIfAborted();
-  if (d.assertCurrent() !== undefined) throw new Error('Lifecycle assertion must be synchronous.');
+  if (d.assertCurrent() !== undefined) {
+    throw new Error('Lifecycle assertion must be synchronous.');
+  }
 }
 // Protocol: docs/dev/cache-lifecycle-protocol.md#provider-composition-and-activation-boundary.
 // Guard graph deliberately has no provider SDK, configuration-reader or build-tool runtime import.
@@ -91,16 +96,21 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
                 return undefined;
               },
               removeHooks: async () => {
-                for (const warning of await d.removeHooks(anchor[2], anchor[4][7]))
+                for (const warning of await d.removeHooks(anchor[2], anchor[4][7])) {
                   host.warning(warning);
+                }
               },
               onWarning: (message) => host.warning(message),
             });
-          } else
-            for (const warning of await d.removeHooks(anchor[2], anchor[4][7]))
+          } else {
+            for (const warning of await d.removeHooks(anchor[2], anchor[4][7])) {
               host.warning(warning);
+            }
+          }
         } else {
-          for (const warning of await d.removeHooks(anchor[3], anchor[2][7])) host.warning(warning);
+          for (const warning of await d.removeHooks(anchor[3], anchor[2][7])) {
+            host.warning(warning);
+          }
         }
       }
     }
@@ -109,7 +119,9 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
   }
   assertCleanup(d);
   const raw = host.getState(STREAMING_INVOCATION_STATE);
-  if (!raw) throw new Error('Owning prepare has no streaming invocation handoff.');
+  if (!raw) {
+    throw new Error('Owning prepare has no streaming invocation handoff.');
+  }
   const anchor = decodeInvocationAnchor(raw),
     budget = d.budget ?? new WorkingBudget(),
     options = { ...d, budget };
@@ -149,8 +161,9 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
         for (const warning of await d.removeHooks(
           opened.store.root.path,
           opened.store.codec.options.context[7],
-        ))
+        )) {
           host.warning(warning);
+        }
       },
       onWarning: (message) => host.warning(message),
     });
@@ -171,8 +184,9 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
       for (const warning of await d.removeHooks(
         opened.store.root.path,
         opened.store.codec.options.context[7],
-      ))
+      )) {
         onWarning(warning);
+      }
       assertCurrent(d);
     };
     const result =
@@ -198,16 +212,20 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
               removeHooks,
             });
     if (result.outcome === 'skipped-not-quiescent') {
-      if (!result.message || !warnings.includes(result.message))
+      if (!result.message || !warnings.includes(result.message)) {
         host.warning('Cache save skipped: ' + (result.message ?? 'consumers remain.'));
+      }
       return result;
     }
     if (
       result.outcome === 'feature-unavailable' &&
       !warnings.includes('Cache save skipped: cache backend is unavailable.')
-    )
+    ) {
       onWarning('Cache save skipped: cache backend is unavailable.');
-    if (result.outcome === 'read-only') await removeHooks();
+    }
+    if (result.outcome === 'read-only') {
+      await removeHooks();
+    }
     // Core recovery, observation/purge, source return and receipt precede these content/provider reads.
     const report = await d.loadReport(opened.store.codec.options.context[7], facts.header[4]);
     const sink = await emit(host, d, report, [], result.outcome);
@@ -230,16 +248,21 @@ async function emit(
   outcome: string,
 ) {
   assertCurrent(d);
-  for (const warning of [...warnings, ...report.warnings]) host.warning(warning);
-  for (const line of report.logLines) host.info(line);
+  for (const warning of [...warnings, ...report.warnings]) {
+    host.warning(warning);
+  }
+  for (const line of report.logLines) {
+    host.info(line);
+  }
   host.info('Mammoth cache outcome: ' + outcome + '.');
   const sink = await d.reportSink?.();
-  if (sink)
+  if (sink) {
     await sink.publishSummary([
       '## Mammoth cache post',
       `Outcome: ${outcome}.`,
       ...report.summaryLines,
     ]);
+  }
   assertCurrent(d);
   return sink;
 }

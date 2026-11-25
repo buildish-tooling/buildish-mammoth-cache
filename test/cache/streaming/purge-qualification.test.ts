@@ -32,15 +32,21 @@ vi.mock('node:fs/promises', async (original) => {
   return {
     ...actual,
     lstat: async (...args: Parameters<typeof actual.lstat>) => {
-      if (managed(args[0])) counts.stats++;
+      if (managed(args[0])) {
+        counts.stats++;
+      }
       return actual.lstat(...args);
     },
     opendir: async (...args: Parameters<typeof actual.opendir>) => {
-      if (managed(args[0])) counts.listings++;
+      if (managed(args[0])) {
+        counts.listings++;
+      }
       return actual.opendir(...args);
     },
     unlink: async (...args: Parameters<typeof actual.unlink>) => {
-      if (managed(args[0])) counts.unlinks++;
+      if (managed(args[0])) {
+        counts.unlinks++;
+      }
       return actual.unlink(...args);
     },
   };
@@ -56,13 +62,15 @@ const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   counts.root = '';
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 it.each([4, 16])(
   'bounds full capture/planner/report work for %i complete units and overlapping purge rules',
   async (n) => {
     const results = [];
-    for (const enabled of [false, true])
+    for (const enabled of [false, true]) {
       for (const reporting of [false, true]) {
         const parent = 'caches/transforms-4',
           f = await observationFixture('gradle', {
@@ -84,8 +92,9 @@ it.each([4, 16])(
             'transformed/a',
             'transformed/b',
             'runtime.lock',
-          ])
+          ]) {
             files[unit + '/' + name] = name;
+          }
         }
         await f.files('', files);
         counts.root = f.root.replaceAll('\\', '/');
@@ -122,8 +131,9 @@ it.each([4, 16])(
           { publishLogGroup: (_title, lines, write) => lines.forEach(write) },
         );
         expect(f.store.root.work).toEqual(before);
-        if (summaries)
+        if (summaries) {
           expect(summaries.snapshot().reduce((sum, p) => sum + p.deleted, 0)).toBe(enabled ? n : 0);
+        }
         const w = f.store.root.work;
         results.push({
           n,
@@ -140,6 +150,7 @@ it.each([4, 16])(
         });
         counts.root = '';
       }
+    }
     expect(results[1]).toEqual(results[0]);
     expect(results[3]).toEqual(results[2]);
     expect(results[2].capture.stats - results[0].capture.stats).toBe(3 * n);

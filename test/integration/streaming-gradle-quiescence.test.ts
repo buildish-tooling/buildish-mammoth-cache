@@ -47,14 +47,17 @@ import { H, decodeRecord } from '../../src/cache/streaming/encoding';
 const exec = promisify(execFile);
 const configured = process.env.MAMMOTH_TEST_GRADLE_HOMES && process.env.MAMMOTH_TEST_JAVA_HOME;
 const required = process.env.MAMMOTH_REQUIRE_NATIVE_QUIESCENCE === '1';
-if (required && !configured) throw new Error('Required native proof is missing its installations.');
+if (required && !configured) {
+  throw new Error('Required native proof is missing its installations.');
+}
 it.skipIf(!configured)(
   'captures real suppressed/Test/config-cache/failed builds and stops two isolated installed versions',
   async (test) => {
     const baseline = await inspectGradleDaemons();
     if (baseline.uncertain || baseline.remaining) {
-      if (required)
+      if (required) {
         throw new Error('Required native proof has unrelated/uncertain initial consumers.');
+      }
       test.skip('Host already has unowned/opaque daemons; no unrelated stop is authorized.');
       return;
     }
@@ -121,12 +124,18 @@ it.skipIf(!configured)(
             maxBuffer: 2 * 1024 * 1024,
             timeout: 120000,
           });
-          if (failed) throw new Error('Expected fixture failure');
+          if (failed) {
+            throw new Error('Expected fixture failure');
+          }
           return result.stdout;
         } catch (error) {
-          if (!failed) throw error;
+          if (!failed) {
+            throw error;
+          }
           const e = error as { stdout?: string; stderr?: string; code?: unknown };
-          if (e.code !== 1) throw error;
+          if (e.code !== 1) {
+            throw error;
+          }
           return (e.stdout ?? '') + (e.stderr ?? '');
         }
       }
@@ -153,7 +162,9 @@ it.skipIf(!configured)(
         const row = f.store.codec.schemas.documents['gradle-installation'].parse(
           decodeRecord(await readFile(dir + '/' + name)),
         );
-        if (row[3] === (await realpath(homes[0]))) await rm(dir + '/' + name);
+        if (row[3] === (await realpath(homes[0]))) {
+          await rm(dir + '/' + name);
+        }
       }
       await writeFile(project + '/fail-settings', 'fail');
       expect(await run(homes[0], ['help'], true, true)).toContain('intentional settings failure');
@@ -167,7 +178,9 @@ it.skipIf(!configured)(
         const row = f.store.codec.schemas.documents['gradle-installation'].parse(
           decodeRecord(await readFile(dir + '/' + name)),
         );
-        if (row[3] === (await realpath(homes[1]))) withheld = name;
+        if (row[3] === (await realpath(homes[1]))) {
+          withheld = name;
+        }
       }
       expect(withheld).not.toBe('');
       await rename(dir + '/' + withheld, root + '/withheld-registration.json');
@@ -176,7 +189,9 @@ it.skipIf(!configured)(
           assertCurrent: (): undefined => {},
           exitGraceMs: 0,
         });
-        if (denied.status === 'ready') denied.window.close();
+        if (denied.status === 'ready') {
+          denied.window.close();
+        }
         expect(denied.status).toBe('skipped-not-quiescent');
         expect((await inspectGradleDaemons()).remaining).toBe(true);
       } finally {
@@ -204,7 +219,9 @@ it.skipIf(!configured)(
         });
       expect(peak).toBe(1);
       expect(stopped.sort()).toEqual((await Promise.all(homes.map((h) => realpath(h)))).sort());
-      if (gate.status !== 'ready') throw new Error(gate.message);
+      if (gate.status !== 'ready') {
+        throw new Error(gate.message);
+      }
       gate.window.close();
       expect((await inspectGradleDaemons()).remaining).toBe(false);
       expect(
@@ -243,12 +260,13 @@ it.skipIf(!configured)(
       );
     } finally {
       // Only these exact isolated homes/installations; never stop host-discovered daemons.
-      for (const home of homes)
+      for (const home of homes) {
         await stopGradleInstallation(
           { gradleHome: home, gradleUserHome: guh, javaHome: java },
           new AbortController().signal,
           60000,
         ).catch(() => {});
+      }
       let clean = false;
       for (let attempt = 0; attempt < 20; attempt++) {
         const scan = await inspectGradleDaemons();

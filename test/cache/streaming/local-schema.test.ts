@@ -107,12 +107,24 @@ it.each([
 ])('rejects impossible v2 state %s', (kind) => {
   const f = localFixtures(),
     bad = structuredClone(f.state);
-  if (kind === 'missing-handoff') bad[6] = null;
-  if (kind === 'missing-terminal') bad[4] = 'completed';
-  if (kind === 'unexpected-terminal') bad[7] = ['outcome', 'abandoned', null, null, null];
-  if (kind === 'v1') bad[1] = 1;
-  if (kind === 'extra-package') bad.push(f.q('worker-archive'));
-  if (kind === 'zero-revision') bad[3] = 0;
+  if (kind === 'missing-handoff') {
+    bad[6] = null;
+  }
+  if (kind === 'missing-terminal') {
+    bad[4] = 'completed';
+  }
+  if (kind === 'unexpected-terminal') {
+    bad[7] = ['outcome', 'abandoned', null, null, null];
+  }
+  if (kind === 'v1') {
+    bad[1] = 1;
+  }
+  if (kind === 'extra-package') {
+    bad.push(f.q('worker-archive'));
+  }
+  if (kind === 'zero-revision') {
+    bad[3] = 0;
+  }
   expect(() => f.codec.encode(bad)).toThrow();
 });
 it('keeps policy order/strictness in identity and rejects duplicates/GC ambiguity', () => {
@@ -140,8 +152,9 @@ it('roundtrips the exact v2 documents and terminal outcomes without package auth
     ['current', 1, f.options.invocation, f.prefix + 'state.json'],
     f.bindings,
     f.state,
-  ] as Value[])
+  ] as Value[]) {
     expect(f.codec.decode(f.codec.encode(value))).toEqual(value);
+  }
   for (const outcome of [
     'read-only',
     'no-change',
@@ -164,7 +177,9 @@ it('roundtrips the exact v2 documents and terminal outcomes without package auth
     expect(() => f.codec.encode(complete)).not.toThrow();
     const bad = structuredClone(complete);
     (bad[7] as Value[])[3] = null;
-    if (terminal[1] === 'worker-uploaded') expect(() => f.codec.encode(bad)).toThrow();
+    if (terminal[1] === 'worker-uploaded') {
+      expect(() => f.codec.encode(bad)).toThrow();
+    }
   }
 });
 it('binds install selectors to bounded metadata context and preserves replacement geometry', () => {
@@ -177,8 +192,9 @@ it('binds install selectors to bounded metadata context and preserves replacemen
     ['metadata-member', 'a'.repeat(64), 'source', 'metadata', 4],
     ['metadata-member', 'a'.repeat(32), 'source', 'foreign', 4],
     ['metadata-member', 'a'.repeat(32), 'source', 'metadata', -1],
-  ])
+  ]) {
     expect(() => f.codec.schemas.installMember.parse(bad)).toThrow();
+  }
   const row: Value[] = [
     'install',
     1,

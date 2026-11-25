@@ -28,13 +28,16 @@ export interface WorkerTarHeader {
   readonly mode: number;
   readonly mtimeMs: number;
 }
+
 export interface WorkerTarEntry {
   readonly header: WorkerTarHeader;
   readonly body: AsyncIterable<Buffer>;
 }
+
 export interface WorkerTransportCompletion {
   readonly uncompressedBytes: bigint;
 }
+
 export type WorkerEntryConsumer = (entry: WorkerTarEntry, signal: AbortSignal) => Promise<void>;
 
 /**
@@ -76,12 +79,13 @@ export async function readWorkerTransport(
   let uncompressedBytes = 0n,
     consumerTask: Promise<void> = Promise.resolve();
   const abort = (reason: unknown) => {
-    if (!signal.aborted)
+    if (!signal.aborted) {
       controller.abort(
         reason instanceof Error
           ? reason
           : new Error('Worker transport aborted.', { cause: reason }),
       );
+    }
   };
   // Dispose each consumer's abort subscription; a shared never-settled Promise.race
   // would retain one reaction for every entry in a long archive.
@@ -103,12 +107,16 @@ export async function readWorkerTransport(
           reject(error);
         },
       );
-      if (signal.aborted) onAbort();
+      if (signal.aborted) {
+        onAbort();
+      }
     });
   }
   const externalAbort = () => abort(options.signal?.reason);
   options.signal?.addEventListener('abort', externalAbort, { once: true });
-  if (options.signal?.aborted) externalAbort();
+  if (options.signal?.aborted) {
+    externalAbort();
+  }
   inflater.on('end', () => {
     deflateEnded = true;
   });
@@ -122,8 +130,9 @@ export async function readWorkerTransport(
     },
   });
   function tail(bytes: Buffer): void {
-    if (bytes.length > trailer.length - trailerBytes)
+    if (bytes.length > trailer.length - trailerBytes) {
       throw new Error('Trailing bytes after the worker gzip member.');
+    }
     bytes.copy(trailer, trailerBytes);
     trailerBytes += bytes.length;
   }
@@ -132,8 +141,9 @@ export async function readWorkerTransport(
     decodeStrings: false,
     write(chunk: Buffer, _encoding, callback) {
       try {
-        if (!Buffer.isBuffer(chunk) || chunk.length > WORKER_TRANSPORT_CHUNK_BYTES)
+        if (!Buffer.isBuffer(chunk) || chunk.length > WORKER_TRANSPORT_CHUNK_BYTES) {
           throw new Error('Worker compressed chunk exceeds the resident byte bound.');
+        }
         let bytes = chunk;
         if (headerBytes < gzipHeader.length) {
           const take = Math.min(bytes.length, gzipHeader.length - headerBytes);
@@ -150,8 +160,9 @@ export async function readWorkerTransport(
             gzipHeader[2] !== 8 ||
             gzipHeader[3] !== 0 ||
             gzipHeader.readUInt32LE(4) !== 0
-          )
+          ) {
             throw new Error('Invalid fixed worker gzip header.');
+          }
         }
         if (!bytes.length) {
           callback();
@@ -171,8 +182,9 @@ export async function readWorkerTransport(
           }
           try {
             const used = inflater.bytesWritten - before;
-            if (!Number.isSafeInteger(used) || used < 0 || used > bytes.length)
+            if (!Number.isSafeInteger(used) || used < 0 || used > bytes.length) {
               throw new Error('Invalid native inflater consumed-byte count.');
+            }
             if (used < bytes.length) {
               deflateEnded = true;
               tail(bytes.subarray(used));
@@ -202,8 +214,9 @@ export async function readWorkerTransport(
     });
     body.on('error', () => {});
     consumerTask = (async () => {
-      if ((header.type !== 'file' && header.type !== 'directory') || header.mtimeMs === undefined)
+      if ((header.type !== 'file' && header.type !== 'directory') || header.mtimeMs === undefined) {
         throw new Error('Missing strict worker header facts.');
+      }
       const portable: WorkerTarHeader = {
         name: header.name,
         type: header.type,
@@ -217,7 +230,9 @@ export async function readWorkerTransport(
           return consume({ header: portable, body }, signal);
         }),
       );
-      if (!bodyEnded) throw new Error('Worker consumer returned before draining its body.');
+      if (!bodyEnded) {
+        throw new Error('Worker consumer returned before draining its body.');
+      }
       next();
     })().catch(abort);
   });
@@ -228,10 +243,18 @@ export async function readWorkerTransport(
   try {
     await Promise.all([inputDone, outputDone]);
     await consumerTask;
-    if (signal.aborted) throw signal.reason;
-    if (trailerBytes !== trailer.length) throw new Error('Truncated worker gzip trailer.');
-    if (trailer.readUInt32LE(0) !== checksum) throw new Error('Worker gzip CRC mismatch.');
-    if (trailer.readUInt32LE(4) !== moduloSize) throw new Error('Worker gzip ISIZE mismatch.');
+    if (signal.aborted) {
+      throw signal.reason;
+    }
+    if (trailerBytes !== trailer.length) {
+      throw new Error('Truncated worker gzip trailer.');
+    }
+    if (trailer.readUInt32LE(0) !== checksum) {
+      throw new Error('Worker gzip CRC mismatch.');
+    }
+    if (trailer.readUInt32LE(4) !== moduloSize) {
+      throw new Error('Worker gzip ISIZE mismatch.');
+    }
     return { uncompressedBytes };
   } catch (error) {
     abort(error);

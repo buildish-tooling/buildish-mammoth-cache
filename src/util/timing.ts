@@ -28,6 +28,7 @@ export interface TimingOptions {
   };
   readonly signal?: AbortSignal;
 }
+
 export function formatElapsed(milliseconds: number): string {
   const ms = Math.max(0, Math.floor(milliseconds));
   return `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
@@ -49,7 +50,9 @@ export async function timed<T>(
   outcome: (value: T) => string = () => 'success',
   failure: (error: unknown) => string = () => (options.signal?.aborted ? 'cancelled' : 'failed'),
 ): Promise<T> {
-  if (!options.timing) return work();
+  if (!options.timing) {
+    return work();
+  }
   const now = options.timing.now ?? (() => performance.now());
   const read = () => {
     try {

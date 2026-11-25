@@ -42,6 +42,7 @@ export interface WorkerPostRequest extends LifecycleOptions {
   readonly onCaptureInfo?: (message: string) => void;
   readonly onWarning?: (message: string) => void;
 }
+
 /** One fresh post operation; no source/package pointer can authorize replay or upload retry. */
 export async function postStreamingWorker(input: WorkerPostRequest) {
   const opened = await OpenedInvocation.open(input.anchor, input.budget, input.cleanupSignal),
@@ -66,12 +67,14 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     if (
       store.codec.options.role !== 'distributed-worker' ||
       store.codec.options.access !== 'writable'
-    )
+    ) {
       throw new Error('Worker post requires writable worker role.');
+    }
     if (attempt.state[4] === 'completed') {
       const terminal = attempt.state[7]!;
-      if (terminal[1] !== 'abandoned' && terminal[1] !== 'worker-uploaded')
+      if (terminal[1] !== 'abandoned' && terminal[1] !== 'worker-uploaded') {
         throw new Error('Worker has no completion artifact.');
+      }
       await attempt.guard();
       answer =
         terminal[1] === 'abandoned'
@@ -84,13 +87,14 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
           ...request,
           layeredWorker: attempt.handoff,
         });
-        if (gate.status !== 'ready')
+        if (gate.status !== 'ready') {
           throw new Error(
             'Gradle layer consumers could not settle; seed retained at ' +
               gradleSeedPath(store, seed) +
               ': ' +
               gate.message,
           );
+        }
         attempt.attachWindow(gate.window);
         settledConsumers = true;
       }
@@ -149,7 +153,9 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
                   : 'failed',
           );
         } catch (error) {
-          if (!(error instanceof WorkerUploadUnconfirmed)) throw error;
+          if (!(error instanceof WorkerUploadUnconfirmed)) {
+            throw error;
+          }
           request.onWarning?.(error.message);
         }
         if (receipt) {
@@ -209,7 +215,9 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
   } finally {
     attempt.close();
   }
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) {
+    throw failure;
+  }
   return answer!;
 }
 
@@ -223,8 +231,9 @@ export async function postFailedPrepareGradleLayer(
   },
 ): Promise<void> {
   const opened = await OpenedInvocation.open(input.anchor, input.budget, input.cleanupSignal);
-  if (opened.store.codec.options.invocation !== input.advertisedInvocation)
+  if (opened.store.codec.options.invocation !== input.advertisedInvocation) {
     throw new Error('Failed-prepare layer advertisement differs from the owning invocation.');
+  }
   const attempt = await PostAttempt.open(opened, input);
   const store = attempt.store,
     seed = attempt.handoff.header[12];
@@ -233,11 +242,13 @@ export async function postFailedPrepareGradleLayer(
       !seed ||
       store.codec.options.role !== 'distributed-worker' ||
       store.codec.options.access !== 'writable'
-    )
+    ) {
       throw new Error('Failed-prepare layer cleanup requires the frozen writable worker seed.');
+    }
     if (attempt.state[4] === 'completed') {
-      if (attempt.state[7]?.[1] !== 'abandoned')
+      if (attempt.state[7]?.[1] !== 'abandoned') {
         throw new Error('Unexpected failed-prepare layer completion.');
+      }
       return;
     }
     await validateGradleSeedOwner(store, seed);
@@ -245,8 +256,9 @@ export async function postFailedPrepareGradleLayer(
       ...input,
       layeredWorker: attempt.handoff,
     });
-    if (gate.status !== 'ready')
+    if (gate.status !== 'ready') {
       throw new Error('Failed-prepare Gradle consumers could not settle: ' + gate.message);
+    }
     attempt.attachWindow(gate.window);
     await input.removeHooks();
     await attempt.guard();

@@ -45,6 +45,7 @@ export interface NativeChild {
   readonly fileId: string;
   readonly pruned: boolean;
 }
+
 const childType = (s: BigIntStats): NativeChild['type'] =>
   s.isFile() ? 'file' : s.isDirectory() ? 'directory' : s.isSymbolicLink() ? 'symlink' : 'other';
 /** Capture-only pre-freeze policy; the trusted caller already owns the exclusive window. */
@@ -54,6 +55,7 @@ export interface NativePurge {
   outcome(partition: string, outcome: 'deleted' | 'missing' | 'unsupported', path: string): void;
   checkpoint(phase: 'before-unlink' | 'unlinked' | 'refreshed'): Promise<void>;
 }
+
 export interface WalkOptions {
   readonly budget: WorkingBudget;
   readonly purge?: NativePurge;
@@ -74,6 +76,7 @@ export interface WalkOptions {
   /** Immediate parent held by a caller's checked ancestor scope. Rechecked at both boundaries. */
   readonly parentNative?: NativeIdentity;
 }
+
 export type WalkEvent =
   | (NativeChild & { readonly tag: 'protected-child'; readonly nativePath: string })
   | {
@@ -91,12 +94,14 @@ export type WalkEvent =
       readonly nativePath: string;
       readonly identity: NativeIdentity;
     };
+
 export interface WalkWork {
   listings: number;
   entries: number;
   stats: number;
   peakNames: number;
 }
+
 export const walkWork = (): WalkWork => ({ listings: 0, entries: 0, stats: 0, peakNames: 0 });
 interface Child {
   name: string;
@@ -119,7 +124,9 @@ export async function* walkNative(
   relativePathSchema.parse(relative);
   const logicalRoot = pathSchema.parse(options.logicalRoot ?? relative);
   const max = options.maxDirectoryEntries ?? 100000;
-  if (!Number.isSafeInteger(max) || max < 1) throw new Error('Invalid directory entry allowance.');
+  if (!Number.isSafeInteger(max) || max < 1) {
+    throw new Error('Invalid directory entry allowance.');
+  }
   const signal = options.signal ?? new AbortController().signal;
   let retained = 0;
   const rawStat = async (path: string) => {
@@ -139,11 +146,15 @@ export async function* walkNative(
       expected[2] !== 'directory' ||
       expected[3] !== root.binding[3] ||
       !sameNative(await stat(parentPath(relative)), expected, true)
-    )
+    ) {
       throw new Error('Scoped traversal parent changed.');
+    }
   };
-  if (options.parentNative) await checkParent();
-  else if (relative) await root.parents(relative);
+  if (options.parentNative) {
+    await checkParent();
+  } else if (relative) {
+    await root.parents(relative);
+  }
   async function* visit(
     nativePath: string,
     path: string,
@@ -183,12 +194,17 @@ export async function* walkNative(
         release();
       }
     }
-    if (pruned) return;
+    if (pruned) {
+      return;
+    }
     pathSchema.parse(path);
     let before = nativeIdentity(raw);
-    if (expectedKind && before[2] !== expectedKind)
+    if (expectedKind && before[2] !== expectedKind) {
       throw new Error('Native entry kind changed during traversal.');
-    if (before[2] === 'directory' && depth > 100) throw new Error('Native tree depth exceeded.');
+    }
+    if (before[2] === 'directory' && depth > 100) {
+      throw new Error('Native tree depth exceeded.');
+    }
     const releaseFrame = options.budget.holdRecord(
       512 + Buffer.byteLength(path) + Buffer.byteLength(nativePath),
     );
@@ -196,12 +212,15 @@ export async function* walkNative(
       if (before[2] === 'file') {
         filePathSchema.parse(path);
         yield { tag: 'file', path, nativePath, identity: before, links: String(raw.nlink) };
-        if (!options.summaryOnlyFile?.(path) && !sameNative(before, await stat(nativePath), true))
+        if (!options.summaryOnlyFile?.(path) && !sameNative(before, await stat(nativePath), true)) {
           throw new Error('Native file changed during traversal.');
+        }
         return;
       }
       const activityTimes = options.purge ? ([before[8], before[9]] as const) : undefined;
-      if (!options.purge) yield { tag: 'directory-open', path, nativePath, identity: before };
+      if (!options.purge) {
+        yield { tag: 'directory-open', path, nativePath, identity: before };
+      }
       const intact = options.intactDirectory?.(path);
       if (intact) {
         let directJars: true | undefined;
@@ -212,14 +231,18 @@ export async function* walkNative(
           for await (const entry of await opendir(root.resolve(nativePath), { bufferSize: 32 })) {
             signal.throwIfAborted();
             work.entries++;
-            if (++entries > max) throw directoryBreadthError(path, max, 'native walk');
-            if ((entry.name === 'classes.jar' || entry.name === 'sources.jar') && entry.isFile())
+            if (++entries > max) {
+              throw directoryBreadthError(path, max, 'native walk');
+            }
+            if ((entry.name === 'classes.jar' || entry.name === 'sources.jar') && entry.isFile()) {
               directJars = true;
+            }
           }
         }
         const after = await stat(nativePath);
-        if (!sameNative(before, after, true))
+        if (!sameNative(before, after, true)) {
           throw new Error('Native directory changed during traversal.');
+        }
         yield { tag: 'directory-close', path, nativePath, identity: after, directJars };
         return;
       }
@@ -237,24 +260,37 @@ export async function* walkNative(
         for await (const entry of directory) {
           signal.throwIfAborted();
           work.entries++;
-          if (++entries > max) throw directoryBreadthError(path, max, 'native walk');
+          if (++entries > max) {
+            throw directoryBreadthError(path, max, 'native walk');
+          }
           componentSchema.parse(entry.name);
           const childPath = joinPath(path, entry.name);
           // Count every physical child; inventories additionally keep protected IDs.
           let pruned = false;
           if (isCacheMetadataPath(childPath)) {
-            if ((options.metadata ?? (relative === '' ? 'exclude' : 'reject')) !== 'exclude')
+            if ((options.metadata ?? (relative === '' ? 'exclude' : 'reject')) !== 'exclude') {
               throw new Error('Reserved metadata in native staging.');
+            }
             pruned = true;
           }
-          if (!pruned && options.prune?.(childPath)) pruned = true;
-          if (pruned && !options.inspectChild) continue;
-          if (!pruned) pathSchema.parse(childPath);
-          if (names.has(entry.name)) throw new Error('Duplicate decoded native child name.');
+          if (!pruned && options.prune?.(childPath)) {
+            pruned = true;
+          }
+          if (pruned && !options.inspectChild) {
+            continue;
+          }
+          if (!pruned) {
+            pathSchema.parse(childPath);
+          }
+          if (names.has(entry.name)) {
+            throw new Error('Duplicate decoded native child name.');
+          }
           let isDirectory = entry.isDirectory();
           if (!entry.isFile() && !isDirectory) {
             const raw = await rawStat(joinPath(nativePath, entry.name));
-            if (!options.inspectChild) nativeIdentity(raw);
+            if (!options.inspectChild) {
+              nativeIdentity(raw);
+            }
             isDirectory = raw.isDirectory();
           }
           const bytes = 128 + 4 * Buffer.byteLength(entry.name);
@@ -266,8 +302,9 @@ export async function* walkNative(
           names.add(name);
           children.push({ name, directory: isDirectory, regular: entry.isFile(), pruned });
         }
-        if (!sameNative(before, await stat(nativePath), true))
+        if (!sameNative(before, await stat(nativePath), true)) {
           throw new Error('Native directory changed while listing.');
+        }
         names.clear();
         children.sort(
           (a, b) => Number(a!.directory) - Number(b!.directory) || compareName(a!.name, b!.name),
@@ -278,10 +315,14 @@ export async function* walkNative(
         if (options.purge) {
           const policy = options.purge;
           for (const child of children) {
-            if (!child || child.directory || child.pruned) continue;
+            if (!child || child.directory || child.pruned) {
+              continue;
+            }
             const file = joinPath(nativePath, child.name),
               claims = policy.claim(joinPath(path, child.name));
-            if (!claims.length) continue;
+            if (!claims.length) {
+              continue;
+            }
             const partition = claims[0];
             if (!child.regular) {
               policy.outcome(partition, 'unsupported', file);
@@ -291,9 +332,12 @@ export async function* walkNative(
             try {
               candidate = await rawStat(file);
             } catch (error) {
-              if (!missing(error)) throw error;
-              if (!sameNative(before, await stat(nativePath), true))
+              if (!missing(error)) {
+                throw error;
+              }
+              if (!sameNative(before, await stat(nativePath), true)) {
                 throw new Error('Missing purge candidate changed its parent.', { cause: error });
+              }
               child.removed = true;
               policy.outcome(partition, 'missing', file);
               continue;
@@ -303,19 +347,23 @@ export async function* walkNative(
               continue;
             }
             const expected = nativeIdentity(candidate);
-            if (expected[3] !== root.binding[3]) throw new Error('Cross-device purge candidate.');
+            if (expected[3] !== root.binding[3]) {
+              throw new Error('Cross-device purge candidate.');
+            }
             await policy.checkpoint('before-unlink');
             policy.assertCurrent();
             signal.throwIfAborted();
-            if (!sameNative(before, await stat(nativePath), true))
+            if (!sameNative(before, await stat(nativePath), true)) {
               throw new Error('Purge parent changed.');
+            }
             const fresh = await rawStat(file);
             if (
               !fresh.isFile() ||
               fresh.nlink !== 1n ||
               !sameNative(expected, nativeIdentity(fresh), true)
-            )
+            ) {
               throw new Error('Purge candidate changed.');
+            }
             policy.assertCurrent();
             signal.throwIfAborted();
             await unlink(root.resolve(file));
@@ -323,8 +371,9 @@ export async function* walkNative(
             child.removed = true;
             policy.outcome(partition, 'deleted', file);
             const after = await stat(nativePath);
-            if (!sameObject(before, after) || before[6] !== after[6])
+            if (!sameObject(before, after) || before[6] !== after[6]) {
               throw new Error('Purge parent was replaced.');
+            }
             before = after;
             await policy.checkpoint('unlinked');
             await policy.checkpoint('refreshed');
@@ -341,7 +390,9 @@ export async function* walkNative(
           options.budget.release(released);
           charge -= released;
           retained -= released;
-          if (child.removed) continue;
+          if (child.removed) {
+            continue;
+          }
           yield* visit(
             joinPath(nativePath, child.name),
             joinPath(path, child.name),
@@ -351,8 +402,9 @@ export async function* walkNative(
           );
         }
         const after = await stat(nativePath);
-        if (!sameNative(before, after, true))
+        if (!sameNative(before, after, true)) {
           throw new Error('Native directory changed during traversal.');
+        }
         yield { tag: 'directory-close', path, nativePath, identity: after };
       } finally {
         options.budget.release(charge);
@@ -363,6 +415,8 @@ export async function* walkNative(
     }
   }
   yield* visit(relative, logicalRoot, logicalRoot ? logicalRoot.split('/').length + 1 : 1);
-  if (options.parentNative) await checkParent();
+  if (options.parentNative) {
+    await checkParent();
+  }
   await root.verifyRoot();
 }

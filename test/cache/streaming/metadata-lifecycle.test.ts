@@ -54,7 +54,9 @@ const gradleLifecycle = gradleResolver({
 });
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 async function directory(label: string) {
   const root = await mkdtemp(path.resolve('build/ls4-' + label + '-'));
@@ -68,12 +70,13 @@ async function backend() {
   const saves = vi.fn<BaseCacheBackend['saveCache']>(async (paths, key) => {
     const target = path.join(root, String(++sequence));
     await mkdir(target);
-    for (const source of paths)
+    for (const source of paths) {
       await cp(
         source.replace(/[\\/]$/, ''),
         path.join(target, path.basename(source.replace(/[\\/]$/, ''))),
         { recursive: true, preserveTimestamps: true },
       );
+    }
     objects.set(key, target);
     return sequence;
   });
@@ -87,13 +90,15 @@ async function backend() {
           [...objects.keys()].reverse().find((candidate) => candidate.startsWith(prefix)),
         )
         .find(Boolean);
-      if (selected)
-        for (const name of await readdir(objects.get(selected)!))
+      if (selected) {
+        for (const name of await readdir(objects.get(selected)!)) {
           await cp(
             path.join(objects.get(selected)!, name),
             path.join(options!.archiveRoot!, name),
             { recursive: true, preserveTimestamps: true },
           );
+        }
+      }
       return selected;
     },
     isMissingPathsError: () => false,
@@ -164,8 +169,9 @@ async function prepare(
     artifactBackend: config.artifacts ? async () => config.artifacts! : undefined,
     provision: async () => {},
     installHooks: async (store) => {
-      if (model.tuple[2] === 'gradle' && config.role !== 'distributed-worker')
+      if (model.tuple[2] === 'gradle' && config.role !== 'distributed-worker') {
         await store.makeParents(registrationDirectory(store) + '/placeholder');
+      }
       await config.hooks?.();
     },
     assertCurrent: (): undefined => {},
@@ -192,10 +198,11 @@ async function assertNoCatalogue(f: Awaited<ReturnType<typeof prepare>>, complet
   for (const name of files) {
     const bytes = await readFile(f.store.root.resolve(f.store.prefix + 'files/' + name));
     const first = JSON.parse(bytes.toString().split('\n')[0]);
-    if (first[0] === 'local-stream')
+    if (first[0] === 'local-stream') {
       expect(completed ? ['model', 'handoff'] : ['model', 'activity', 'handoff']).toContain(
         first[2],
       );
+    }
   }
   expect(f.budget.retained).toBe(0);
 }
@@ -669,40 +676,57 @@ it.each(['size', 'mtime', 'mode', 'type', 'delete', 'empty-directory'] as const)
     expect((await post(seed, sdk.api)).outcome).toBe('published');
     const warm = await prepare(sdk.api, 'e1'.repeat(16)),
       file = warm.store.root.resolve('data/shared/a');
-    if (change === 'size') await writeFile(file, 'longer-body');
-    if (change === 'mtime') await utimes(file, 2.345, 2.345);
-    if (change === 'mode') await chmod(file, 0o444);
+    if (change === 'size') {
+      await writeFile(file, 'longer-body');
+    }
+    if (change === 'mtime') {
+      await utimes(file, 2.345, 2.345);
+    }
+    if (change === 'mode') {
+      await chmod(file, 0o444);
+    }
     if (change === 'type') {
       await rm(file);
       await mkdir(file);
       await writeFile(path.join(file, 'child'), 'child');
     }
-    if (change === 'delete') await rm(file);
-    if (change === 'empty-directory') await mkdir(warm.store.root.resolve('data/shared/empty'));
+    if (change === 'delete') {
+      await rm(file);
+    }
+    if (change === 'empty-directory') {
+      await mkdir(warm.store.root.resolve('data/shared/empty'));
+    }
     const saves = sdk.saves.mock.calls.length;
     expect((await post(warm, sdk.api)).outcome).toBe('published');
     expect(sdk.saves.mock.calls.length).toBeGreaterThan(saves);
     expect(warm.store.root.work.bodyHashBytes).toBe(0);
     await assertNoCatalogue(warm, true);
     const restored = await prepare(sdk.api, 'e2'.repeat(16));
-    if (change === 'type')
+    if (change === 'type') {
       expect(await readFile(restored.store.root.resolve('data/shared/a/child'), 'utf8')).toBe(
         'child',
       );
-    if (change === 'delete') expect(await restored.store.root.stat('data/shared/a')).toBeNull();
-    if (change === 'empty-directory')
+    }
+    if (change === 'delete') {
+      expect(await restored.store.root.stat('data/shared/a')).toBeNull();
+    }
+    if (change === 'empty-directory') {
       expect((await restored.store.root.stat('data/shared/empty'))?.[2]).toBe('directory');
-    if (change === 'size')
+    }
+    if (change === 'size') {
       expect(await readFile(restored.store.root.resolve('data/shared/a'), 'utf8')).toBe(
         'longer-body',
       );
-    if (change === 'mode')
+    }
+    if (change === 'mode') {
       expect((await restored.store.root.stat('data/shared/a'))![6] & 0o200).toBe(0);
-    if (change === 'mtime')
+    }
+    if (change === 'mtime') {
       expect(Number((await restored.store.root.stat('data/shared/a'))![8]) / 1e9).toBeCloseTo(
         2.345,
         6,
       );
+    }
     await assertNoCatalogue(restored);
   },
 );
@@ -734,11 +758,12 @@ it.each([
       model = snapshotModel(writer);
     if (baseline !== 'miss') {
       const seed = await prepare(sdk.api, 'a4'.repeat(16), { model, job: writer ?? 'parent' });
-      if (baseline === 'prior')
+      if (baseline === 'prior') {
         await buildFiles(seed, {
           'state/shared/change': 'previous',
           'state/shared/delete': 'removed',
         });
+      }
       await post(seed, sdk.api);
     }
     const copy = vi.spyOn(MetadataSnapshot, 'copy'),
@@ -803,7 +828,9 @@ it.each(['prior', 'empty', 'miss'] as const)(
       model = snapshotModel();
     if (baseline !== 'miss') {
       const seed = await prepare(sdk.api, 'c4'.repeat(16), { model, job: 'A' });
-      if (baseline === 'prior') await buildFiles(seed, { 'state/shared/a': 'base-state' });
+      if (baseline === 'prior') {
+        await buildFiles(seed, { 'state/shared/a': 'base-state' });
+      }
       await post(seed, sdk.api);
     }
     const aggregator = await prepare(sdk.api, 'c5'.repeat(16), {
@@ -817,15 +844,18 @@ it.each(['prior', 'empty', 'miss'] as const)(
     });
     const descriptor = (await handoff(aggregator)).entries.find((e) => e[1] === 'state')![4]!;
     expect(descriptor[4][0]).toBe(baseline === 'prior' ? 'base' : 'empty');
-    if (baseline !== 'prior')
+    if (baseline !== 'prior') {
       expect(descriptor[4][1]).toBe(baseline === 'empty' ? 'generation' : 'miss');
+    }
     await post(aggregator, sdk.api);
     const reader = await prepare(sdk.api, 'c6'.repeat(16), { model });
-    if (baseline === 'prior')
+    if (baseline === 'prior') {
       expect(await readFile(reader.store.root.resolve('state/shared/a'), 'utf8')).toBe(
         'base-state',
       );
-    else expect((await handoff(reader)).entries.find((e) => e[1] === 'state')![2]).toBe('empty');
+    } else {
+      expect((await handoff(reader)).entries.find((e) => e[1] === 'state')![2]).toBe('empty');
+    }
     expect(await reader.store.root.stat('state/shared/extra')).toBeNull();
   },
 );

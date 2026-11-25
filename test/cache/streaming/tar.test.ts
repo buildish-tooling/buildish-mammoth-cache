@@ -36,7 +36,9 @@ async function parse(bytes: Buffer, strict = true, chunk = 512): Promise<Header[
   await pipeline(
     Readable.from(
       (async function* () {
-        for (let i = 0; i < bytes.length; i += chunk) yield bytes.subarray(i, i + chunk);
+        for (let i = 0; i < bytes.length; i += chunk) {
+          yield bytes.subarray(i, i + chunk);
+        }
       })(),
       { objectMode: false, highWaterMark: chunk },
     ),
@@ -173,10 +175,11 @@ describe('opt-in worker TAR profile', () => {
     expect(await parse(Buffer.concat([m, ends, ends]))).toHaveLength(1);
   });
   it('checks raw portable fields before upstream normalization', async () => {
-    for (const opts of [{ mode: 0o100644 }, { uid: 1 }])
+    for (const opts of [{ mode: 0o100644 }, { uid: 1 }]) {
       await expect(parse(Buffer.concat([tarHeader('x', 0, opts), ends]))).rejects.toThrow(
         'Invalid Mammoth TAR',
       );
+    }
     const h = tarHeader('x');
     h[124] = 57;
     checksum(h);

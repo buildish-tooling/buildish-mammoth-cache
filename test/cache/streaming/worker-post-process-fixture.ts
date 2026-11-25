@@ -60,7 +60,9 @@ if (mode === 'start') {
   await f.files('', { 'data/created': 'original', 'state/created': 'snapshot' });
 }
 const opened = await OpenedInvocation.current(root, f.budget);
-if (!opened) throw new Error('missing owner');
+if (!opened) {
+  throw new Error('missing owner');
+}
 const backend: WorkflowArtifactBackend = {
   capabilities: {
     ...STANDARD_WORKFLOW_ARTIFACT_BACKEND_CAPABILITIES,
@@ -76,11 +78,17 @@ const backend: WorkflowArtifactBackend = {
   },
   uploadArtifact: async (name, files) => {
     await writeFile(sink + '.package-path', files[0]);
-    if (mode === 'start' && point === 'upload-opened') process.exit(73);
-    if (mode === 'retry') throw new Error('unexpected retry upload');
+    if (mode === 'start' && point === 'upload-opened') {
+      process.exit(73);
+    }
+    if (mode === 'retry') {
+      throw new Error('unexpected retry upload');
+    }
     const bytes = await readFile(files[0]);
     await writeFile(sink, bytes);
-    if (mode === 'start' && point === 'upload-written') process.exit(73);
+    if (mode === 'start' && point === 'upload-written') {
+      process.exit(73);
+    }
     return {
       id: 1,
       name,
@@ -99,5 +107,9 @@ await postStreamingWorker({
   assertCurrent: (): undefined => {},
   artifactBackend: async () => backend,
 });
-if (mode === 'start' && point === 'terminal-completed') process.exit(73);
-if (f.budget.retained) throw new Error('worker child leaked budget');
+if (mode === 'start' && point === 'terminal-completed') {
+  process.exit(73);
+}
+if (f.budget.retained) {
+  throw new Error('worker child leaked budget');
+}

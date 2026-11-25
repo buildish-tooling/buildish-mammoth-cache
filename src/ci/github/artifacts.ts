@@ -38,8 +38,9 @@ export function createGitHubWorkflowArtifactBackend(
       supportsRawWorkerArchives: true,
     },
     async uploadArtifact(name, files, rootDirectory, options) {
-      if (options?.skipArchive && files.length !== 1)
+      if (options?.skipArchive && files.length !== 1) {
         throw new Error('Raw worker upload requires exactly one file.');
+      }
       const actualName = options?.skipArchive ? path.basename(files[0]!) : name;
       const response = await client.uploadArtifact(name, [...files], rootDirectory, options);
 

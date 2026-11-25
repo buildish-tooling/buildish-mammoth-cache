@@ -28,6 +28,7 @@ export class BufferedWriter {
   private disposed = false;
   private logical: number;
   private physical: number;
+
   constructor(
     private readonly handle: FileHandle,
     private readonly budget: WorkingBudget,
@@ -40,21 +41,36 @@ export class BufferedWriter {
     this.logical = initial;
     this.physical = initial;
   }
+
   get position() {
     return this.logical;
   }
+
   get written() {
     return this.physical;
   }
+
   pending(start: number, end: number): Buffer {
-    if (this.disposed || this.failed || start < this.physical || end > this.logical || end < start)
+    if (
+      this.disposed ||
+      this.failed ||
+      start < this.physical ||
+      end > this.logical ||
+      end < start
+    ) {
       throw new Error('Invalid buffered read.');
+    }
     return this.buffer!.subarray(start - this.physical, end - this.physical);
   }
+
   /** Memory-only fast path; false leaves the caller's bytes untouched for async flush. */
   tryAppend(bytes: Uint8Array): boolean {
-    if (this.disposed || this.failed || this.busy) throw new Error('Unavailable buffered writer.');
-    if (bytes.byteLength > BufferedWriter.capacity - this.used) return false;
+    if (this.disposed || this.failed || this.busy) {
+      throw new Error('Unavailable buffered writer.');
+    }
+    if (bytes.byteLength > BufferedWriter.capacity - this.used) {
+      return false;
+    }
     try {
       if (!this.buffer && bytes.byteLength) {
         this.budget.retain(BufferedWriter.capacity);
@@ -69,9 +85,14 @@ export class BufferedWriter {
       throw error;
     }
   }
+
   async append(bytes: Uint8Array): Promise<void> {
-    if (this.tryAppend(bytes)) return;
-    if (this.disposed || this.failed || this.busy) throw new Error('Unavailable buffered writer.');
+    if (this.tryAppend(bytes)) {
+      return;
+    }
+    if (this.disposed || this.failed || this.busy) {
+      throw new Error('Unavailable buffered writer.');
+    }
     this.busy = true;
     try {
       if (!this.buffer) {
@@ -85,7 +106,9 @@ export class BufferedWriter {
         this.used += count;
         at += count;
         this.logical = add(this.logical, count);
-        if (this.used === this.buffer.length) await this.flushBytes();
+        if (this.used === this.buffer.length) {
+          await this.flushBytes();
+        }
       }
     } catch (error) {
       this.failed = true;
@@ -94,8 +117,11 @@ export class BufferedWriter {
       this.busy = false;
     }
   }
+
   async flush(): Promise<void> {
-    if (this.disposed || this.failed || this.busy) throw new Error('Unavailable buffered writer.');
+    if (this.disposed || this.failed || this.busy) {
+      throw new Error('Unavailable buffered writer.');
+    }
     this.busy = true;
     try {
       await this.flushBytes();
@@ -103,9 +129,12 @@ export class BufferedWriter {
       this.busy = false;
     }
   }
+
   private async flushBytes(): Promise<void> {
     try {
-      if (this.used) await this.beforeFlush?.();
+      if (this.used) {
+        await this.beforeFlush?.();
+      }
       let at = 0;
       while (at < this.used) {
         this.writeCall();
@@ -114,30 +143,43 @@ export class BufferedWriter {
           !Number.isSafeInteger(result.bytesWritten) ||
           result.bytesWritten < 1 ||
           result.bytesWritten > this.used - at
-        )
+        ) {
           throw new Error('Short buffered write.');
+        }
         at += result.bytesWritten;
         this.physical = add(this.physical, result.bytesWritten);
         this.wrote(result.bytesWritten);
       }
-      if (this.used) await this.afterFlush?.();
+      if (this.used) {
+        await this.afterFlush?.();
+      }
       this.used = 0;
     } catch (error) {
       this.failed = true;
       throw error;
     }
   }
+
   releaseBuffer(): void {
-    if (this.busy) throw new Error('Active buffered writer.');
-    if (this.used) throw new Error('Pending buffered bytes.');
+    if (this.busy) {
+      throw new Error('Active buffered writer.');
+    }
+    if (this.used) {
+      throw new Error('Pending buffered bytes.');
+    }
     if (this.buffer) {
       this.budget.release(BufferedWriter.capacity);
       this.buffer = undefined;
     }
   }
+
   dispose(): void {
-    if (this.disposed) return;
-    if (this.busy) throw new Error('Active buffered writer.');
+    if (this.disposed) {
+      return;
+    }
+    if (this.busy) {
+      throw new Error('Active buffered writer.');
+    }
     this.disposed = true;
     if (this.buffer) {
       this.budget.release(BufferedWriter.capacity);

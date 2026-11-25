@@ -37,7 +37,9 @@ import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot
 import type { WorkerMergeInput } from '../../../src/cache/streaming/worker-merge';
 const roots: string[] = [];
 export async function cleanupCompleteFixtures() {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 export async function completeFixture(
   tool: 'gradle' | 'maven' = 'gradle',
@@ -95,6 +97,7 @@ export async function completeFixture(
   return { root, model, context, store, budget };
 }
 export type FixtureFile = string | null | { body: string; mode?: number; time?: number };
+
 export async function completeArchive(
   f: Awaited<ReturnType<typeof completeFixture>>,
   job: string,
@@ -131,12 +134,15 @@ export async function completeArchive(
           : wr === path
             ? [workspaceKind(path, Object.keys(files)), path, 'subtree']
             : null;
-      if (unit) yield { type: used ? 'used-unit-open' : 'unit-open', unit };
+      if (unit) {
+        yield { type: used ? 'used-unit-open' : 'unit-open', unit };
+      }
       for (const name of direct) {
         const spec = files[name],
           file = typeof spec === 'string' ? { body: spec } : spec!;
-        if (used) yield { type: 'used', name: baseName(name) };
-        else
+        if (used) {
+          yield { type: 'used', name: baseName(name) };
+        } else {
           yield {
             type: 'file',
             path: name,
@@ -148,13 +154,19 @@ export async function completeArchive(
             })(),
             assertStable: async () => {},
           };
+        }
       }
-      if (unit?.[2] === 'direct') yield { type: used ? 'used-unit-close' : 'unit-close' };
+      if (unit?.[2] === 'direct') {
+        yield { type: used ? 'used-unit-close' : 'unit-close' };
+      }
       for (const dir of [...directories]
         .filter((d) => d && parentPath(d) === path)
-        .sort((a, b) => compareName(baseName(a), baseName(b))))
+        .sort((a, b) => compareName(baseName(a), baseName(b)))) {
         yield* visit(dir);
-      if (unit?.[2] === 'subtree') yield { type: used ? 'used-unit-close' : 'unit-close' };
+      }
+      if (unit?.[2] === 'subtree') {
+        yield { type: used ? 'used-unit-close' : 'unit-close' };
+      }
       yield { type: 'dir-close', path };
     }
     yield* visit('');

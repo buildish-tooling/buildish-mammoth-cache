@@ -41,9 +41,12 @@ export async function checkInstallMember(
     reader = await readers.reader(binding, signal);
   const stat = options.stat ?? ((p: string) => store.root.stat(p));
   const actualRoot = await stat(physical);
-  if (!actualRoot) throw new Error('Missing install member.');
-  if (options.rootNative && !sameNative(options.rootNative, actualRoot, true))
+  if (!actualRoot) {
+    throw new Error('Missing install member.');
+  }
+  if (options.rootNative && !sameNative(options.rootNative, actualRoot, true)) {
     throw new Error('Observed backup root changed.');
+  }
   const phase = new NativeReadPhase(
     store.root,
     actualRoot[2] === 'file' ? parentPath(physical) : physical,
@@ -51,8 +54,9 @@ export async function checkInstallMember(
   if (actualRoot[2] === 'file') {
     store.root.work.stats++;
     const raw = await lstat(store.root.resolve(physical), { bigint: true });
-    if (raw.nlink !== 1n || !sameNative(actualRoot, nativeIdentity(raw), true))
+    if (raw.nlink !== 1n || !sameNative(actualRoot, nativeIdentity(raw), true)) {
       throw new Error('Aliased/changed install root file.');
+    }
   }
   const actual =
     actualRoot[2] === 'directory'
@@ -75,14 +79,20 @@ export async function checkInstallMember(
   async function next() {
     while (true) {
       const n = await actual.next();
-      if (n.done) return n;
+      if (n.done) {
+        return n;
+      }
       const e = n.value;
-      if (e.tag === 'protected-child') throw new Error('Unsupported install member.');
+      if (e.tag === 'protected-child') {
+        throw new Error('Unsupported install member.');
+      }
       if (e.tag === 'directory-close') {
         await phase.leave(e.nativePath, e.identity);
         continue;
       }
-      if (e.tag === 'directory-open') await phase.enter(e.nativePath, e.identity);
+      if (e.tag === 'directory-open') {
+        await phase.enter(e.nativePath, e.identity);
+      }
       return n;
     }
   }
@@ -98,17 +108,24 @@ export async function checkInstallMember(
           kind = row[0] === 'file' ? 'file' : 'directory',
           path = String(row[1]);
         if (head.done) {
-          if (options.partial) return;
+          if (options.partial) {
+            return;
+          }
           throw new Error('Missing member descendant.');
         }
         const e = head.value;
-        if (e.tag === 'protected-child' || e.tag === 'directory-close')
+        if (e.tag === 'protected-child' || e.tag === 'directory-close') {
           throw new Error('Invalid member event.');
+        }
         const actualKind = e.tag === 'file' ? 'file' : 'directory';
         const order = compareMembership(['member', actualKind, e.path], ['member', kind, path]);
-        if (order < 0) throw new Error('Unknown install descendant.');
+        if (order < 0) {
+          throw new Error('Unknown install descendant.');
+        }
         if (order > 0) {
-          if (options.partial) return;
+          if (options.partial) {
+            return;
+          }
           throw new Error('Missing member descendant.');
         }
         const expected = row[2] as NativeIdentity,
@@ -127,18 +144,24 @@ export async function checkInstallMember(
           !matches ||
           observed[3] !== store.root.binding[3] ||
           (e.tag === 'file' && e.links !== '1')
-        )
+        ) {
           throw new Error('Install member native identity changed.');
-        if (options.observed) await options.observed(value, e.nativePath, observed);
+        }
+        if (options.observed) {
+          await options.observed(value, e.nativePath, observed);
+        }
         head = await next();
       },
       signal,
     );
-    if (!head.done) throw new Error('Unknown trailing install descendant.');
+    if (!head.done) {
+      throw new Error('Unknown trailing install descendant.');
+    }
     // Root stat prevents replacing an empty member between the join and return.
     const after = await stat(physical);
-    if (!after || !sameNative(actualRoot, after, true))
+    if (!after || !sameNative(actualRoot, after, true)) {
       throw new Error('Install member changed during validation.');
+    }
     return after;
   } finally {
     await actual.return(undefined as never);

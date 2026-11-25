@@ -45,11 +45,15 @@ async function* records(rows: Value[]): AsyncGenerator<Value> {
   yield* rows;
 }
 async function* chunks(bytes: Buffer): AsyncGenerator<Buffer> {
-  for (let i = 0; i < bytes.length; i += 37) yield bytes.subarray(i, i + 37);
+  for (let i = 0; i < bytes.length; i += 37) {
+    yield bytes.subarray(i, i + 37);
+  }
 }
 function fixture(purpose: LocalPurpose, model?: ReturnType<typeof resolveModel>) {
   const o = { ...localOptions() };
-  if (model) o.model = model;
+  if (model) {
+    o.model = model;
+  }
   const f = localFixtures(o),
     partition = null;
   const opts: LocalStreamOptions = {
@@ -147,8 +151,9 @@ async function write(f: ReturnType<typeof fixture>, rows = f.rows) {
   if (
     f.header[2] === 'install-plan' &&
     (!Array.isArray(rows[0]) || rows[0][0] !== 'install-context')
-  )
+  ) {
     rows = [['install-context', nonce], ...rows];
+  }
   let seal!: LocalStreamSeal;
   const output: Buffer[] = [];
   for await (const bytes of writeLocalStream(
@@ -158,11 +163,12 @@ async function write(f: ReturnType<typeof fixture>, rows = f.rows) {
     (s) => {
       seal = s;
     },
-  ))
+  )) {
     output.push(bytes);
+  }
   return { bytes: Buffer.concat(output), seal };
 }
-for (const purpose of localPurposes)
+for (const purpose of localPurposes) {
   it('checks independent ' + purpose + ' canonical framing and row grammar', async () => {
     const f = fixture(purpose),
       actual = await write(f);
@@ -182,6 +188,7 @@ for (const purpose of localPurposes)
     expect(seen).toEqual([f.header, ...f.rows, ['local-end', f.rows.length, f.digest]]);
     expect(f.opts.budget.retained).toBe(0);
   });
+}
 it.each([
   'version',
   'identity',
@@ -195,18 +202,33 @@ it.each([
 ])('rejects local framing %s', async (kind) => {
   const f = fixture('activity');
   let bytes = f.bytes;
-  if (kind === 'version')
+  if (kind === 'version') {
     bytes = Buffer.from(bytes.toString().replace('"local-stream",1', '"local-stream",2'));
-  if (kind === 'identity') bytes = Buffer.from(bytes.toString().replace(f.options.invocation, h));
-  if (kind === 'purpose')
+  }
+  if (kind === 'identity') {
+    bytes = Buffer.from(bytes.toString().replace(f.options.invocation, h));
+  }
+  if (kind === 'purpose') {
     bytes = Buffer.from(bytes.toString().replace('"activity"', '"observations"'));
-  if (kind === 'partition') f.opts = { ...f.opts, partition: 'data' };
-  if (kind === 'end-count')
+  }
+  if (kind === 'partition') {
+    f.opts = { ...f.opts, partition: 'data' };
+  }
+  if (kind === 'end-count') {
     bytes = Buffer.from(bytes.toString().replace('"local-end",5', '"local-end",4'));
-  if (kind === 'event-hash') bytes = Buffer.from(bytes.toString().replace(f.digest, h));
-  if (kind === 'raw-hash') (f.reference as Value[])[4] = h;
-  if (kind === 'trailing') bytes = Buffer.concat([bytes, encodeRecord(['dir-close', ''])]);
-  if (kind === 'truncated') bytes = bytes.subarray(0, -1);
+  }
+  if (kind === 'event-hash') {
+    bytes = Buffer.from(bytes.toString().replace(f.digest, h));
+  }
+  if (kind === 'raw-hash') {
+    (f.reference as Value[])[4] = h;
+  }
+  if (kind === 'trailing') {
+    bytes = Buffer.concat([bytes, encodeRecord(['dir-close', ''])]);
+  }
+  if (kind === 'truncated') {
+    bytes = bytes.subarray(0, -1);
+  }
   await expect(readLocalStream(chunks(bytes), 'activity', f.opts, f.reference)).rejects.toThrow();
   expect(f.opts.budget.retained).toBe(0);
 });
@@ -262,16 +284,25 @@ it.each([
       kind === 'unit-activity' || kind === 'missing-unit' ? 'activity' : 'observations',
     ),
     rows = structuredClone(f.rows);
-  if (kind === 'late-child') rows.splice(5, 0, ['child', 'z', 'file', '1', '9']);
-  if (kind === 'child-collision') rows.splice(4, 0, ['child', 'empty.bin', 'directory', '1', '2']);
+  if (kind === 'late-child') {
+    rows.splice(5, 0, ['child', 'z', 'file', '1', '9']);
+  }
+  if (kind === 'child-collision') {
+    rows.splice(4, 0, ['child', 'empty.bin', 'directory', '1', '2']);
+  }
   if (kind === 'breadth') {
     f.opts = { ...f.opts, maxDirectoryEntries: 1 };
     rows.splice(4, 0, ['child', 'z', 'file', '1', '9']);
   }
-  if (kind === 'duplicate-file') rows.splice(5, 0, rows[4]);
-  if (kind === 'missing-unit')
+  if (kind === 'duplicate-file') {
+    rows.splice(5, 0, rows[4]);
+  }
+  if (kind === 'missing-unit') {
     rows.splice(1, 0, ['dir-open', 'repository'], ['used', 'a.jar', 'data']);
-  if (kind === 'wrong-owner') (rows[4] as Value[])[2] = 'data';
+  }
+  if (kind === 'wrong-owner') {
+    (rows[4] as Value[])[2] = 'data';
+  }
   if (kind === 'unit-activity') {
     rows.splice(
       1,
@@ -313,7 +344,7 @@ it('has no cumulative installation count/byte admission limit', async () => {
   let seal!: LocalStreamSeal;
   const registration = f.rows[0] as Value[];
   const source = async function* () {
-    for (let i = 0; i < 100001; i++)
+    for (let i = 0; i < 100001; i++) {
       yield [
         'installation',
         [
@@ -322,11 +353,13 @@ it('has no cumulative installation count/byte admission limit', async () => {
           ...(registration[1] as Value[]).slice(5),
         ],
       ];
+    }
   };
   for await (const _ of writeLocalStream(source(), 'installations', f.opts, (s) => {
     seal = s;
-  }))
+  })) {
     void _;
+  }
   const read = await readLocalStream(
     writeLocalStream(source(), 'installations', f.opts, () => {}),
     'installations',
@@ -369,7 +402,7 @@ it('allows retained incomplete workspace observations but rejects deletion witho
     const result: Value[] = [];
     for (let i = 0; i < paths.length; i++) {
       result.push(['dir-open', paths[i], directory]);
-      if (i + 1 < paths.length)
+      if (i + 1 < paths.length) {
         result.push([
           'child',
           paths[i + 1].slice(paths[i].length + (paths[i] ? 1 : 0)),
@@ -377,6 +410,7 @@ it('allows retained incomplete workspace observations but rejects deletion witho
           '1',
           '3',
         ]);
+      }
     }
     result.push(
       ['child', 'metadata.bin', 'file', '1', '2'],
@@ -384,7 +418,9 @@ it('allows retained incomplete workspace observations but rejects deletion witho
       ['file', 'metadata.bin', 'data', native, 'none', decision],
       ['unit-close', 'artifact-transform', root, sha],
     );
-    for (const path of [...paths].reverse()) result.push(['dir-close', path]);
+    for (const path of [...paths].reverse()) {
+      result.push(['dir-close', path]);
+    }
     return result;
   }
   expect((await write(f, rows('retain'))).seal.records).toBeGreaterThan(10);
@@ -419,7 +455,9 @@ it('releases local names on early writer return and failing provisional consumer
   expect(f.opts.budget.retained).toBe(0);
   await expect(
     readLocalStream(chunks(f.bytes), 'activity', f.opts, f.reference, async (row) => {
-      if (Array.isArray(row) && row[0] === 'dir-open') throw new Error('local consumer');
+      if (Array.isArray(row) && row[0] === 'dir-open') {
+        throw new Error('local consumer');
+      }
     }),
   ).rejects.toThrow('local consumer');
   expect(f.opts.budget.retained).toBe(0);
@@ -432,12 +470,14 @@ it('serializes each activity row once across several files sharing a directory',
     genericDigest = vi.spyOn(encoding.Digest.prototype, 'update');
   try {
     const output: Buffer[] = [];
-    for await (const bytes of writeLocalStream(records(f.rows), 'activity', f.opts, () => {}))
+    for await (const bytes of writeLocalStream(records(f.rows), 'activity', f.opts, () => {})) {
       output.push(bytes);
+    }
     expect(serialized).toHaveBeenCalledTimes(f.rows.length + 2);
     expect(genericDigest).not.toHaveBeenCalled();
-    for (const [index, bytes] of output.entries())
+    for (const [index, bytes] of output.entries()) {
       expect(bytes).toBe(serialized.mock.results[index].value);
+    }
     expect(f.opts.budget.retained).toBe(0);
   } finally {
     serialized.mockRestore();
@@ -488,7 +528,9 @@ it('exposes exact checked row positions for bounded joins and releases on early 
   bad[4] = '0'.repeat(64);
   await expect(
     (async () => {
-      for await (const _ of readLocalRows(chunks(f.bytes), 'installations', f.opts, bad)) void _;
+      for await (const _ of readLocalRows(chunks(f.bytes), 'installations', f.opts, bad)) {
+        void _;
+      }
     })(),
   ).rejects.toThrow('local reference');
   expect(f.opts.budget.retained).toBe(0);
@@ -514,7 +556,9 @@ it('resolves install evidence kind before the existing grammar accepts each prov
       resolved = value;
     },
   )) {
-    if (Array.isArray(row.value) && row.value[0] === 'install') expect(resolved).toBe(row.value);
+    if (Array.isArray(row.value) && row.value[0] === 'install') {
+      expect(resolved).toBe(row.value);
+    }
   }
   expect(opts.budget.retained).toBe(0);
 });
@@ -536,8 +580,9 @@ it('cancels a pending pre-accept evidence join and releases the held parser reco
         entered();
         await new Promise<void>(() => {});
       },
-    ))
+    )) {
       void row;
+    }
   })();
   await called;
   controller.abort(new Error('cancel evidence frontier'));
@@ -692,8 +737,9 @@ it.each([
         purpose as LocalPurpose,
         f.opts,
         () => {},
-      ))
+      )) {
         void bytes;
+      }
     })(),
   ).rejects.toThrow();
   const header = [...f.header];

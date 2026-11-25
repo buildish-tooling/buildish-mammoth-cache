@@ -34,7 +34,9 @@ import { localOptions } from './local-fixtures';
 import { byteSource } from './protocol-fixtures';
 const roots: string[] = [];
 afterEach(async () => {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 const signal = () => new AbortController().signal;
 async function fixture() {
@@ -70,7 +72,7 @@ async function archive(
   async function* events(): AsyncGenerator<WorkerEvent> {
     yield { type: 'channel-open' };
     yield { type: 'dir-open', path: '' };
-    for (let i = 0; i < count; i++)
+    for (let i = 0; i < count; i++) {
       yield {
         type: 'file',
         path: 'f' + String(i).padStart(3, '0'),
@@ -78,10 +80,13 @@ async function archive(
         mode,
         mtimeMs: time,
         bytes: (async function* () {
-          if (body) yield Buffer.from(body);
+          if (body) {
+            yield Buffer.from(body);
+          }
         })(),
         assertStable: async () => {},
       };
+    }
     yield { type: 'dir-close', path: '' };
     yield { type: 'channel-close' };
     yield { type: 'channel-open' };
@@ -127,10 +132,14 @@ it.each(['', 'x'])(
         signal(),
       );
     let head = await reader.next();
-    while (head?.type !== 'file') head = await reader.next();
+    while (head?.type !== 'file') {
+      head = await reader.next();
+    }
     expect(reader.work.peakPending).toBe(1);
     let count = 0;
-    for await (const b of head.file.body) count += b.length;
+    for await (const b of head.file.body) {
+      count += b.length;
+    }
     expect(count).toBe(body.length);
     const meta = await reader.next();
     expect(meta?.type === 'control' && tuple(meta.value)[0]).toBe('file-meta');
@@ -140,7 +149,9 @@ it.each(['', 'x'])(
     });
     await Promise.resolve();
     expect(settled).toBe(false);
-    while (await reader.next()) void 0;
+    while (await reader.next()) {
+      void 0;
+    }
     await reader.completion;
     await reader.close();
     expect(f.budget.retained).toBe(0);
@@ -163,9 +174,13 @@ it.each(['body', 'metadata'])(
         signal(),
       );
     let head = await reader.next();
-    while (head?.type !== 'file') head = await reader.next();
+    while (head?.type !== 'file') {
+      head = await reader.next();
+    }
     if (phase === 'metadata') {
-      for await (const b of head.file.body) void b;
+      for await (const b of head.file.body) {
+        void b;
+      }
       await reader.next();
     }
     reader.cancel(new Error('cancelled frontier'));
@@ -192,7 +207,9 @@ it('stages only provisional winners, hashes losers and repairs equivalent mode/t
   expect(result.readers.every((r) => r.work.peakPending === 1)).toBe(true);
   const part = result.partitions[0],
     rows = [];
-  for await (const r of part.facts.rows(signal())) rows.push(tuple(r));
+  for await (const r of part.facts.rows(signal())) {
+    rows.push(tuple(r));
+  }
   expect(rows[0].slice(4)).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/), 3, 0o755, 2000]);
   expect(await readFile(f.store.root.resolve(part.nativeRoot + '/f000'), 'utf8')).toBe('abc');
   expect(await f.store.root.stat('f000')).toBe(null);
@@ -264,7 +281,9 @@ it('retires a partially acquired partition spool after the next acquisition fail
   let calls = 0;
   const create = WorkerSpool.create,
     spy = vi.spyOn(WorkerSpool, 'create').mockImplementation(async (...args) => {
-      if (++calls === 2) throw new Error('second acquisition failed');
+      if (++calls === 2) {
+        throw new Error('second acquisition failed');
+      }
       return create(...args);
     });
   try {
@@ -343,7 +362,9 @@ it('destroys unstarted owned streams when the second membership acquisition fail
     create = DiskMembership.create;
   let count = 0;
   const spy = vi.spyOn(DiskMembership, 'create').mockImplementation(async (...args) => {
-    if (++count === 2) throw new Error('membership acquisition failed');
+    if (++count === 2) {
+      throw new Error('membership acquisition failed');
+    }
     return create(...args);
   });
   try {

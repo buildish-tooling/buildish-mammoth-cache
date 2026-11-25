@@ -23,7 +23,9 @@ import type { InstallScratch as InstallScratchType } from '../../../src/cache/st
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture() {
   const f = await installFixture();
@@ -91,7 +93,9 @@ it('keeps completed units and abandons an unstarted suffix after later failure',
   );
   let n = 0;
   const mock = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-source-renamed' && ++n === 2) throw new Error('interrupted');
+    if (name === 'install-source-renamed' && ++n === 2) {
+      throw new Error('interrupted');
+    }
   });
   await expect(executeInstall(f.store, plan, f.budget, { batchOperations: 2 })).rejects.toThrow(
     'interrupted',
@@ -117,8 +121,9 @@ it('cancels during endpoint checks before initiating another rename', async () =
     path,
   ) {
     const value = await stat.call(this, path);
-    if (path === input.nativeRoot + '/data/a' && ++n === 1)
+    if (path === input.nativeRoot + '/data/a' && ++n === 1) {
       controller.abort(new Error('endpoint cancellation'));
+    }
     return value;
   });
   await expect(
@@ -260,7 +265,9 @@ it('restores a parked old root after cancellation before placing the replacement
   );
   const abort = new AbortController();
   vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-old-backed-up') abort.abort(new Error('cancelled'));
+    if (name === 'install-old-backed-up') {
+      abort.abort(new Error('cancelled'));
+    }
   });
   await expect(executeInstall(f.store, plan, f.budget, { signal: abort.signal })).rejects.toThrow(
     'cancelled',
@@ -323,8 +330,9 @@ it('owns an incoming placement whose post-rename observation fails', async () =>
   );
   let moves = 0;
   vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'install-rename-before-stat' && ++moves === 2)
+    if (name === 'install-rename-before-stat' && ++moves === 2) {
       throw new Error('incoming observation failed');
+    }
   });
   await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow(
     'incoming observation failed',
@@ -348,7 +356,9 @@ it('retains ownership when recording the completed backup fails', async () => {
     value,
     ...rest
   ) {
-    if (Array.isArray(value) && value[0] === 'backup') throw new Error('backup record failed');
+    if (Array.isArray(value) && value[0] === 'backup') {
+      throw new Error('backup record failed');
+    }
     return append.call(this, value, ...rest);
   });
   await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('backup record failed');
@@ -370,8 +380,9 @@ it('reports retained endpoints when reverse cleanup rename succeeds before its o
       restoring = true;
       throw new Error('place failed');
     }
-    if (name === 'install-rename-before-stat' && restoring)
+    if (name === 'install-rename-before-stat' && restoring) {
       throw new Error('return observation failed');
+    }
   });
   await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow('retained backup roots');
   expect(await readFile(f.store.root.resolve('state/old'), 'utf8')).toBe('old');
@@ -391,7 +402,9 @@ it.each(['file-backups', 'directory-backup'] as const)(
           'x'.repeat(512 * 1024),
         ]),
       );
-      if (shape === 'file-backups') old['state/keep.lock'] = 'keep';
+      if (shape === 'file-backups') {
+        old['state/keep.lock'] = 'keep';
+      }
       await f.files('', old);
       const plan = await freezeInstallPlan(
         f.store,
@@ -403,8 +416,12 @@ it.each(['file-backups', 'directory-backup'] as const)(
       let intents = 0,
         pointers = 0;
       const hook = vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-        if (name === 'install-intent-published') intents++;
-        if (name === 'install-progress-pointer') pointers++;
+        if (name === 'install-intent-published') {
+          intents++;
+        }
+        if (name === 'install-progress-pointer') {
+          pointers++;
+        }
       });
       await executeInstall(f.store, plan, f.budget);
       expect(f.store.root.work.bodyHashBytes).toBe(0);
@@ -462,11 +479,12 @@ it('consumes an admitted metadata source through the isolated installer in read-
   expect(await f.store.root.stat(plan.plan[2])).toBeNull();
   expect(() => plan.metadata.assert(f.store)).toThrow('closed');
   expect(await f.store.root.stat(input.objectRoot + '/envelope.json')).not.toBeNull();
-  for (const directory of ['planning', 'admission', 'mutation'])
+  for (const directory of ['planning', 'admission', 'mutation']) {
     expect(
       await (
         await import('node:fs/promises')
       ).readdir(f.store.root.resolve(f.store.prefix + directory)),
     ).toEqual([]);
+  }
   expect(f.budget.retained).toBe(0);
 });

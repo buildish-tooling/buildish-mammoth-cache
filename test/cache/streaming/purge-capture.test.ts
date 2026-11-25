@@ -45,9 +45,12 @@ vi.mock('node:fs/promises', async (original) => {
   return {
     ...actual,
     lstat: async (...a: Parameters<typeof actual.lstat>) => {
-      if (watched(a[0])) counts.stats++;
-      if (counts.forbidden && String(a[0]).startsWith(counts.forbidden))
+      if (watched(a[0])) {
+        counts.stats++;
+      }
+      if (counts.forbidden && String(a[0]).startsWith(counts.forbidden)) {
         throw new Error('Unexpected opaque descendant stat');
+      }
       const value = await actual.lstat(...a);
       counts.onStat?.(String(a[0]));
       return String(a[0]) === counts.crossDevice
@@ -60,15 +63,21 @@ vi.mock('node:fs/promises', async (original) => {
         : value;
     },
     opendir: async (...a: Parameters<typeof actual.opendir>) => {
-      if (watched(a[0])) counts.listings++;
-      if (counts.forbidden && String(a[0]).startsWith(counts.forbidden))
+      if (watched(a[0])) {
+        counts.listings++;
+      }
+      if (counts.forbidden && String(a[0]).startsWith(counts.forbidden)) {
         throw new Error('Unexpected opaque descendant listing');
+      }
       return actual.opendir(...a);
     },
     unlink: async (...a: Parameters<typeof actual.unlink>) => {
-      if (String(a[0]) === counts.deny)
+      if (String(a[0]) === counts.deny) {
         throw Object.assign(new Error('denied'), { code: 'EACCES' });
-      if (watched(a[0])) counts.unlinks++;
+      }
+      if (watched(a[0])) {
+        counts.unlinks++;
+      }
       return actual.unlink(...a);
     },
   };
@@ -81,7 +90,9 @@ afterEach(async () => {
   counts.forbidden = '';
   counts.onStat = undefined;
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture(
   files: Record<string, string>,
@@ -95,7 +106,9 @@ async function fixture(
     await f.close();
   });
   await f.files('', files);
-  for (const p of Object.keys(files)) await utimes(f.store.root.resolve(p), 1.234, 1.234);
+  for (const p of Object.keys(files)) {
+    await utimes(f.store.root.resolve(p), 1.234, 1.234);
+  }
   const cutoff = Date.now() + 30;
   const initialized = await initializeObservationFixture(f, undefined, cutoff);
   await setTimeout(Math.max(0, cutoff - Date.now() + 5));
@@ -104,7 +117,9 @@ async function fixture(
     root: f.store.root,
     invocation: f.store.codec.options.invocation,
     assertCurrent() {
-      if (!active) throw new Error('window expired');
+      if (!active) {
+        throw new Error('window expired');
+      }
     },
   };
   return {
@@ -224,12 +239,16 @@ it.each(['file', 'parent', 'after-unlink', 'revoke', 'unlink-error'] as const)(
     const f = await fixture({ 'data/a': 'a', 'data/runtime.lock': 'lock' });
     let once = false;
     vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-      if (once) return;
+      if (once) {
+        return;
+      }
       if (bad === 'after-unlink' && point === 'observation-purge-unlinked') {
         once = true;
         await f.files('', { 'data/unknown': 'unknown' });
       }
-      if (point !== 'observation-purge-before-unlink') return;
+      if (point !== 'observation-purge-before-unlink') {
+        return;
+      }
       if (bad === 'file') {
         once = true;
         await writeFile(f.store.root.resolve('data/runtime.lock'), 'replacement');
@@ -244,7 +263,9 @@ it.each(['file', 'parent', 'after-unlink', 'revoke', 'unlink-error'] as const)(
         once = true;
         f.expire();
       }
-      if (bad === 'unlink-error') counts.deny = f.store.root.resolve('data/runtime.lock');
+      if (bad === 'unlink-error') {
+        counts.deny = f.store.root.resolve('data/runtime.lock');
+      }
     });
     await expect(
       captureObservations(f.store, { budget: f.budget, purgeWindow: f.grant }),
@@ -301,14 +322,18 @@ it('keeps opaque hard-pruned scopes opaque under broad rules and reports them', 
 });
 it('adds zero native operations for nonmatches and fixed candidate-only work as ordinary files/depth grow', async () => {
   const results = [];
-  for (const depth of [0, 6])
-    for (const n of [4, 16])
-      for (const match of [false, true])
+  for (const depth of [0, 6]) {
+    for (const n of [4, 16]) {
+      for (const match of [false, true]) {
         for (const enabled of [false, true]) {
           const parent = 'data' + '/nested'.repeat(depth),
             files: Record<string, string> = {};
-          for (let i = 0; i < n; i++) files[parent + '/f' + i] = 'body';
-          if (match) files[parent + '/runtime.lock'] = 'lock';
+          for (let i = 0; i < n; i++) {
+            files[parent + '/f' + i] = 'body';
+          }
+          if (match) {
+            files[parent + '/runtime.lock'] = 'lock';
+          }
           const f = await fixture(files, [parent + '/runtime.lock']);
           counts.root = f.root.replaceAll('\\', '/');
           counts.stats = 0;
@@ -335,6 +360,9 @@ it('adds zero native operations for nonmatches and fixed candidate-only work as 
           });
           counts.root = '';
         }
+      }
+    }
+  }
   const added = [];
   for (let i = 0; i < results.length; i += 2) {
     const off = results[i],
@@ -342,8 +370,11 @@ it('adds zero native operations for nonmatches and fixed candidate-only work as 
     expect(on.listings).toBe(off.listings);
     expect(on.unlinks - off.unlinks).toBe(off.match ? 1 : 0);
     const delta = on.stats - off.stats;
-    if (!off.match) expect(delta).toBe(0);
-    else added.push(delta);
+    if (!off.match) {
+      expect(delta).toBe(0);
+    } else {
+      added.push(delta);
+    }
   }
   expect(new Set(added).size).toBe(1);
   expect(added[0]).toBe(3);
@@ -373,8 +404,11 @@ it.each(['abort', 'revoke'] as const)(
     let seen = 0;
     counts.onStat = (p) => {
       if (p === f.store.root.resolve('data/runtime.lock') && ++seen === 2) {
-        if (kind === 'abort') controller.abort(new Error('last stat abort'));
-        else f.expire();
+        if (kind === 'abort') {
+          controller.abort(new Error('last stat abort'));
+        } else {
+          f.expire();
+        }
       }
     };
     await expect(
@@ -393,7 +427,9 @@ it.each(['abort', 'revoke'] as const)(
 it('rejects an expired window at final acceptance while preserving a committed observation', async () => {
   const f = await fixture({ 'data/a': 'a', 'data/runtime.lock': 'lock' });
   vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-    if (point === 'observations-pointer') f.expire();
+    if (point === 'observations-pointer') {
+      f.expire();
+    }
   });
   await expect(
     captureObservations(f.store, { budget: f.budget, purgeWindow: f.grant }),

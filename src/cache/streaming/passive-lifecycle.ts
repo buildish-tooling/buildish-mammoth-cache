@@ -26,12 +26,15 @@ export async function postStreamingReadOnly(anchor: InvocationAnchor, options: L
   const opened = await OpenedInvocation.open(anchor, options.budget, options.cleanupSignal),
     attempt = await PostAttempt.open(opened, options);
   try {
-    if (attempt.store.codec.options.access !== 'read-only')
+    if (attempt.store.codec.options.access !== 'read-only') {
       throw new Error('Read-only post requires frozen read-only access.');
-    if (attempt.state[4] === 'completed' && attempt.state[7]?.[1] !== 'read-only')
+    }
+    if (attempt.state[4] === 'completed' && attempt.state[7]?.[1] !== 'read-only') {
       throw new Error('Invalid read-only terminal outcome.');
-    if (attempt.state[4] !== 'completed')
+    }
+    if (attempt.state[4] !== 'completed') {
       await attempt.finish(['outcome', 'read-only', null, null, null]);
+    }
     await attempt.guard();
     return { outcome: 'read-only' as const };
   } finally {
@@ -45,7 +48,9 @@ export async function reconcileDisabledRoot(root: string, options: LifecycleOpti
   try {
     await lstat(root);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw e;
+    }
     present = false;
   }
   if (present) {
@@ -55,6 +60,7 @@ export async function reconcileDisabledRoot(root: string, options: LifecycleOpti
   }
   options.cleanupSignal?.throwIfAborted();
   options.signal?.throwIfAborted();
-  if (options.assertCurrent() !== undefined)
+  if (options.assertCurrent() !== undefined) {
     throw new Error('Lifecycle assertion must be synchronous.');
+  }
 }

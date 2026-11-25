@@ -54,9 +54,12 @@ export const nativeIdentitySchema = z.tuple([
   nanosecondSchema.nullable(),
 ]);
 export const nativePathSchema = nameSchema.refine((v) => {
-  if (v.includes('\0')) return false;
-  if (v.startsWith('/'))
+  if (v.includes('\0')) {
+    return false;
+  }
+  if (v.startsWith('/')) {
     return path.posix.isAbsolute(v) && !v.split('/').some((s) => s === '.' || s === '..');
+  }
   return (
     (/^[a-zA-Z]:[\\/]/.test(v) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(v)) &&
     path.win32.isAbsolute(v) &&
@@ -66,7 +69,9 @@ export const nativePathSchema = nameSchema.refine((v) => {
 export const roleSchema = z.enum(['standalone', 'distributed-worker', 'distributed-aggregator']);
 export const accessSchema = z.enum(['writable', 'read-only']);
 export type Role = z.infer<typeof roleSchema>;
+
 export type Access = z.infer<typeof accessSchema>;
+
 export const policySchema = z
   .tuple([
     z.literal('policy'),
@@ -83,6 +88,7 @@ export const policySchema = z
   ])
   .refine((p) => (p[5] === 'off') === (p[6] === null));
 export type Policy = z.infer<typeof policySchema>;
+
 export const policyId = (input: Policy): string => H('policy', policySchema.parse(input));
 export interface LocalOptions {
   readonly invocation: string;
@@ -91,6 +97,7 @@ export interface LocalOptions {
   readonly role: Role;
   readonly access: Access;
 }
+
 export const semanticUnitSchema = z.union([
   z.tuple([z.literal('file'), filePathSchema, z.literal('file')]),
   unitSchema,
@@ -133,7 +140,9 @@ export const ownedReferenceSchema = <T extends string>(invocation: string, purpo
 };
 
 function assert(condition: boolean, message: string): void {
-  if (!condition) throw new Error(message);
+  if (!condition) {
+    throw new Error(message);
+  }
 }
 export function localSchemas(options: LocalOptions) {
   shaSchema.parse(options.invocation);
@@ -254,34 +263,42 @@ export function localSchemas(options: LocalOptions) {
   };
 }
 export type LocalSchemas = ReturnType<typeof localSchemas>;
+
 export class LocalCodec {
   readonly schemas: LocalSchemas;
+
   constructor(readonly options: LocalOptions) {
     this.schemas = localSchemas(options);
   }
+
   validate(value: Value): Value {
     encodeRecord(value);
     if (
       !Array.isArray(value) ||
       typeof value[0] !== 'string' ||
       !Object.hasOwn(this.schemas.documents, value[0])
-    )
+    ) {
       throw new Error('Unknown local document.');
+    }
     return this.schemas.documents[value[0] as keyof LocalSchemas['documents']].parse(value);
   }
+
   encode(value: Value): Buffer {
     return encodeRecord(this.validate(value));
   }
+
   decode(bytes: Buffer): Value {
     return this.validate(decodeRecord(bytes));
   }
+
   decodeReferenced(bytes: Buffer, reference: Value): Value {
     if (
       !Array.isArray(reference) ||
       typeof reference[1] !== 'string' ||
       !Object.hasOwn(this.schemas.documents, reference[1])
-    )
+    ) {
       throw new Error('Unknown local document reference purpose.');
+    }
     const ref = this.schemas.ref(reference[1]).parse(reference);
     assert(
       bytes.length === ref[3] && rawSha(bytes) === ref[4],
@@ -291,12 +308,14 @@ export class LocalCodec {
     assert(Array.isArray(value) && value[0] === ref[1], 'Local document purpose mismatch.');
     return value;
   }
+
   checkStateBindings(state: Value, bindings: Value): void {
     const s = this.schemas.documents['local-state'].parse(this.validate(state));
     const b = this.schemas.documents.bindings.parse(this.validate(bindings));
     const bytes = this.encode(b);
     assert(s[5][3] === bytes.length && s[5][4] === rawSha(bytes), 'State bindings ref mismatch.');
-    if (!['prepare-pending', 'prepare-failed'].includes(s[4]))
+    if (!['prepare-pending', 'prepare-failed'].includes(s[4])) {
       assert(b[8][7] !== null && s[6] !== null, 'Missing successful build cutoff/handoff.');
+    }
   }
 }

@@ -37,7 +37,8 @@ export async function nativeBaseFile(
     raw.nlink !== 1n ||
     n[3] !== store.root.binding[3] ||
     raw.size > BigInt(max)
-  )
+  ) {
     throw new Error('Native metadata missing, aliased or exceeds admission.');
+  }
   return n;
 }

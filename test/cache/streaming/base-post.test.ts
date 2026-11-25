@@ -134,8 +134,11 @@ it.each([
     for (let unit = 0; unit < units; unit++) {
       const parent = `repository/group/unit-${unit}/0-version/`;
       const files: Record<string, string> = { [parent + 'keep.lock']: 'protected' };
-      for (const id of partitions)
-        for (let file = 0; file < width; file++) files[`${parent}${id}${file}.jar`] = 'dependency';
+      for (const id of partitions) {
+        for (let file = 0; file < width; file++) {
+          files[`${parent}${id}${file}.jar`] = 'dependency';
+        }
+      }
       await f.files(f.root, files);
     }
     // Direct files must precede the lexically earlier subdirectory in the summary.
@@ -146,8 +149,9 @@ it.each([
     const first = await post(f, initial.anchor);
     expect(first.outcome).toBe('published');
     const fresh = f.directory + '/fresh';
-    for (let unit = 0; unit < units; unit++)
+    for (let unit = 0; unit < units; unit++) {
       await f.files(fresh, { [`repository/group/unit-${unit}/0-version/keep.lock`]: 'protected' });
+    }
     const saves = f.save.mock.calls.length,
       next = await f.prepare({ nonce: 'b'.repeat(32), root: fresh });
     const directories = 3 + units * 2, // root, repository, group, and two directories per coordinate
@@ -164,7 +168,9 @@ it.each([
           lookup = vi.spyOn(ObservationIndex.prototype, 'directory');
         const source = await realFold(owner);
         try {
-          for (const id of partitions) expect(source.summary(id)[3]).toBe(filesPerPartition);
+          for (const id of partitions) {
+            expect(source.summary(id)[3]).toBe(filesPerPartition);
+          }
           expect(source.summary('empty').slice(3)).toEqual([0, 0, 0]);
           expect(children).toHaveBeenCalledTimes(directories);
           expect(lookup).not.toHaveBeenCalled();
@@ -178,8 +184,9 @@ it.each([
             'scratchLogicalWriteBytes',
             'renames',
             'unlinks',
-          ] as const)
+          ] as const) {
             expect(work[counter], counter).toBe(before[counter]);
+          }
           return source;
         } catch (error) {
           await source.dispose();
@@ -192,8 +199,9 @@ it.each([
       key: first.key,
     });
     expect(fold).toHaveBeenCalledTimes(1);
-    for (const id of partitions)
+    for (const id of partitions) {
       expect(logs).toContain(`Mammoth: partition publication [partition=${id}] (reuse).`);
+    }
     expect(logs.some((s) => s.includes('partition staging') || s.includes('source return'))).toBe(
       false,
     );
@@ -219,8 +227,12 @@ it.each([
   let calls = 0;
   f.save.mockImplementation(async (...args) => {
     if (++calls === boundary) {
-      if (kind.endsWith('lost')) await save(...args);
-      if (kind.endsWith('null')) return -1;
+      if (kind.endsWith('lost')) {
+        await save(...args);
+      }
+      if (kind.endsWith('null')) {
+        return -1;
+      }
       throw new Error('outgoing response unavailable');
     }
     return save(...args);
@@ -271,7 +283,9 @@ it('keeps a local source return failure hard, retains stage paths and prevents f
     this: NativeRoot,
     ...args
   ) {
-    if (args[1] === 'data') throw new Error('return destination unavailable');
+    if (args[1] === 'data') {
+      throw new Error('return destination unavailable');
+    }
     return rename.apply(this, args);
   });
   const warning = vi.fn();

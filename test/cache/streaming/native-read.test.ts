@@ -25,7 +25,9 @@ import { abortableValues } from '../../../src/cache/streaming/abort';
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture() {
   const directory = await mkdtemp(path.resolve('build/native-read-'));
@@ -90,7 +92,9 @@ async function closed(handle: FileHandle) {
 }
 async function drain(source: AsyncIterable<Buffer>) {
   const chunks: Buffer[] = [];
-  for await (const chunk of source) chunks.push(chunk);
+  for await (const chunk of source) {
+    chunks.push(chunk);
+  }
   return chunks;
 }
 it('forwards actual emitted buffers without wrapper copies and retains stable chunks across delayed pulls', async () => {

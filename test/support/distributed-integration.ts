@@ -123,8 +123,9 @@ export async function distributedReuse(tool: 'gradle' | 'maven') {
     await parent.prepare();
     expect(parent.outputs['dependent-delta-artifact-count']).toBe('2');
     async function verify(result: Awaited<ReturnType<typeof job>>) {
-      for (const name of ['a', 'b'])
+      for (const name of ['a', 'b']) {
         expect(await readFile(path.join(result.home, 'proof', name), 'utf8')).toBe(name);
+      }
     }
     async function resolveBoth(result: Awaited<ReturnType<typeof job>>) {
       const output = await result.build('both', true);
@@ -152,8 +153,10 @@ export async function distributedReuse(tool: 'gradle' | 'maven') {
     passed = true;
   } finally {
     await cleanupBaseFixtures();
-    if (passed && process.env.BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT !== '1')
+    if (passed && process.env.BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT !== '1') {
       await rm(root, { recursive: true, force: true });
-    else console.log('Distributed fixture retained:', root);
+    } else {
+      console.log('Distributed fixture retained:', root);
+    }
   }
 }

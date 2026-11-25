@@ -65,10 +65,16 @@ const roots: string[] = [],
   merges: Awaited<ReturnType<typeof mergeWorkerArchives>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const r of merges.splice(0)) await r.dispose();
-  for (const d of downloads.splice(0)) await d.dispose();
+  for (const r of merges.splice(0)) {
+    await r.dispose();
+  }
+  for (const d of downloads.splice(0)) {
+    await d.dispose();
+  }
   await cleanupSourceFixtures();
-  for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true });
+  for (const r of roots.splice(0)) {
+    await rm(r, { recursive: true, force: true });
+  }
 });
 function backend() {
   const objects = new Map<number, { artifact: WorkflowArtifactDescriptor; bytes: Buffer }>();
@@ -93,14 +99,18 @@ function backend() {
   const list = vi.fn(async () => [...objects.values()].map((x) => x.artifact));
   const get = vi.fn(async (name: string) => {
     const value = [...objects.values()].find((x) => x.artifact.name === name);
-    if (!value) throw new Error('missing');
+    if (!value) {
+      throw new Error('missing');
+    }
     return value.artifact;
   });
   const download = vi.fn(
     async (...[artifactId, options]: Parameters<WorkflowArtifactBackend['downloadArtifact']>) => {
       expect(options?.skipDecompress).toBe(true);
       const value = objects.get(artifactId);
-      if (!value || !options?.path) throw new Error('missing');
+      if (!value || !options?.path) {
+        throw new Error('missing');
+      }
       await writeFile(path.join(options.path, 'opaque-response-name.data'), value.bytes);
       return { downloadPath: options.path, digestMismatch: false };
     },
@@ -233,7 +243,9 @@ it.each([true, false])(
       read = vi.spyOn(NativeReadPhase.prototype, 'read');
     f.b.upload.mockImplementation(async (...args) => {
       const artifact = await upload(...args);
-      if (!reported) f.b.objects.get(artifact.id)!.artifact = { ...artifact, digest: null };
+      if (!reported) {
+        f.b.objects.get(artifact.id)!.artifact = { ...artifact, digest: null };
+      }
       throw new Error('ambiguous RPC outcome');
     });
     const before = await readFile(f.archive.file);
@@ -323,15 +335,22 @@ it.each(['extra', 'directory', 'outside', 'mismatch', 'bytes', 'hardlink'])(
     f.b.download.mockImplementation(async (...args) => {
       const result = await download(...args),
         dir = args[1]!.path!;
-      if (fault === 'extra') await writeFile(path.join(dir, 'extra'), 'extra');
+      if (fault === 'extra') {
+        await writeFile(path.join(dir, 'extra'), 'extra');
+      }
       if (fault === 'directory') {
         await rm(path.join(dir, 'opaque-response-name.data'));
         await mkdir(path.join(dir, 'sub'));
       }
-      if (fault === 'outside') result.downloadPath = foreign;
-      if (fault === 'mismatch') result.digestMismatch = true;
-      if (fault === 'bytes')
+      if (fault === 'outside') {
+        result.downloadPath = foreign;
+      }
+      if (fault === 'mismatch') {
+        result.digestMismatch = true;
+      }
+      if (fault === 'bytes') {
         await writeFile(path.join(dir, 'opaque-response-name.data'), Buffer.alloc(f.archive.bytes));
+      }
       if (fault === 'hardlink') {
         await rm(path.join(dir, 'opaque-response-name.data'));
         await link(foreign, path.join(dir, 'linked'));
@@ -469,8 +488,9 @@ it('installs real multi-worker packages, whole workspace winners and independent
       await writeFile(f.store.root.resolve(root + '/metadata.bin'), 'm');
       await writeFile(f.store.root.resolve(root + '/results.bin'), 'r');
       // Losing bodies have an incompatible file/directory shape; they are validated independently.
-      if (job === 'B')
+      if (job === 'B') {
         await mkdir(f.store.root.resolve(root + '/transformed/x'), { recursive: true });
+      }
       await writeFile(
         f.store.root.resolve(root + '/transformed/x' + (job === 'B' ? '/child' : '')),
         job,
@@ -483,8 +503,11 @@ it('installs real multi-worker packages, whole workspace winners and independent
     }
   }
   // Freeze portable ordinary ties consistently on both native platforms.
-  for (const f of [a, b])
-    for (const name of ['d/a', 'd/b']) await utimes(f.store.root.resolve(name), 1, 1);
+  for (const f of [a, b]) {
+    for (const name of ['d/a', 'd/b']) {
+      await utimes(f.store.root.resolve(name), 1, 1);
+    }
+  }
   const bodyReads = vi.spyOn(NativeReadPhase.prototype, 'read'),
     av = await freezeRetainedSources(a, units, ['state', 'other']),
     bv = await freezeRetainedSources(b, units),
@@ -531,10 +554,13 @@ it('installs real multi-worker packages, whole workspace winners and independent
     expect(await readFile(p.store.root.resolve(root + '/transformed/x'), 'utf8')).toBe('A');
     expect((await p.store.root.stat(root + '/transformed/x'))![2]).toBe('file');
   }
-  for (const name of ['A', 'B'])
+  for (const name of ['A', 'B']) {
     expect(await readFile(p.store.root.resolve('d/unique-' + name), 'utf8')).toBe(name);
+  }
   expect(await readFile(p.store.root.resolve('state/value'), 'utf8')).toBe('snapshot');
-  for (const snapshot of accepted.snapshots) await snapshot.verify(new AbortController().signal);
+  for (const snapshot of accepted.snapshots) {
+    await snapshot.verify(new AbortController().signal);
+  }
   expect(tuple(await p.store.state())[4]).toBe('prepare-pending');
   await accepted.dispose();
   expect(p.budget.retained).toBe(0);
@@ -640,7 +666,9 @@ it('installs real Maven direct-unit packages with strict portable metadata repai
   for (const root of units) {
     const n = (await p.store.root.stat(root + '/a.jar'))!;
     expect(n[8]).toBe('2000000000');
-    if (process.platform !== 'win32') expect(n[6] & 0o777).toBe(0o755);
+    if (process.platform !== 'win32') {
+      expect(n[6] & 0o777).toBe(0o755);
+    }
     expect(await readFile(p.store.root.resolve(root + '/a.jar'), 'utf8')).toBe('jar');
   }
   await accepted.dispose();

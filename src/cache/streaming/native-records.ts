@@ -29,6 +29,7 @@ export const identitySchema = z.tuple([
   shaSchema,
 ]);
 export type ObjectIdentity = z.infer<typeof identitySchema>;
+
 export const keySchema = nameSchema.max(512);
 export function objectKey(input: ObjectIdentity): string {
   const [family, , partition, lineage, writer, decision] = identitySchema.parse(input);
@@ -51,11 +52,13 @@ export const objectRefSchema = z
   .tuple([z.literal('object-ref'), identitySchema, keySchema, positiveSchema.max(65536), shaSchema])
   .refine((r) => r[2] === objectKey(r[1]));
 export type ObjectRef = z.infer<typeof objectRefSchema>;
+
 export const generationEntrySchema = z.union([
   z.tuple([z.literal('empty'), partitionSchema]),
   z.tuple([z.literal('object'), partitionSchema, objectRefSchema]),
 ]);
 export type GenerationEntry = z.infer<typeof generationEntrySchema>;
+
 export const groupsSchema = z.array(z.array(partitionSchema).min(1).max(64)).min(1).max(64);
 export function checkIdentity(
   identity: ObjectIdentity,
@@ -64,23 +67,29 @@ export function checkIdentity(
 ): void {
   identitySchema.parse(identity);
   equal(identity.slice(0, 3), [model.family, model.id, partition], 'object identity');
-  if (!model.partitions.some((p) => p[0] === partition))
+  if (!model.partitions.some((p) => p[0] === partition)) {
     throw new Error('Unknown object partition.');
+  }
 }
 // Protocol: docs/dev/native-base-protocol.md#recovery-groups
 /** Only model partitions are retained. Caller co-reads trees and supplies one coordinate's owners. */
 export class RecoveryGroups {
   private readonly parents: number[];
   private readonly ids: string[];
+
   constructor(private readonly model: ResolvedModel) {
     this.ids = model.partitions.map((p) => p[0]);
     this.parents = this.ids.map((_, i) => i);
   }
+
   private index(id: string): number {
     const index = this.ids.indexOf(id);
-    if (index < 0) throw new Error('Unknown recovery partition.');
+    if (index < 0) {
+      throw new Error('Unknown recovery partition.');
+    }
     return index;
   }
+
   private root(i: number): number {
     while (this.parents[i] !== i) {
       this.parents[i] = this.parents[this.parents[i]];
@@ -88,13 +97,20 @@ export class RecoveryGroups {
     }
     return i;
   }
+
   observe(owners: readonly string[]): void {
-    if (owners.length > 64) throw new Error('Unbounded coordinate ownership frontier.');
+    if (owners.length > 64) {
+      throw new Error('Unbounded coordinate ownership frontier.');
+    }
     const indices = owners.map((id) => this.index(id));
-    if (this.model.tuple[2] !== 'maven' && new Set(indices).size > 1)
+    if (this.model.tuple[2] !== 'maven' && new Set(indices).size > 1) {
       throw new Error('Only Maven direct units connect recovery partitions.');
-    for (const i of indices.slice(1)) this.parents[this.root(i)] = this.root(indices[0]);
+    }
+    for (const i of indices.slice(1)) {
+      this.parents[this.root(i)] = this.root(indices[0]);
+    }
   }
+
   groups(): string[][] {
     const groups = new Map<number, string[]>();
     for (const [i, id] of this.ids.entries()) {
@@ -105,26 +121,36 @@ export class RecoveryGroups {
     }
     return [...groups.values()];
   }
+
   check(input: string[][], available?: ReadonlySet<string>): string[][] {
     const groups = groupsSchema.parse(input),
       flattened = groups.flat();
-    if (flattened.length !== this.ids.length || new Set(flattened).size !== this.ids.length)
+    if (flattened.length !== this.ids.length || new Set(flattened).size !== this.ids.length) {
       throw new Error('Incomplete/duplicate recovery groups.');
+    }
     let previous = -1;
     for (const group of groups) {
       const indices = group.map((id) => this.index(id));
-      if (indices[0] <= previous || indices.some((i, n) => n > 0 && i <= indices[n - 1]))
+      if (indices[0] <= previous || indices.some((i, n) => n > 0 && i <= indices[n - 1])) {
         throw new Error('Recovery group order.');
+      }
       previous = indices[0];
     }
-    if (this.model.tuple[2] !== 'maven' && groups.some((g) => g.length !== 1))
+    if (this.model.tuple[2] !== 'maven' && groups.some((g) => g.length !== 1)) {
       throw new Error('Non-Maven recovery groups must be singletons.');
+    }
     const declared = (id: string) => groups.findIndex((g) => g.includes(id));
-    for (const actual of this.groups())
-      if (actual.some((id) => declared(id) !== declared(actual[0])))
+    for (const actual of this.groups()) {
+      if (actual.some((id) => declared(id) !== declared(actual[0]))) {
         throw new Error('Observed connectivity crosses recovery groups.');
-    if (!available) return groups;
-    for (const id of available) this.index(id);
+      }
+    }
+    if (!available) {
+      return groups;
+    }
+    for (const id of available) {
+      this.index(id);
+    }
     const cold: string[][] = [];
     for (const group of groups) {
       if (group.some((id) => !available.has(id))) {
@@ -132,8 +158,9 @@ export class RecoveryGroups {
         continue;
       }
       const root = this.root(this.index(group[0]));
-      if (group.some((id) => this.root(this.index(id)) !== root))
+      if (group.some((id) => this.root(this.index(id)) !== root)) {
         throw new Error('Invented recovery-group join.');
+      }
     }
     return cold;
   }

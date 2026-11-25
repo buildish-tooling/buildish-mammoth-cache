@@ -32,7 +32,9 @@ import type { LocalRow } from '../../../src/cache/streaming/local-stream';
 import { encodeRecord, type Value } from '../../../src/cache/streaming/encoding';
 const roots: string[] = [];
 afterEach(async () => {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 async function fixture() {
   const root = await mkdtemp(path.resolve('build/install-index-'));
@@ -64,15 +66,21 @@ it('indexes source subtrees with exact spans using name-order immediate pages', 
     const rootLease = await indexedNode(scratch, index),
       root = rootLease.node,
       children = [];
-    for await (const child of indexedChildren(scratch, root)) children.push(child);
+    for await (const child of indexedChildren(scratch, root)) {
+      children.push(child);
+    }
     expect(children.map((c) => c[0])).toEqual(['metadata']);
     const metadataLease = await indexedNode(scratch, children[0][1]),
       metadata = metadataLease.node;
     const childrenMetadata: (readonly [string, number])[] = [];
-    for await (const child of indexedChildren(scratch, metadata)) childrenMetadata.push(child);
+    for await (const child of indexedChildren(scratch, metadata)) {
+      childrenMetadata.push(child);
+    }
     expect(childrenMetadata.map((c) => c[0])).toEqual(['a', 'c', 'z']);
     const checked: LocalRow[] = [];
-    for await (const row of frames(q)) checked.push(row);
+    for await (const row of frames(q)) {
+      checked.push(row);
+    }
     const position = (path: string) =>
       checked.find((row) => Array.isArray(row.value) && row.value[1] === path)!;
     for (const name of ['a', 'z']) {
@@ -130,8 +138,9 @@ it('does bounded linear metadata work without retaining whole file records', asy
         ['directory', '', directory],
         ['directory', 'metadata', directory],
       ];
-    for (let i = 0; i < width; i++)
+    for (let i = 0; i < width; i++) {
       rows.push(['file', 'metadata/' + String(i).padStart(4, '0'), native]);
+    }
     const q = await provisional(
       (async function* () {
         yield* rows;
@@ -223,7 +232,9 @@ it('cancels a wide postorder close between bounded scratch reads and retires its
     (async function* () {
       yield ['directory', '', directory];
       yield ['directory', 'metadata', directory];
-      for (let i = 0; i < 16; i++) yield ['file', 'metadata/' + String(i).padStart(2, '0'), native];
+      for (let i = 0; i < 16; i++) {
+        yield ['file', 'metadata/' + String(i).padStart(2, '0'), native];
+      }
     })(),
   );
   const original = scratch.record.bind(scratch);

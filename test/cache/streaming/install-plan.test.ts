@@ -26,7 +26,9 @@ import type { MetadataMemberReader } from '../../../src/cache/streaming/metadata
 import type { Value } from '../../../src/cache/streaming/encoding';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture(shared = false) {
   const f = await installFixture('gradle', { shared });
@@ -48,18 +50,23 @@ async function read(
       { budget, partition: null, installKind: () => kind },
       undefined,
       async (value) => {
-        if (!Array.isArray(value) || value[0] !== 'install') return;
+        if (!Array.isArray(value) || value[0] !== 'install') {
+          return;
+        }
         const binding = (value[4] ?? value[5]) as Value;
         const reader = plan.metadata.reader(binding);
         readers.add(reader);
         const root = await reader.rootNode(binding, String(value[2]), null);
         kind = root[1] as 'file' | 'directory';
       },
-    ))
+    )) {
       rows.push(row.value);
+    }
     return rows;
   } finally {
-    for (const reader of readers) reader.close();
+    for (const reader of readers) {
+      reader.close();
+    }
     await plan.metadata.dispose();
   }
 }
@@ -75,8 +82,9 @@ it('freezes canonical mixed-owner cold-root units with disjoint empty parents an
   expect(mutations.map((r) => r[1])).toEqual([1, 2, 3, 4, 5, 6, 7]);
   const parents = mutations.filter((r) => r[0] === 'install-parent');
   expect(parents.map((r) => r[2])).toEqual(['data', 'data/sub']);
-  for (const parent of parents)
+  for (const parent of parents) {
     expect(await readdir(f.store.root.resolve(String(parent[3])))).toEqual([]);
+  }
   expect(String(parents[1][3]).startsWith(String(parents[0][3]) + '/')).toBe(false);
   expect(f.budget.retained).toBe(0);
 });
@@ -136,7 +144,9 @@ it.each(['aggregate', 'parents'] as const)(
       closed: ReturnType<typeof vi.spyOn>[] = [];
     let calls = 0;
     const creates = vi.spyOn(InstallScratch, 'create').mockImplementation(async (...args) => {
-      if (++calls === 2 && failure === 'aggregate') throw new Error('acquire failed');
+      if (++calls === 2 && failure === 'aggregate') {
+        throw new Error('acquire failed');
+      }
       const scratch = await original(...args);
       closed.push(vi.spyOn(scratch, 'close'));
       return scratch;

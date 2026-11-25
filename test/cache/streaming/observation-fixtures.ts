@@ -40,6 +40,7 @@ type Active = {
   window?: ExclusiveWindow;
   finish: () => Promise<void>;
 };
+
 const active = new WeakMap<OwnedStore, Active>();
 export async function observationFixture(
   tool: 'gradle' | 'maven' = 'maven',
@@ -103,7 +104,9 @@ export async function initializeObservationFixture(
   state[6] = f.store.codec.schemas.ref('handoff').parse(handoff);
   await f.store.updateState(state);
   const opened = await OpenedInvocation.current(f.root, f.budget);
-  if (!opened) throw new Error('Fixture prepare missing');
+  if (!opened) {
+    throw new Error('Fixture prepare missing');
+  }
   vi.spyOn(opened.store, 'fail').mockImplementation(f.store.fail);
   f.store = opened.store;
   const attempt = await PostAttempt.open(opened, {
@@ -142,7 +145,9 @@ export async function initializeObservationFixture(
       assertCurrent: (): undefined => {},
       lifecycle,
     });
-    if (window.status !== 'ready') throw new Error(window.message);
+    if (window.status !== 'ready') {
+      throw new Error(window.message);
+    }
     context.window = window.window;
     attempt.attachWindow(window.window);
   }
@@ -165,7 +170,9 @@ export async function captureFixtureObservations(
   options: Omit<ObservationCaptureOptions, 'attempt'>,
 ): Promise<FrozenObservation> {
   const context = active.get(store);
-  if (!context) throw new Error('Absent active fixture owner');
+  if (!context) {
+    throw new Error('Absent active fixture owner');
+  }
   const result = await captureObservations(store, {
     ...options,
     attempt: context.attempt,
@@ -176,7 +183,9 @@ export async function captureFixtureObservations(
 }
 export async function executeFixtureGc(store: OwnedStore, options: GcOptions) {
   const context = active.get(store);
-  if (!context?.index) throw new Error('Absent original fixture capture');
+  if (!context?.index) {
+    throw new Error('Absent original fixture capture');
+  }
   context.owner = await GcSurvivorOwner.execute(context.index, options);
   context.index = undefined;
   return { cursor: context.owner.cursor, owner: context.owner };

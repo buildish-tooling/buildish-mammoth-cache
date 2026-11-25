@@ -38,12 +38,15 @@ export function isFeatureAvailable() {
 }
 export async function saveCache(paths: string[], key: string) {
   await trace('cache-save', { paths, key });
-  if (process.env.MAMMOTH_TEST_EXIT_SAVE === '1') process.exit(73);
+  if (process.env.MAMMOTH_TEST_EXIT_SAVE === '1') {
+    process.exit(73);
+  }
   const id = hash(key + JSON.stringify(paths)),
     dir = root() + '/cache/' + id;
   await mkdir(dir, { recursive: true });
-  for (let i = 0; i < paths.length; i++)
+  for (let i = 0; i < paths.length; i++) {
     await cp(path.resolve(paths[i]), dir + '/' + i, { recursive: true, preserveTimestamps: true });
+  }
   await writeFile(dir + '.json', JSON.stringify({ key, paths, dir }));
   if (process.env.MAMMOTH_TEST_OCCUPY_RETURN === '1' && key.includes('-p-data-')) {
     const managed = process.env.MAVEN_USER_HOME ?? process.env.GRADLE_USER_HOME!;
@@ -59,7 +62,9 @@ export async function restoreCache(
   options?: { lookupOnly?: boolean },
 ) {
   await trace(options?.lookupOnly ? 'cache-lookup' : 'cache-restore', { paths, key });
-  if (process.env.MAMMOTH_TEST_FAIL_RESTORE === '1') throw new Error('Fixture restore failed');
+  if (process.env.MAMMOTH_TEST_FAIL_RESTORE === '1') {
+    throw new Error('Fixture restore failed');
+  }
   const candidates = await rows('cache');
   for (const prefix of [key, ...prefixes]) {
     const selected = candidates
@@ -69,8 +74,10 @@ export async function restoreCache(
           (row.key as string).startsWith(prefix) &&
           JSON.stringify(row.paths) === JSON.stringify(paths),
       );
-    if (!selected) continue;
-    if (!options?.lookupOnly)
+    if (!selected) {
+      continue;
+    }
+    if (!options?.lookupOnly) {
       for (let i = 0; i < paths.length; i++) {
         await mkdir(path.dirname(path.resolve(paths[i])), { recursive: true });
         await cp(selected.dir + '/' + i, path.resolve(paths[i]), {
@@ -78,6 +85,7 @@ export async function restoreCache(
           preserveTimestamps: true,
         });
       }
+    }
     return selected.key as string;
   }
   return undefined;
@@ -85,9 +93,12 @@ export async function restoreCache(
 const artifact = {
   async uploadArtifact(name: string, files: string[]) {
     await trace('artifact-upload', name);
-    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'throw')
+    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'throw') {
       throw new Error('Fixture raw upload unavailable');
-    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'null') return null;
+    }
+    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'null') {
+      return null;
+    }
     const items = await rows('artifacts'),
       id = items.length + 1,
       bytes = await readFile(files[0]),
@@ -97,9 +108,12 @@ const artifact = {
     await cp(files[0], dir + '/' + name);
     const metadata = { id, name, size: bytes.length, digest };
     await writeFile(dir + '.json', JSON.stringify(metadata));
-    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'lost')
+    if (process.env.MAMMOTH_TEST_UPLOAD_OUTCOME === 'lost') {
       throw new Error('Fixture lost upload acknowledgement');
-    if (process.env.MAMMOTH_TEST_MUTATE_PACKAGE === '1') await appendFile(files[0], 'changed');
+    }
+    if (process.env.MAMMOTH_TEST_MUTATE_PACKAGE === '1') {
+      await appendFile(files[0], 'changed');
+    }
     return metadata;
   },
   async listArtifacts() {
@@ -109,7 +123,9 @@ const artifact = {
   async getArtifact(name: string) {
     await trace('artifact-get', name);
     const item = (await rows('artifacts')).find((row) => row.name === name);
-    if (!item) throw new Error('Artifact missing');
+    if (!item) {
+      throw new Error('Artifact missing');
+    }
     return { artifact: item };
   },
   async downloadArtifact(id: number, options: { path: string }) {

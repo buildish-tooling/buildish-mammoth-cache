@@ -136,7 +136,7 @@ it('deduplicates matching claims, excludes purgeable payloads and refuses opaque
   );
   expect(m.purge('shared/a.tmp')).toEqual(['data', 'other']);
   expect(() => m.owner('data/a.tmp')).toThrow();
-  for (const rule of ['.mammoth/secret', 'caches/journal-1/file'])
+  for (const rule of ['.mammoth/secret', 'caches/journal-1/file']) {
     expect(() =>
       resolveModel(
         [
@@ -161,6 +161,7 @@ it('deduplicates matching claims, excludes purgeable payloads and refuses opaque
         1,
       ),
     ).toThrow('opaque');
+  }
 });
 
 it('round trips resolved rules in exact model reference streams', async () => {
@@ -184,8 +185,9 @@ it('round trips resolved rules in exact model reference streams', async () => {
     'model',
     { codec, budget, partition: null },
     () => {},
-  ))
+  )) {
     chunks.push(bytes);
+  }
   const bytes = Buffer.concat(chunks),
     ref = ['ref', 'model', codec.schemas.prefix + 'model.ndjson', bytes.length, rawSha(bytes)];
   await readLocalStream(

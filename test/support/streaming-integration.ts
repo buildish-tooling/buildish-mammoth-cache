@@ -53,7 +53,9 @@ export async function streamingIntegrationJob(options: {
   const home = options.home ?? path.join(root, 'home');
   const workspace = path.join(root, 'project');
   const temp = path.join(root, 'temp');
-  for (const directory of [home, workspace, temp]) await mkdir(directory, { recursive: true });
+  for (const directory of [home, workspace, temp]) {
+    await mkdir(directory, { recursive: true });
+  }
   const env = {
     ...process.env,
     GITHUB_REPOSITORY: 'fixtures/mammoth',
@@ -103,8 +105,9 @@ export async function streamingIntegrationJob(options: {
       );
       const config = normalizeGradleActionConfig(raw, configOptions);
       const adapter = new GradleBuildToolAdapter(config);
-      if (options.installedGradle)
+      if (options.installedGradle) {
         adapter.provision = async () => ({ items: [], warnings: [], additionalOutputs: {} });
+      }
       return { config, buildToolAdapterFactory: () => adapter };
     }
     const raw = await resolveMavenActionInputsFromConfigFile(

@@ -81,7 +81,9 @@ export async function metadataFixture(model?: ResolvedModel) {
     for (const [name, body] of Object.entries(entries)) {
       const file = path.join(base, ...name.split('/'));
       await mkdir(body === null ? file : path.dirname(file), { recursive: true });
-      if (body !== null) await writeFile(file, body);
+      if (body !== null) {
+        await writeFile(file, body);
+      }
     }
   }
   const save = vi.fn<BaseCacheBackend['saveCache']>(async (paths, key) => {
@@ -102,12 +104,14 @@ export async function metadataFixture(model?: ResolvedModel) {
       const key = [prefix, ...(fallback ?? [])]
         .map((p) => [...objects.keys()].reverse().find((k) => k.startsWith(p)))
         .find(Boolean);
-      if (key)
-        for (const member of await readdir(objects.get(key)!))
+      if (key) {
+        for (const member of await readdir(objects.get(key)!)) {
           await cp(path.join(objects.get(key)!, member), path.join(options!.archiveRoot!, member), {
             recursive: true,
             preserveTimestamps: true,
           });
+        }
+      }
       return key;
     },
   );

@@ -28,8 +28,9 @@ export function checkPostRootBinding(
     bindings[5][0] !== store.root.path ||
     !sameObject(bindings[5][1], native) ||
     bindings[5][1][6] !== native[6]
-  )
+  ) {
     throw new Error('Post root binding changed.');
+  }
 }
 
 /** Fresh fixed-cost orchestration barrier after awaited phase work; no process query. */
@@ -40,8 +41,9 @@ export async function assertLifecycleWindow(
 ) {
   const check = () => {
     window.signal?.throwIfAborted();
-    if (window.assertCurrent() !== undefined)
+    if (window.assertCurrent() !== undefined) {
       throw new Error('Lifecycle window assertion must be synchronous.');
+    }
   };
   check();
   store.root.work.stats++;

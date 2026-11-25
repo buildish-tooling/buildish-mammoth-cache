@@ -21,7 +21,9 @@ import { installFixture } from './install-fixture';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function pair() {
   const old = await installFixture();
@@ -44,7 +46,9 @@ async function complete(old: Awaited<ReturnType<typeof installFixture>>) {
     { budget: old.budget, partition: null },
     (async function* (): AsyncGenerator<Value> {
       yield ['handoff', 4, 'base-key', null, null, 1, 'disabled', null, null, activity, 0, 0, null];
-      for (const p of old.model.partitions) yield ['partition', p[0], 'miss', null, null];
+      for (const p of old.model.partitions) {
+        yield ['partition', p[0], 'miss', null, null];
+      }
     })(),
   );
   state[6] = old.store.codec.schemas.ref('handoff').parse(handoff);

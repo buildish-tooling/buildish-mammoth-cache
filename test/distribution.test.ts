@@ -38,7 +38,9 @@ async function writeTreeFile(root: string, file: string, contents: string): Prom
 async function createDistribution(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mammoth-distribution-test-'));
   temporaryDirectories.push(root);
-  for (const file of rootFiles) await writeTreeFile(root, file, 'Legal fixture\n');
+  for (const file of rootFiles) {
+    await writeTreeFile(root, file, 'Legal fixture\n');
+  }
   for (const tool of ['gradle', 'maven']) {
     await writeTreeFile(root, `actions/github/${tool}/action.yml`, descriptor(tool));
     await writeTreeFile(root, `dist/github/${tool}/main/index.cjs`, mainBundle);

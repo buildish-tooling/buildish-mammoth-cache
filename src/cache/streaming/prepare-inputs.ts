@@ -26,18 +26,26 @@ export function metadataWorkerRequests(
   policy: Policy,
 ): readonly WorkerRequest[] {
   const { model, context, role, access } = store.codec.options;
-  if (access === 'read-only' || role !== 'distributed-aggregator') return [];
+  if (access === 'read-only' || role !== 'distributed-aggregator') {
+    return [];
+  }
   const required = new Set(policy[10]),
     jobs = [...required],
     snapshots = new Map<string, string[]>();
-  for (const p of model.partitions)
+  for (const p of model.partitions) {
     if (p[3] === 'single-writer' && p[4] !== null && !ownsLocalSnapshot(p, store.codec.options)) {
-      if (!snapshots.has(p[4])) snapshots.set(p[4], []);
+      if (!snapshots.has(p[4])) {
+        snapshots.set(p[4], []);
+      }
       snapshots.get(p[4])!.push(p[0]);
-      if (!jobs.includes(p[4])) jobs.push(p[4]);
+      if (!jobs.includes(p[4])) {
+        jobs.push(p[4]);
+      }
     }
-  if (jobs.length > 16 || jobs.includes(context[4]))
+  }
+  if (jobs.length > 16 || jobs.includes(context[4])) {
     throw new Error('Invalid prepare producer requests.');
+  }
   return jobs.map((job) => ({
     job,
     required: required.has(job),

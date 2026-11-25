@@ -35,7 +35,9 @@ import { resolveModel } from '../../../src/cache/streaming/model';
 const results: Awaited<ReturnType<typeof mergeWorkerArchives>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const r of results.splice(0)) await r.dispose();
+  for (const r of results.splice(0)) {
+    await r.dispose();
+  }
   await cleanupCompleteFixtures();
 });
 async function merge(...args: Parameters<typeof mergeWorkerArchives>) {
@@ -46,8 +48,11 @@ async function merge(...args: Parameters<typeof mergeWorkerArchives>) {
 const signal = () => new AbortController().signal;
 async function activity(f: Awaited<ReturnType<typeof completeFixture>>, q: Value) {
   const rows: Value[] = [];
-  for await (const row of f.store.rows(q, 'activity', { budget: f.budget, partition: null }))
-    if (!['local-stream', 'local-end'].includes(String(tuple(row.value)[0]))) rows.push(row.value);
+  for await (const row of f.store.rows(q, 'activity', { budget: f.budget, partition: null })) {
+    if (!['local-stream', 'local-end'].includes(String(tuple(row.value)[0]))) {
+      rows.push(row.value);
+    }
+  }
   return rows;
 }
 it('unions usage, suppresses selected upserts and installs through actual V4a without hashing selected bodies again', async () => {
@@ -167,9 +172,9 @@ it.each(['file', 'directory'])(
         ordinaryPolicy: 'strict',
       }),
       part = result.partitions[0];
-    if (kind === 'file')
+    if (kind === 'file') {
       await writeFile(f.store.root.resolve(part.nativeRoot + '/data/x'), 'tampered');
-    else {
+    } else {
       await rmdir(f.store.root.resolve(part.nativeRoot + '/data/empty'));
       await mkdir(f.store.root.resolve(part.nativeRoot + '/data/empty'));
     }
@@ -202,7 +207,9 @@ it('preserves valid partial installation without creating replay authority', asy
     }),
     accepted = await acceptWorkerMerge(f.store, result, f.budget);
   const spy = vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-    if (point === 'install-source-renamed') throw new Error('interrupted install');
+    if (point === 'install-source-renamed') {
+      throw new Error('interrupted install');
+    }
   });
   await expect(installWorkerMerge(f.store, accepted, f.budget)).rejects.toThrow('interrupted');
   spy.mockRestore();
@@ -238,7 +245,9 @@ it.each(['selected-file', 'selected-directory'])(
       accepted = await acceptWorkerMerge(f.store, result, f.budget),
       rows = await activity(f, accepted.activity);
     expect(rows).not.toContainEqual(['used', kind === 'selected-file' ? 'child' : 'x', 'data']);
-    if (kind === 'selected-directory') expect(rows).toContainEqual(['used', 'old', 'data']);
+    if (kind === 'selected-directory') {
+      expect(rows).toContainEqual(['used', 'old', 'data']);
+    }
     await installWorkerMerge(f.store, accepted, f.budget);
     expect(
       await readFile(
@@ -375,7 +384,9 @@ it('returns no accepted result after post-adopt cleanup failure and preserves un
       this: WorkerStage,
     ) {
       adopt.call(this);
-      if (this === result.stage) adopted = true;
+      if (this === result.stage) {
+        adopted = true;
+      }
     }),
     dSpy = vi.spyOn(WorkerStage.prototype, 'dispose').mockImplementation(async function (
       this: WorkerStage,
@@ -401,9 +412,11 @@ it('returns no accepted result after post-adopt cleanup failure and preserves un
     'x',
   );
   let retained = false;
-  for (const id of await readdir(f.store.root.resolve(f.store.prefix + 'snapshots')))
-    if (await f.store.root.stat(f.store.prefix + 'snapshots/' + id + '/state/state/y'))
+  for (const id of await readdir(f.store.root.resolve(f.store.prefix + 'snapshots'))) {
+    if (await f.store.root.stat(f.store.prefix + 'snapshots/' + id + '/state/state/y')) {
       retained = true;
+    }
+  }
   expect(retained).toBe(false); // unused independent copies remain owned and are retired before authority
   expect(f.budget.retained).toBe(0);
 });

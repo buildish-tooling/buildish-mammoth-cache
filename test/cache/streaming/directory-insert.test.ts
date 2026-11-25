@@ -30,7 +30,9 @@ vi.mock('node:fs/promises', async (original) => {
     rename: async (from: string, to: string) => {
       if (counts.prefix && from.startsWith(counts.prefix)) {
         counts.renames++;
-        if (counts.exdev) throw Object.assign(new Error('cross device'), { code: 'EXDEV' });
+        if (counts.exdev) {
+          throw Object.assign(new Error('cross device'), { code: 'EXDEV' });
+        }
       }
       return actual.rename(from, to);
     },
@@ -43,7 +45,9 @@ afterEach(async () => {
   counts.exdev = false;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture(model?: ReturnType<typeof resolveModel>) {
   const f = await installFixture('maven', { model });
@@ -78,8 +82,9 @@ it.each([16, 256])(
       inputs = [];
     for (let p = 0; p < 4; p++) {
       const entries: Record<string, string | null> = { ['q' + p + '/empty']: null };
-      for (let i = 0; i < n; i++)
+      for (let i = 0; i < n; i++) {
         entries['q' + p + '/d' + Math.floor(i / 16) + '/f' + String(i).padStart(4, '0')] = 'body';
+      }
       inputs.push(await f.incoming('q' + p, entries, 'trusted-base'));
     }
     const plan = await freezeInstallPlan(f.store, inputs, f.budget);
@@ -88,8 +93,9 @@ it.each([16, 256])(
       budget: f.budget,
       partition: null,
       installKind: () => 'directory',
-    }))
+    })) {
       rows.push(row.value);
+    }
     expect(rows.filter((r) => Array.isArray(r) && r[0] === 'install')).toHaveLength(4);
     counts.prefix = f.store.root.resolve(f.store.prefix + 'base') + sep;
     await executeInstall(f.store, plan, f.budget, { batchOperations: 1, batchBytes: 1 });
@@ -145,8 +151,9 @@ it.each(['source-root-replaced', 'destination-occupied'] as const)(
     const f = await fixture(),
       input = await f.incoming('data', { 'data/deep/a': 'original' }),
       plan = await freezeInstallPlan(f.store, [input], f.budget);
-    if (kind === 'destination-occupied') await f.files('', { 'data/foreign': 'keep' });
-    else {
+    if (kind === 'destination-occupied') {
+      await f.files('', { 'data/foreign': 'keep' });
+    } else {
       await rename(
         f.store.root.resolve(input.nativeRoot + '/data'),
         f.store.root.resolve(input.nativeRoot + '/retained'),
@@ -157,9 +164,9 @@ it.each(['source-root-replaced', 'destination-occupied'] as const)(
     await expect(executeInstall(f.store, plan, f.budget)).rejects.toThrow();
     expect(counts.renames).toBe(0);
     await f.store.assertNoIntents();
-    if (kind === 'destination-occupied')
+    if (kind === 'destination-occupied') {
       expect(await readFile(f.store.root.resolve('data/foreign'), 'utf8')).toBe('keep');
-    else {
+    } else {
       expect(await f.store.root.stat('data')).toBeNull();
       expect(
         await readFile(f.store.root.resolve(input.nativeRoot + '/retained/deep/a'), 'utf8'),

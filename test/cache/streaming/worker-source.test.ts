@@ -38,8 +38,13 @@ const signal = () => new AbortController().signal;
 async function guarded(...args: Parameters<typeof WorkerSources.create>) {
   const source = await WorkerSources.create(...args);
   try {
-    for await (const event of source.events(signal()))
-      if (event.type === 'file') for await (const chunk of event.bytes) void chunk;
+    for await (const event of source.events(signal())) {
+      if (event.type === 'file') {
+        for await (const chunk of event.bytes) {
+          void chunk;
+        }
+      }
+    }
   } finally {
     await source.dispose();
   }
@@ -80,7 +85,9 @@ it('routes a real frozen tree once, reads selected bodies only during encoding, 
     budget: f.budget,
     membership: await DiskMembership.create(f.store, f.budget),
     async consumeFile({ body }) {
-      for await (const b of body) bodies += b.length;
+      for await (const b of body) {
+        bodies += b.length;
+      }
     },
   });
   expect(bodies).toBe(7);
@@ -107,8 +114,9 @@ it('keeps owned empty descendants only in selected complete workspace channels',
     }
     await f.files('', { 'data/changed': 'ordinary' });
     const changedTime = Math.ceil(Date.now() / 1000) + 1200;
-    for (const file of [changed + '/metadata.bin', 'data/changed'])
+    for (const file of [changed + '/metadata.bin', 'data/changed']) {
       await utimes(f.store.root.resolve(file), changedTime, changedTime);
+    }
     await utimes(f.store.root.resolve(used + '/metadata.bin'), changedTime, Date.now() / 1000 - 1);
     await captureFixtureObservations(f.store, { budget: f.budget });
     const { owner } = await executeFixtureGc(f.store, { budget: f.budget });
@@ -137,7 +145,9 @@ it('keeps owned empty descendants only in selected complete workspace channels',
         },
         async function* (signal) {
           for await (const event of source.events(signal)) {
-            if ('path' in event) paths.push(event.path);
+            if ('path' in event) {
+              paths.push(event.path);
+            }
             yield event;
           }
         },
@@ -149,11 +159,15 @@ it('keeps owned empty descendants only in selected complete workspace channels',
         membership: await DiskMembership.create(f.store, f.budget),
         async event(value) {
           const row = tuple(value);
-          if (row[0] === 'used-unit-open') usage.push(String(row[3]));
+          if (row[0] === 'used-unit-open') {
+            usage.push(String(row[3]));
+          }
         },
         async consumeFile({ body, path: file }) {
           bodies.push(file);
-          for await (const chunk of body) void chunk;
+          for await (const chunk of body) {
+            void chunk;
+          }
         },
       });
       expect(usage).toEqual([used]);
@@ -201,10 +215,14 @@ it('seals independent disk membership forks, verifies replay integrity and clean
   const replay = await spool.seal(signal()),
     other = await fork.seal(signal());
   const rows: Value[] = [];
-  for await (const r of replay()) rows.push(r);
+  for await (const r of replay()) {
+    rows.push(r);
+  }
   expect(rows).toEqual([['member', 'file', 'a']]);
   const more: Value[] = [];
-  for await (const r of other()) more.push(r);
+  for await (const r of other()) {
+    more.push(r);
+  }
   expect(more).toEqual([['member', 'unit', 'd']]);
   await expect(spool.append(['member', 'file', 'b'], signal())).rejects.toThrow('sealed');
   await spool.dispose();
@@ -247,7 +265,9 @@ it('preserves an aborted writer cause while retiring a paused local membership r
       },
       async function* (signal) {
         for await (const event of source.events(signal)) {
-          if (event.type === 'channel-open' && ++channels === 2) throw failure;
+          if (event.type === 'channel-open' && ++channels === 2) {
+            throw failure;
+          }
           yield event;
         }
       },
@@ -272,7 +292,11 @@ it('keeps meaningful empty aggregate directories and complete workspace markers'
     sources = await WorkerSources.create(f.store, view, f.budget),
     events = [];
   for await (const e of sources.events(signal())) {
-    if (e.type === 'file') for await (const b of e.bytes) void b;
+    if (e.type === 'file') {
+      for await (const b of e.bytes) {
+        void b;
+      }
+    }
     events.push(e.type === 'dir-open' ? e.path : e.type);
   }
   expect(events).toContain('empty');
@@ -304,7 +328,9 @@ it('keeps meaningful empty aggregate directories and complete workspace markers'
     budget: f.budget,
     membership: await DiskMembership.create(f.store, f.budget),
     async consumeFile({ body }) {
-      for await (const b of body) void b;
+      for await (const b of body) {
+        void b;
+      }
     },
   });
   await sources.dispose();
@@ -321,8 +347,9 @@ it('accepts GC survivors but rejects a changed ancestor of a selected workspace'
       await f.files('', { [unit + '/metadata.bin']: 'm', [unit + '/results.bin']: 'r' });
     }
     await f.files('', { [removed + '/keep.lock']: 'protected' });
-    for (const file of ['metadata.bin', 'results.bin'])
+    for (const file of ['metadata.bin', 'results.bin']) {
       await utimes(f.store.root.resolve(removed + '/' + file), 1, 1);
+    }
     const changedTime = Math.ceil(Date.now() / 1000) + 1200;
     await utimes(f.store.root.resolve(selected + '/metadata.bin'), changedTime, changedTime);
     await captureFixtureObservations(f.store, { budget: f.budget });
@@ -332,8 +359,14 @@ it('accepts GC survivors but rejects a changed ancestor of a selected workspace'
     try {
       const opened: string[] = [];
       for await (const event of sources.events(signal())) {
-        if (event.type === 'unit-open') opened.push(event.unit[1]);
-        if (event.type === 'file') for await (const bytes of event.bytes) void bytes;
+        if (event.type === 'unit-open') {
+          opened.push(event.unit[1]);
+        }
+        if (event.type === 'file') {
+          for await (const bytes of event.bytes) {
+            void bytes;
+          }
+        }
       }
       expect(opened).toEqual([selected]);
       expect(await readFile(f.store.root.resolve(removed + '/keep.lock'), 'utf8')).toBe(
@@ -384,11 +417,15 @@ it('emits complete snapshot empty leaves in a channel after aggregate and usage'
     budget: f.budget,
     membership: await DiskMembership.create(f.store, f.budget),
     async consumeFile({ body }) {
-      for await (const b of body) void b;
+      for await (const b of body) {
+        void b;
+      }
     },
     async event(v) {
       const r = tuple(v);
-      if (r[0] === 'dir-open') opens.push(v);
+      if (r[0] === 'dir-open') {
+        opens.push(v);
+      }
     },
   });
   expect(opens).toContainEqual(['dir-open', 2, 'empty']);
@@ -424,9 +461,13 @@ it('reuses canonical scratch bytes for spool digests and rejects altered replay'
     spool = await WorkerSpool.create(f.store, f.budget),
     update = vi.spyOn(Digest.prototype, 'update');
   try {
-    for (const name of ['a', 'b', 'c']) await spool.append(['row', name], signal());
+    for (const name of ['a', 'b', 'c']) {
+      await spool.append(['row', name], signal());
+    }
     spool.seal(signal());
-    for await (const r of spool.rows(signal())) void r;
+    for await (const r of spool.rows(signal())) {
+      void r;
+    }
     expect(update).not.toHaveBeenCalled();
   } finally {
     update.mockRestore();
@@ -437,7 +478,9 @@ it('reuses canonical scratch bytes for spool digests and rejects altered replay'
   await writeFile(file, (await readFile(file, 'utf8')).replace('"b"', '"z"'));
   await expect(
     (async () => {
-      for await (const r of spool.rows(signal())) void r;
+      for await (const r of spool.rows(signal())) {
+        void r;
+      }
     })(),
   ).rejects.toThrow(/Changed (worker spool|scratch)/);
   await spool.dispose();
@@ -452,8 +495,13 @@ it('borrows the actual original owner and freezes snapshot declarations', async 
   expect(sources.snapshots).toEqual(['data']);
   expect(Object.isFrozen(sources.snapshots)).toBe(true);
   await expect(view.survivors.dispose()).rejects.toThrow('still borrowed');
-  for await (const event of sources.events(signal()))
-    if (event.type === 'file') for await (const chunk of event.bytes) void chunk;
+  for await (const event of sources.events(signal())) {
+    if (event.type === 'file') {
+      for await (const chunk of event.bytes) {
+        void chunk;
+      }
+    }
+  }
   await sources.dispose();
   await f.finish();
   expect(f.budget.retained).toBe(0);

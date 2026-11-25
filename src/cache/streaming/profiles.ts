@@ -30,6 +30,8 @@ export const GRADLE_LAYER_VERSION = '9.6.1';
 
 /** The projection hash is computed by the canonical codec, not by this prefix helper. */
 export function streamingFamilyId(buildTool: 'gradle' | 'maven', familySha: string): string {
-  if (!/^[a-f0-9]{64}$/.test(familySha)) throw new Error('Invalid streaming family digest.');
+  if (!/^[a-f0-9]{64}$/.test(familySha)) {
+    throw new Error('Invalid streaming family digest.');
+  }
   return `mammoth-s1-${buildTool}-${familySha}`;
 }

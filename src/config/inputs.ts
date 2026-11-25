@@ -74,7 +74,9 @@ export async function resolveActionInputsFromConfigFile<TBuildTool extends Actio
   options: ResolveActionInputsFromConfigFileOptions,
 ): Promise<RawActionInputsByBuildTool[TBuildTool]> {
   const configFile = directInputs.configFile.trim();
-  if (configFile.length === 0) return directInputs;
+  if (configFile.length === 0) {
+    return directInputs;
+  }
 
   const normalizedConfigFile = normalizeRelativePath(configFile, 'config-file');
   if (normalizedConfigFile === '.') {
@@ -250,13 +252,17 @@ function serializeConfigValue(value: unknown, label: string, kind: ConfigFileVal
     case 'number':
       return typeof value === 'number' ? String(value) : validateString(value, label).trim();
     case 'list':
-      if (typeof value === 'string') return value.trim();
+      if (typeof value === 'string') {
+        return value.trim();
+      }
       return validateArray(value, label)
         .map((entry, index) => validateString(entry, `${label} entry ${index}`).trim())
         .filter((entry) => entry.length > 0)
         .join('\n');
     case 'structured':
-      if (typeof value === 'string') return value.trim();
+      if (typeof value === 'string') {
+        return value.trim();
+      }
       try {
         return JSON.stringify(value);
       } catch (error: unknown) {
@@ -269,12 +275,16 @@ function serializeConfigValue(value: unknown, label: string, kind: ConfigFileVal
 }
 
 function validateString(value: unknown, label: string): string {
-  if (typeof value !== 'string') throw new Error(`${label} must be a string.`);
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string.`);
+  }
   return value;
 }
 
 function validateArray(value: unknown, label: string): readonly unknown[] {
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
   return value;
 }
 

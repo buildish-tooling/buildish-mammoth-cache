@@ -32,8 +32,12 @@ const NAME_PATTERN = /^[A-Za-z0-9._ -]{1,100}$/;
  */
 export function parseBooleanInput(input: string, inputName: string): boolean {
   const normalized = input.trim().toLowerCase();
-  if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
   throw new Error(`${inputName} must be either 'true' or 'false'.`);
 }
 

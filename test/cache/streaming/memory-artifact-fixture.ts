@@ -46,14 +46,18 @@ export function memoryArtifacts() {
   const list = vi.fn(async () => [...objects.values()].map((x) => x.artifact));
   const get = vi.fn(async (name: string) => {
     const value = [...objects.values()].find((x) => x.artifact.name === name);
-    if (!value) throw new Error('missing');
+    if (!value) {
+      throw new Error('missing');
+    }
     return value.artifact;
   });
   const download = vi.fn(
     async (...[artifactId, options]: Parameters<WorkflowArtifactBackend['downloadArtifact']>) => {
       expect(options?.skipDecompress).toBe(true);
       const value = objects.get(artifactId);
-      if (!value || !options?.path) throw new Error('missing');
+      if (!value || !options?.path) {
+        throw new Error('missing');
+      }
       await writeFile(path.join(options.path, 'opaque-response-name.data'), value.bytes);
       return { downloadPath: options.path, digestMismatch: false };
     },

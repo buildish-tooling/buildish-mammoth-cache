@@ -36,8 +36,9 @@ export async function* installCurrentRows(
           child.type === 'symlink' ||
           child.type === 'other' ||
           child.device !== store.root.binding[3]
-        )
+        ) {
           return 'prune';
+        }
       },
     },
     work,
@@ -55,10 +56,13 @@ export async function* installCurrentRows(
         } catch {
           /* protected/unowned payload */
         }
-        if (managed) throw new Error('Aliased managed current file is unsupported.');
+        if (managed) {
+          throw new Error('Aliased managed current file is unsupported.');
+        }
       }
       yield ['file', event.path, event.identity];
-    } else
+    } else {
       yield [event.tag === 'directory-open' ? 'dir-open' : 'dir-close', event.path, event.identity];
+    }
   }
 }

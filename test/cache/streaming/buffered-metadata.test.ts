@@ -26,7 +26,9 @@ import { encodeRecord, type Value } from '../../../src/cache/streaming/encoding'
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture() {
   const f = await installFixture();
@@ -53,7 +55,9 @@ it('serves interleaved pending/physical rows at logical offsets without flushing
     expect(writes.mock.calls.length).toBeLessThan(5);
     expect(f.store.root.work.scratchWriteCalls).toBe(writes.mock.calls.length);
     const rows: Value[] = [];
-    for await (const row of scratch.rows(0, scratch.position)) rows.push(row);
+    for await (const row of scratch.rows(0, scratch.position)) {
+      rows.push(row);
+    }
     expect(rows).toHaveLength(2048);
     expect(offsets[1]).toBe(encodeRecord(rows[0]).length);
     expect(rows[2047]).toEqual(['row', 2047, 'x'.repeat(81)]);
@@ -68,7 +72,9 @@ it('finishes immutable local streams with block writes before returning their re
   async function* rows(): AsyncGenerator<Value> {
     yield ['dir-open', ''];
     yield ['dir-open', 'data'];
-    for (let n = 0; n < 1024; n++) yield ['used', 'f' + String(n).padStart(4, '0'), 'data'];
+    for (let n = 0; n < 1024; n++) {
+      yield ['used', 'f' + String(n).padStart(4, '0'), 'data'];
+    }
     yield ['dir-close', 'data'];
     yield ['dir-close', ''];
   }
@@ -94,7 +100,9 @@ it('rejects a changed backing file before flushing a sealed spool and releases i
   await writeFile(f.store.root.resolve(scratch.path), 'foreign');
   await expect(
     (async () => {
-      for await (const row of spool.rows(new AbortController().signal)) void row;
+      for await (const row of spool.rows(new AbortController().signal)) {
+        void row;
+      }
     })(),
   ).rejects.toThrow('Changed scratch');
   await spool.dispose();
@@ -106,7 +114,9 @@ it('handles partial writes and poisons failed buffers instead of publishing a tr
   let fail = false;
   const handle = {
     async write(bytes: Buffer, offset: number, length: number) {
-      if (fail) throw new Error('write failed');
+      if (fail) {
+        throw new Error('write failed');
+      }
       const n = Math.min(length, 7);
       parts.push(Buffer.from(bytes.subarray(offset, offset + n)));
       return { bytesWritten: n };
@@ -218,7 +228,9 @@ it('rejects reads during a partial flush and permits them after the writer settl
   await expect(scratch.record(8)).rejects.toThrow();
   await expect(
     (async () => {
-      for await (const r of scratch.rows(0, scratch.position)) void r;
+      for await (const r of scratch.rows(0, scratch.position)) {
+        void r;
+      }
     })(),
   ).rejects.toThrow();
   release();
@@ -235,7 +247,9 @@ it('reuses bounded scratch pages for adjacent positional records and tolerates s
   const f = await fixture(),
     scratch = await InstallScratch.create(f.store, f.budget),
     offsets: number[] = [];
-  for (let i = 0; i < 2048; i++) offsets.push(await scratch.append(['row', i, 'x'.repeat(81)]));
+  for (let i = 0; i < 2048; i++) {
+    offsets.push(await scratch.append(['row', i, 'x'.repeat(81)]));
+  }
   await scratch.flush();
   const handle = (scratch as unknown as { handle: FileHandle }).handle,
     read = handle.read.bind(handle);
@@ -261,11 +275,15 @@ it('reuses bounded scratch pages for adjacent positional records and tolerates s
 it('shares first-flush readiness between concurrent spool replays and releases pages after both', async () => {
   const f = await fixture(),
     spool = await WorkerSpool.create(f.store, f.budget);
-  for (let i = 0; i < 128; i++) await spool.append(['row', i], new AbortController().signal);
+  for (let i = 0; i < 128; i++) {
+    await spool.append(['row', i], new AbortController().signal);
+  }
   spool.seal(new AbortController().signal);
   const collect = async () => {
     const values: Value[] = [];
-    for await (const row of spool.rows(new AbortController().signal)) values.push(row);
+    for await (const row of spool.rows(new AbortController().signal)) {
+      values.push(row);
+    }
     return values;
   };
   const [a, b] = await Promise.all([collect(), collect()]);
@@ -280,17 +298,21 @@ it('reuses scratch assembly storage across cached/cross-page random lookups', as
     scratch = await InstallScratch.create(f.store, f.budget);
   try {
     const offsets: number[] = [];
-    for (let i = 0; i < 140; i++) offsets.push(await scratch.append(['row', i, 'x'.repeat(900)]));
+    for (let i = 0; i < 140; i++) {
+      offsets.push(await scratch.append(['row', i, 'x'.repeat(900)]));
+    }
     await scratch.flush();
-    for await (const row of scratch.rows(0, scratch.position))
+    for await (const row of scratch.rows(0, scratch.position)) {
       expect((row as readonly Value[])[0]).toBe('row');
+    }
     const before = f.store.root.work.scratchDecoderAllocations;
-    for (let round = 0; round < 3; round++)
+    for (let round = 0; round < 3; round++) {
       for (let i = 0; i < offsets.length; i++) {
         const r = await scratch.record(offsets[i]);
         expect(r.value).toEqual(['row', i, 'x'.repeat(900)]);
         r.release();
       }
+    }
     expect(f.store.root.work.scratchDecoderAllocations - before).toBeLessThanOrEqual(1);
   } finally {
     await scratch.close();
@@ -306,11 +328,12 @@ it('preserves batched spool bytes/digests and yields to real timers within bound
     timer = true;
   }, 0);
   try {
-    for (let group = 0; group < 4; group++)
+    for (let group = 0; group < 4; group++) {
       await spool.appendBatch(
         Array.from({ length: 200 }, (_, i) => ['row', group * 200 + i, 'é🙂'.repeat(8)] as Value),
         signal,
       );
+    }
     expect(timer).toBe(true);
     spool.seal(signal);
     let count = 0;
@@ -426,7 +449,9 @@ it('consumes strict local streams in charged byte and row bounded batches', asyn
   async function* values(): AsyncGenerator<Value> {
     yield ['dir-open', ''];
     yield ['dir-open', 'data'];
-    for (let i = 0; i < 800; i++) yield ['used', 'f' + String(i).padStart(4, '0'), 'data'];
+    for (let i = 0; i < 800; i++) {
+      yield ['used', 'f' + String(i).padStart(4, '0'), 'data'];
+    }
     yield ['dir-close', 'data'];
     yield ['dir-close', ''];
   }

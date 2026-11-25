@@ -36,9 +36,15 @@ const results: WorkerMergeResult[] = [],
   contexts: MetadataInstallContext[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const context of contexts.splice(0)) await context.dispose();
-  for (const index of indexes.splice(0)) await index.dispose();
-  for (const result of results.splice(0)) await result.dispose();
+  for (const context of contexts.splice(0)) {
+    await context.dispose();
+  }
+  for (const index of indexes.splice(0)) {
+    await index.dispose();
+  }
+  for (const result of results.splice(0)) {
+    await result.dispose();
+  }
   await cleanupCompleteFixtures();
 });
 const signal = () => new AbortController().signal;
@@ -84,8 +90,9 @@ it('reuses the one final native join after modes/times without readback or body 
     const lease = await indexedNode(receipt.context.scratch, offset);
     try {
       expect(lease.node[4]).toBeNull();
-      for await (const edge of indexedEntries(receipt.context.scratch, lease.node))
+      for await (const edge of indexedEntries(receipt.context.scratch, lease.node)) {
         await checkHashFree(edge[2]);
+      }
     } finally {
       lease.release();
     }
@@ -95,7 +102,9 @@ it('reuses the one final native join after modes/times without readback or body 
   expect(accepted.work.activityIndexDirectories).toBe(3);
   const native = (await f.store.root.stat(receipt.nativeRoot + '/data/shared/a'))!;
   expect(BigInt(native[8]) / 1000000n).toBe(1234n);
-  if (process.platform !== 'win32') expect(native[6] & 0o777).toBe(0o755);
+  if (process.platform !== 'win32') {
+    expect(native[6] & 0o777).toBe(0o755);
+  }
   await accepted.dispose();
   expect(f.budget.retained).toBe(0);
 });

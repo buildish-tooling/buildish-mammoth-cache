@@ -75,8 +75,9 @@ describe('parseCachePartitionsInput', () => {
     expect(
       parseCachePartitionsInput('[{"id":"dependency-metadata","writer":" metadata "}]'),
     ).toEqual([{ id: 'dependency-metadata', writer: 'metadata' }]);
-    for (const value of [{ publication: 'newest' }, { writer: '' }, { writer: 123 }])
+    for (const value of [{ publication: 'newest' }, { writer: '' }, { writer: 123 }]) {
       expect(() => parseCachePartitionsInput(JSON.stringify([{ id: 'data', ...value }]))).toThrow();
+    }
   });
 
   it('rejects include globs that do not end with /**', () => {

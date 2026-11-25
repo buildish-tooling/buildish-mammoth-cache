@@ -38,25 +38,35 @@ export async function captureStreamingWorkspaceEvidence(home: string, model: Res
     ? walkNative(root, 'caches', { budget: new WorkingBudget() })
     : [];
   for await (const entry of entries) {
-    if (entry.tag !== 'file' && entry.tag !== 'directory-open') continue;
+    if (entry.tag !== 'file' && entry.tag !== 'directory-open') {
+      continue;
+    }
     const name = entry.path;
     const unit = workspaceRoot(name);
-    if (!unit && !/^caches\/build-cache-[0-9]+\/[a-f0-9]{32}$/u.test(name)) continue;
+    if (!unit && !/^caches\/build-cache-[0-9]+\/[a-f0-9]{32}$/u.test(name)) {
+      continue;
+    }
     try {
       model.owner(entry.tag === 'file' ? name : name + '/.workspace-directory-probe');
     } catch (error) {
-      if (error instanceof Error && /Unowned|Reserved\/excluded/u.test(error.message)) continue;
+      if (error instanceof Error && /Unowned|Reserved\/excluded/u.test(error.message)) {
+        continue;
+      }
       throw error;
     }
     if (!unit) {
-      if (entry.tag === 'file') archives.set(name, await sha(name));
+      if (entry.tag === 'file') {
+        archives.set(name, await sha(name));
+      }
       continue;
     }
     const details = units.get(unit) ?? { files: [], directories: new Set<string>() };
     if (entry.tag === 'file') {
       details.files.push(name);
       sizes.set(name, Number(entry.identity[5]));
-    } else details.directories.add(name);
+    } else {
+      details.directories.add(name);
+    }
     units.set(unit, details);
   }
   const evidence = new Map<
@@ -85,8 +95,9 @@ export async function captureStreamingWorkspaceEvidence(home: string, model: Res
     try {
       markers.finish();
     } catch (error) {
-      if (error instanceof Error && error.message === 'Missing required workspace markers.')
+      if (error instanceof Error && error.message === 'Missing required workspace markers.') {
         continue;
+      }
       throw error;
     }
     evidence.set(unit, {

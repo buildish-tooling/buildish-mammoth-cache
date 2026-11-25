@@ -117,6 +117,7 @@ const capturedBuildScanFileSchema = z.object({
 });
 
 type CapturedBuildResultFile = z.infer<typeof capturedBuildResultFileSchema>;
+
 type CapturedBuildScanFile = z.infer<typeof capturedBuildScanFileSchema>;
 
 /**

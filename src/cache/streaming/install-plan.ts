@@ -25,6 +25,7 @@ import { InstallParents } from './install-parents';
 import type { IndexedMetadataInput } from './metadata-install-context';
 import { type MetadataInstallContext } from './metadata-install-context';
 export type InstallInput = IndexedMetadataInput;
+
 import type { WorkingBudget } from './tree-state';
 import { parentPath } from './tree-state';
 import type { NativeIdentity } from './native';
@@ -37,11 +38,13 @@ export interface FrozenInstall {
   readonly parentsPrefix: string;
   readonly maxDirectoryEntries: number;
 }
+
 interface InstallIndexes {
   readonly scratch: InstallScratch;
   readonly current: number;
   readonly sources: ReadonlyMap<number, number>;
 }
+
 const indexes = new WeakMap<FrozenInstall, InstallIndexes>();
 export async function takeInstallIndexes(
   store: OwnedStore,
@@ -50,7 +53,9 @@ export async function takeInstallIndexes(
   assertFrozenInstall(store, frozen);
   frozen.metadata?.assert(store);
   const value = indexes.get(frozen);
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   indexes.delete(frozen);
   try {
     await value.scratch.reopen();
@@ -62,8 +67,9 @@ export async function takeInstallIndexes(
 }
 const frozenPlans = new WeakSet<object>();
 export function assertFrozenInstall(store: OwnedStore, plan: FrozenInstall): void {
-  if (!frozenPlans.has(plan) || plan.store !== store)
+  if (!frozenPlans.has(plan) || plan.store !== store) {
     throw new Error('Install requires this process-owned frozen plan.');
+  }
 }
 /** Staged metadata path: the original discovery index remains the sole per-file source. */
 export async function freezeMetadataInstallPlan(
@@ -76,8 +82,9 @@ export async function freezeMetadataInstallPlan(
   if (
     context.budget !== budget ||
     (options.maxDirectoryEntries ?? 100000) !== context.maxDirectoryEntries
-  )
+  ) {
     throw new Error('Metadata install policy/budget mismatch.');
+  }
   try {
     return await freezePlan(store, context.take(), budget, options, context);
   } catch (error) {
@@ -113,12 +120,16 @@ async function freezePlan(
   if (
     inputs.length > model.partitions.length ||
     new Set(inputs.map((i) => i.partition)).size !== inputs.length
-  )
+  ) {
     throw new Error('Duplicate source partition projection.');
-  for (const input of inputs) input.assertBound(store);
+  }
+  for (const input of inputs) {
+    input.assertBound(store);
+  }
   await store.assertNoIntents();
-  if (options.pruneAggregates && inputs.length !== model.partitions.length)
+  if (options.pruneAggregates && inputs.length !== model.partitions.length) {
     throw new Error('Cannot prune incomplete/cold metadata contexts.');
+  }
   await store.makeParents(store.prefix + 'files/pending');
   const owned: InstallScratch[] = [];
   let retained: InstallScratch | undefined;
@@ -145,8 +156,9 @@ async function freezePlan(
             budget,
             signal,
             maxDirectoryEntries,
-          }))
+          })) {
             await accept({ value, start: ordinal, end: ++ordinal, record: ordinal });
+          }
         },
       ),
       desired = inputs.map((input) => ({
@@ -171,23 +183,30 @@ async function freezePlan(
         if (node[1] === 'operation') {
           let sink = aggregate;
           if (model.partitions[node[4]][3] === 'single-writer') {
-            if (!routes[node[4]]) routes[node[4]] = await spool();
+            if (!routes[node[4]]) {
+              routes[node[4]] = await spool();
+            }
             sink = routes[node[4]]!;
           }
           await sink.append(['route', offset, ancestor]);
           return;
         }
         const chain = await scratch.append(['ancestor', node[2], node[6], ancestor]);
-        for (const type of ['file', 'directory'])
+        for (const type of ['file', 'directory']) {
           for await (const raw of scratch.rows(node[8], node[9])) {
             const edge = raw as readonly Value[];
-            if (edge[4] === type) await route(Number(edge[2]), chain);
+            if (edge[4] === type) {
+              await route(Number(edge[2]), chain);
+            }
           }
+        }
       } finally {
         lease.release();
       }
     }
-    if (selected !== null) await route(selected, null);
+    if (selected !== null) {
+      await route(selected, null);
+    }
     let index = 0;
     async function* prepareAncestors(chain: number | null, path: string): AsyncGenerator<Value> {
       const parent = parentPath(path);
@@ -195,17 +214,21 @@ async function freezePlan(
         activeParents.length &&
         parent !== activeParents[activeParents.length - 1].path &&
         !parent.startsWith(activeParents[activeParents.length - 1].path + '/')
-      )
+      ) {
         activeParents.pop()!.release();
-      if (activeParents.length && activeParents[activeParents.length - 1].path === parent) return;
+      }
+      if (activeParents.length && activeParents[activeParents.length - 1].path === parent) {
+        return;
+      }
       const pending: { path: string; old: number | null; release: () => void }[] = [];
       try {
         while (chain !== null) {
           const row = await scratch.record(chain);
           try {
             const value = row.value as readonly Value[];
-            if (activeParents.length && value[1] === activeParents[activeParents.length - 1].path)
+            if (activeParents.length && value[1] === activeParents[activeParents.length - 1].path) {
               break;
+            }
             pending.push({
               path: Buffer.from(String(value[1])).toString(),
               old: value[2] as number | null,
@@ -220,22 +243,29 @@ async function freezePlan(
           signal.throwIfAborted();
           const frame = pending.pop()!;
           activeParents.push(frame);
-          if (!frame.path) continue;
+          if (!frame.path) {
+            continue;
+          }
           if (frame.old === null) {
             const binding = await parents.claim(frame.path);
-            if (binding) yield ['install-parent', ++index, frame.path, binding[0], binding[1]];
+            if (binding) {
+              yield ['install-parent', ++index, frame.path, binding[0], binding[1]];
+            }
           } else {
             const node = await indexedNode(scratch, frame.old);
             try {
-              if ((node.node[3] as NativeIdentity)[3] !== store.root.binding[3])
+              if ((node.node[3] as NativeIdentity)[3] !== store.root.binding[3]) {
                 throw new Error('Cross-filesystem install parent.');
+              }
             } finally {
               node.release();
             }
           }
         }
       } finally {
-        for (const frame of pending) frame.release();
+        for (const frame of pending) {
+          frame.release();
+        }
       }
     }
     async function* operation(route: readonly Value[]): AsyncGenerator<Value> {
@@ -249,7 +279,9 @@ async function freezePlan(
         let sourcePath: string | null = null,
           sourceEvidence: Value = null;
         if (op[5] !== null) {
-          if (!input) throw new Error('Missing desired producer receipt.');
+          if (!input) {
+            throw new Error('Missing desired producer receipt.');
+          }
           const node = await indexedNode(scratch, op[5]);
           try {
             sourcePath = input.nativeRoot + '/' + op[2];
@@ -288,7 +320,9 @@ async function freezePlan(
           const op = lease.value as Selection,
             u = op[7]!;
           if (!previous || !canonical(previous).equals(canonical(u))) {
-            if (previous) yield ['install-unit-close', previous[0], previous[1]];
+            if (previous) {
+              yield ['install-unit-close', previous[0], previous[1]];
+            }
             yield ['install-unit-open', ...u];
             previous = u;
           }
@@ -297,21 +331,28 @@ async function freezePlan(
           lease.release();
         }
       }
-      if (previous) yield ['install-unit-close', previous[0], previous[1]];
-      for (let p = 0; p < model.partitions.length; p++)
+      if (previous) {
+        yield ['install-unit-close', previous[0], previous[1]];
+      }
+      for (let p = 0; p < model.partitions.length; p++) {
         if (
           inputs.some((i) => i.partition === model.partitions[p][0]) &&
           model.partitions[p][3] === 'single-writer'
         ) {
           const u: InstallUnit = ['snapshot', model.partitions[p][0], 'partition'];
           yield ['install-unit-open', ...u];
-          for (const frame of activeParents) frame.release();
+          for (const frame of activeParents) {
+            frame.release();
+          }
           activeParents.length = 0;
-          if (routes[p])
-            for await (const route of routes[p]!.rows(0, routes[p]!.position))
+          if (routes[p]) {
+            for await (const route of routes[p]!.rows(0, routes[p]!.position)) {
               yield* operation(route as readonly Value[]);
+            }
+          }
           yield ['install-unit-close', u[0], u[1]];
         }
+      }
       await parents.seal(budget);
     }
     const plan = await store.writeStream(
@@ -339,7 +380,9 @@ async function freezePlan(
     frozenPlans.add(frozen);
     return frozen;
   } finally {
-    for (const frame of activeParents) frame.release();
+    for (const frame of activeParents) {
+      frame.release();
+    }
     await Promise.all(owned.filter((s) => s !== retained).map((s) => s.close()));
   }
 }

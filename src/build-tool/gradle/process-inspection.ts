@@ -22,6 +22,7 @@ export interface DaemonInspection {
   readonly uncertain: boolean;
   readonly reason?: string;
 }
+
 /** Java's launcher options precede the main class; classpath/property text is not a main class. */
 export function gradleDaemonArguments(argv: readonly string[]): 'daemon' | 'other' | 'uncertain' {
   const paired = new Set([
@@ -42,14 +43,24 @@ export function gradleDaemonArguments(argv: readonly string[]): 'daemon' | 'othe
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     if (paired.has(arg)) {
-      if (argv[i + 1]?.startsWith('@')) return 'uncertain';
+      if (argv[i + 1]?.startsWith('@')) {
+        return 'uncertain';
+      }
       i++;
       continue;
     }
-    if (arg === '-jar' || arg === '-m' || arg === '--module') break;
-    if (arg.startsWith('@')) return 'uncertain';
-    if (arg.startsWith('-')) continue;
-    if (arg === GRADLE_DAEMON_MAIN) return 'daemon';
+    if (arg === '-jar' || arg === '-m' || arg === '--module') {
+      break;
+    }
+    if (arg.startsWith('@')) {
+      return 'uncertain';
+    }
+    if (arg.startsWith('-')) {
+      continue;
+    }
+    if (arg === GRADLE_DAEMON_MAIN) {
+      return 'daemon';
+    }
     break;
   }
   return argv.includes(GRADLE_DAEMON_MAIN) ? 'uncertain' : 'other';
@@ -77,15 +88,24 @@ export function windowsArguments(line: string): string[] {
     }
     if (line[i] === '"') {
       value += '\\'.repeat(Math.floor(slashes / 2));
-      if (slashes % 2) value += '"';
-      else quoted = !quoted;
+      if (slashes % 2) {
+        value += '"';
+      } else {
+        quoted = !quoted;
+      }
     } else {
       value += '\\'.repeat(slashes);
-      if (i < line.length) value += line[i];
+      if (i < line.length) {
+        value += line[i];
+      }
     }
   }
-  if (quoted) throw new Error('Unterminated native command line.');
-  if (active) result.push(value);
+  if (quoted) {
+    throw new Error('Unterminated native command line.');
+  }
+  if (active) {
+    result.push(value);
+  }
   return result;
 }
 async function limited(path: string): Promise<string> {
@@ -95,10 +115,14 @@ async function limited(path: string): Promise<string> {
   try {
     while (length < bytes.length) {
       const got = await handle.read(bytes, length, bytes.length - length, null);
-      if (!got.bytesRead) break;
+      if (!got.bytesRead) {
+        break;
+      }
       length += got.bytesRead;
     }
-    if (length > 65536) throw new Error('Native process record exceeds bound.');
+    if (length > 65536) {
+      throw new Error('Native process record exceeds bound.');
+    }
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length));
   } finally {
     await handle.close();
@@ -110,8 +134,9 @@ export function linuxStartTime(stat: string): string {
       .trim()
       .split(/\s+/),
     value = fields[19];
-  if (stat.indexOf('(') < 0 || !value || !/^\d+$/.test(value))
+  if (stat.indexOf('(') < 0 || !value || !/^\d+$/.test(value)) {
     throw new Error('Invalid process identity.');
+  }
   return value;
 }
 // Primary ABI: kernel.org/doc/html/v6.17/filesystems/proc.html.
@@ -120,40 +145,53 @@ async function linuxInspection(signal: AbortSignal): Promise<DaemonInspection> {
   let remaining = false;
   for await (const e of entries) {
     signal.throwIfAborted();
-    if (!/^\d+$/.test(e.name)) continue;
+    if (!/^\d+$/.test(e.name)) {
+      continue;
+    }
     const base = '/proc/' + e.name;
     try {
       const owner = await lstat(base);
-      if (owner.uid !== process.getuid!()) continue;
+      if (owner.uid !== process.getuid!()) {
+        continue;
+      }
       const before = linuxStartTime(await limited(base + '/stat')),
         line = await limited(base + '/cmdline'),
         after = linuxStartTime(await limited(base + '/stat'));
-      if (before !== after)
+      if (before !== after) {
         return {
           remaining,
           uncertain: true,
           reason: 'Process identity changed during inspection.',
         };
+      }
       const argv = line.split('\0');
-      if (argv[argv.length - 1] === '') argv.pop();
+      if (argv[argv.length - 1] === '') {
+        argv.pop();
+      }
       const kind = gradleDaemonArguments(argv);
       if (kind !== 'other') {
         const image = (await readlink(base + '/exe')).split('/').pop()!;
         if (!/^javaw?$/.test(image)) {
-          if (/^javaw?$/.test(argv[0]?.split('/').pop() ?? ''))
+          if (/^javaw?$/.test(argv[0]?.split('/').pop() ?? '')) {
             return {
               remaining,
               uncertain: true,
               reason: 'Java launcher has an unknown executable image.',
             };
+          }
           continue; // e.g. grep/pgrep arguments are not a running Java daemon.
         }
       }
-      if (kind === 'uncertain')
+      if (kind === 'uncertain') {
         return { remaining, uncertain: true, reason: 'Ambiguous Java main-class arguments.' };
-      if (kind === 'daemon') remaining = true;
+      }
+      if (kind === 'daemon') {
+        remaining = true;
+      }
     } catch (error) {
-      if (['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+      if (['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        continue;
+      }
       return {
         remaining,
         uncertain: true,
@@ -218,7 +256,9 @@ async function inspectWindows(signal: AbortSignal): Promise<DaemonInspection> {
       while ((at = tail.indexOf(10)) >= 0) {
         const bytes = tail.subarray(0, at);
         tail = tail.subarray(at + 1);
-        if (bytes.length > 65536) throw new Error('Oversized process record.');
+        if (bytes.length > 65536) {
+          throw new Error('Oversized process record.');
+        }
         const row = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
         if (
           !Array.isArray(row) ||
@@ -229,15 +269,17 @@ async function inspectWindows(signal: AbortSignal): Promise<DaemonInspection> {
           typeof row[2] !== 'string' ||
           !/^\d+$/.test(row[2]) ||
           typeof row[3] !== 'string'
-        )
+        ) {
           uncertain = true;
-        else {
+        } else {
           const kind = gradleDaemonArguments(windowsArguments(row[3]));
           remaining ||= kind === 'daemon';
           uncertain ||= kind === 'uncertain';
         }
       }
-      if (tail.length > 65536) throw new Error('Oversized process record.');
+      if (tail.length > 65536) {
+        throw new Error('Oversized process record.');
+      }
     }
     const code = await finish;
     signal.throwIfAborted();
@@ -256,8 +298,12 @@ export async function inspectGradleDaemons(
   signal = new AbortController().signal,
 ): Promise<DaemonInspection> {
   signal.throwIfAborted();
-  if (process.platform === 'linux') return linuxInspection(signal);
-  if (process.platform === 'win32') return inspectWindows(signal);
+  if (process.platform === 'linux') {
+    return linuxInspection(signal);
+  }
+  if (process.platform === 'win32') {
+    return inspectWindows(signal);
+  }
   if (process.platform === 'darwin') {
     const { inspectDarwinDaemons } = await import('./darwin-process-inspection');
     return inspectDarwinDaemons(signal);

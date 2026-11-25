@@ -33,11 +33,13 @@ export interface WorkerFile {
   readonly header: WorkerTarHeader;
   readonly body: AsyncIterable<Buffer>;
 }
+
 export interface WorkerReader extends WorkerContext {
   consumeFile(file: WorkerFile, signal: AbortSignal): Promise<void>;
   /** Validated events remain provisional until readWorkerArchive resolves. */
   event?(value: Value, signal: AbortSignal): Promise<void>;
 }
+
 export async function readWorkerArchive(
   source: Readable,
   options: WorkerReader,
@@ -55,12 +57,15 @@ export async function readWorkerArchive(
             const bytes = Buffer.allocUnsafe(header.size);
             let at = 0;
             for await (const chunk of body) {
-              if (at + chunk.length > bytes.length)
+              if (at + chunk.length > bytes.length) {
                 throw new Error('Control body length mismatch.');
+              }
               chunk.copy(bytes, at);
               at += chunk.length;
             }
-            if (at !== bytes.length) throw new Error('Truncated control body.');
+            if (at !== bytes.length) {
+              throw new Error('Truncated control body.');
+            }
             const value = decodeRecord(bytes),
               name =
                 state.sequence === 0 && tuple(value)[0] === 'identity'
@@ -68,7 +73,9 @@ export async function readWorkerArchive(
                   : tuple(value)[0] === 'complete'
                     ? '.mammoth-meta/complete.json'
                     : `.mammoth-meta/${add(state.sequence)}.json`;
-            if (header.name !== name) throw new Error('Wrong control member sequence/name.');
+            if (header.name !== name) {
+              throw new Error('Wrong control member sequence/name.');
+            }
             await state.control(value);
             await options.event?.(value, transportSignal);
           } finally {
@@ -77,7 +84,9 @@ export async function readWorkerArchive(
         } else {
           state.payloadHeader(header);
           if (header.type === 'directory') {
-            for await (const _ of body) void _;
+            for await (const _ of body) {
+              void _;
+            }
           } else {
             const file = state.file,
               digest = createHash('sha256');
@@ -85,7 +94,9 @@ export async function readWorkerArchive(
             const observed = (async function* () {
               for await (const chunk of body) {
                 bytes = add(bytes, chunk.length);
-                if (bytes > header.size) throw new Error('Payload length mismatch.');
+                if (bytes > header.size) {
+                  throw new Error('Payload length mismatch.');
+                }
                 digest.update(chunk);
                 yield chunk;
               }
@@ -106,11 +117,16 @@ export async function readWorkerArchive(
       },
       { signal },
     );
-    if (!state) throw new Error('Missing worker identity.');
+    if (!state) {
+      throw new Error('Missing worker identity.');
+    }
     return state.finish();
   } finally {
-    if (state) await state.dispose();
-    else await options.membership.dispose();
+    if (state) {
+      await state.dispose();
+    } else {
+      await options.membership.dispose();
+    }
   }
 }
 export type WorkerEvent =
@@ -127,17 +143,20 @@ export type WorkerEvent =
       bytes: AsyncIterable<Uint8Array>;
       assertStable(signal: AbortSignal): Promise<void>;
     };
+
 /** Observational counters only; never wire or acceptance authority. */
 export interface WorkerWriteWork {
   tarBytes: number;
   controlMembers: number;
   controlBodyBytes: number;
 }
+
 export interface WorkerWriter extends WorkerContext {
   readonly work?: WorkerWriteWork;
   readonly snapshots: readonly string[];
   assertStable(signal: AbortSignal): Promise<void>;
 }
+
 /** Caller supplies ordered frozen events and body guards; no filesystem walker or backend. */
 export async function writeWorkerArchive(
   destination: Writable,
@@ -148,14 +167,17 @@ export async function writeWorkerArchive(
   const controller = new AbortController(),
     signal = controller.signal;
   const abort = (error: unknown) => {
-    if (!signal.aborted)
+    if (!signal.aborted) {
       controller.abort(
         error instanceof Error ? error : new Error('Worker writer aborted.', { cause: error }),
       );
+    }
   };
   const outside = () => abort(external?.reason);
   external?.addEventListener('abort', outside, { once: true });
-  if (external?.aborted) outside();
+  if (external?.aborted) {
+    outside();
+  }
   let state: WorkerState;
   try {
     state = new WorkerState(options, signal);
@@ -211,7 +233,9 @@ export async function writeWorkerArchive(
       pendingNext = true;
       const next = await withAbort(iterator.next(), signal);
       pendingNext = false;
-      if (next.done) break;
+      if (next.done) {
+        break;
+      }
       const e = next.value;
       switch (e.type) {
         case 'channel-open':
@@ -250,7 +274,9 @@ export async function writeWorkerArchive(
         case 'unit-close':
         case 'used-unit-close': {
           const close = state.unitCloseTuple();
-          if (close[0] !== e.type) throw new Error('Wrong unit close event.');
+          if (close[0] !== e.type) {
+            throw new Error('Wrong unit close event.');
+          }
           await control(close);
           break;
         }
@@ -293,11 +319,14 @@ export async function writeWorkerArchive(
             (async function* () {
               for await (const chunk of abortableValues(e.bytes, signal)) {
                 signal.throwIfAborted();
-                if (!(chunk instanceof Uint8Array) || chunk.byteLength > 256 * 1024)
+                if (!(chunk instanceof Uint8Array) || chunk.byteLength > 256 * 1024) {
                   throw new Error('Invalid resident file chunk.');
+                }
                 const b = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
                 size = add(size, b.length);
-                if (size > e.size) throw new Error('Source body exceeds header.');
+                if (size > e.size) {
+                  throw new Error('Source body exceeds header.');
+                }
                 sha.update(b);
                 yield b;
               }
@@ -318,19 +347,26 @@ export async function writeWorkerArchive(
     await control(state.completeTuple());
     archive.finalize();
     await output;
-    if (signal.aborted) throw signal.reason;
+    if (signal.aborted) {
+      throw signal.reason;
+    }
     completed = true;
     return state.finish();
   } catch (error) {
     abort(error);
     throw signal.reason;
   } finally {
-    if (!completed) abort(new Error('Incomplete worker writer.'));
+    if (!completed) {
+      abort(new Error('Incomplete worker writer.'));
+    }
     try {
       if (iterator?.return) {
         const cleanup = iterator.return();
-        if (pendingNext) void cleanup.catch(() => {});
-        else await cleanup;
+        if (pendingNext) {
+          void cleanup.catch(() => {});
+        } else {
+          await cleanup;
+        }
       }
     } finally {
       try {

@@ -26,7 +26,9 @@ const fixtures: MetadataFixture[] = [],
   sources: MetadataPublicationSource[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const source of sources.splice(0)) await source.dispose();
+  for (const source of sources.splice(0)) {
+    await source.dispose();
+  }
   for (const f of fixtures.splice(0)) {
     expect(f.budget.retained).toBe(0);
     await f.close();
@@ -48,7 +50,7 @@ it.each(['clean', 'excluded', 'mixed-aggregate', 'mixed-snapshot'] as const)(
           0,
         ],
       ];
-    if (mixed)
+    if (mixed) {
       parts.push([
         'other',
         ['repository/other/**'],
@@ -58,6 +60,7 @@ it.each(['clean', 'excluded', 'mixed-aggregate', 'mixed-snapshot'] as const)(
         'default',
         0,
       ]);
+    }
     const model = resolveModel(['model', 1, 'maven', hard, parts], 'maven-native-', 1),
       f = await metadataFixture(model);
     fixtures.push(f);
@@ -65,8 +68,12 @@ it.each(['clean', 'excluded', 'mixed-aggregate', 'mixed-snapshot'] as const)(
       'repository/org/a/1/a.jar': 'a',
       'repository/org/b/1/b.jar': 'b',
     };
-    if (kind === 'excluded') files['repository/keep.lock'] = 'private';
-    if (mixed) files['repository/other/c/1/c.jar'] = 'c';
+    if (kind === 'excluded') {
+      files['repository/keep.lock'] = 'private';
+    }
+    if (mixed) {
+      files['repository/other/c/1/c.jar'] = 'c';
+    }
     await f.files(f.root, files);
     const original = new Map(
         await Promise.all(
@@ -107,8 +114,9 @@ it.each(['clean', 'excluded', 'mixed-aggregate', 'mixed-snapshot'] as const)(
         expect(await readFile(f.store.root.resolve(input.nativeRoot + '/' + body), 'utf8')).toBe(
           files[body],
         );
-        if (kind === 'excluded')
+        if (kind === 'excluded') {
           expect(await f.store.root.stat(input.nativeRoot + '/repository/keep.lock')).toBeNull();
+        }
       }
     } finally {
       await restored.dispose();

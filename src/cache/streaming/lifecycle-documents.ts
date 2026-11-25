@@ -94,5 +94,7 @@ export function lifecycleDocuments(options: LocalOptions) {
   return { bindings, 'local-state': state };
 }
 export type LifecycleBindings = z.infer<ReturnType<typeof lifecycleDocuments>['bindings']>;
+
 export type LifecycleState = z.infer<ReturnType<typeof lifecycleDocuments>['local-state']>;
+
 export type LifecycleTerminal = NonNullable<LifecycleState[7]>;

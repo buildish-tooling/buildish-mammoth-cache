@@ -58,7 +58,9 @@ function source(bytes: Buffer, chunk = 16384, splits: number[] = []) {
 }
 const drain = async ({ header, body }: WorkerTarEntry) => {
   let bytes = 0;
-  for await (const chunk of body) bytes += chunk.length;
+  for await (const chunk of body) {
+    bytes += chunk.length;
+  }
   expect(bytes).toBe(header.size);
 };
 const smallTar = Buffer.concat([tarMember('payload/aggregate/f', Buffer.from('abc')), ends]);
@@ -73,6 +75,7 @@ interface Expected {
   header: WorkerTarHeader;
   body: Buffer;
 }
+
 function w1Fixture(): { gzip: Buffer; expected: Expected[] } {
   const members: Buffer[] = [],
     expected: Expected[] = [];
@@ -108,15 +111,20 @@ function w1Fixture(): { gzip: Buffer; expected: Expected[] } {
     const pax: Buffer[] = [];
     const pathNeeded =
       Buffer.byteLength(header.name) > 100 || Buffer.byteLength(header.name) !== header.name.length;
-    if (pathNeeded) pax.push(paxRecord('path', header.name));
-    if (header.mtimeMs % 1000)
+    if (pathNeeded) {
+      pax.push(paxRecord('path', header.name));
+    }
+    if (header.mtimeMs % 1000) {
       pax.push(
         paxRecord(
           'mtime',
           Math.floor(header.mtimeMs / 1000) + '.' + String(header.mtimeMs % 1000).padStart(3, '0'),
         ),
       );
-    if (pax.length) members.push(tarMember('PaxHeader', Buffer.concat(pax), { type: 'x' }));
+    }
+    if (pax.length) {
+      members.push(tarMember('PaxHeader', Buffer.concat(pax), { type: 'x' }));
+    }
     members.push(
       tarMember(pathNeeded ? 'PaxHeader' : header.name, body, {
         type: header.type === 'directory' ? '5' : '0',
@@ -139,9 +147,13 @@ async function readW1(bytes: Buffer, chunk = 16384, splits: number[] = []) {
       const row = w1.expected[index++];
       expect(header).toEqual(row.header);
       const chunks: Buffer[] = [];
-      for await (const b of body) chunks.push(b);
+      for await (const b of body) {
+        chunks.push(b);
+      }
       expect(Buffer.concat(chunks)).toEqual(row.body);
-      if (header.name === '.mammoth-meta/complete.json') complete = true;
+      if (header.name === '.mammoth-meta/complete.json') {
+        complete = true;
+      }
     },
     { signal: AbortSignal.timeout(2000) },
   );
@@ -167,7 +179,9 @@ describe('worker transport completion', () => {
     'rejects a late %s error after final application metadata',
     async (kind) => {
       const bytes = Buffer.from(w1.gzip);
-      if (kind !== 'short') bytes[bytes.length - (kind === 'crc' ? 8 : 4)] ^= 1;
+      if (kind !== 'short') {
+        bytes[bytes.length - (kind === 'crc' ? 8 : 4)] ^= 1;
+      }
       const run = await readW1(kind === 'short' ? bytes.subarray(0, -1) : bytes);
       await expect(run.work).rejects.toThrow(
         kind === 'crc' ? 'CRC' : kind === 'size' ? 'ISIZE' : 'trailer',
@@ -244,7 +258,9 @@ describe('flow and cancellation', () => {
         entered.resolve();
         await resume.promise;
         const sha = createHash('sha256');
-        for await (const b of body) sha.update(b);
+        for await (const b of body) {
+          sha.update(b);
+        }
         actualHash = sha.digest('hex');
       },
       { signal: controller.signal },
@@ -273,7 +289,9 @@ describe('flow and cancellation', () => {
       readWorkerTransport(input.stream, async ({ body }) => {
         for await (const b of body) {
           consumed += b.length;
-          if (consumed >= 32768) throw new Error('consumer failed');
+          if (consumed >= 32768) {
+            throw new Error('consumer failed');
+          }
         }
       }),
     ).rejects.toThrow('consumer failed');

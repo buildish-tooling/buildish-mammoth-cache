@@ -40,7 +40,9 @@ export async function readMetadataGeneration(
   key: string,
   options: NativeOperationOptions,
 ): Promise<MetadataGeneration> {
-  if (reference[3] > 65536) throw new Error('Generation exceeds admission.');
+  if (reference[3] > 65536) {
+    throw new Error('Generation exceeds admission.');
+  }
   const release = options.budget.holdRecord(reference[3]);
   try {
     const chunks: Buffer[] = [];
@@ -63,10 +65,12 @@ export class MetadataBaseRestore {
   key: string | null = null;
   context: MetadataInstallContext | undefined;
   entries: HandoffEntry[] = [];
+
   private constructor(
     readonly store: OwnedStore,
     readonly options: NativeOperationOptions,
   ) {}
+
   private async root(): Promise<{ path: string; native?: NativeIdentity }> {
     const owner: { path: string; native?: NativeIdentity } = {
       path: this.store.prefix + 'base/' + randomUUID(),
@@ -76,6 +80,7 @@ export class MetadataBaseRestore {
     owner.native = (await this.store.root.stat(owner.path))!;
     return owner;
   }
+
   private async checkedExtraction(
     owner: { path: string; native?: NativeIdentity },
     found: boolean,
@@ -86,16 +91,19 @@ export class MetadataBaseRestore {
       !actual ||
       !sameObject(owner.native, actual) ||
       owner.native[6] !== actual[6]
-    )
+    ) {
       throw new Error('SDK extraction root changed.');
+    }
     if (!found) {
       this.store.root.work.nativeListings++;
       for await (const entry of await opendir(this.store.root.resolve(owner.path), {
         bufferSize: 1,
-      }))
+      })) {
         throw new Error('Missing SDK result left partial extraction: ' + entry.name);
+      }
     }
   }
+
   static async acquire(
     store: OwnedStore,
     backend: BaseCacheBackend | null,
@@ -107,11 +115,13 @@ export class MetadataBaseRestore {
       model = store.codec.options.model;
     try {
       if (backend?.isFeatureAvailable()) {
-        if (!backend.capabilities.supportsNewestPrefixRestore)
+        if (!backend.capabilities.supportsNewestPrefixRestore) {
           throw new Error('Native generation discovery unavailable.');
+        }
         const allowed = [nameSchema.parse(refs.currentRef)];
-        if (refs.defaultRef && refs.defaultRef !== refs.currentRef)
+        if (refs.defaultRef && refs.defaultRef !== refs.currentRef) {
           allowed.push(nameSchema.parse(refs.defaultRef));
+        }
         const prefixes = allowed.map((ref) => lineagePrefix(model.family, lineageId(ref))),
           owner = await result.root();
         const key = await timed(
@@ -130,8 +140,9 @@ export class MetadataBaseRestore {
         await result.checkedExtraction(owner, key !== undefined);
         if (key !== undefined) {
           await timed(options, 'generation control admission', async () => {
-            if (!prefixes.some((prefix) => key.startsWith(prefix)))
+            if (!prefixes.some((prefix) => key.startsWith(prefix))) {
               throw new Error('Unauthorized generation lineage.');
+            }
             const file = owner.path + '/record.json',
               before = await nativeBaseFile(store, file, 65536);
             const release = options.budget.holdRecord(Number(before[5]));
@@ -141,22 +152,27 @@ export class MetadataBaseRestore {
                 signal.throwIfAborted();
                 chunks.push(bytes);
               }
-              if (!sameNative(before, await nativeBaseFile(store, file, 65536), true))
+              if (!sameNative(before, await nativeBaseFile(store, file, 65536), true)) {
                 throw new Error('Generation changed during control admission.');
+              }
               const bytes = Buffer.concat(chunks),
                 generation = decodeMetadataGeneration(bytes, model, key);
-              if (!allowed.map(lineageId).includes(generation[5]))
+              if (!allowed.map(lineageId).includes(generation[5])) {
                 throw new Error('Unauthorized generation lineage.');
+              }
               store.root.work.nativeListings++;
               let recordSeen = false;
               for await (const entry of await opendir(store.root.resolve(owner.path), {
                 bufferSize: 2,
               })) {
-                if (recordSeen || entry.name !== 'record.json')
+                if (recordSeen || entry.name !== 'record.json') {
                   throw new Error('Unexpected generation extraction member.');
+                }
                 recordSeen = true;
               }
-              if (!recordSeen) throw new Error('Missing generation extraction record.');
+              if (!recordSeen) {
+                throw new Error('Missing generation extraction record.');
+              }
               result.generation = generation;
               result.key = key;
               result.record = await store.write(
@@ -173,7 +189,7 @@ export class MetadataBaseRestore {
         }
       }
       const offered: { partition: string; root: string }[] = [];
-      for (const entry of result.generation?.[8] ?? [])
+      for (const entry of result.generation?.[8] ?? []) {
         if (entry[0] === 'object') {
           const owner = await result.root();
           const key = await timed(
@@ -186,11 +202,15 @@ export class MetadataBaseRestore {
             (key) => (key === undefined ? 'miss' : 'hit'),
           );
           signal.throwIfAborted();
-          if (key !== undefined && key !== entry[2][2])
+          if (key !== undefined && key !== entry[2][2]) {
             throw new Error('Native object exact-key mismatch.');
+          }
           await result.checkedExtraction(owner, key !== undefined);
-          if (key !== undefined) offered.push({ partition: entry[1], root: owner.path });
+          if (key !== undefined) {
+            offered.push({ partition: entry[1], root: owner.path });
+          }
         }
+      }
       result.context = result.generation
         ? await timed(options, 'shared base validation', () =>
             MetadataInstallContext.discover(store, result.generation!, offered, options),
@@ -210,10 +230,11 @@ export class MetadataBaseRestore {
               : 'available';
         if (status === 'available') {
           const input = result.context.source(partition[0]);
-          if (input?.upstream.kind !== 'native-metadata')
+          if (input?.upstream.kind !== 'native-metadata') {
             throw new Error('Missing admitted native pin source.');
+          }
           pin = input.upstream.source.pin() ?? ['restored-object', input.upstream.source.reference];
-        } else if (status === 'empty')
+        } else if (status === 'empty') {
           pin = [
             'pinned-partition-metadata',
             2,
@@ -226,6 +247,7 @@ export class MetadataBaseRestore {
             profile,
             emptyPartitionMetadata(profile),
           ];
+        }
         // Captured now, before any extras, worker or installer overlay may change the live root.
         result.entries.push(['partition', partition[0], status, pin, null]);
       }
@@ -236,18 +258,22 @@ export class MetadataBaseRestore {
       throw error;
     }
   }
+
   async dispose(): Promise<void> {
-    if (this.#disposed) return;
+    if (this.#disposed) {
+      return;
+    }
     this.#disposed = true;
     await settleNativeCleanup([
       () => this.context?.dispose(),
       ...this.#roots.map((owner) => async () => {
-        if (owner.native)
+        if (owner.native) {
           await retireOwnedDirectory(this.store, owner.path, owner.native, this.options.budget);
-        else if (await this.store.root.stat(owner.path))
+        } else if (await this.store.root.stat(owner.path)) {
           throw new Error(
             'Unresolved extraction root retained at ' + this.store.root.resolve(owner.path),
           );
+        }
       }),
     ]);
   }

@@ -231,8 +231,9 @@ it('resolves actual Gradle purge defaults through the adapter and honors disable
     ['caches/build-cache-1/gc.properties', []],
     ['wrapper/dists/gradle/hash/gradle.zip.lck', []],
     [`caches/jars-9/${hash}/source.jar.receipt`, []],
-  ] as const)
+  ] as const) {
     expect(model.purge(path), path).toEqual(owners);
+  }
   expect(
     resolve([{ id: 'dependency-artifacts', purgeableGlobs: [] }]).purge(
       'caches/modules-2/modules-2.lock',
@@ -282,8 +283,9 @@ it('preserves disjoint Gradle module coverage and single-writer metadata authori
     'caches/modules-3/files-9/g/a.jar',
     'caches/modules-2/files-3/g/a.jar',
     'caches/modules-3/metadata-9/descriptors.bin',
-  ])
+  ]) {
     expect(() => model.owner(path)).toThrow('Unowned');
+  }
   expect(() => model.owner('caches/modules-2/metadata-2.107/gc.properties')).toThrow('excluded');
 });
 
@@ -313,8 +315,9 @@ it('rejects retired Gradle overrides and allows disabling both artifact replacem
     'caches/modules-3/files-9/a.jar',
     'caches/jars-9/a.jar',
     'caches/resources-2/a',
-  ])
+  ]) {
     expect(() => model.owner(path), path).toThrow('Unowned');
+  }
 });
 
 it('preserves explicit custom metadata coverage and its configured writer', () => {
@@ -389,7 +392,9 @@ it.each([{ excludes: [] }, { excludes: ['caches/jars-9/ignored.jar'] }])(
     );
     expect(() => model.owner('caches/modules-3/files-9/g/a.jar')).toThrow('Unowned');
     expect(model.owner('caches/jars-9/kept.jar')[0]).toBe('module-support');
-    if (excludes.length) expect(() => model.owner(excludes[0])).toThrow('Unowned');
+    if (excludes.length) {
+      expect(() => model.owner(excludes[0])).toThrow('Unowned');
+    }
   },
 );
 

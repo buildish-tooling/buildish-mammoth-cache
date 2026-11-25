@@ -88,13 +88,18 @@ export interface GradleOperationalCapture {
   readonly directory: string;
   readonly requiredGradleVersion?: string;
 }
+
 function operationalRegistration(options?: GradleOperationalCapture): string {
-  if (!options) return '';
-  if (!/^[a-f0-9]{64}$/.test(options.invocation))
+  if (!options) {
+    return '';
+  }
+  if (!/^[a-f0-9]{64}$/.test(options.invocation)) {
     throw new Error('Invalid operational invocation.');
+  }
   validateCaptureRootPath(options.directory);
-  if (options.requiredGradleVersion && options.requiredGradleVersion !== GRADLE_LAYER_VERSION)
+  if (options.requiredGradleVersion && options.requiredGradleVersion !== GRADLE_LAYER_VERSION) {
     throw new Error('Unsupported layer registration version.');
+  }
   const directory = toGroovySingleQuotedString(options.directory),
     id = toGroovySingleQuotedString(options.invocation);
   // Protocol: docs/dev/cache-lifecycle-protocol.md#gradle-installation-registration.

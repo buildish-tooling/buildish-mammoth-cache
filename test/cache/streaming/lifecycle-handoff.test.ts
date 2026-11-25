@@ -123,8 +123,9 @@ it('round-trips only bounded invocation handoff data with charged lifetime and s
     [f.header, ...[...f.entries].reverse()],
     [f.header, ...f.entries, f.entries[0]],
     [f.header, ['file', 'data/a']],
-  ])
+  ]) {
     await expect(f.write(values)).rejects.toThrow();
+  }
 });
 it('binds declared-empty pins to exact v2 generation and invocation, rejecting miss and foreign provenance', async () => {
   const f = await fixture(),
@@ -208,8 +209,9 @@ it('matches independent H2 exact successful-main handoff bytes and whole-stream 
     'handoff',
     options,
     () => {},
-  ))
+  )) {
     encoded.push(chunk);
+  }
   expect(Buffer.concat(encoded)).toEqual(expected);
   await expect(
     readLocalStream(

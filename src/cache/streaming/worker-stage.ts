@@ -37,6 +37,7 @@ interface Frame {
   directories: Map<string, { identity: NativeIdentity; release: () => void }>;
   release: () => void;
 }
+
 export interface StagedPartition {
   readonly partition: string;
   readonly nativeRoot: string;
@@ -44,6 +45,7 @@ export interface StagedPartition {
   readonly directories: WorkerSpool;
   readonly rootNative?: NativeIdentity;
 }
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#native-identity-and-evidence.
 // Private worker candidate only. V2 acceptance moves complete partition roots into
 // exact install/<partition> before sealing evidence; this class never installs live data.
@@ -62,40 +64,53 @@ export class WorkerStage {
   private disposed = false;
   private retiring = false;
   private retired = false;
+
   private constructor(
     readonly store: OwnedStore,
     readonly budget: WorkingBudget,
     readonly path: string,
     private readonly identity: NativeIdentity,
   ) {}
+
   static async create(store: OwnedStore, budget: WorkingBudget): Promise<WorkerStage> {
     const name = store.prefix + 'worker/' + randomUUID();
     await store.makeParents(name + '/payload');
     const identity = await store.root.stat(name);
-    if (!identity) throw new Error('Missing worker candidate.');
+    if (!identity) {
+      throw new Error('Missing worker candidate.');
+    }
     return new WorkerStage(store, budget, name, identity);
   }
+
   enter(path: string): void {
-    if (this.disposed || this.sealed) throw new Error('Disposed/sealed worker stage.');
+    if (this.disposed || this.sealed) {
+      throw new Error('Disposed/sealed worker stage.');
+    }
     const parent = this.frames[this.frames.length - 1];
-    if (parent ? parentPath(path) !== parent.path : path !== '')
+    if (parent ? parentPath(path) !== parent.path : path !== '') {
       throw new Error('Unbalanced worker stage.');
+    }
     this.frames.push({
       path,
       directories: new Map(),
       release: this.budget.holdRecord(512 + Buffer.byteLength(path)),
     });
   }
+
   private async stat(name: string): Promise<NativeIdentity> {
     this.store.root.work.stats++;
     return nativeIdentity(await lstat(this.store.root.resolve(name), { bigint: true }));
   }
+
   hasPartition(partition: string): boolean {
     return this.partitions.has(partition);
   }
+
   async ensure(partition: string, signal: AbortSignal): Promise<StagedPartition> {
     signal.throwIfAborted();
-    if (this.disposed || this.sealed) throw new Error('Disposed/sealed worker stage.');
+    if (this.disposed || this.sealed) {
+      throw new Error('Disposed/sealed worker stage.');
+    }
     this.store.codec.schemas.partition.parse(partition);
     let part = this.partitions.get(partition);
     if (!part) {
@@ -112,21 +127,24 @@ export class WorkerStage {
       part = { partition, nativeRoot: this.path + '/' + partition, facts, directories };
       this.partitions.set(partition, part);
     }
-    for (const f of this.frames)
+    for (const f of this.frames) {
       if (!f.directories.has(partition)) {
         const name = f.path ? joinPath(part.nativeRoot, f.path) : part.nativeRoot;
         await mkdir(this.store.root.resolve(name));
         const identity = await this.stat(name);
-        if (identity[3] !== this.store.root.binding[3])
+        if (identity[3] !== this.store.root.binding[3]) {
           throw new Error('Cross-filesystem worker staging.');
+        }
         f.directories.set(partition, {
           identity,
           release: this.budget.holdRecord(encodeRecord(['directory', f.path, identity]).length),
         });
         this.work.directories++;
       }
+    }
     return part;
   }
+
   async write(
     file: WorkerFile,
     signal: AbortSignal,
@@ -162,8 +180,9 @@ export class WorkerStage {
         written[2] !== 'file' ||
         written[3] !== this.store.root.binding[3] ||
         BigInt(written[5]) !== BigInt(file.header.size)
-      )
+      ) {
         throw new Error('Invalid staged body identity/length.');
+      }
       return {
         close,
         finish: async (sha, size, mode, mtimeMs) => {
@@ -173,18 +192,21 @@ export class WorkerStage {
           if (
             !sameNative(written, before, true) ||
             !sameNative(written, nativeIdentity(await handle.stat({ bigint: true })), true)
-          )
+          ) {
             throw new Error('Staged body changed before metadata repair.');
+          }
           await handle.chmod(mode);
           const time = portableMtimeSeconds(mtimeMs);
           await handle.utimes(time, time);
           this.work.metadataRepairs++;
           this.store.root.work.stats++;
           const native = nativeIdentity(await handle.stat({ bigint: true }));
-          if (BigInt(native[8]) / 1000000n !== BigInt(mtimeMs))
+          if (BigInt(native[8]) / 1000000n !== BigInt(mtimeMs)) {
             throw new Error('Staged portable timestamp cannot be represented.');
-          if (!sameNative(native, await this.stat(name), true))
+          }
+          if (!sameNative(native, await this.stat(name), true)) {
             throw new Error('Staged body changed during metadata repair.');
+          }
           await close();
           await part.facts.append(
             ['file', file.path, file.partition, native, sha, size, mode, mtimeMs],
@@ -198,25 +220,32 @@ export class WorkerStage {
       throw error;
     }
   }
+
   async leave(path: string, signal: AbortSignal): Promise<void> {
     const f = this.frames[this.frames.length - 1];
-    if (!f || f.path !== path) throw new Error('Unbalanced worker stage close.');
+    if (!f || f.path !== path) {
+      throw new Error('Unbalanced worker stage close.');
+    }
     for (const [partition, binding] of f.directories) {
       const expected = binding.identity;
       signal.throwIfAborted();
       const part = this.partitions.get(partition)!,
         name = path ? joinPath(part.nativeRoot, path) : part.nativeRoot,
         before = await this.stat(name);
-      if (!sameObject(expected, before) || expected[6] !== before[6])
+      if (!sameObject(expected, before) || expected[6] !== before[6]) {
         throw new Error('Worker stage directory changed.');
+      }
       await chmod(this.store.root.resolve(name), 0o755);
       await utimes(this.store.root.resolve(name), 0, 0);
       const final = await this.stat(name);
-      if (!sameObject(expected, final))
+      if (!sameObject(expected, final)) {
         throw new Error('Worker directory replaced during metadata repair.');
+      }
       await part.directories.append(['directory', path, final], signal);
       if (path === '') {
-        if (this.roots.has(partition)) throw new Error('Repeated staged partition root.');
+        if (this.roots.has(partition)) {
+          throw new Error('Repeated staged partition root.');
+        }
         this.roots.set(partition, {
           identity: Object.freeze(final) as NativeIdentity,
           release: this.budget.holdRecord(512),
@@ -224,31 +253,39 @@ export class WorkerStage {
       }
     }
     this.frames.pop()!.release();
-    for (const binding of f.directories.values()) binding.release();
+    for (const binding of f.directories.values()) {
+      binding.release();
+    }
   }
+
   async seal(signal: AbortSignal): Promise<readonly StagedPartition[]> {
     signal.throwIfAborted();
-    if (this.frames.length || this.disposed || this.sealed)
+    if (this.frames.length || this.disposed || this.sealed) {
       throw new Error('Unfinished worker staging.');
+    }
     for (const p of this.partitions.values()) {
       p.facts.seal(signal);
       p.directories.seal(signal);
     }
     for (const [id, part] of this.partitions) {
       const root = this.roots.get(id);
-      if (!root) throw new Error('Missing sealed partition root.');
+      if (!root) {
+        throw new Error('Missing sealed partition root.');
+      }
       this.partitions.set(id, Object.freeze({ ...part, rootNative: root.identity }));
     }
     this.sealed = true;
     return Object.freeze([...this.partitions.values()]);
   }
+
   /** Move private selected roots, never referenced Q paths or live cache trees. */
   async publish(
     kind: 'install' | 'snapshot',
     signal: AbortSignal,
   ): Promise<readonly StagedPartition[]> {
-    if (this.disposed || !this.sealed || this.adopted || this.frames.length || this.moves.size)
+    if (this.disposed || !this.sealed || this.adopted || this.frames.length || this.moves.size) {
       throw new Error('Worker stage publication unavailable.');
+    }
     // Caller holds the invocation prepare window after one recover/intents preflight.
     const retained =
       kind === 'snapshot'
@@ -258,8 +295,9 @@ export class WorkerStage {
       signal.throwIfAborted();
       const target = retained + partition,
         expected = this.roots.get(partition)!.identity;
-      if (!sameNative(expected, await this.stat(part.nativeRoot), true))
+      if (!sameNative(expected, await this.stat(part.nativeRoot), true)) {
         throw new Error('Selected worker root changed before publication.');
+      }
       await this.store.makeParents(target);
       this.moves.set(partition, { source: part.nativeRoot, target, expected });
       await this.store.root.renameAbsent(part.nativeRoot, target, expected);
@@ -268,10 +306,14 @@ export class WorkerStage {
     signal.throwIfAborted();
     return Object.freeze([...this.partitions.values()]);
   }
+
   adopt(): void {
-    if (this.disposed || this.retiring) throw new Error('Disposed worker stage.');
+    if (this.disposed || this.retiring) {
+      throw new Error('Disposed worker stage.');
+    }
     this.adopted = true;
   }
+
   /** Original final install projection only; generic stage data grants no merge authority. */
   static assertPublishedInstall(
     stage: WorkerStage,
@@ -288,11 +330,15 @@ export class WorkerStage {
       stage.partitions.get(part.partition) !== part ||
       part.nativeRoot !== store.prefix + 'install/' + part.partition ||
       stage.moves.get(part.partition)?.target !== part.nativeRoot
-    )
+    ) {
       throw new Error('Unbound/retired final worker install projection.');
+    }
   }
+
   private async rollback(): Promise<void> {
-    if (this.adopted || !this.moves.size) return;
+    if (this.adopted || !this.moves.size) {
+      return;
+    }
     for (const [partition, move] of [...this.moves].reverse()) {
       const source = await this.store.root.stat(move.source),
         target = await this.store.root.stat(move.target);
@@ -300,33 +346,45 @@ export class WorkerStage {
         this.moves.delete(partition);
         continue;
       }
-      if (source && target) throw new Error('Ambiguous worker source publication.');
+      if (source && target) {
+        throw new Error('Ambiguous worker source publication.');
+      }
       if (target) {
-        if (!sameRename(move.expected, target)) throw new Error('Published worker source changed.');
+        if (!sameRename(move.expected, target)) {
+          throw new Error('Published worker source changed.');
+        }
         await this.store.root.renameAbsent(move.target, move.source, target);
-      } else if (!source || !sameRename(move.expected, source))
+      } else if (!source || !sameRename(move.expected, source)) {
         throw new Error('Worker source publication lost.');
+      }
       const part = this.partitions.get(partition)!;
       this.partitions.set(partition, Object.freeze({ ...part, nativeRoot: move.source }));
       this.moves.delete(partition);
     }
   }
+
   async dispose(): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
     this.retiring = true; // Revoke producer authority before cleanup can fail or suspend.
     while (this.frames.length) {
       const f = this.frames.pop()!;
-      for (const binding of f.directories.values()) binding.release();
+      for (const binding of f.directories.values()) {
+        binding.release();
+      }
       f.release();
     }
-    for (const root of this.roots.values()) root.release();
+    for (const root of this.roots.values()) {
+      root.release();
+    }
     const results = await Promise.allSettled([...this.spools].map((spool) => spool.dispose()));
     const errors = results
       .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
       .map((r) => r.reason);
     try {
       await this.rollback();
-      if (!this.retired)
+      if (!this.retired) {
         await retireOwnedDirectory(
           this.store,
           this.path,
@@ -334,11 +392,14 @@ export class WorkerStage {
           this.budget,
           'worker-candidate-retired',
         );
+      }
       this.retired = true;
     } catch (error) {
       errors.push(error);
     }
-    if (errors.length) throw new AggregateError(errors, 'Worker candidate cleanup failed.');
+    if (errors.length) {
+      throw new AggregateError(errors, 'Worker candidate cleanup failed.');
+    }
     this.disposed = true;
   }
 }

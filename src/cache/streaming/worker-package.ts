@@ -26,7 +26,9 @@ import type { WorkerSummary } from './worker-state';
 import type { WorkingBudget } from './tree-state';
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') {
-    for (const item of Object.values(value)) freeze(item);
+    for (const item of Object.values(value)) {
+      freeze(item);
+    }
     Object.freeze(value);
   }
   return value;
@@ -37,25 +39,35 @@ const genuine = new WeakSet<object>();
 // No serialized package pointer grants retry or cleanup authority.
 export class FrozenWorkerArchive {
   #upload: 'fresh' | 'active' | 'confirmed' | 'unconfirmed' | 'retired' = 'fresh';
+
   claimUpload(): void {
-    if (this.#upload !== 'fresh') throw new Error('Worker package upload already attempted.');
+    if (this.#upload !== 'fresh') {
+      throw new Error('Worker package upload already attempted.');
+    }
     this.#upload = 'active';
   }
+
   settleUpload(confirmed: boolean): void {
-    if (this.#upload !== 'active') throw new Error('Worker upload is not active.');
+    if (this.#upload !== 'active') {
+      throw new Error('Worker upload is not active.');
+    }
     this.#upload = confirmed ? 'confirmed' : 'unconfirmed';
   }
+
   async retireUploaded(): Promise<void> {
-    if (this.#upload !== 'confirmed')
+    if (this.#upload !== 'confirmed') {
       throw new Error('Worker package has no settled direct confirmation.');
+    }
     const current = await this.store.root.stat(this.reference[2]);
-    if (!current || !sameNative(this.native, current, true))
+    if (!current || !sameNative(this.native, current, true)) {
       throw new Error('Worker package replaced; retained at ' + this.file);
+    }
     await unlink(this.file);
     this.store.root.work.unlinks++;
     this.store.root.work.cleanupFiles++;
     this.#upload = 'retired';
   }
+
   private constructor(
     readonly store: OwnedStore,
     readonly reference: Reference,
@@ -67,15 +79,19 @@ export class FrozenWorkerArchive {
     genuine.add(this);
     Object.freeze(this);
   }
+
   get file(): string {
     return this.store.root.resolve(this.reference[2]);
   }
+
   get bytes(): number {
     return this.reference[3];
   }
+
   get sha(): string {
     return this.reference[4];
   }
+
   static async package(
     store: OwnedStore,
     view: WorkerSourceView,
@@ -84,8 +100,9 @@ export class FrozenWorkerArchive {
     options: { readonly signal?: AbortSignal; readonly maxDirectoryEntries?: number } = {},
   ): Promise<FrozenWorkerArchive> {
     // Validate/copy all scalar caller inputs before opening any source/candidate.
-    if (typeof name !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,232}\.tar\.gz$/.test(name))
+    if (typeof name !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,232}\.tar\.gz$/.test(name)) {
       throw new Error('Invalid raw worker artifact filename.');
+    }
     options = Object.freeze({ ...options });
     const controller = new AbortController(),
       signal = options.signal
@@ -130,21 +147,24 @@ export class FrozenWorkerArchive {
       void archive.catch(abort);
       const settled = await Promise.allSettled([writer, archive]);
       const failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failed.length)
+      if (failed.length) {
         throw new AggregateError(
           failed.map((r) => r.reason),
           'Worker package did not freeze.',
         );
+      }
       const summary = (settled[0] as PromiseFulfilledResult<WorkerSummary>).value,
         reference = (settled[1] as PromiseFulfilledResult<Reference>).value;
-      if (path.posix.basename(reference[2]) !== name)
+      if (path.posix.basename(reference[2]) !== name) {
         throw new Error('Raw worker artifact basename changed.');
+      }
       const opened = await store.root.openRead(reference[2]);
       try {
         store.root.work.stats++;
         const current = await opened.handle.stat({ bigint: true });
-        if (current.nlink !== 1n || !sameNative(opened.identity, nativeIdentity(current), true))
+        if (current.nlink !== 1n || !sameNative(opened.identity, nativeIdentity(current), true)) {
           throw new Error('Aliased/changed worker archive.');
+        }
         result = new FrozenWorkerArchive(
           store,
           freeze([...reference]) as Reference,
@@ -161,23 +181,30 @@ export class FrozenWorkerArchive {
       await sources.dispose();
     }
     signal.throwIfAborted();
-    if (!result) throw new Error('Missing frozen worker archive.');
+    if (!result) {
+      throw new Error('Missing frozen worker archive.');
+    }
     return result;
   }
+
   async assertStable(signal: AbortSignal): Promise<void> {
-    if (!genuine.has(this)) throw new Error('Unbound frozen worker archive.');
+    if (!genuine.has(this)) {
+      throw new Error('Unbound frozen worker archive.');
+    }
     signal.throwIfAborted();
     const opened = await this.store.root.openRead(this.reference[2], this.native);
     try {
       this.store.root.work.stats++;
       const current = await opened.handle.stat({ bigint: true });
-      if (current.nlink !== 1n || !sameNative(this.native, nativeIdentity(current), true))
+      if (current.nlink !== 1n || !sameNative(this.native, nativeIdentity(current), true)) {
         throw new Error('Frozen worker archive changed.');
+      }
     } finally {
       await opened.handle.close();
     }
     signal.throwIfAborted();
   }
+
   open(): Readable {
     // Q length/hash validation is compressed-byte integrity, not another TAR pass.
     return Readable.from(

@@ -39,7 +39,9 @@ import { settleNativeCleanup, type NativeOperationOptions } from './native-opera
 import type { Unit } from './schema';
 
 type Activity = 'none' | 'used' | 'upsert';
+
 type Decision = 'retain' | 'delete';
+
 // Temporary hierarchical metadata, no body bytes or durable authority.
 type Node = [
   'directory' | 'file',
@@ -57,7 +59,9 @@ type Node = [
   Decision,
   number,
 ];
+
 type Edge = ['edge', string, NativeChild['type'], string, string, number | null];
+
 const rank = (a: Activity) => (a === 'upsert' ? 2 : a === 'used' ? 1 : 0);
 const maxActivity = (a: Activity, b: Activity): Activity => (rank(a) >= rank(b) ? a : b);
 const compare = (a: string, b: string, ak = 'file', bk = 'file') =>
@@ -93,6 +97,7 @@ export interface ObservationCaptureOptions extends NativeOperationOptions {
   readonly onCaptureInfo?: (message: string) => void;
   readonly onWarning?: (message: string) => void;
 }
+
 export interface FrozenObservation {
   readonly index?: ObservationIndex;
   readonly reference: Reference;
@@ -114,7 +119,9 @@ export function claimCapturedObservationIndex(
 ): PostAttempt {
   ObservationIndex.assert(index, store);
   const attempt = capturedIndexes.get(index);
-  if (!attempt) throw new Error('Absent/consumed original observation capture.');
+  if (!attempt) {
+    throw new Error('Absent/consumed original observation capture.');
+  }
   attempt.assert();
   capturedIndexes.delete(index);
   return attempt;
@@ -147,7 +154,9 @@ async function capture(
   input: ObservationCaptureOptions,
 ): Promise<FrozenObservation> {
   input.attempt.assert();
-  if (input.attempt.store !== store) throw new Error('Observation attempt/store mismatch.');
+  if (input.attempt.store !== store) {
+    throw new Error('Observation attempt/store mismatch.');
+  }
   input.attempt.claimCapture();
   const options = Object.freeze({
       ...input,
@@ -158,7 +167,9 @@ async function capture(
     model = codec.options.model;
   options.summaries?.assert(model);
   const worker = codec.options.role === 'distributed-worker';
-  if (worker && options.purgeWindow) throw new Error('Worker capture cannot purge.');
+  if (worker && options.purgeWindow) {
+    throw new Error('Worker capture cannot purge.');
+  }
   const configured = model.partitions.some((p) => p[7]?.length),
     purge = {
       status: !configured
@@ -174,20 +185,26 @@ async function capture(
   const assertWindow = (): undefined => {
     signal.throwIfAborted();
     const window = options.purgeWindow;
-    if (!window || window.root !== store.root || window.invocation !== codec.options.invocation)
+    if (!window || window.root !== store.root || window.invocation !== codec.options.invocation) {
       throw new Error('Unbound purge window.');
-    if (window.assertCurrent.constructor.name === 'AsyncFunction')
+    }
+    if (window.assertCurrent.constructor.name === 'AsyncFunction') {
       throw new Error('Purge lifetime assertion must be synchronous.');
-    if (window.assertCurrent() !== undefined)
+    }
+    if (window.assertCurrent() !== undefined) {
       throw new Error('Purge lifetime assertion must be synchronous.');
+    }
   };
-  if (configured && options.purgeWindow) assertWindow();
+  if (configured && options.purgeWindow) {
+    assertWindow();
+  }
   signal.throwIfAborted();
   await store.assertNoIntents();
   const initial = options.attempt.state,
     bindings = options.attempt.bindings;
-  if ((options.maxDirectoryEntries ?? 100000) !== bindings[8][9])
+  if ((options.maxDirectoryEntries ?? 100000) !== bindings[8][9]) {
     throw new Error('Observation allowance differs from frozen policy.');
+  }
   await options.attempt.guard();
   const importedActivity = options.attempt.handoff.header[9];
   const activity = new ActivityCursor(activityFacts(store, importedActivity, options)),
@@ -226,7 +243,9 @@ async function capture(
     try {
       return model.owner(path);
     } catch (e) {
-      if (e instanceof Error && /Unowned|Reserved\/excluded/.test(e.message)) return null;
+      if (e instanceof Error && /Unowned|Reserved\/excluded/.test(e.message)) {
+        return null;
+      }
       throw e;
     }
   };
@@ -241,14 +260,19 @@ async function capture(
       c.path,
     );
   const mark = (path: string, directory: boolean) => {
-    if (!workspace) return;
+    if (!workspace) {
+      return;
+    }
     const relative = path.slice(workspace.root.length + 1);
-    if (markerNames.has(relative)) workspace.markers.push([directory, path]);
+    if (markerNames.has(relative)) {
+      workspace.markers.push([directory, path]);
+    }
   };
   const child = (c: NativeChild): 'prune' | void => {
     const frame = frames[frames.length - 1];
-    if (!frame || frame.path !== c.parent)
+    if (!frame || frame.path !== c.parent) {
       throw new Error('Observation child has no active parent.');
+    }
     const charge = 160 + 4 * (Buffer.byteLength(c.name) + c.device.length + c.fileId.length);
     options.budget.retain(charge);
     frame.charge += charge;
@@ -270,18 +294,25 @@ async function capture(
       }
       return 'prune';
     }
-    if (c.type === 'directory') return;
+    if (c.type === 'directory') {
+      return;
+    }
     const partition = owner(c.path);
     if (!partition || (model.tuple[2] === 'maven' && isMavenTransientFile(c.name))) {
       summaries?.excluded(c.type, partition?.[0], housekeeping(c));
       return 'prune';
     }
-    if (c.type !== 'file') throw new Error('Unsupported managed observation child.');
+    if (c.type !== 'file') {
+      throw new Error('Unsupported managed observation child.');
+    }
     // Local discovery may omit unknown layouts; imported contribution validators stay strict.
     // The existing physical child projection still protects these files from whole-tree moves.
     if (isWorkspaceScaffolding(model, c.path)) {
-      if (housekeeping(c)) summaries?.excluded('file', partition[0], true);
-      else summaries?.unsupportedLayout(partition[0], c.path);
+      if (housekeeping(c)) {
+        summaries?.excluded('file', partition[0], true);
+      } else {
+        summaries?.unsupportedLayout(partition[0], c.path);
+      }
       return 'prune';
     }
   };
@@ -294,7 +325,9 @@ async function capture(
   ) => {
     const parent = frames[frames.length - 1];
     if (!parent) {
-      if (root !== undefined) throw new Error('Multiple observation roots.');
+      if (root !== undefined) {
+        throw new Error('Multiple observation roots.');
+      }
       root = offset;
       return;
     }
@@ -339,9 +372,12 @@ async function capture(
     await activity.start();
     for await (const e of walk) {
       signal.throwIfAborted();
-      if (e.tag === 'protected-child') continue;
-      if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1'))
+      if (e.tag === 'protected-child') {
+        continue;
+      }
+      if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1')) {
         throw new Error('Aliased/cross-device observation source.');
+      }
       if (e.tag === 'directory-open') {
         mark(e.path, true);
         let unitActivity: Activity = 'none';
@@ -349,10 +385,13 @@ async function capture(
           isWorkspaceRoot(model, e.path) ||
           (model.tuple[2] === 'maven' &&
             (e.path === 'repository' || e.path.startsWith('repository/')))
-        )
+        ) {
           unitActivity = await activity.take('unit', e.path);
+        }
         if (isWorkspaceRoot(model, e.path)) {
-          if (workspace) throw new Error('Nested observation workspace.');
+          if (workspace) {
+            throw new Error('Nested observation workspace.');
+          }
           workspace = { root: e.path, markers: [] };
         }
         const charge = 128; // Per-directory reduction state.
@@ -433,8 +472,9 @@ async function capture(
             (directMask & (directMask - 1n)) !== 0n &&
             model.tuple[2] === 'maven' &&
             e.path.startsWith('repository/')
-          )
+          ) {
             throw new Error('Maven direct unit splits a snapshot owner.');
+          }
           let kind: string | null = null,
             complete = 1;
           if (workspace?.root === e.path) {
@@ -443,9 +483,13 @@ async function capture(
               workspace.markers.filter(([dir]) => !dir).map(([, p]) => p),
             );
             const markers = new UnitMarkers([kind, e.path, 'subtree'] as Unit);
-            for (const [dir, p] of workspace.markers)
-              if (dir) markers.directory(p);
-              else markers.file(p);
+            for (const [dir, p] of workspace.markers) {
+              if (dir) {
+                markers.directory(p);
+              } else {
+                markers.file(p);
+              }
+            }
             try {
               markers.finish();
             } catch {
@@ -456,8 +500,9 @@ async function capture(
             model.tuple[2] === 'maven' &&
             (e.path === 'repository' || e.path.startsWith('repository/')) &&
             (directFiles || frame.unitActivity !== 'none')
-          )
+          ) {
             kind = 'maven-directory';
+          }
           if (
             kind === 'maven-directory' &&
             frame.entries.some(
@@ -467,10 +512,11 @@ async function capture(
                 !isCacheMetadataPath(e.path + '/' + x.name) &&
                 !isMavenTransientFile(x.name),
             )
-          )
+          ) {
             directDelete = false;
+          }
           const start = tree.position;
-          for (const entry of frame.entries)
+          for (const entry of frame.entries) {
             await tree.append([
               'edge',
               entry.name,
@@ -479,6 +525,7 @@ async function capture(
               entry.id,
               entry.offset,
             ]);
+          }
           // Preserve walked scaffolding too: worker replay must co-read the same tree
           // and detect late children there, without treating an unowned directory as payload.
           const end = tree.position;
@@ -505,9 +552,13 @@ async function capture(
       }
     }
     await activity.finish();
-    if (root === undefined) throw new Error('Missing observation root.');
+    if (root === undefined) {
+      throw new Error('Missing observation root.');
+    }
     const rendered = renderObservations(tree, root, signal);
-    if (options.retainIndex) capturedIndex = await ObservationIndex.write(store, rendered, options);
+    if (options.retainIndex) {
+      capturedIndex = await ObservationIndex.write(store, rendered, options);
+    }
     const reference =
       capturedIndex?.reference ??
       (await store.writeStream('observations', { ...options, partition: null }, rendered, signal));
@@ -516,7 +567,9 @@ async function capture(
     equal(state, initial, 'observation capture state');
     await store.assertNoIntents();
     signal.throwIfAborted();
-    if (configured && options.purgeWindow) assertWindow();
+    if (configured && options.purgeWindow) {
+      assertWindow();
+    }
     await options.attempt.guard();
     await store.fail('observations-pointer');
     signal.throwIfAborted();
@@ -530,7 +583,9 @@ async function capture(
     failure = e;
     throw e;
   } finally {
-    for (const frame of frames) options.budget.release(frame.charge);
+    for (const frame of frames) {
+      options.budget.release(frame.charge);
+    }
     await settleNativeCleanup(
       [
         () => walk.return(undefined),
@@ -546,8 +601,12 @@ async function capture(
   }
   try {
     signal.throwIfAborted();
-    if (configured && options.purgeWindow) assertWindow();
-    if (capturedIndex) capturedIndexes.set(capturedIndex, options.attempt);
+    if (configured && options.purgeWindow) {
+      assertWindow();
+    }
+    if (capturedIndex) {
+      capturedIndexes.set(capturedIndex, options.attempt);
+    }
     return completed!;
   } catch (error) {
     await settleNativeCleanup([() => capturedIndex?.dispose()], error);
@@ -575,9 +634,14 @@ async function* renderObservations(
         return;
       }
       yield ['directory', n[1], n[2]];
-      for await (const e of edges(n)) yield ['child', n[1], e[1], e[2], e[3], e[4]];
-      for await (const e of edges(n))
-        if (e[5] !== null && (e[2] === 'file' || !direct)) yield* facts(e[5], false);
+      for await (const e of edges(n)) {
+        yield ['child', n[1], e[1], e[2], e[3], e[4]];
+      }
+      for await (const e of edges(n)) {
+        if (e[5] !== null && (e[2] === 'file' || !direct)) {
+          yield* facts(e[5], false);
+        }
+      }
     } finally {
       lease.release();
     }
@@ -595,14 +659,18 @@ async function* renderObservations(
         return;
       }
       yield ['dir-open', n[1], n[2]];
-      for await (const e of edges(n)) yield ['child', e[1], e[2], e[3], e[4]];
+      for await (const e of edges(n)) {
+        yield ['child', e[1], e[2], e[3], e[4]];
+      }
       const unit = n[8] !== null && !override,
         direct = n[8] === 'maven-directory';
       let selected = override,
         sha: string | undefined;
       if (unit) {
         const digest = new Digest('observation-unit');
-        for await (const f of facts(offset, direct)) digest.update(f);
+        for await (const f of facts(offset, direct)) {
+          digest.update(f);
+        }
         sha = digest.digest();
         const act = direct ? n[11] : n[4],
           deletion =
@@ -612,12 +680,21 @@ async function* renderObservations(
         selected = [act, deletion];
         yield ['unit-open', n[8], n[1], direct ? 'direct' : 'subtree', act, deletion, sha];
       }
-      for await (const e of edges(n))
-        if (e[5] !== null && (e[2] === 'file' || !direct)) yield* visit(e[5], selected);
-      if (unit) yield ['unit-close', n[8], n[1], sha!];
-      if (direct)
-        for await (const e of edges(n))
-          if (e[5] !== null && e[2] === 'directory') yield* visit(e[5], override);
+      for await (const e of edges(n)) {
+        if (e[5] !== null && (e[2] === 'file' || !direct)) {
+          yield* visit(e[5], selected);
+        }
+      }
+      if (unit) {
+        yield ['unit-close', n[8], n[1], sha!];
+      }
+      if (direct) {
+        for await (const e of edges(n)) {
+          if (e[5] !== null && e[2] === 'directory') {
+            yield* visit(e[5], override);
+          }
+        }
+      }
       yield ['dir-close', n[1]];
     } finally {
       lease.release();
@@ -640,35 +717,50 @@ async function* activityFacts(
   )) {
     options.signal?.throwIfAborted();
     const row = tuple(record.value);
-    if (row[0] === 'dir-open') path = String(row[1]);
-    else if (row[0] === 'dir-close') path = parentPath(path);
-    else if (row[0] === 'unit-open') yield [String(row[2]), 'unit', row[4] as Activity];
-    else if (row[0] === 'upsert' || row[0] === 'used')
+    if (row[0] === 'dir-open') {
+      path = String(row[1]);
+    } else if (row[0] === 'dir-close') {
+      path = parentPath(path);
+    } else if (row[0] === 'unit-open') {
+      yield [String(row[2]), 'unit', row[4] as Activity];
+    } else if (row[0] === 'upsert' || row[0] === 'used') {
       yield [path ? path + '/' + row[1] : String(row[1]), 'file', row[0]];
+    }
   }
 }
 class ActivityCursor {
   private readonly iterator: AsyncIterator<readonly [string, 'file' | 'unit', Activity]>;
   private head?: IteratorResult<readonly [string, 'file' | 'unit', Activity]>;
+
   constructor(source: AsyncIterable<readonly [string, 'file' | 'unit', Activity]>) {
     this.iterator = source[Symbol.asyncIterator]();
   }
+
   async start() {
     this.head = await this.iterator.next();
   }
+
   async take(kind: 'file' | 'unit', path: string): Promise<Activity> {
     while (this.head && !this.head.done) {
       const h = this.head.value,
         c = compare(h[0], path, h[1], kind);
-      if (c > 0) return 'none';
+      if (c > 0) {
+        return 'none';
+      }
       this.head = await this.iterator.next();
-      if (c === 0) return h[2];
+      if (c === 0) {
+        return h[2];
+      }
     }
     return 'none';
   }
+
   async finish() {
-    while (this.head && !this.head.done) this.head = await this.iterator.next();
+    while (this.head && !this.head.done) {
+      this.head = await this.iterator.next();
+    }
   }
+
   async close() {
     await this.iterator.return?.();
   }

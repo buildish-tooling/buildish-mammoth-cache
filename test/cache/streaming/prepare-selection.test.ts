@@ -53,8 +53,9 @@ async function* records(rows: Value[]) {
 }
 async function encode(f: ReturnType<typeof fixture>, rows = f.rows) {
   const chunks = [];
-  for await (const chunk of writeLocalStream(records(rows), 'handoff', f.options, () => {}))
+  for await (const chunk of writeLocalStream(records(rows), 'handoff', f.options, () => {})) {
     chunks.push(chunk);
+  }
   return Buffer.concat(chunks);
 }
 it('matches compact v2 handoff framing and hash through an independent oracle', async () => {
@@ -103,14 +104,30 @@ it.each([
 ] as const)('rejects malformed compact handoff %s', async (kind) => {
   const f = fixture(),
     rows = structuredClone(f.rows);
-  if (kind === 'missing') rows.pop();
-  if (kind === 'duplicate') rows.push(rows[1]);
-  if (kind === 'order') [rows[1], rows[2]] = [rows[2], rows[1]];
-  if (kind === 'old-version') (rows[0] as Value[])[1] = 1;
-  if (kind === 'extra-header') (rows[0] as Value[]).push(null);
-  if (kind === 'same-lineage') (rows[0] as Value[])[3] = (rows[0] as Value[])[2];
-  if (kind === 'invalid-outcome') (rows[1] as Value[])[2] = 'pending';
-  if (kind === 'pinless-available') (rows[1] as Value[])[2] = 'available';
+  if (kind === 'missing') {
+    rows.pop();
+  }
+  if (kind === 'duplicate') {
+    rows.push(rows[1]);
+  }
+  if (kind === 'order') {
+    [rows[1], rows[2]] = [rows[2], rows[1]];
+  }
+  if (kind === 'old-version') {
+    (rows[0] as Value[])[1] = 1;
+  }
+  if (kind === 'extra-header') {
+    (rows[0] as Value[]).push(null);
+  }
+  if (kind === 'same-lineage') {
+    (rows[0] as Value[])[3] = (rows[0] as Value[])[2];
+  }
+  if (kind === 'invalid-outcome') {
+    (rows[1] as Value[])[2] = 'pending';
+  }
+  if (kind === 'pinless-available') {
+    (rows[1] as Value[])[2] = 'available';
+  }
   await expect(encode(f, rows)).rejects.toThrow();
   expect(f.budget.retained).toBe(0);
 });

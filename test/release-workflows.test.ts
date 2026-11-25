@@ -29,6 +29,7 @@ interface Step {
   env?: Record<string, string>;
   with?: Record<string, unknown>;
 }
+
 interface Job {
   needs?: string[] | string;
   if?: string;
@@ -37,12 +38,14 @@ interface Job {
   env?: Record<string, string>;
   steps: Step[];
 }
+
 interface Workflow {
   on: Record<string, { inputs: Record<string, { required: boolean }> }>;
   concurrency: { group: string; 'cancel-in-progress': boolean };
   permissions: Record<string, string>;
   jobs: Record<string, Job>;
 }
+
 const load = (name: string): Workflow =>
   parse(readFileSync(`.github/workflows/release-${name}.yml`, 'utf8')) as Workflow;
 const candidate = load('candidate');
@@ -300,8 +303,9 @@ exec "$REAL_GIT" "$@"
     for (const workflow of [candidate, promotion]) {
       for (const job of Object.values(workflow.jobs)) {
         for (const step of job.steps) {
-          if (step.run)
+          if (step.run) {
             expect(() => execFileSync('bash', ['-n'], { input: step.run })).not.toThrow();
+          }
         }
       }
     }

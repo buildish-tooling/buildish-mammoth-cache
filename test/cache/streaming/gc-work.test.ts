@@ -34,11 +34,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 it('never re-admits unrelated retained trees after fixed shared-parent deletions as trees and partitions grow', async () => {
   const results = [];
-  for (const partitions of [4, 16])
+  for (const partitions of [4, 16]) {
     for (const directories of [2, 8]) {
       const hard = ['.mammoth/**'];
       const ids = Array.from({ length: partitions }, (_, i) => 'p' + String(i).padStart(2, '0'));
@@ -57,8 +59,10 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
       fixtures.push(f);
       const deleted = ['selected/p00/shared/a', 'selected/p00/shared/b'];
       await f.files('', Object.fromEntries(deleted.map((p) => [p, 'expired'])));
-      for (const p of deleted) await utimes(f.store.root.resolve(p), 1, 1);
-      for (const id of ids)
+      for (const p of deleted) {
+        await utimes(f.store.root.resolve(p), 1, 1);
+      }
+      for (const id of ids) {
         for (let d = 0; d < directories; d++) {
           const parent = 'retained/' + id + '/shared/d' + d;
           await f.files('', {
@@ -67,6 +71,7 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
             [parent + '/keep.lock']: 'protected',
           });
         }
+      }
       await captureFixtureObservations(f.store, { budget: f.budget });
       const native = vi.mocked(lstat),
         listings = vi.mocked(opendir);
@@ -78,13 +83,14 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
         { native: number; listings: number; work: typeof before; codec: typeof codec } | undefined;
       let completions = 0;
       vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-        if (name === 'gc-target-deleted' && ++completions === 2)
+        if (name === 'gc-target-deleted' && ++completions === 2) {
           afterDeletion = {
             native: native.mock.calls.length,
             listings: listings.mock.calls.length,
             work: { ...f.store.root.work },
             codec: { ...recordEncodingWork },
           };
+        }
       });
       const { owner } = await executeFixtureGc(f.store, { budget: f.budget, batchOperations: 1 });
       expect(completions).toBe(2);
@@ -134,8 +140,10 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
       });
       expect(calls.filter((p) => p.startsWith(f.root + '/retained'))).toEqual([]);
       expect(opened.filter((p) => p === f.root || managed(p))).toEqual([]);
-      for (const p of deleted) expect(await f.store.root.stat(p)).toBeNull();
-      for (const id of ids)
+      for (const p of deleted) {
+        expect(await f.store.root.stat(p)).toBeNull();
+      }
+      for (const id of ids) {
         for (let d = 0; d < directories; d++) {
           const parent = 'retained/' + id + '/shared/d' + d;
           expect(await readFile(f.store.root.resolve(parent + '/one'), 'utf8')).toBe('keep');
@@ -143,18 +151,25 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
             'protected',
           );
         }
+      }
       const selectionBefore = { ...f.store.root.work },
         selectionCodec = { ...recordEncodingWork },
         selectionStats = native.mock.calls.length;
       const source = await MetadataPublicationSource.survivors(owner);
       try {
-        for (const id of ids) expect(source.summary(id)[3]).toBe(directories * 2);
+        for (const id of ids) {
+          expect(source.summary(id)[3]).toBe(directories * 2);
+        }
         const names: string[] = [];
         async function visit(offset: number): Promise<void> {
           const lease = await source.node(offset);
           try {
-            if (lease.node[1] === 'file') names.push(lease.node[2]);
-            for await (const edge of source.children(lease.node)) await visit(edge[2]);
+            if (lease.node[1] === 'file') {
+              names.push(lease.node[2]);
+            }
+            for await (const edge of source.children(lease.node)) {
+              await visit(edge[2]);
+            }
           } finally {
             lease.release();
           }
@@ -182,6 +197,7 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
       await f.finish();
       expect(f.budget.retained).toBe(0);
     }
+  }
   for (const result of results) {
     expect(result.native.managedStats).toBe(results[0].native.managedStats);
     expect(result.afterDeletion.stats).toBe(results[0].afterDeletion.stats);

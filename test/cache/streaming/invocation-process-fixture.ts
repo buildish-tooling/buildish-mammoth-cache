@@ -17,7 +17,9 @@
 import { decodeInvocationAnchor, OpenedInvocation } from '../../../src/cache/streaming/invocation';
 import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
 const anchor = decodeInvocationAnchor(process.argv[2]);
-if (anchor[0] !== 'streaming-lifecycle') throw new Error('Expected live anchor');
+if (anchor[0] !== 'streaming-lifecycle') {
+  throw new Error('Expected live anchor');
+}
 const budget = new WorkingBudget(),
   opened = await OpenedInvocation.open(anchor, budget);
 process.stdout.write(

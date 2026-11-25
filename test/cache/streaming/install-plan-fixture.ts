@@ -28,7 +28,9 @@ const contexts = new WeakMap<OwnedStore, Set<MetadataInstallContext>>();
 export async function closeFixtureInstallPlans(store: OwnedStore): Promise<void> {
   const values = contexts.get(store);
   contexts.delete(store);
-  for (const context of values ?? []) await context.dispose();
+  for (const context of values ?? []) {
+    await context.dispose();
+  }
 }
 export interface FixtureIncoming {
   partition: string;
@@ -36,6 +38,7 @@ export interface FixtureIncoming {
   objectRoot: string;
   reference: ObjectRef;
 }
+
 /** Test offers are data until the actual one-pass metadata admission, exactly like completed SDK extraction. */
 export async function freezeInstallPlan(
   store: OwnedStore,
@@ -43,8 +46,9 @@ export async function freezeInstallPlan(
   budget: WorkingBudget,
   options: { signal?: AbortSignal; maxDirectoryEntries?: number; pruneAggregates?: boolean } = {},
 ) {
-  if (new Set(offers.map((offer) => offer.partition)).size !== offers.length)
+  if (new Set(offers.map((offer) => offer.partition)).size !== offers.length) {
     throw new Error('Duplicate source partition projection.');
+  }
   const model = store.codec.options.model;
   const entries: GenerationEntry[] = model.partitions.map((p) => {
     const offer = offers.find((offer) => offer.partition === p[0]);
@@ -74,7 +78,9 @@ export async function freezeInstallPlan(
     offers.map((offer) => ({ partition: offer.partition, root: offer.objectRoot })),
     { budget, ...options },
   );
-  if (!contexts.has(store)) contexts.set(store, new Set());
+  if (!contexts.has(store)) {
+    contexts.set(store, new Set());
+  }
   contexts.get(store)!.add(context);
   return freezeMetadataInstallPlan(store, context, budget, options);
 }

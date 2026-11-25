@@ -90,8 +90,12 @@ describe('canonical raw action inputs', () => {
       async (workspace) => {
         const directInputs = readActionInputs('gradle', {
           getInput(name) {
-            if (name === 'config-file') return 'cache.json';
-            if (name === 'cache-enabled') return 'true';
+            if (name === 'config-file') {
+              return 'cache.json';
+            }
+            if (name === 'cache-enabled') {
+              return 'true';
+            }
             return '';
           },
         });
@@ -265,7 +269,7 @@ it.each(['gradle'] as const)(
     const options = { phase: 'prepare' as const, ciContext: fixtureCi('/cache') };
     const absent = readActionInputs(tool, { getInput: () => '' });
     expect(normalizeSharedActionConfig(absent, options).exportLayerEnvironment).toBe(true);
-    for (const fileValue of [false, true])
+    for (const fileValue of [false, true]) {
       await withConfigFile(
         'cache.yml',
         `export-layer-environment: ${fileValue}\n`,
@@ -286,6 +290,7 @@ it.each(['gradle'] as const)(
           }
         },
       );
+    }
     expect(() =>
       normalizeSharedActionConfig({ ...absent, exportLayerEnvironment: 'yes' }, options),
     ).toThrow('export-layer-environment');

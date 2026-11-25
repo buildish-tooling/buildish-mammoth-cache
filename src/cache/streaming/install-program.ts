@@ -22,9 +22,11 @@ import type { MetadataInstallContext } from './metadata-install-context';
 import type { WorkingBudget } from './tree-state';
 
 export type InstallBatch = readonly ['batch', number, number];
+
 export class InstallReaders {
   kind: 'file' | 'directory' = 'file';
   private readonly metadata: MetadataInstallContext;
+
   constructor(
     readonly store: OwnedStore,
     readonly budget: WorkingBudget,
@@ -34,11 +36,13 @@ export class InstallReaders {
     admission.assert(store);
     this.metadata = admission.frozen.metadata;
   }
+
   async reader(binding: Value, signal: AbortSignal) {
     signal.throwIfAborted();
     this.metadata.assert(this.store);
     return this.metadata.reader(binding);
   }
+
   async close() {
     /* Original context/index lifetime belongs to admission. */
   }
@@ -53,6 +57,7 @@ export class InstallProgram {
     readonly rows: InstallScratch,
     readonly batches: InstallScratch,
   ) {}
+
   static async create(
     store: OwnedStore,
     plan: Reference,
@@ -61,11 +66,14 @@ export class InstallProgram {
     targets = { operations: 16384, bytes: 8 * 1024 * 1024 },
     admission?: InstallAdmission,
   ): Promise<InstallProgram> {
-    if (!admission) throw new Error('Install program requires admitted operations.');
+    if (!admission) {
+      throw new Error('Install program requires admitted operations.');
+    }
     admission.assert(store);
     equal(plan, admission.frozen.plan, 'admitted install plan');
-    if (![targets.operations, targets.bytes].every((n) => Number.isSafeInteger(n) && n > 0))
+    if (![targets.operations, targets.bytes].every((n) => Number.isSafeInteger(n) && n > 0)) {
       throw new Error('Invalid install batch targets.');
+    }
     const rows = admission.operations;
     let batches: InstallScratch | undefined;
     try {
@@ -75,19 +83,23 @@ export class InstallProgram {
         unitOperations = 0,
         operations = 0,
         units = 0;
-      for await (const page of rows.batches(0, rows.position, signal))
+      for await (const page of rows.batches(0, rows.position, signal)) {
         for (const frame of page) {
           const accepted = frame.value;
           signal.throwIfAborted();
           const item = accepted as readonly Value[],
             row = item[1] as readonly Value[],
             tag = row[0];
-          if (tag === 'local-stream' || tag === 'local-end' || tag === 'install-context') continue;
+          if (tag === 'local-stream' || tag === 'local-end' || tag === 'install-context') {
+            continue;
+          }
           if (tag === 'install-unit-open') {
             unitStart = frame.start;
             unitOperations = 0;
           }
-          if (tag === 'install' || tag === 'install-parent') unitOperations++;
+          if (tag === 'install' || tag === 'install-parent') {
+            unitOperations++;
+          }
           if (tag === 'install-unit-close') {
             if (
               units > 0 &&
@@ -103,7 +115,10 @@ export class InstallProgram {
             units++;
           }
         }
-      if (rows.position > start) await batches.append(['batch', start, rows.position]);
+      }
+      if (rows.position > start) {
+        await batches.append(['batch', start, rows.position]);
+      }
       signal.throwIfAborted();
       return new InstallProgram(store, plan, readers, rows, batches);
     } catch (error) {
@@ -111,16 +126,19 @@ export class InstallProgram {
       throw error;
     }
   }
+
   async *batchRows(batch: InstallBatch) {
     yield* this.rows.rows(batch[1], batch[2]);
   }
+
   async close() {
     const results = await Promise.allSettled([this.batches.close()]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (failures.length)
+    if (failures.length) {
       throw new AggregateError(
         failures.map((r) => r.reason),
         'Program scratch cleanup failed.',
       );
+    }
   }
 }

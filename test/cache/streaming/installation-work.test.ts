@@ -103,8 +103,11 @@ it('counts complete 4/16-partition shared-parent worker → metadata base → re
       });
     const totals = () => {
       const total = nativeWork();
-      for (const root of roots)
-        for (const key of Object.keys(total) as (keyof NativeWork)[]) total[key] += root.work[key];
+      for (const root of roots) {
+        for (const key of Object.keys(total) as (keyof NativeWork)[]) {
+          total[key] += root.work[key];
+        }
+      }
       return total;
     };
     let before = totals(),
@@ -137,8 +140,8 @@ it('counts complete 4/16-partition shared-parent worker → metadata base → re
         role: 'distributed-worker',
       });
       phase('worker-' + job + '-prepare');
-      for (const unit of ['one', 'two'])
-        for (const id of ids)
+      for (const unit of ['one', 'two']) {
+        for (const id of ids) {
           for (const suffix of ['jar', 'pom']) {
             const logical = 'repository/shared/' + unit + '/1/' + id + '.' + suffix,
               file = worker.store.root.resolve(logical);
@@ -147,6 +150,8 @@ it('counts complete 4/16-partition shared-parent worker → metadata base → re
             await chmod(file, 0o644);
             await utimes(file, 1.2345, 1.2345);
           }
+        }
+      }
       expect(
         (
           await postStreamingWorker({
@@ -223,7 +228,9 @@ it('counts complete 4/16-partition shared-parent worker → metadata base → re
           await readFile(warm.store.root.resolve(warm.store.prefix + 'files/' + name), 'utf8')
         ).split('\n')[0],
       );
-      if (first[0] === 'local-stream') expect(['model', 'handoff']).toContain(first[2]);
+      if (first[0] === 'local-stream') {
+        expect(['model', 'handoff']).toContain(first[2]);
+      }
     }
     const sdkArchiveBytes = (
         await Promise.all(

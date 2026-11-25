@@ -27,7 +27,9 @@ import {
 } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 export async function cleanupSourceFixtures() {
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 }
 export async function sourceFixture(
   snapshot = false,
@@ -79,17 +81,23 @@ export async function freezeSources(
       (a, b) => Number(a.isDirectory()) - Number(b.isDirectory()) || compareName(a.name, b.name),
     );
     for (const e of entries) {
-      if (e.name === '.mammoth' || e.name.endsWith('.lock') || e.name.endsWith('-excluded.jar'))
+      if (e.name === '.mammoth' || e.name.endsWith('.lock') || e.name.endsWith('-excluded.jar')) {
         continue;
+      }
       const logical = p ? p + '/' + e.name : e.name;
-      if (remove === 'remove-unit' && logical === unitRoot) continue;
+      if (remove === 'remove-unit' && logical === unitRoot) {
+        continue;
+      }
       if (e.isDirectory()) {
-        for await (const row of activity(logical)) values.push(row);
+        for await (const row of activity(logical)) {
+          values.push(row);
+        }
       } else if (
         logical !== remove &&
         !(remove === 'remove-unit' && (logical === unitRoot || logical.startsWith(unitRoot + '/')))
-      )
+      ) {
         values.push(['upsert', e.name, f.model.owner(logical)[0]]);
+      }
     }
     if (values.length || !p) {
       yield ['dir-open', p];
@@ -99,8 +107,12 @@ export async function freezeSources(
   }
   const imported: Value[] = [];
   if (remove) {
-    for await (const row of activity('')) imported.push(row);
-  } else imported.push(['dir-open', ''], ['dir-close', '']);
+    for await (const row of activity('')) {
+      imported.push(row);
+    }
+  } else {
+    imported.push(['dir-open', ''], ['dir-close', '']);
+  }
   const initialized = await initializeObservationFixture(
     f,
     imported,
@@ -111,7 +123,9 @@ export async function freezeSources(
     retainIndex: true,
   });
   const result = await executeFixtureGc(initialized.store, { budget: f.budget });
-  if (!captured.index) throw new Error('Missing original capture');
+  if (!captured.index) {
+    throw new Error('Missing original capture');
+  }
   return { survivors: result.owner };
 }
 export async function freezeRetainedSources(

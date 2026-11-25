@@ -25,19 +25,25 @@ export function fileCommands(text: string): Record<string, string> {
     values: Record<string, string> = {};
   for (let i = 0; i < lines.length; i++) {
     const n = lines[i].indexOf('<<');
-    if (n < 0) continue;
+    if (n < 0) {
+      continue;
+    }
     const key = lines[i].slice(0, n),
       delimiter = lines[i].slice(n + 2),
       body = [];
-    while (++i < lines.length && lines[i] !== delimiter) body.push(lines[i]);
-    if (i === lines.length) throw new Error('Unterminated file command');
+    while (++i < lines.length && lines[i] !== delimiter) {
+      body.push(lines[i]);
+    }
+    if (i === lines.length) {
+      throw new Error('Unterminated file command');
+    }
     values[key] = body.join('\n');
   }
   return values;
 }
 export async function entrypointBundles(root: string, native = false) {
   const builds = [];
-  for (const tool of ['gradle', 'maven'])
+  for (const tool of ['gradle', 'maven']) {
     for (const phase of ['main', 'post']) {
       const outfile = root + '/' + tool + '-' + phase + '.cjs';
       const result = await build({
@@ -62,8 +68,9 @@ export async function entrypointBundles(root: string, native = false) {
                     if (
                       path.resolve(args.importer) ===
                       path.resolve('test/support/entrypoint-native-work.ts')
-                    )
+                    ) {
                       return undefined;
+                    }
                     return path.resolve(args.resolveDir, args.path) ===
                       path.resolve('src/cache/streaming/native')
                       ? { path: path.resolve('test/support/entrypoint-native-work.ts') }
@@ -84,6 +91,7 @@ export async function entrypointBundles(root: string, native = false) {
       });
       builds.push({ tool, phase, outfile, inputs: Object.keys(result.metafile!.inputs) });
     }
+  }
   return builds;
 }
 export async function entrypointJob(
@@ -98,13 +106,17 @@ export async function entrypointJob(
     home = job + '/home',
     temp = job + '/temp';
   store ??= job + '/service';
-  for (const dir of [workspace, home, temp, store]) await mkdir(dir, { recursive: true });
-  for (const file of ['state', 'output', 'env', 'summary', 'trace'])
+  for (const dir of [workspace, home, temp, store]) {
+    await mkdir(dir, { recursive: true });
+  }
+  for (const file of ['state', 'output', 'env', 'summary', 'trace']) {
     await writeFile(job + '/' + file, '');
-  if (tool === 'gradle')
+  }
+  if (tool === 'gradle') {
     await cp(path.resolve('test/fixtures/smoke/gradle'), workspace + '/gradle', {
       recursive: true,
     });
+  }
   const event = job + '/event.json';
   await writeFile(event, JSON.stringify({ repository: { default_branch: 'main' } }));
   const env: NodeJS.ProcessEnv = {
@@ -140,7 +152,7 @@ export async function entrypointJob(
     'INPUT_GITHUB-DEFAULT-BRANCH': 'main',
   };
   // Avoid inheriting the surrounding runner's unrelated Action state/input switches.
-  for (const key of Object.keys(env))
+  for (const key of Object.keys(env)) {
     if (
       /^(?:STATE_|INPUT_)/.test(key) &&
       !(
@@ -153,9 +165,13 @@ export async function entrypointJob(
           'INPUT_GITHUB-DEFAULT-BRANCH': 1,
         }
       )
-    )
+    ) {
       delete env[key];
-  for (const [key, value] of Object.entries(inputs)) env['INPUT_' + key.toUpperCase()] = value;
+    }
+  }
+  for (const [key, value] of Object.entries(inputs)) {
+    env['INPUT_' + key.toUpperCase()] = value;
+  }
   async function run(phase: string, overrides: NodeJS.ProcessEnv = {}, delegateTool = tool) {
     const state =
       phase === 'post'

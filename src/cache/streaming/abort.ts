@@ -33,7 +33,9 @@ export function withAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> 
         reject(error);
       },
     );
-    if (signal.aborted) abort();
+    if (signal.aborted) {
+      abort();
+    }
   });
 }
 
@@ -56,8 +58,11 @@ export async function* abortableValues<T>(
   } finally {
     if (!done && iterator.return) {
       const retirement = iterator.return();
-      if (signal.aborted) void retirement.catch(() => {});
-      else await retirement;
+      if (signal.aborted) {
+        void retirement.catch(() => {});
+      } else {
+        await retirement;
+      }
     }
   }
 }

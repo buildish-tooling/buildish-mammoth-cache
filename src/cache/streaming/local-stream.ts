@@ -39,6 +39,7 @@ export const localPurposes = [
   'install-plan',
 ] as const;
 export type LocalPurpose = (typeof localPurposes)[number];
+
 export interface LocalStreamOptions {
   readonly codec: LocalCodec;
   readonly budget: WorkingBudget;
@@ -47,34 +48,44 @@ export interface LocalStreamOptions {
   /** Required for install streams: member kind from independently validated referenced evidence. */
   readonly installKind?: InstallKind;
 }
+
 export interface LocalStreamSeal {
   bytes: number;
   records: number;
   sha: string;
   eventSha: string;
 }
+
 export class LocalStreamGrammar {
   private readonly tree?: LocalTreeState;
   private readonly handoff?: HandoffGrammar;
   private readonly install?: LocalInstallState;
   private count = 0;
+
   constructor(
     private readonly purpose: LocalPurpose,
     private readonly options: LocalStreamOptions,
   ) {
     z.enum(localPurposes).parse(purpose);
-    if (options.partition !== null) throw new Error('Unexpected local stream partition scope.');
-    if (purpose === 'activity' || purpose === 'observations')
+    if (options.partition !== null) {
+      throw new Error('Unexpected local stream partition scope.');
+    }
+    if (purpose === 'activity' || purpose === 'observations') {
       this.tree = new LocalTreeState(
         purpose,
         options.codec.schemas,
         options.budget,
         options.maxDirectoryEntries,
       );
-    if (purpose === 'handoff') this.handoff = new HandoffGrammar(options.codec);
-    if (purpose === 'install-plan')
+    }
+    if (purpose === 'handoff') {
+      this.handoff = new HandoffGrammar(options.codec);
+    }
+    if (purpose === 'install-plan') {
       this.install = new LocalInstallState(options.codec.schemas, options.installKind);
+    }
   }
+
   header(): Value {
     const options = this.options.codec.options;
     return [
@@ -87,15 +98,19 @@ export class LocalStreamGrammar {
       null,
     ];
   }
+
   accept(value: Value): void {
-    if (this.tree) this.tree.accept(value);
-    else if (this.handoff) this.handoff.accept(value);
-    else if (this.install) this.install.accept(value);
-    else if (this.purpose === 'installations')
+    if (this.tree) {
+      this.tree.accept(value);
+    } else if (this.handoff) {
+      this.handoff.accept(value);
+    } else if (this.install) {
+      this.install.accept(value);
+    } else if (this.purpose === 'installations') {
       z.tuple([z.literal('installation'), this.options.codec.schemas.rows.registration]).parse(
         value,
       );
-    else if (this.purpose === 'model') {
+    } else if (this.purpose === 'model') {
       const model = this.options.codec.options.model,
         expected =
           this.count === 0
@@ -103,11 +118,16 @@ export class LocalStreamGrammar {
             : this.count <= model.partitions.length
               ? ['partition', ...model.partitions[this.count - 1]]
               : null;
-      if (expected === null) throw new Error('Extra model row.');
+      if (expected === null) {
+        throw new Error('Extra model row.');
+      }
       equal(value, expected, 'frozen model row');
-    } else throw new Error('Unknown local stream purpose.');
+    } else {
+      throw new Error('Unknown local stream purpose.');
+    }
     this.count = add(this.count);
   }
+
   finish(): void {
     this.tree?.finish();
     this.handoff?.finish();
@@ -115,9 +135,11 @@ export class LocalStreamGrammar {
     if (
       this.purpose === 'model' &&
       this.count !== this.options.codec.options.model.partitions.length + 1
-    )
+    ) {
       throw new Error('Incomplete model stream.');
+    }
   }
+
   dispose(): void {
     this.tree?.dispose();
     this.install?.dispose();
@@ -131,6 +153,7 @@ export interface LocalRow {
   /** Zero-based physical record number, including the header. */
   readonly record: number;
 }
+
 /** Provisional rows for bounded joins. Acceptance requires verified EOF, never early return. */
 export async function* readLocalRows(
   source: AsyncIterable<Uint8Array>,
@@ -155,7 +178,9 @@ export async function* readLocalRows(
 async function drain<T>(rows: AsyncGenerator<LocalRow, T>): Promise<T> {
   while (true) {
     const row = await rows.next();
-    if (row.done) return row.value;
+    if (row.done) {
+      return row.value;
+    }
   }
 }
 /** References bind exact bytes; callbacks remain provisional until this resolves. */
@@ -198,6 +223,7 @@ interface StreamGrammar {
   finish(): void;
   dispose(): void;
 }
+
 export async function readModelStream(
   source: AsyncIterable<Uint8Array>,
   reference: Value,
@@ -223,16 +249,21 @@ export async function readModelStream(
       const row = tuple(value);
       if (!head) {
         head = tuple(value, 'model-header');
-        if (head.length !== 3 && head.length !== 4) throw new Error('Invalid frozen model header.');
+        if (head.length !== 3 && head.length !== 4) {
+          throw new Error('Invalid frozen model header.');
+        }
       } else {
-        if (partitions.length === 64 || row[0] !== 'partition')
+        if (partitions.length === 64 || row[0] !== 'partition') {
           throw new Error('Invalid bootstrap model row.');
+        }
         partitions.push(row.slice(1));
       }
       releases.push(budget.holdRecord(encodeRecord(value).length));
     },
     finish() {
-      if (!head) throw new Error('Missing model header.');
+      if (!head) {
+        throw new Error('Missing model header.');
+      }
       model = resolveModel(
         ['model', 1, head[1], head[2], partitions, ...head.slice(3)],
         identity.prefix,
@@ -245,7 +276,9 @@ export async function readModelStream(
       );
     },
     dispose() {
-      for (const release of releases) release();
+      for (const release of releases) {
+        release();
+      }
     },
   };
   await drain(
@@ -260,7 +293,9 @@ async function* readFrames<G extends StreamGrammar>(
   try {
     for (;;) {
       const result = await batches.next();
-      if (result.done) return result.value;
+      if (result.done) {
+        return result.value;
+      }
       for (const row of result.value) {
         args[6].throwIfAborted();
         yield row;
@@ -279,8 +314,9 @@ export async function* readLocalBatches(
   signal = new AbortController().signal,
   batchChargeLimit = options.budget.limit,
 ) {
-  if (!Number.isSafeInteger(batchChargeLimit) || batchChargeLimit < 1)
+  if (!Number.isSafeInteger(batchChargeLimit) || batchChargeLimit < 1) {
     throw new Error('Invalid local batch charge allowance.');
+  }
   const ref = options.codec.schemas.ref(purpose).parse(reference);
   return yield* readFrameBatches(
     source,
@@ -324,13 +360,15 @@ async function* readFrameBatches<G extends StreamGrammar>(
     batchCharge = 0;
   const releases: (() => void)[] = [];
   const clear = () => {
-    for (const release of releases.splice(0)) release();
+    for (const release of releases.splice(0)) {
+      release();
+    }
     batch = [];
     batchBytes = 0;
     batchCharge = 0;
   };
   try {
-    for await (const chunk of abortableValues(source, signal))
+    for await (const chunk of abortableValues(source, signal)) {
       for (const frame of decoder.push(chunk)) {
         signal.throwIfAborted();
         if (
@@ -355,9 +393,13 @@ async function* readFrameBatches<G extends StreamGrammar>(
         releases.push(budget.holdRecord(frame.raw.length));
         batchBytes += frame.raw.length;
         batchCharge += decodedRecordCharge(frame.raw.length);
-        if (ended) throw new Error('Trailing local stream row.');
+        if (ended) {
+          throw new Error('Trailing local stream row.');
+        }
         bytes = add(bytes, frame.raw.length);
-        if (bytes > expected.bytes) throw new Error('Local reference length exceeded.');
+        if (bytes > expected.bytes) {
+          throw new Error('Local reference length exceeded.');
+        }
         raw.update(frame.raw);
         if (!started) {
           equal(frame.value, grammar.header(), 'local stream header');
@@ -369,12 +411,16 @@ async function* readFrameBatches<G extends StreamGrammar>(
           equal(end, ['local-end', records, digest.digest()], 'local stream seal');
           ended = true;
         } else {
-          if (beforeAccept) await withAbort(beforeAccept(frame.value), signal);
+          if (beforeAccept) {
+            await withAbort(beforeAccept(frame.value), signal);
+          }
           grammar.accept(frame.value);
           records = add(records);
           digest.encoded(frame.raw.subarray(0, -1));
         }
-        if (event) await withAbort(event(frame.value), signal);
+        if (event) {
+          await withAbort(event(frame.value), signal);
+        }
         batch.push({
           value: frame.value,
           start: bytes - frame.raw.length,
@@ -386,6 +432,7 @@ async function* readFrameBatches<G extends StreamGrammar>(
           clear();
         }
       }
+    }
     decoder.finish();
     if (batch.length) {
       yield batch;
@@ -393,7 +440,9 @@ async function* readFrameBatches<G extends StreamGrammar>(
       await setImmediate();
       signal.throwIfAborted();
     }
-    if (!started || !ended) throw new Error('Truncated local stream.');
+    if (!started || !ended) {
+      throw new Error('Truncated local stream.');
+    }
     const sha = raw.copy().digest('hex');
     equal([bytes, sha], [expected.bytes, expected.sha], 'local reference');
     return {
@@ -427,8 +476,9 @@ export async function* writeLocalStream(
   try {
     const header = encodeRecord(grammar.header());
     digest.encoded(header.subarray(0, -1));
-    if (onRow)
+    if (onRow) {
       await onRow({ value: grammar.header(), start: bytes, end: bytes + header.length, record: 0 });
+    }
     yield emit(header);
     for await (const value of abortableValues(records, signal)) {
       const encoded = encodeRecord(value),
@@ -440,14 +490,17 @@ export async function* writeLocalStream(
       } finally {
         release();
       }
-      if (onRow) await onRow({ value, start: bytes, end: bytes + encoded.length, record: count });
+      if (onRow) {
+        await onRow({ value, start: bytes, end: bytes + encoded.length, record: count });
+      }
       yield emit(encoded);
     }
     grammar.finish();
     const end: Value = ['local-end', count, digest.digest()],
       encodedEnd = encodeRecord(end);
-    if (onRow)
+    if (onRow) {
       await onRow({ value: end, start: bytes, end: bytes + encodedEnd.length, record: count + 1 });
+    }
     yield emit(encodedEnd);
     signal.throwIfAborted();
     sealed({ bytes, records: count, sha: raw.digest('hex'), eventSha: digest.digest() });

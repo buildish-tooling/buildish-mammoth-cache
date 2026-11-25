@@ -94,6 +94,7 @@ export interface StreamingPrepareRequest extends LifecycleOptions {
   readonly now?: () => number;
   readonly fail?: Failpoint;
 }
+
 export type PrepareRestoreStatus =
   | 'feature-unavailable'
   | 'miss'
@@ -101,6 +102,7 @@ export type PrepareRestoreStatus =
   | 'fallback-lineage-hit'
   | 'current-lineage-partial-hit'
   | 'fallback-lineage-partial-hit';
+
 export interface StreamingPrepareResult {
   readonly restoreStatus: PrepareRestoreStatus;
   readonly store: OwnedStore;
@@ -110,6 +112,7 @@ export interface StreamingPrepareResult {
   readonly workerCount: number;
   readonly gradleSeed: GradleSeedDescriptor | null;
 }
+
 const rows = async function* (values: readonly Value[]) {
   yield* values;
 };
@@ -133,10 +136,11 @@ export async function prepareStreaming(
       request.policy.restoreCleanup,
     ) &&
     request.existingGradleLayer?.length
-  )
+  ) {
     throw new Error(
       'GRADLE_RO_DEP_CACHE is already set. Remove the conflicting value or disable dependency-cache-layer.',
     );
+  }
   const signal = request.signal ?? new AbortController().signal,
     options = Object.freeze({
       ...request,
@@ -146,22 +150,28 @@ export async function prepareStreaming(
     id = invocationId(request.context, request.nonce);
   const assertCurrent = (): undefined => {
     signal.throwIfAborted();
-    if (request.assertCurrent() !== undefined)
+    if (request.assertCurrent() !== undefined) {
       throw new Error('Prepare lifetime assertion must be synchronous.');
+    }
   };
-  if (request.policy.gcAgeMs !== null && uint(request.policy.gcAgeMs) === 0)
+  if (request.policy.gcAgeMs !== null && uint(request.policy.gcAgeMs) === 0) {
     throw new Error('Invalid GC age.');
+  }
   if (
     !request.cleanupEnabled &&
     (request.policy.gcAgeMs !== null || request.policy.restoreCleanup !== 'none')
-  )
+  ) {
     throw new Error('Disabled cleanup has active deletion policy.');
-  if (request.policy.role !== 'distributed-aggregator' && request.policy.ordinaryOrder.length)
+  }
+  if (request.policy.role !== 'distributed-aggregator' && request.policy.ordinaryOrder.length) {
     throw new Error('Only an aggregator applies dependent workers.');
+  }
   try {
     await lstat(request.root);
   } catch (error) {
-    if (!missing(error)) throw error;
+    if (!missing(error)) {
+      throw error;
+    }
     signal.throwIfAborted();
     await mkdir(request.root, { recursive: true });
   }
@@ -179,10 +189,11 @@ export async function prepareStreaming(
     docs = lifecycleDocuments(codec.options),
     anchor = invocationAnchor(store.root, request.context, request.nonce);
   request.saveAnchor(encodeInvocationAnchor(anchor));
-  if (await store.root.stat(store.prefix.slice(0, -1)))
+  if (await store.root.stat(store.prefix.slice(0, -1))) {
     throw new Error(
       'Existing invocation namespace; use a fresh dedicated root or handle retained data manually.',
     );
+  }
   const start = uint((request.now ?? Date.now)()),
     age = request.policy.gcAgeMs;
   const policy = policySchema.parse([
@@ -239,8 +250,9 @@ export async function prepareStreaming(
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     await store.makeParents(store.prefix + 'install/pending');
     const installOwner = (await store.root.stat(store.prefix + 'install'))!;
-    if (installOwner[3] !== store.root.binding[3])
+    if (installOwner[3] !== store.root.binding[3]) {
       throw new Error('Cross-filesystem install staging.');
+    }
     assertCurrent();
     await request.provision();
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
@@ -265,13 +277,16 @@ export async function prepareStreaming(
     if (
       gradleLayerCandidate(request.model, store.codec.options, request.policy.restoreCleanup) &&
       request.gradleLayerVersion?.() === GRADLE_LAYER_VERSION
-    )
+    ) {
       seed = await installGradleSeed(store, restored, options);
+    }
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
     if (requests.length) {
-      if (!request.artifactBackend) throw new Error('Required artifact backend is missing.');
+      if (!request.artifactBackend) {
+        throw new Error('Required artifact backend is missing.');
+      }
       const backend = await request.artifactBackend();
       const selected = await timed(options, 'worker discovery', () =>
         discoverWorkerArtifacts(backend, request.model, request.context, requests, { signal }),
@@ -294,8 +309,9 @@ export async function prepareStreaming(
         partition[3] !== 'single-writer' ||
         ownsLocalSnapshot(partition, store.codec.options) ||
         selectedJobs.has(partition[4]!)
-      )
+      ) {
         continue;
+      }
       let snapshot: MetadataSnapshot;
       const source = restored.context!.source(entry[1]);
       if (entry[2] === 'available' && source?.upstream.kind === 'native-metadata') {
@@ -310,13 +326,14 @@ export async function prepareStreaming(
         } finally {
           await publication.dispose();
         }
-      } else
+      } else {
         snapshot = await MetadataSnapshot.empty(
           store,
           entry[1],
           ['empty', entry[2] === 'empty' ? 'generation' : entry[2] === 'cold' ? 'cold' : 'miss'],
           options,
         );
+      }
       snapshots.add(snapshot);
       fallback.set(entry[1], snapshot);
     }
@@ -336,12 +353,14 @@ export async function prepareStreaming(
       request.onWorkerWarnings?.(merged.warnings);
     }
     const prune = request.policy.restoreCleanup === 'prune-managed' && restored.generation !== null;
-    for (const entry of restored.entries)
+    for (const entry of restored.entries) {
       if (
         (entry[2] === 'miss' || entry[2] === 'cold') &&
         (prune || request.model.partitions.find((p) => p[0] === entry[1])![3] === 'single-writer')
-      )
+      ) {
         await restored.context!.declareEmpty(entry[1], signal);
+      }
+    }
     const cold = new Set(restored.context!.cold.flat());
     if (
       request.model.partitions.some((p) => {
@@ -366,14 +385,19 @@ export async function prepareStreaming(
         acceptWorkerMerge(store, merged!, request.budget, signal, options.timing),
       );
       merged = undefined;
-      for (const snapshot of accepted.snapshots) snapshots.add(snapshot);
-      for (const snapshot of accepted.snapshots) fallback.set(snapshot.partition, snapshot);
-      if (accepted.incoming.length)
+      for (const snapshot of accepted.snapshots) {
+        snapshots.add(snapshot);
+      }
+      for (const snapshot of accepted.snapshots) {
+        fallback.set(snapshot.partition, snapshot);
+      }
+      if (accepted.incoming.length) {
         await timed(options, 'worker install', () =>
           installWorkerMerge(store, accepted!, request.budget, signal, () =>
             assertLifecycleWindow(store, bindings, { signal, assertCurrent }),
           ),
         );
+      }
     }
     await store.fail('prepare-workers-installed');
     const activity =
@@ -387,8 +411,9 @@ export async function prepareStreaming(
         ]),
         signal,
       ));
-    for (const entry of restored.entries)
+    for (const entry of restored.entries) {
       entry[4] = fallback.get(entry[1])?.sourceDescriptor() ?? null;
+    }
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );

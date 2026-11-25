@@ -46,6 +46,7 @@ export interface WorkerRequest {
   readonly required: boolean;
   readonly authorizedSnapshots: readonly string[];
 }
+
 /** Check backend support before creating the current operation’s immutable upload package. */
 export async function freezeWorkerArtifact(
   backend: WorkflowArtifactBackend,
@@ -72,7 +73,9 @@ export async function discoverWorkerArtifacts(
     readonly signal?: AbortSignal;
   } = {},
 ): Promise<readonly SelectedWorkerArtifact[]> {
-  if (requests.length > 16) throw new Error('Worker discovery producer admission exceeded.');
+  if (requests.length > 16) {
+    throw new Error('Worker discovery producer admission exceeded.');
+  }
   execution = Object.freeze(contextSchema.parse(execution)) as Context;
   requests = Object.freeze(
     requests.map((r) =>
@@ -82,8 +85,9 @@ export async function discoverWorkerArtifacts(
       }),
     ),
   );
-  if (requests.length > 16 || new Set(requests.map((r) => r.job)).size !== requests.length)
+  if (requests.length > 16 || new Set(requests.map((r) => r.job)).size !== requests.length) {
     throw new Error('Worker discovery producer admission exceeded/duplicated.');
+  }
   const scope = workerScope(options.scope, execution),
     signal = options.signal ?? new AbortController().signal;
   rawWorkerBackend(backend, scope);
@@ -104,25 +108,36 @@ export async function discoverWorkerArtifacts(
   });
   const artifacts = await backend.listArtifacts({ latest: false, scope });
   signal.throwIfAborted();
-  for (const artifact of artifacts)
+  for (const artifact of artifacts) {
     for (const s of state) {
       const attempt = workerArtifactAttempt(artifact.name, s.prefix);
-      if (attempt === null) continue;
+      if (attempt === null) {
+        continue;
+      }
       s.candidate = true;
-      if (attempt > execution[5]) continue;
+      if (attempt > execution[5]) {
+        continue;
+      }
       if (attempt > s.attempt) {
         s.best = Object.freeze({ ...artifact });
         s.attempt = attempt;
         s.ambiguous = false;
-      } else if (attempt === s.attempt) s.ambiguous = true;
+      } else if (attempt === s.attempt) {
+        s.ambiguous = true;
+      }
     }
+  }
   const result: SelectedWorkerArtifact[] = [];
   for (const s of state) {
     if (!s.best) {
-      if (!s.request.required && !s.candidate) continue;
+      if (!s.request.required && !s.candidate) {
+        continue;
+      }
       throw new Error('Worker has no artifact at or before the selected attempt: ' + s.request.job);
     }
-    if (s.ambiguous) throw new Error('Ambiguous raw worker artifacts for ' + s.request.job);
+    if (s.ambiguous) {
+      throw new Error('Ambiguous raw worker artifacts for ' + s.request.job);
+    }
     s.context[5] = s.attempt;
     result.push(
       Object.freeze({
@@ -146,7 +161,9 @@ export async function acquireWorkerArtifacts(
   } = {},
 ): Promise<readonly DownloadedWorkerArchive[]> {
   const downloads: DownloadedWorkerArchive[] = [];
-  if (selections.length > 16) throw new Error('Worker acquisition admission exceeded.');
+  if (selections.length > 16) {
+    throw new Error('Worker acquisition admission exceeded.');
+  }
   selections = Object.freeze(
     selections.map((s) =>
       Object.freeze({
@@ -166,18 +183,20 @@ export async function acquireWorkerArtifacts(
     scope: options.scope ? Object.freeze({ ...options.scope }) : undefined,
   });
   try {
-    for (const selection of selections)
+    for (const selection of selections) {
       downloads.push(await DownloadedWorkerArchive.download(store, backend, selection, options));
+    }
     return Object.freeze(downloads);
   } catch (error) {
     const settled = await Promise.allSettled(downloads.map((d) => d.dispose())),
       failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (failed.length)
+    if (failed.length) {
       throw new AggregateError(
         [error, ...failed.map((r) => r.reason)],
         'Worker acquisition cleanup failed.',
         { cause: error },
       );
+    }
     throw error;
   }
 }
@@ -185,6 +204,7 @@ export interface WorkerUploadReceipt {
   readonly artifact: Readonly<WorkflowArtifactDescriptor>;
   readonly receipt: Value;
 }
+
 /** Only SDK/direct-response failures use this type; local source/cleanup failures remain hard. */
 export class WorkerUploadUnconfirmed extends Error {
   constructor(readonly retainedPath: string) {
@@ -209,16 +229,18 @@ export async function uploadWorkerArtifact(
   rawWorkerBackend(backend, scope);
   if (options.retentionDays !== undefined) {
     uintSchema.parse(options.retentionDays);
-    if (!backend.capabilities.supportsRetentionDays)
+    if (!backend.capabilities.supportsRetentionDays) {
       throw new Error('Worker backend lacks requested retention support.');
+    }
   }
   if (
     workerArtifactAttempt(
       archive.name,
       workerArtifactPrefix(archive.store.codec.options.model, context),
     ) !== context[5]
-  )
+  ) {
     throw new Error('Frozen raw archive has noncanonical producer naming.');
+  }
   await archive.assertStable(signal);
   const file = archive.file,
     root = path.dirname(file);
@@ -234,8 +256,9 @@ export async function uploadWorkerArtifact(
     if (
       artifact.size !== archive.bytes ||
       (workerDigest(artifact.digest) !== null && workerDigest(artifact.digest) !== archive.sha)
-    )
+    ) {
       throw new Error('Worker service size/digest differs from frozen package.');
+    }
   } catch {
     // SDK rejection does not expose closure of inaccessible readers. Keep this exact package.
     archive.settleUpload(false);

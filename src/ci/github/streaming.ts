@@ -37,8 +37,9 @@ export function gitHubStreamingFactories(
       return (await resolveLifecycle(tool)).removeKnownHooks(root);
     },
     loadReport: async (tool, tempDirectory) => {
-      if (tool !== 'gradle')
+      if (tool !== 'gradle') {
         return { anyBuildFailed: false, warnings: [], summaryLines: [], logLines: [], builds: [] };
+      }
       const { loadGradleBuildReport, buildReportFromGradleReport } =
         await import('../../build-tool/gradle/build-results');
       return buildReportFromGradleReport(await loadGradleBuildReport({ tempDirectory }));

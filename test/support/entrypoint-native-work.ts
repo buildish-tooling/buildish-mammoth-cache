@@ -26,9 +26,14 @@ NativeRoot.bind = async (...args: Parameters<typeof bind>) => {
   return root;
 };
 process.once('exit', () => {
-  if (!roots.size) return;
+  if (!roots.size) {
+    return;
+  }
   const total: Record<string, number> = {};
-  for (const root of roots)
-    for (const [key, value] of Object.entries(root.work)) total[key] = (total[key] ?? 0) + value;
+  for (const root of roots) {
+    for (const [key, value] of Object.entries(root.work)) {
+      total[key] = (total[key] ?? 0) + value;
+    }
+  }
   appendFileSync(process.env.MAMMOTH_TEST_TRACE!, JSON.stringify(['native-work', total]) + '\n');
 });

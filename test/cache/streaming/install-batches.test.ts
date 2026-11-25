@@ -23,7 +23,9 @@ import { InstallProgram, InstallReaders } from '../../../src/cache/streaming/ins
 import type { Value } from '../../../src/cache/streaming/encoding';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture() {
   const f = await installFixture();
@@ -56,8 +58,12 @@ async function batches(
         operations = 0;
       for await (const frame of program.batchRows(row as ['batch', number, number])) {
         const operation = (frame as readonly Value[])[1] as readonly Value[];
-        if (operation[0] === 'install-unit-close') units++;
-        if (operation[0] === 'install' || operation[0] === 'install-parent') operations++;
+        if (operation[0] === 'install-unit-close') {
+          units++;
+        }
+        if (operation[0] === 'install' || operation[0] === 'install-parent') {
+          operations++;
+        }
       }
       result.push({ units, operations, start: Number(row[1]), end: Number(row[2]) });
     }

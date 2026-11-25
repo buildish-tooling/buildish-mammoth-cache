@@ -72,7 +72,9 @@ it.each([false, true])(
   async (empty) => {
     const f = await fixture(),
       copy = vi.spyOn(MetadataSnapshot, 'copy');
-    if (!empty) await f.files('', { 'data/new': 'body', 'state/mine': 'snapshot' });
+    if (!empty) {
+      await f.files('', { 'data/new': 'body', 'state/mine': 'snapshot' });
+    }
     const result = await f.post();
     expect(result.outcome).toBe('worker-uploaded');
     expect(f.logs.some((s) => s.includes('Finished worker package construction'))).toBe(true);
@@ -102,7 +104,9 @@ it.each([false, true])(
         membership: await DiskMembership.create(f.ready.store, f.budget),
         consumeFile: async (file) => {
           files.push(file.path);
-          for await (const _ of file.body) void _;
+          for await (const _ of file.body) {
+            void _;
+          }
         },
       },
     );

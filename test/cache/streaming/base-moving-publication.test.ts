@@ -24,7 +24,9 @@ const fixtures: MetadataFixture[] = [],
   sources: MetadataPublicationSource[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const source of sources.splice(0)) await source.dispose();
+  for (const source of sources.splice(0)) {
+    await source.dispose();
+  }
   for (const f of fixtures.splice(0)) {
     expect(f.budget.retained).toBe(0);
     await f.close();
@@ -98,7 +100,9 @@ it('publishes a meaningful empty subtree as native payload rather than a declare
   fixtures.push(f);
   await f.files(f.root, { 'data/empty/child': null });
   const result = await publishMetadataBase(await source(f), f.api, request);
-  if (result.outcome !== 'published') throw new Error('fixture');
+  if (result.outcome !== 'published') {
+    throw new Error('fixture');
+  }
   expect(result.generation[8][0][0]).toBe('object');
   expect(result.generation[8][1]).toEqual(['empty', 'state']);
   expect(await readdir(f.root + '/data/empty')).toEqual(['child']);

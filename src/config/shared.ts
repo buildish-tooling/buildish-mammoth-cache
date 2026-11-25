@@ -65,7 +65,9 @@ export function validateCacheKeyPrefix(input: string): string {
  */
 export function parseCachePartitionsInput(input: string): readonly ConfiguredCachePartitionInput[] {
   const trimmed = input.trim();
-  if (trimmed.length === 0) return [];
+  if (trimmed.length === 0) {
+    return [];
+  }
   const parsed = parseSerializedJson(trimmed, 'cache-partitions');
   const partitionValues = validateArray(parsed, 'cache-partitions');
   const seenIds = new Set<string>();
@@ -79,26 +81,30 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
     if (
       partition['read-only-layer'] !== undefined &&
       typeof partition['read-only-layer'] !== 'boolean'
-    )
+    ) {
       throw new Error(`Partition '${id}' read-only-layer must be a boolean.`);
+    }
     if (
       partition.publication !== undefined &&
       partition.publication !== 'aggregate' &&
       partition.publication !== 'single-writer'
-    )
+    ) {
       throw new Error(`Invalid publication policy for partition '${id}'.`);
+    }
     if (
       partition.writer !== undefined &&
       (typeof partition.writer !== 'string' || !partition.writer.trim())
-    )
+    ) {
       throw new Error(`Partition '${id}' writer must be a nonempty job name.`);
+    }
     if (
       partition['conflict-handling'] !== undefined &&
       partition['conflict-handling'] !== 'default' &&
       partition['conflict-handling'] !== 'choose-worker-directory' &&
       partition['conflict-handling'] !== 'choose-worker-entry'
-    )
+    ) {
       throw new Error(`Invalid conflict-handling policy for partition '${id}'.`);
+    }
     return {
       id,
       ...(partition['read-only-layer'] === undefined
@@ -154,7 +160,9 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
  */
 export function normalizeRelativePath(input: string, inputName: string): string {
   const trimmed = input.trim();
-  if (trimmed.length === 0) throw new Error(`${inputName} must not be empty.`);
+  if (trimmed.length === 0) {
+    throw new Error(`${inputName} must not be empty.`);
+  }
   if (trimmed.startsWith('~')) {
     throw new Error(`${inputName} must not use home-directory expansion.`);
   }
@@ -201,13 +209,20 @@ function normalizeCachePartitionGlob(
   kind: 'include' | 'exclude',
 ): string {
   const raw = validateString(value, label).trim();
-  if (raw.length === 0) throw new Error(`${label} must not be blank.`);
-  if (raw.startsWith('~')) throw new Error(`${label} must not use home-directory expansion.`);
+  if (raw.length === 0) {
+    throw new Error(`${label} must not be blank.`);
+  }
+  if (raw.startsWith('~')) {
+    throw new Error(`${label} must not use home-directory expansion.`);
+  }
   const posixRaw = raw.replaceAll('\\', '/');
   const rawSegments = posixRaw.split('/');
-  if (rawSegments.includes('..'))
+  if (rawSegments.includes('..')) {
     throw new Error(`${label} must not use '..' path traversal segments.`);
-  if (rawSegments.includes('.')) throw new Error(`${label} must not contain '.' path segments.`);
+  }
+  if (rawSegments.includes('.')) {
+    throw new Error(`${label} must not contain '.' path segments.`);
+  }
   const normalized = path.posix.normalize(posixRaw);
   if (
     normalized.length === 0 ||
@@ -219,7 +234,9 @@ function normalizeCachePartitionGlob(
   ) {
     throw new Error(`${label} must be a cache-root-relative glob.`);
   }
-  if (normalized.startsWith('!')) throw new Error(`${label} must not be a negated glob.`);
+  if (normalized.startsWith('!')) {
+    throw new Error(`${label} must not be a negated glob.`);
+  }
   if (UNSUPPORTED_GLOB_TOKENS_PATTERN.test(normalized)) {
     throw new Error(
       `${label} uses unsupported glob syntax. Supported wildcards are '*' within a segment and '**' as a whole path segment.`,
@@ -227,13 +244,17 @@ function normalizeCachePartitionGlob(
   }
   const segments = normalized.split('/');
   for (const segment of segments) {
-    if (segment.length === 0) throw new Error(`${label} must not contain empty path segments.`);
+    if (segment.length === 0) {
+      throw new Error(`${label} must not contain empty path segments.`);
+    }
     if (segment.includes('**') && segment !== '**') {
       throw new Error(`${label} may only use '**' as a complete path segment.`);
     }
   }
   if (kind === 'include') {
-    if (segments.at(-1) !== '**') throw new Error(`${label} must end with '/**'.`);
+    if (segments.at(-1) !== '**') {
+      throw new Error(`${label} must end with '/**'.`);
+    }
     if (segments.slice(0, -1).includes('**')) {
       throw new Error(`${label} may only use '**' as the final path segment.`);
     }
@@ -242,12 +263,16 @@ function normalizeCachePartitionGlob(
 }
 
 function validateString(value: unknown, label: string): string {
-  if (typeof value !== 'string') throw new Error(`${label} must be a string.`);
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string.`);
+  }
   return value;
 }
 
 function validateArray(value: unknown, label: string): readonly unknown[] {
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
   return value;
 }
 

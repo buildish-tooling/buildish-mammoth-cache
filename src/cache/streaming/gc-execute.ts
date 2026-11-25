@@ -31,6 +31,7 @@ export interface GcOptions extends NativeOperationOptions {
   readonly batchOperations?: number;
   readonly batchBytes?: number;
 }
+
 const defaultSignal = () => new AbortController().signal;
 
 async function finishBatch(store: OwnedStore, phase: InstallParentPhase, signal: AbortSignal) {
@@ -54,16 +55,23 @@ async function apply(
     const path = String(r[1]),
       expected = r[3] as NativeIdentity;
     let actual = await phase.stat(path);
-    if (!actual) throw new Error('Frozen GC target disappeared.');
+    if (!actual) {
+      throw new Error('Frozen GC target disappeared.');
+    }
     if (expected[2] === 'directory') {
       await phase.parents(path + '/pending'); // Checks own attributed child-directory changes before popping it.
       actual = await phase.stat(path);
-      if (!actual || !sameDirectoryObject(expected, actual))
+      if (!actual || !sameDirectoryObject(expected, actual)) {
         throw new Error('GC cleanup directory changed.');
-    } else if (!sameNative(expected, actual, true)) throw new Error('GC target replaced/changed.');
+      }
+    } else if (!sameNative(expected, actual, true)) {
+      throw new Error('GC target replaced/changed.');
+    }
     await phase.parents(path);
     const now = await phase.stat(path);
-    if (!now || !sameNative(actual, now, true)) throw new Error('GC target changed before unlink.');
+    if (!now || !sameNative(actual, now, true)) {
+      throw new Error('GC target changed before unlink.');
+    }
     signal.throwIfAborted();
     if (expected[2] === 'directory') {
       await rmdir(store.root.resolve(path));
@@ -79,12 +87,18 @@ async function apply(
     for await (const item of evidence) {
       signal.throwIfAborted();
       const r = tuple(item);
-      if (r[0] === 'gc-unit-open') maven = r[1] === 'maven-directory';
+      if (r[0] === 'gc-unit-open') {
+        maven = r[1] === 'maven-directory';
+      }
       if (r[0] === 'target') {
         if (maven && String(r[1]).endsWith('/_remote.repositories')) {
-          if (marker) throw new Error('Multiple Maven origin markers in one unit.');
+          if (marker) {
+            throw new Error('Multiple Maven origin markers in one unit.');
+          }
           marker = { row: r, release: index.options.budget.holdRecord(512 + canonical(r).length) };
-        } else await target(r);
+        } else {
+          await target(r);
+        }
       } else if (r[0] === 'gc-unit-close' && marker) {
         await target(marker.row);
         marker.release();
@@ -116,8 +130,9 @@ async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttem
       operations: options.batchOperations,
       bytes: options.batchBytes,
     };
-    if (index.hasGcSelections) program = await GcProgram.create(index, limits);
-    else {
+    if (index.hasGcSelections) {
+      program = await GcProgram.create(index, limits);
+    } else {
       GcProgram.validateLimits(limits);
       cursor = await index.completedWithoutGcSelections(options.signal);
     }
@@ -152,7 +167,9 @@ async function run(index: ObservationIndex, input: GcOptions, attempt: PostAttem
         await apply(store, program.evidence(batch[1], batch[2]), index, phase);
       }
       cursor = program.final;
-    } else await finishBatch(store, phase, options.signal);
+    } else {
+      await finishBatch(store, phase, options.signal);
+    }
     await attempt.guard();
     await program?.close();
     program = undefined;
@@ -189,6 +206,7 @@ const survivorOwners = new WeakSet<GcSurvivorOwner>();
 export class GcSurvivorOwner {
   #active = true;
   #readers = 0;
+
   private constructor(
     readonly index: ObservationIndex,
     private readonly phase: InstallParentPhase,
@@ -199,26 +217,34 @@ export class GcSurvivorOwner {
     survivorOwners.add(this);
     Object.freeze(this);
   }
+
   static async execute(index: ObservationIndex, options: GcOptions): Promise<GcSurvivorOwner> {
     ObservationIndex.assert(index);
     if (
       index.options.budget !== options.budget ||
       (index.options.maxDirectoryEntries ?? 100000) !== (options.maxDirectoryEntries ?? 100000)
-    )
+    ) {
       throw new Error('GC survivor original capture policy/budget mismatch.');
+    }
     const attempt = claimCapturedObservationIndex(index, index.store);
     const result = await run(index, options, attempt);
     return new GcSurvivorOwner(index, result.phase, result.container, result.native, result.cursor);
   }
+
   static assertReceipt(owner: GcSurvivorOwner): void {
-    if (!survivorOwners.has(owner)) throw new Error('Unavailable original GC survivor receipt.');
+    if (!survivorOwners.has(owner)) {
+      throw new Error('Unavailable original GC survivor receipt.');
+    }
     owner.assert();
   }
+
   assert(): void {
-    if (!survivorOwners.has(this) || !this.#active)
+    if (!survivorOwners.has(this) || !this.#active) {
       throw new Error('Unavailable GC survivor owner.');
+    }
     ObservationIndex.assert(this.index);
   }
+
   borrow(): () => void {
     this.assert();
     this.#readers++;
@@ -230,19 +256,28 @@ export class GcSurvivorOwner {
       }
     };
   }
+
   async directoryNative(path: string): Promise<NativeIdentity> {
     this.assert();
     const actual = await this.phase.effective(path);
-    if (!actual) throw new Error('Missing surviving directory.');
+    if (!actual) {
+      throw new Error('Missing surviving directory.');
+    }
     return actual;
   }
+
   changedDirectoryNative(path: string): Promise<NativeIdentity | null> {
     this.assert();
     return this.phase.changedNative(path);
   }
+
   async dispose(): Promise<void> {
-    if (this.#readers) throw new Error('GC survivor hierarchy still borrowed.');
-    if (!this.#active) return;
+    if (this.#readers) {
+      throw new Error('GC survivor hierarchy still borrowed.');
+    }
+    if (!this.#active) {
+      return;
+    }
     this.#active = false;
     await settleNativeCleanup([
       () => this.index.dispose(),

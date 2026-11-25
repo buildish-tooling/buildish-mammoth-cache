@@ -39,6 +39,7 @@ export type IndexedNode = readonly [
   number,
   ...directoryFlag: [] | [1 | IntactDirectory],
 ];
+
 // fields: tag,kind,path,N/protected fact,sha,owner-mask,protected-count,childrenStart,childrenEnd,sourceStart,sourceEnd,Maven direct files
 interface Frame {
   path: string;
@@ -51,6 +52,7 @@ interface Frame {
   hasDirectFiles?: true;
   release: () => void;
 }
+
 export function nodeIsIntact(node: IndexedNode): boolean {
   return node[11] === 'intact' || node[11] === 'intact-jars';
 }
@@ -62,7 +64,9 @@ export function nodeHasDirectFiles(node: IndexedNode): boolean {
 }
 export function partitionBit(model: ResolvedModel, id: string): bigint {
   const index = model.partitions.findIndex((p) => p[0] === id);
-  if (index < 0) throw new Error('Unknown indexed partition.');
+  if (index < 0) {
+    throw new Error('Unknown indexed partition.');
+  }
   return 1n << BigInt(index);
 }
 export function ownerBit(model: ResolvedModel, path: string): bigint {
@@ -80,7 +84,9 @@ export async function buildInstallIndex(
   signal = new AbortController().signal,
 ): Promise<number> {
   return buildObservedInstallIndex(scratch, model, partition, signal, async (accept) => {
-    for await (const row of abortableValues(source, signal)) await accept(row);
+    for await (const row of abortableValues(source, signal)) {
+      await accept(row);
+    }
   });
 }
 
@@ -109,7 +115,9 @@ export async function buildObservedInstallIndex(
   async function child(offset: number, node: IndexedNode) {
     const parent = frames[frames.length - 1];
     if (!parent) {
-      if (root !== undefined) throw new Error('Multiple index roots.');
+      if (root !== undefined) {
+        throw new Error('Multiple index roots.');
+      }
       root = offset;
       return;
     }
@@ -120,16 +128,21 @@ export async function buildObservedInstallIndex(
     parent.count++;
     parent.mask |= nodeMask(node);
     parent.protectedCount += node[6];
-    if (trackDirectFiles && node[1] === 'file') parent.hasDirectFiles = true;
+    if (trackDirectFiles && node[1] === 'file') {
+      parent.hasDirectFiles = true;
+    }
   }
   async function close(end: number, intact?: IntactDirectory) {
     const frame = frames.pop();
-    if (!frame) throw new Error('Unbalanced index.');
+    if (!frame) {
+      throw new Error('Unbalanced index.');
+    }
     let charge = 0;
     const entries: { name: string; kind: string; offset: number }[] = [];
     try {
-      if (intact && (partition === null || !frame.path || frame.count))
+      if (intact && (partition === null || !frame.path || frame.count)) {
         throw new Error('Invalid retained intact source directory.');
+      }
       let at = frame.tail;
       while (at !== null) {
         signal.throwIfAborted();
@@ -155,9 +168,11 @@ export async function buildObservedInstallIndex(
       ) {
         const key = (name: string) => nativeAliasKey(name);
         entries.sort((a, b) => compareName(key(a.name), key(b.name)));
-        for (let n = 1; n < entries.length; n++)
-          if (key(entries[n - 1].name) === key(entries[n].name))
+        for (let n = 1; n < entries.length; n++) {
+          if (key(entries[n - 1].name) === key(entries[n].name)) {
             throw new Error('Native case/normalization path alias.');
+          }
+        }
       }
       entries.sort((a, b) => compareName(a.name, b.name));
       const start = scratch.position;
@@ -171,7 +186,9 @@ export async function buildObservedInstallIndex(
           partition === null
             ? ownerBit(model, frame.path + '/.workspace-directory-probe')
             : partitionBit(model, partition);
-        if (!frame.mask) frame.protectedCount++;
+        if (!frame.mask) {
+          frame.protectedCount++;
+        }
       }
       const node: IndexedNode = [
         'node',
@@ -199,15 +216,26 @@ export async function buildObservedInstallIndex(
       signal.throwIfAborted();
       const row = record.value as readonly Value[],
         tag = row[0];
-      if (tag === 'local-stream') return;
+      if (tag === 'local-stream') {
+        return;
+      }
       if (tag === 'local-end') {
-        if (partition !== null) while (frames.length) await close(record.start);
+        if (partition !== null) {
+          while (frames.length) {
+            await close(record.start);
+          }
+        }
         return;
       }
       if (partition !== null && tag !== 'dir-close') {
         const path = String(row[1]);
-        while (frames.length && path !== '' && frames[frames.length - 1].path !== parentPath(path))
+        while (
+          frames.length &&
+          path !== '' &&
+          frames[frames.length - 1].path !== parentPath(path)
+        ) {
           await close(record.start);
+        }
       }
       if (tag === 'directory' || tag === 'dir-open') {
         const path = String(row[1]),
@@ -224,11 +252,14 @@ export async function buildObservedInstallIndex(
         });
       } else if (tag === 'dir-close') {
         const frame = frames[frames.length - 1];
-        if (!frame || frame.path !== row[1]) throw new Error('Unbalanced index directory close.');
+        if (!frame || frame.path !== row[1]) {
+          throw new Error('Unbalanced index directory close.');
+        }
         if (row[2] !== undefined) {
           const native = row[2] as NativeIdentity;
-          if (!sameObject(frame.native, native))
+          if (!sameObject(frame.native, native)) {
             throw new Error('Indexed directory replaced during production.');
+          }
           frame.native = native;
         }
         await close(record.end, record.intact);
@@ -265,14 +296,20 @@ export async function buildObservedInstallIndex(
           record.end,
         ];
         await child(await scratch.append(node, claim.token), node);
-      } else throw new Error('Unexpected index row.');
+      } else {
+        throw new Error('Unexpected index row.');
+      }
     });
-    if (frames.length || root === undefined) throw new Error('Incomplete index root.');
+    if (frames.length || root === undefined) {
+      throw new Error('Incomplete index root.');
+    }
     signal.throwIfAborted();
     return root;
   } finally {
     try {
-      for (const frame of frames) frame.release();
+      for (const frame of frames) {
+        frame.release();
+      }
     } finally {
       claim.release();
     }
@@ -289,8 +326,12 @@ export async function* indexedChildren(
   scratch: InstallScratch,
   node: IndexedNode,
 ): AsyncGenerator<readonly [string, number]> {
-  if (node[1] !== 'directory') return;
-  if (nodeIsIntact(node)) throw new Error('Intact source directory cannot be expanded.');
+  if (node[1] !== 'directory') {
+    return;
+  }
+  if (nodeIsIntact(node)) {
+    throw new Error('Intact source directory cannot be expanded.');
+  }
   for await (const value of scratch.rows(node[7], node[8])) {
     const row = value as readonly Value[];
     yield [String(row[1]), Number(row[3])];
@@ -301,8 +342,12 @@ export async function* indexedEntries(
   scratch: InstallScratch,
   node: IndexedNode,
 ): AsyncGenerator<readonly [string, IndexedNode[1], number]> {
-  if (node[1] !== 'directory') return;
-  if (nodeIsIntact(node)) throw new Error('Intact source directory cannot be expanded.');
+  if (node[1] !== 'directory') {
+    return;
+  }
+  if (nodeIsIntact(node)) {
+    throw new Error('Intact source directory cannot be expanded.');
+  }
   for await (const value of scratch.rows(node[7], node[8])) {
     const row = value as readonly Value[];
     yield [String(row[1]), row[2] as IndexedNode[1], Number(row[3])];
@@ -319,10 +364,12 @@ export class IndexDirectories {
     entries: { name: string; kind: IndexedNode[1]; offset: number }[] | null;
     charge: number;
   }[] = [];
+
   constructor(
     private readonly scratch: InstallScratch,
     private readonly root: number,
   ) {}
+
   private async push(offset: number) {
     const lease = await indexedNode(this.scratch, offset);
     this.frames.push({
@@ -334,21 +381,28 @@ export class IndexDirectories {
       charge: 0,
     });
   }
+
   private pop() {
     const frame = this.frames.pop()!;
     this.scratch.budget.release(frame.charge);
     frame.release();
   }
+
   async directory(path: string): Promise<IndexedNode | null> {
-    if (!this.frames.length) await this.push(this.root);
+    if (!this.frames.length) {
+      await this.push(this.root);
+    }
     while (
       this.frames.length > 1 &&
       this.frames[this.frames.length - 1].path !== path &&
       !path.startsWith(this.frames[this.frames.length - 1].path + '/')
-    )
+    ) {
       this.pop();
+    }
     let frame = this.frames[this.frames.length - 1];
-    if (frame.path === path) return frame.node;
+    if (frame.path === path) {
+      return frame.node;
+    }
     const suffix = frame.path ? path.slice(frame.path.length + 1) : path;
     for (const name of suffix.split('/').filter(Boolean)) {
       if (frame.entries === null) {
@@ -365,21 +419,31 @@ export class IndexDirectories {
         high = frame.entries.length;
       while (low < high) {
         const middle = (low + high) >>> 1;
-        if (compareName(frame.entries[middle].name, name) < 0) low = middle + 1;
-        else high = middle;
+        if (compareName(frame.entries[middle].name, name) < 0) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
       }
       const child = frame.entries[low];
-      if (!child || child.name !== name || child.kind !== 'directory') return null;
+      if (!child || child.name !== name || child.kind !== 'directory') {
+        return null;
+      }
       await this.push(child.offset);
       frame = this.frames[this.frames.length - 1];
     }
     return frame.node;
   }
+
   /** A borrowed directory page; member records retain their own explicit lease. */
   async member(path: string): Promise<{ node: IndexedNode; release(): void } | null> {
-    if (path === '') return indexedNode(this.scratch, this.root);
+    if (path === '') {
+      return indexedNode(this.scratch, this.root);
+    }
     const directory = await this.directory(parentPath(path));
-    if (!directory) return null;
+    if (!directory) {
+      return null;
+    }
     const frame = this.frames[this.frames.length - 1];
     if (frame.entries === null) {
       frame.entries = [];
@@ -396,13 +460,19 @@ export class IndexDirectories {
       high = frame.entries.length;
     while (low < high) {
       const middle = (low + high) >>> 1;
-      if (compareName(frame.entries[middle].name, name) < 0) low = middle + 1;
-      else high = middle;
+      if (compareName(frame.entries[middle].name, name) < 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
     }
     const entry = frame.entries[low];
     return entry?.name === name ? indexedNode(this.scratch, entry.offset) : null;
   }
+
   close() {
-    while (this.frames.length) this.pop();
+    while (this.frames.length) {
+      this.pop();
+    }
   }
 }

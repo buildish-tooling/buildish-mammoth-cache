@@ -82,6 +82,7 @@ it('uses the same family for explicit default and separates explicit directory s
   expect(chosen.family).not.toBe(strict.family);
   expect(chosen.partitions[0][5]).toBe(policy);
   expect(() => model('gradle', options)).toThrow(/aggregate Maven/u);
-  for (const override of [{ publication: 'single-writer' }, { includes: ['wrapper/**'] }])
+  for (const override of [{ publication: 'single-writer' }, { includes: ['wrapper/**'] }]) {
     expect(() => model('maven', [{ ...options[0], ...override }])).toThrow();
+  }
 });

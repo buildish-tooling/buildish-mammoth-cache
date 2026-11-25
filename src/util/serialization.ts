@@ -52,7 +52,9 @@ export function parseWithZod<T>(
   label: string,
 ): T {
   const result = schema.safeParse(data);
-  if (result.success) return result.data;
+  if (result.success) {
+    return result.data;
+  }
   const issue = result.error.issues[0];
   const pathStr = issue && issue.path.length > 0 ? ` at ${issue.path.map(String).join('.')}` : '';
   throw new Error(`Invalid ${label}${pathStr}: ${issue?.message ?? 'Unknown validation error'}`);

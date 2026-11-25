@@ -40,6 +40,7 @@ export interface ScratchWork {
   writes: number;
   writeBytes: number;
 }
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#install-batches-and-recovery.
 // Unpublished operation-local metadata only. Never a mutable Q/P or restart authority.
 export class InstallScratch {
@@ -60,6 +61,7 @@ export class InstallScratch {
   private lookups = 0;
   private owner: symbol | null = null;
   private writing = false;
+
   private constructor(
     readonly store: OwnedStore,
     readonly path: string,
@@ -89,17 +91,21 @@ export class InstallScratch {
           raw.nlink !== 1n ||
           Number(raw.size) !== this.writer.written ||
           fileNative.some((v, i) => ![5, 7, 8, 9].includes(i) && v !== after[i])
-        )
+        ) {
           throw new Error('Scratch changed during buffered write.');
+        }
         this.fileNative = after;
       },
     );
   }
+
   static async create(store: OwnedStore, budget: WorkingBudget): Promise<InstallScratch> {
     const name = store.prefix + 'planning/' + randomUUID() + '/scratch.ndjson';
     await store.makeParents(name);
     const native = await store.root.stat(parentPath(name));
-    if (!native) throw new Error('Missing scratch directory.');
+    if (!native) {
+      throw new Error('Missing scratch directory.');
+    }
     store.root.work.opens++;
     const handle = await open(store.root.resolve(name), 'wx+', 0o600);
     try {
@@ -117,21 +123,27 @@ export class InstallScratch {
       throw error;
     }
   }
+
   get position(): number {
     return this.end;
   }
+
   claim(): { token: symbol; release: () => void } {
-    if (this.owner || this.closed || this.failed || this.parked || this.readOnly || this.reading)
+    if (this.owner || this.closed || this.failed || this.parked || this.readOnly || this.reading) {
       throw new Error('Scratch already claimed or unavailable.');
+    }
     const token = Symbol('scratch-owner');
     this.owner = token;
     return {
       token,
       release: () => {
-        if (this.owner === token) this.owner = null;
+        if (this.owner === token) {
+          this.owner = null;
+        }
       },
     };
   }
+
   /** Synchronous admission/copy when the current block has room. */
   tryAppend(value: Value, owner?: symbol, encoded?: (bytes: Buffer) => void): number | null {
     if (
@@ -143,14 +155,17 @@ export class InstallScratch {
       this.lookups > 0 ||
       this.physicalReaders > 0 ||
       (this.owner !== null && this.owner !== owner)
-    )
+    ) {
       throw new Error('Scratch write is unavailable.');
+    }
     const bytes = encodeRecord(value),
       release = this.budget.holdRecord(bytes.length),
       start = this.end;
     this.writing = true;
     try {
-      if (!this.writer.tryAppend(bytes)) return null;
+      if (!this.writer.tryAppend(bytes)) {
+        return null;
+      }
       this.store.root.work.metadataRowsWritten++;
       this.work.writes++;
       this.end = this.writer.position;
@@ -168,18 +183,23 @@ export class InstallScratch {
       release();
     }
   }
+
   async append(value: Value, owner?: symbol, encoded?: (bytes: Buffer) => void): Promise<number> {
-    if (this.closed || this.failed || this.parked || this.readOnly)
+    if (this.closed || this.failed || this.parked || this.readOnly) {
       throw new Error('Scratch is closed or failed.');
+    }
     if (
       this.writing ||
       this.physicalReaders > 0 ||
       this.lookups > 0 ||
       (this.owner !== null && this.owner !== owner)
-    )
+    ) {
       throw new Error('Scratch write is already claimed.');
+    }
     const buffered = this.tryAppend(value, owner, encoded);
-    if (buffered !== null) return buffered;
+    if (buffered !== null) {
+      return buffered;
+    }
     this.store.root.work.metadataRowsWritten++;
     const bytes = encodeRecord(value),
       release = this.budget.holdRecord(bytes.length),
@@ -203,8 +223,11 @@ export class InstallScratch {
       release();
     }
   }
+
   async appendBatch(values: readonly Value[], encoded?: (bytes: Buffer) => void): Promise<void> {
-    if (values.length > 256) throw new Error('Scratch batch exceeds row allowance.');
+    if (values.length > 256) {
+      throw new Error('Scratch batch exceeds row allowance.');
+    }
     if (
       this.closed ||
       this.failed ||
@@ -214,22 +237,27 @@ export class InstallScratch {
       this.lookups > 0 ||
       this.physicalReaders > 0 ||
       this.owner
-    )
+    ) {
       throw new Error('Scratch batch is unavailable.');
+    }
     this.writing = true;
     let retained = 0;
     const rows: Buffer[] = [];
     try {
       for (const value of values) {
         const row = encodeRecord(value);
-        if (retained + row.length > 65536) throw new Error('Scratch batch exceeds byte allowance.');
+        if (retained + row.length > 65536) {
+          throw new Error('Scratch batch exceeds byte allowance.');
+        }
         this.budget.retain(row.length);
         retained += row.length;
         rows.push(row);
       }
       this.store.root.work.metadataBatches++;
       for (const row of rows) {
-        if (!this.writer.tryAppend(row)) await this.writer.append(row);
+        if (!this.writer.tryAppend(row)) {
+          await this.writer.append(row);
+        }
         this.end = this.writer.position;
         this.work.writes++;
         this.store.root.work.metadataRowsWritten++;
@@ -244,14 +272,19 @@ export class InstallScratch {
       this.writing = false;
     }
   }
+
   async assertStable(): Promise<void> {
-    if (this.closed || this.failed || this.parked) throw new Error('Unavailable scratch.');
+    if (this.closed || this.failed || this.parked) {
+      throw new Error('Unavailable scratch.');
+    }
     this.store.root.work.stats++;
     if (
       !sameNative(this.fileNative, nativeIdentity(await this.handle.stat({ bigint: true })), true)
-    )
+    ) {
       throw new Error('Changed scratch backing file.');
+    }
   }
+
   async flush(): Promise<void> {
     if (
       this.closed ||
@@ -261,11 +294,14 @@ export class InstallScratch {
       this.physicalReaders > 0 ||
       this.lookups > 0 ||
       this.owner
-    )
+    ) {
       throw new Error('Scratch is busy/failed.');
+    }
     this.writing = true;
     try {
-      if (this.writer.position === this.writer.written) await this.assertStable();
+      if (this.writer.position === this.writer.written) {
+        await this.assertStable();
+      }
       await this.writer.flush();
       this.writer.releaseBuffer();
     } catch (error) {
@@ -275,18 +311,21 @@ export class InstallScratch {
       this.writing = false;
     }
   }
+
   // Closed immutable scratch stays invocation-owned; only this process can reopen its proof.
   async park(): Promise<void> {
     await this.flush();
     this.releaseReadCache();
-    if (this.closed || this.writing || this.owner || this.parked)
+    if (this.closed || this.writing || this.owner || this.parked) {
       throw new Error('Scratch is active.');
+    }
     this.writing = true;
     try {
       await this.assertStable();
       const named = await this.store.root.stat(this.path);
-      if (!named || !sameNative(named, this.fileNative, true))
+      if (!named || !sameNative(named, this.fileNative, true)) {
         throw new Error('Scratch path changed.');
+      }
       await this.handle.close();
       this.writer.dispose();
       this.parked = true;
@@ -295,22 +334,27 @@ export class InstallScratch {
       this.writing = false;
     }
   }
+
   async reopen(): Promise<void> {
-    if (!this.parked || this.closed || this.writing) throw new Error('Scratch is not parked.');
+    if (!this.parked || this.closed || this.writing) {
+      throw new Error('Scratch is not parked.');
+    }
     this.writing = true;
     let handle: FileHandle | undefined;
     try {
       const named = await this.store.root.stat(this.path);
-      if (!named || !sameNative(named, this.fileNative, true))
+      if (!named || !sameNative(named, this.fileNative, true)) {
         throw new Error('Parked scratch changed.');
+      }
       this.store.root.work.opens++;
       handle = await open(
         this.store.root.resolve(this.path),
         constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
       );
       this.store.root.work.stats++;
-      if (!sameNative(this.fileNative, nativeIdentity(await handle.stat({ bigint: true })), true))
+      if (!sameNative(this.fileNative, nativeIdentity(await handle.stat({ bigint: true })), true)) {
         throw new Error('Parked scratch changed while opening.');
+      }
       this.handle = handle;
       handle = undefined;
       this.parked = false;
@@ -319,9 +363,14 @@ export class InstallScratch {
       this.writing = false;
     }
   }
+
   releaseReadCache(): void {
-    if (this.reading || this.lookups > 0) throw new Error('Active scratch read.');
-    if (this.decoded) this.budget.release(this.decoded.charge);
+    if (this.reading || this.lookups > 0) {
+      throw new Error('Active scratch read.');
+    }
+    if (this.decoded) {
+      this.budget.release(this.decoded.charge);
+    }
     this.decoded = undefined;
     this.budget.release(this.pages.length * 65536);
     this.pages.length = 0;
@@ -331,22 +380,27 @@ export class InstallScratch {
       this.lookupDecoderBytes = 0;
     }
   }
+
   private async diskRead(buffer: Buffer, length: number, at: number): Promise<number> {
     this.store.root.work.scratchReadCalls++;
     const { bytesRead } = await this.handle.read(buffer, 0, length, at);
-    if (!bytesRead) throw new Error('Truncated scratch.');
+    if (!bytesRead) {
+      throw new Error('Truncated scratch.');
+    }
     this.work.reads++;
     this.work.readBytes = add(this.work.readBytes, bytesRead);
     this.store.root.work.readBytes = add(this.store.root.work.readBytes, bytesRead);
     this.store.root.work.scratchReadBytes = add(this.store.root.work.scratchReadBytes, bytesRead);
     return bytesRead;
   }
+
   private async readPhysical(buffer: Buffer, at: number): Promise<number> {
     this.physicalReaders++;
     try {
       // A concurrent reader uses its own destination; no shared loading-page mutation.
-      if (this.reading)
+      if (this.reading) {
         return await this.diskRead(buffer, Math.min(buffer.length, this.writer.written - at), at);
+      }
       this.reading = true;
       try {
         let index = this.pages.findIndex((p) => at >= p.start && at < p.end);
@@ -370,10 +424,13 @@ export class InstallScratch {
           page.end = start;
           const limit = Math.min(65536, this.writer.written - start);
           let count = 0;
-          while (count < limit)
+          while (count < limit) {
             count += await this.diskRead(page.bytes.subarray(count), limit - count, start + count);
+          }
           page.end = start + count;
-        } else this.pages.unshift(page);
+        } else {
+          this.pages.unshift(page);
+        }
         const count = Math.min(buffer.length, page.end - at);
         buffer.set(page.bytes.subarray(at - page.start, at - page.start + count));
         return count;
@@ -384,6 +441,7 @@ export class InstallScratch {
       this.physicalReaders--;
     }
   }
+
   private async *bytes(
     start: number,
     end: number,
@@ -394,7 +452,9 @@ export class InstallScratch {
       size = initial;
     while (at < end) {
       signal?.throwIfAborted();
-      if (this.writing) throw new Error('Cannot read active scratch writer.');
+      if (this.writing) {
+        throw new Error('Cannot read active scratch writer.');
+      }
       const buffer = Buffer.allocUnsafe(Math.min(size, end - at));
       let bytesRead: number;
       if (at >= this.writer.written) {
@@ -409,8 +469,11 @@ export class InstallScratch {
       size = Math.min(size * 2, 65536);
     }
   }
+
   private remember(offset: number, value: Value, bytes: number): void {
-    if (this.decoded) this.budget.release(this.decoded.charge);
+    if (this.decoded) {
+      this.budget.release(this.decoded.charge);
+    }
     this.decoded = undefined;
     const charge = decodedRecordCharge(2048);
     // One small, private typed row only; cache absence never changes admission.
@@ -419,6 +482,7 @@ export class InstallScratch {
       this.decoded = { offset, value: structuredClone(value), bytes, charge };
     }
   }
+
   async record(offset: number): Promise<{ value: Value; release: () => void; bytes: number }> {
     if (
       this.closed ||
@@ -428,8 +492,9 @@ export class InstallScratch {
       !Number.isSafeInteger(offset) ||
       offset < 0 ||
       offset >= this.end
-    )
+    ) {
       throw new Error('Invalid scratch offset.');
+    }
     if (this.decoded?.offset === offset) {
       this.store.root.work.scratchRowReuses++;
       this.store.root.work.metadataRowsRead++;
@@ -459,13 +524,18 @@ export class InstallScratch {
     const allocate = () => {
       this.budget.retain(RECORD_BYTES);
       this.store.root.work.scratchDecoderAllocations++;
-      if (concurrent) transientBytes = RECORD_BYTES;
-      else this.lookupDecoderBytes = RECORD_BYTES;
+      if (concurrent) {
+        transientBytes = RECORD_BYTES;
+      } else {
+        this.lookupDecoderBytes = RECORD_BYTES;
+      }
     };
     const decoder = concurrent
       ? new RecordDecoder(allocate)
       : (this.lookupDecoder ??= new RecordDecoder(allocate));
-    if (!concurrent) this.lookupBusy = true;
+    if (!concurrent) {
+      this.lookupBusy = true;
+    }
     decoder.reset();
     try {
       for await (const row of decodeRecords(this.bytes(offset, this.end, 256), decoder)) {
@@ -479,11 +549,15 @@ export class InstallScratch {
       }
     } finally {
       this.lookups--;
-      if (concurrent) this.budget.release(transientBytes);
-      else this.lookupBusy = false;
+      if (concurrent) {
+        this.budget.release(transientBytes);
+      } else {
+        this.lookupBusy = false;
+      }
     }
     throw new Error('Missing scratch record.');
   }
+
   /** Borrowed byte/row bounded batches; caller finishes before requesting the next. */
   async *batches(
     start: number,
@@ -501,8 +575,9 @@ export class InstallScratch {
       start < 0 ||
       end < start ||
       end > this.end
-    )
+    ) {
       throw new Error('Invalid scratch span.');
+    }
     let decoderBytes = 0,
       batchBytes = 0;
     let batch: RecordFrame[] = [],
@@ -514,13 +589,15 @@ export class InstallScratch {
       this.store.root.work.scratchDecoderAllocations++;
     });
     const releaseBatch = () => {
-      for (const release of releases) release();
+      for (const release of releases) {
+        release();
+      }
       releases = [];
       batch = [];
       batchBytes = 0;
     };
     try {
-      for await (const bytes of this.bytes(start, end, 65536, signal))
+      for await (const bytes of this.bytes(start, end, 65536, signal)) {
         for (const row of decoder.push(bytes)) {
           signal?.throwIfAborted();
           pending = this.budget.holdRecord(row.raw.length);
@@ -537,6 +614,7 @@ export class InstallScratch {
           pending = undefined;
           batchBytes += row.raw.length;
         }
+      }
       decoder.finish();
       if (batch.length) {
         this.store.root.work.metadataBatches++;
@@ -550,28 +628,36 @@ export class InstallScratch {
       this.budget.release(decoderBytes);
     }
   }
+
   async *rows(
     start: number,
     end: number,
     encoded?: (bytes: Buffer) => void,
   ): AsyncGenerator<Value> {
-    for await (const batch of this.batches(start, end))
+    for await (const batch of this.batches(start, end)) {
       for (const row of batch) {
         encoded?.(row.raw);
         yield row.value;
       }
+    }
   }
+
   async close(): Promise<void> {
-    if (this.closed) return;
-    if (this.owner || this.writing || this.physicalReaders > 0 || this.lookups > 0)
+    if (this.closed) {
+      return;
+    }
+    if (this.owner || this.writing || this.physicalReaders > 0 || this.lookups > 0) {
       throw new Error('Cannot close active scratch.');
+    }
     this.releaseReadCache();
     this.writer.dispose(); // Unpublished scratch has no readers; pending bytes can be discarded.
     this.closed = true;
     let expected: ReturnType<typeof nativeIdentity> | undefined;
     let failure: unknown;
     try {
-      if (!this.parked) this.store.root.work.stats++;
+      if (!this.parked) {
+        this.store.root.work.stats++;
+      }
       expected = this.parked
         ? this.fileNative
         : nativeIdentity(await this.handle.stat({ bigint: true }));
@@ -579,16 +665,21 @@ export class InstallScratch {
       failure = error;
     }
     try {
-      if (!this.parked) await this.handle.close();
+      if (!this.parked) {
+        await this.handle.close();
+      }
     } catch (error) {
       failure = failure
         ? new AggregateError([failure, error], 'Scratch stat/close failed.')
         : error;
     }
-    if (failure) throw failure;
+    if (failure) {
+      throw failure;
+    }
     const named = await this.store.root.stat(this.path);
-    if (!named || !expected || !sameNative(expected, named, true))
+    if (!named || !expected || !sameNative(expected, named, true)) {
       throw new Error('Scratch path changed; preserving unknown file.');
+    }
     await unlink(this.store.root.resolve(this.path));
     this.store.root.work.unlinks++;
     const directory = parentPath(this.path),
@@ -597,8 +688,9 @@ export class InstallScratch {
       !native ||
       !sameObject(this.directoryNative, native) ||
       native[6] !== this.directoryNative[6]
-    )
+    ) {
       throw new Error('Scratch directory changed.');
+    }
     await rmdir(this.store.root.resolve(directory));
     this.store.root.work.directoryRemovals++;
   }

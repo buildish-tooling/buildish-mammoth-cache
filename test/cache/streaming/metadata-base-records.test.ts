@@ -171,16 +171,27 @@ it.each(['partition-order', 'groups', 'decision', 'key', 'profile', 'version'])(
         ],
         [['data'], ['metadata']],
       );
-    if (kind === 'partition-order')
+    if (kind === 'partition-order') {
       g[8] = [
         ['empty', 'metadata'],
         ['empty', 'data'],
       ];
-    if (kind === 'groups') g[9] = [['data'], ['data']];
-    if (kind === 'decision') g[10] = 'b'.repeat(64);
-    if (kind === 'key') g[11] = 'bad';
-    if (kind === 'profile') g[2] = 'generation-v1';
-    if (kind === 'version') g[1] = 1;
+    }
+    if (kind === 'groups') {
+      g[9] = [['data'], ['data']];
+    }
+    if (kind === 'decision') {
+      g[10] = 'b'.repeat(64);
+    }
+    if (kind === 'key') {
+      g[11] = 'bad';
+    }
+    if (kind === 'profile') {
+      g[2] = 'generation-v1';
+    }
+    if (kind === 'version') {
+      g[1] = 1;
+    }
     expect(() => decodeMetadataGeneration(Buffer.from(JSON.stringify(g) + '\n'), m)).toThrow();
   },
 );

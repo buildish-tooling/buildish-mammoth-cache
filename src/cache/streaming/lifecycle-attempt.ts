@@ -38,6 +38,7 @@ export class PostAttempt {
   #window: ExclusiveWindow | undefined;
   #signal: AbortSignal;
   readonly #lifetime = new AbortController();
+
   private constructor(
     readonly store: OwnedStore,
     private readonly originalBindings: LifecycleBindings,
@@ -53,35 +54,45 @@ export class PostAttempt {
     ]);
     attempts.add(this);
   }
+
   get signal(): AbortSignal {
     return this.#signal;
   }
+
   get bindings(): LifecycleBindings {
     return structuredClone(this.originalBindings);
   }
+
   get generation(): MetadataGeneration | null {
     return structuredClone(this.originalGeneration);
   }
+
   get state(): LifecycleState {
     return structuredClone(this.originalState);
   }
+
   assert(): void {
-    if (!attempts.has(this) || !this.#active) throw new Error('Unavailable post attempt.');
+    if (!attempts.has(this) || !this.#active) {
+      throw new Error('Unavailable post attempt.');
+    }
     this.signal.throwIfAborted();
     this.#window?.assertCurrent();
-    if (this.options.assertCurrent() !== undefined)
+    if (this.options.assertCurrent() !== undefined) {
       throw new Error('Post lifetime assertion must be synchronous.');
+    }
   }
+
   static async open(opened: OpenedInvocation, options: LifecycleOptions): Promise<PostAttempt> {
     OpenedInvocation.assert(opened);
     const store = opened.store,
       docs = lifecycleDocuments(store.codec.options),
       state = docs['local-state'].parse(opened.state),
       bindings = docs.bindings.parse(opened.bindings);
-    if (state[4] !== 'build-ready' && state[4] !== 'completed')
+    if (state[4] !== 'build-ready' && state[4] !== 'completed') {
       throw new Error(
         'Interrupted prepare/post cannot resume; use a fresh dedicated root or handle retained data manually.',
       );
+    }
     options.signal?.throwIfAborted();
     await store.assertNoIntents();
     equal(await store.state(), state, 'fresh post exact root state');
@@ -116,17 +127,20 @@ export class PostAttempt {
       throw error;
     }
   }
+
   attachWindow(window: ExclusiveWindow): void {
     this.assert();
     ExclusiveWindow.assertReceipt(window, this.store);
     if (
       this.#window ||
       (this.store.codec.options.role === 'distributed-worker' && !this.handoff.header[12])
-    )
+    ) {
       throw new Error('Unexpected exclusive post window.');
+    }
     this.#window = window;
     this.#signal = AbortSignal.any([this.#signal, window.signal]);
   }
+
   claimCapture(): void {
     this.assert();
     if (
@@ -136,10 +150,12 @@ export class PostAttempt {
       ((this.store.codec.options.role !== 'distributed-worker' ||
         this.handoff.header[12] !== null) &&
         !this.#window)
-    )
+    ) {
       throw new Error('Post capture has no current exclusive owner.');
+    }
     this.#captured = true;
   }
+
   async guard(): Promise<void> {
     this.assert();
     await assertLifecycleWindow(this.store, this.originalBindings, {
@@ -150,20 +166,25 @@ export class PostAttempt {
       },
     });
   }
+
   async finish(terminal: LifecycleTerminal): Promise<void> {
     await this.guard();
-    if (this.originalState[4] !== 'post-active') throw new Error('Post attempt already completed.');
+    if (this.originalState[4] !== 'post-active') {
+      throw new Error('Post attempt already completed.');
+    }
     equal(await this.store.state(), this.originalState, 'post terminal original attempt');
     if (terminal[1] !== 'skipped-not-quiescent') {
       const activity = this.handoff.header[9];
-      if (!this.store.hasAdmittedMetadata(activity))
+      if (!this.store.hasAdmittedMetadata(activity)) {
         for await (const row of this.store.rows(
           activity,
           'activity',
           { ...this.options, partition: null },
           this.signal,
-        ))
+        )) {
           void row;
+        }
+      }
       await this.store.retireAdmittedMetadata(activity);
     }
     this.originalState[3]++;
@@ -172,8 +193,11 @@ export class PostAttempt {
     await this.store.updateState(this.originalState);
     await this.guard();
   }
+
   close(): void {
-    if (!this.#active) return;
+    if (!this.#active) {
+      return;
+    }
     this.#active = false;
     this.#lifetime.abort(new Error('Post attempt closed.'));
     this.#window?.close();

@@ -20,13 +20,16 @@ import { modeSchema, nameSchema, shaSchema, uintSchema } from './schema';
 // Protocol: docs/dev/cache-protocol.md#ordinary-file-reduction
 export const candidateSchema = z.tuple([nameSchema, shaSchema, uintSchema, uintSchema, modeSchema]);
 export type Candidate = z.infer<typeof candidateSchema>;
+
 export function ordinaryOrder(jobs: readonly string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const job of jobs) {
     nameSchema.parse(job);
     if (!seen.has(job)) {
-      if (seen.size === 16) throw new Error('Producer admission exceeded.');
+      if (seen.size === 16) {
+        throw new Error('Producer admission exceeded.');
+      }
       seen.add(job);
       result.push(job);
     }
@@ -39,12 +42,20 @@ export function foldOrdinary(
   policy: 'strict' | 'newer-mtime',
   launcher = false,
 ): Candidate {
-  if (policy !== 'strict' && policy !== 'newer-mtime') throw new Error('Invalid duplicate policy.');
+  if (policy !== 'strict' && policy !== 'newer-mtime') {
+    throw new Error('Invalid duplicate policy.');
+  }
   const e = candidateSchema.parse(incoming);
-  if (launcher && e[4] !== 493) throw new Error('Noncanonical launcher mode.');
-  if (!current) return e;
+  if (launcher && e[4] !== 493) {
+    throw new Error('Noncanonical launcher mode.');
+  }
+  if (!current) {
+    return e;
+  }
   const r = candidateSchema.parse(current);
-  if (launcher && r[4] !== 493) throw new Error('Noncanonical launcher mode.');
+  if (launcher && r[4] !== 493) {
+    throw new Error('Noncanonical launcher mode.');
+  }
   if (r[1] === e[1] && r[2] === e[2]) {
     const chosen = e[3] > r[3] ? e : r;
     return [
@@ -55,7 +66,9 @@ export function foldOrdinary(
       launcher ? 493 : 420 | ((r[4] | e[4]) & 73),
     ];
   }
-  if (policy === 'strict' || r[3] === e[3]) throw new Error('Prohibited ordinary-file conflict.');
+  if (policy === 'strict' || r[3] === e[3]) {
+    throw new Error('Prohibited ordinary-file conflict.');
+  }
   return e[3] > r[3] ? e : r;
 }
 /** This map is only the admitted <=16-candidate frontier for one path. */
@@ -68,14 +81,20 @@ export function reduceOrdinary(
   const frontier = new Map<string, Candidate>();
   for (const input of candidates) {
     const c = candidateSchema.parse(input);
-    if (frontier.has(c[0])) throw new Error('Duplicate producer identity.');
-    if (frontier.size === 16) throw new Error('Producer admission exceeded.');
+    if (frontier.has(c[0])) {
+      throw new Error('Duplicate producer identity.');
+    }
+    if (frontier.size === 16) {
+      throw new Error('Producer admission exceeded.');
+    }
     frontier.set(c[0], c);
   }
   let result: Candidate | null = null;
   for (const job of ordinaryOrder(jobs)) {
     const candidate = frontier.get(job);
-    if (candidate) result = foldOrdinary(result, candidate, policy, launcher);
+    if (candidate) {
+      result = foldOrdinary(result, candidate, policy, launcher);
+    }
   }
   return result;
 }

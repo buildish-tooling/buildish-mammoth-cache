@@ -27,7 +27,9 @@ import { observationFixture } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture(...args: Parameters<typeof observationFixture>) {
   const f = await observationFixture(...args);
@@ -121,7 +123,9 @@ it('reports actual omitted Kotlin DSL members while admitting recognized scripts
       'observations',
       { budget: f.budget, partition: null },
       async (v) => {
-        if (tuple(v)[0] === 'file') files.push(String(tuple(v)[1]));
+        if (tuple(v)[0] === 'file') {
+          files.push(String(tuple(v)[1]));
+        }
       },
     );
     expect(files.sort()).toEqual(
@@ -181,8 +185,9 @@ it('promotes direct Maven siblings together while keeping nested coordinate deci
     'repository/g/a/1/a.jar',
     'repository/g/a/1/a.pom',
     'repository/g/a/1/child/b.jar',
-  ])
+  ]) {
     await old(f, p);
+  }
   const out = await captureObservations(f.store, { budget: f.budget }),
     units: Value[] = [];
   await f.store.readStream(
@@ -190,7 +195,9 @@ it('promotes direct Maven siblings together while keeping nested coordinate deci
     'observations',
     { budget: f.budget, partition: null },
     async (v) => {
-      if (tuple(v)[0] === 'unit-open') units.push(v);
+      if (tuple(v)[0] === 'unit-open') {
+        units.push(v);
+      }
     },
   );
   expect(units.map((v) => tuple(v).slice(1, 6))).toEqual([
@@ -223,8 +230,11 @@ it.each([false, true])(
     await old(f, coordinate + '/a.jar');
     await old(f, coordinate + (nested ? '/child/a.pom' : '/a.pom'));
     const capture = captureObservations(f.store, { budget: f.budget });
-    if (nested) await expect(capture).resolves.toHaveProperty('index');
-    else await expect(capture).rejects.toThrow('Maven direct unit splits a snapshot owner');
+    if (nested) {
+      await expect(capture).resolves.toHaveProperty('index');
+    } else {
+      await expect(capture).rejects.toThrow('Maven direct unit splits a snapshot owner');
+    }
     await f.finish();
     expect(f.budget.retained).toBe(0);
   },
@@ -246,7 +256,9 @@ it.each([true, false])(
       'observations',
       { budget: f.budget, partition: null },
       async (v) => {
-        if (tuple(v)[0] === 'unit-open') units.push(v);
+        if (tuple(v)[0] === 'unit-open') {
+          units.push(v);
+        }
       },
     );
     expect(units).toHaveLength(1);
@@ -262,7 +274,9 @@ it.each(['policy', 'phase', 'abort', 'mutation'] as const)(
     await old(f, 'data/a');
     const options: { budget: typeof f.budget; signal?: AbortSignal; maxDirectoryEntries?: number } =
       { budget: f.budget };
-    if (what === 'policy') options.maxDirectoryEntries = 200000;
+    if (what === 'policy') {
+      options.maxDirectoryEntries = 200000;
+    }
     if (what === 'abort') {
       const abort = new AbortController();
       abort.abort(new Error('abort'));
@@ -274,11 +288,13 @@ it.each(['policy', 'phase', 'abort', 'mutation'] as const)(
       state[4] = 'build-ready';
       await f.store.updateState(state);
     }
-    if (what === 'mutation')
+    if (what === 'mutation') {
       vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-        if (point === 'observations-candidate')
+        if (point === 'observations-candidate') {
           await writeFile(f.store.root.resolve('data/a'), 'changed');
+        }
       });
+    }
     if (what === 'mutation') {
       await captureObservations(f.store, options);
       // Observations are expected facts, not mutation authority. The consuming
@@ -368,7 +384,9 @@ it('ignores prepare-time activity for removed files and replaced file/directory 
     'observations',
     { budget: f.budget, partition: null },
     async (v) => {
-      if (tuple(v)[0] === 'file') files.push(v);
+      if (tuple(v)[0] === 'file') {
+        files.push(v);
+      }
     },
   );
   expect(files).toHaveLength(2);
@@ -392,8 +410,9 @@ it('retains whole imported activity on the surviving post-build workspace view',
       ['dir-close', ''],
     ],
     f = await fixture('gradle', {}, activity);
-  for (const name of ['metadata.bin', 'results.bin', 'transformed/current'])
+  for (const name of ['metadata.bin', 'results.bin', 'transformed/current']) {
     await old(f, root + '/' + name);
+  }
   const out = await captureObservations(f.store, { budget: f.budget }),
     files: Value[] = [];
   await f.store.readStream(
@@ -401,7 +420,9 @@ it('retains whole imported activity on the surviving post-build workspace view',
     'observations',
     { budget: f.budget, partition: null },
     async (v) => {
-      if (tuple(v)[0] === 'file') files.push(v);
+      if (tuple(v)[0] === 'file') {
+        files.push(v);
+      }
     },
   );
   expect(files).toHaveLength(3);
@@ -460,7 +481,9 @@ it.each([
       'observations',
       { budget: f.budget, partition: null },
       async (row) => {
-        if (tuple(row)[0] === 'file') files.push(row);
+        if (tuple(row)[0] === 'file') {
+          files.push(row);
+        }
       },
     );
     expect(files).toHaveLength(1);

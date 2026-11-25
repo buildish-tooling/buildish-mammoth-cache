@@ -35,6 +35,7 @@ export type ObservedUnit = [
   number,
   number,
 ];
+
 export type ObservedFile = [
   'observed-file',
   string,
@@ -46,6 +47,7 @@ export type ObservedFile = [
   number,
   number,
 ];
+
 // Pure frozen-decision summary, not evidence of native GC completion.
 // retained-file mask, meaningful descendant-dir mask, remaining owner mask,
 // remaining protected count, removed-by-GC flag, direct-GC-change flag,
@@ -60,6 +62,7 @@ export type ObservedSummary = [
   number,
   string,
 ];
+
 export type ObservedDirectory = [
   'observed-directory',
   string,
@@ -73,7 +76,9 @@ export type ObservedDirectory = [
   ObservedUnit | null,
   ObservedSummary,
 ];
+
 export type ObservedNode = ObservedFile | ObservedDirectory;
+
 export type ObservedChild = [
   'observed-child',
   string,
@@ -83,6 +88,7 @@ export type ObservedChild = [
   number | null,
   number,
 ];
+
 interface Frame {
   path: string;
   native: NativeIdentity;
@@ -101,6 +107,7 @@ interface Frame {
   deleting: boolean;
   changed: boolean;
 }
+
 const indexes = new WeakSet<object>();
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#shared-gc-parent-projections.
@@ -115,6 +122,7 @@ export class ObservationIndex {
     lookup: false,
   };
   private readonly directories: ObservationDirectories;
+
   private constructor(
     readonly store: OwnedStore,
     readonly reference: Reference,
@@ -132,10 +140,18 @@ export class ObservationIndex {
     Object.freeze(completed);
     Object.freeze(this);
   }
+
   static assert(index: ObservationIndex, store = index.store): void {
-    if (!indexes.has(index) || index.store !== store || index.life.disposed || index.life.retiring)
+    if (
+      !indexes.has(index) ||
+      index.store !== store ||
+      index.life.disposed ||
+      index.life.retiring
+    ) {
       throw new Error('Unavailable observation index.');
+    }
   }
+
   private static async builder(store: OwnedStore, input: NativeOperationOptions) {
     const options = Object.freeze({ ...input }),
       signal = options.signal ?? new AbortController().signal;
@@ -158,12 +174,16 @@ export class ObservationIndex {
         Number(a[2] === 'directory') - Number(kind === 'directory') || compareName(a[1], name);
       while (lo < hi) {
         const mid = (lo + hi) >>> 1;
-        if (compare(frame.edges[mid]) < 0) lo = mid + 1;
-        else hi = mid;
+        if (compare(frame.edges[mid]) < 0) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
       }
       const e = frame.edges[lo];
-      if (!e || e[1] !== name || e[2] !== kind)
+      if (!e || e[1] !== name || e[2] !== kind) {
         throw new Error('Observation fact lacks projected child.');
+      }
       return e;
     };
     const accept = async (item: LocalRow) => {
@@ -171,7 +191,9 @@ export class ObservationIndex {
       count++;
       const r = tuple(item.value),
         frame = frames[frames.length - 1];
-      if (r[0] === 'local-stream' || r[0] === 'local-end') return;
+      if (r[0] === 'local-stream' || r[0] === 'local-end') {
+        return;
+      }
       if (r[0] === 'dir-open') {
         const charge = 1024 + 4 * (item.end - item.start);
         options.budget.retain(charge);
@@ -209,7 +231,9 @@ export class ObservationIndex {
         ]);
         frame.projectionEnd = item.end;
       } else if (r[0] === 'file') {
-        if (!unitActive) boundary = add(boundary);
+        if (!unitActive) {
+          boundary = add(boundary);
+        }
         const path = frame.path ? frame.path + '/' + r[1] : String(r[1]),
           n = r[3] as NativeIdentity;
         const e = edge(frame, String(r[1]), 'file'),
@@ -240,7 +264,9 @@ export class ObservationIndex {
         // Selected units still require GC admission even if they contain no file targets.
         if (r[5] === 'delete') {
           hasGcSelections = true;
-          if (r[3] === 'subtree') frame.deleting = true;
+          if (r[3] === 'subtree') {
+            frame.deleting = true;
+          }
         }
         const charge = 256 + 4 * encodeRecord(r).length;
         options.budget.retain(charge);
@@ -259,7 +285,9 @@ export class ObservationIndex {
       } else if (r[0] === 'unit-close') {
         unitActive = false;
         boundary = add(boundary);
-        if (!frame.unit) throw new Error('Missing observation unit.');
+        if (!frame.unit) {
+          throw new Error('Missing observation unit.');
+        }
         frame.unit[8] = item.end;
       } else if (r[0] === 'dir-close') {
         frames.pop();
@@ -279,7 +307,9 @@ export class ObservationIndex {
           const protectedHere = frame.edges.filter((e) => e[5] === null).length;
           frame.originalProtected = add(frame.originalProtected, protectedHere);
           frame.remainingProtected = add(frame.remainingProtected, protectedHere);
-          if (!frame.allOwners) frame.allOwners = declaredOwner;
+          if (!frame.allOwners) {
+            frame.allOwners = declaredOwner;
+          }
           const removed =
             frame.deleting &&
             !isWorkspaceScaffolding(store.codec.options.model, frame.path) &&
@@ -288,15 +318,20 @@ export class ObservationIndex {
             frame.allOwners !== 0n &&
             (frame.allOwners & (frame.allOwners - 1n)) === 0n;
           if (!removed && !frame.remainingOwners && !frame.remainingProtected) {
-            if (declaredOwner) frame.remainingOwners = declaredOwner;
-            else frame.remainingProtected = 1;
+            if (declaredOwner) {
+              frame.remainingOwners = declaredOwner;
+            } else {
+              frame.remainingProtected = 1;
+            }
           }
           // The observation already has two sorted categories. Merge them by
           // name for the full post-GC projection digest, without a second sort
           // or retaining another directory-width table.
           const digest = new Digest('ancestor-children');
           let split = frame.edges.findIndex((e) => e[2] === 'directory');
-          if (split < 0) split = frame.edges.length;
+          if (split < 0) {
+            split = frame.edges.length;
+          }
           let left = 0,
             right = split;
           while (left < split || right < frame.edges.length) {
@@ -306,7 +341,9 @@ export class ObservationIndex {
               (left < split && compareName(frame.edges[left][1], frame.edges[right][1]) < 0)
                 ? frame.edges[left++]
                 : frame.edges[right++];
-            if (!e[6]) digest.update([e[1], e[2]]);
+            if (!e[6]) {
+              digest.update([e[1], e[2]]);
+            }
           }
           const summary: ObservedSummary = [
             'post-gc-summary',
@@ -319,7 +356,9 @@ export class ObservationIndex {
             digest.digest(),
           ];
           const start = scratch.position;
-          for (const e of frame.edges) await scratch.append(e);
+          for (const e of frame.edges) {
+            await scratch.append(e);
+          }
           const end = scratch.position,
             offset = await scratch.append([
               'observed-directory',
@@ -339,8 +378,9 @@ export class ObservationIndex {
             parent.allOwners |= frame.allOwners;
             parent.originalProtected = add(parent.originalProtected, frame.originalProtected);
             parent.childCleanup &&= removed;
-            if (removed) parent.changed = true;
-            else {
+            if (removed) {
+              parent.changed = true;
+            } else {
               parent.retainedFiles |= frame.retainedFiles;
               parent.descendantDirs |= frame.descendantDirs | declaredOwner;
               parent.remainingOwners |= frame.remainingOwners;
@@ -351,7 +391,9 @@ export class ObservationIndex {
             e[5] = offset;
             e[6] = Number(removed);
           } else {
-            if (root !== undefined) throw new Error('Multiple observation roots.');
+            if (root !== undefined) {
+              throw new Error('Multiple observation roots.');
+            }
             root = offset;
             completed = ['cursor', '0'.repeat(64), item.end, item.record + 1, add(boundary), null];
           }
@@ -363,8 +405,9 @@ export class ObservationIndex {
     return {
       accept,
       finish(reference: Reference, ownsReference = false) {
-        if (transferred || root === undefined || frames.length || !completed)
+        if (transferred || root === undefined || frames.length || !completed) {
           throw new Error('Incomplete observation index.');
+        }
         signal.throwIfAborted();
         completed[1] = reference[4];
         transferred = true;
@@ -381,13 +424,18 @@ export class ObservationIndex {
         );
       },
       async dispose() {
-        if (transferred) return;
-        for (const frame of frames) options.budget.release(frame.charge);
+        if (transferred) {
+          return;
+        }
+        for (const frame of frames) {
+          options.budget.release(frame.charge);
+        }
         frames.length = 0;
         await scratch.close();
       },
     };
   }
+
   static async open(
     store: OwnedStore,
     reference: Reference,
@@ -401,14 +449,16 @@ export class ObservationIndex {
         'observations',
         { ...input, partition: null },
         input.signal,
-      ))
+      )) {
         await builder.accept(row);
+      }
       return builder.finish(reference);
     } catch (error) {
       await settleNativeCleanup([() => builder.dispose()], error);
       throw error;
     }
   }
+
   /** Only the actual strict writer can feed this builder and bind its completed Q. */
   static async write(
     store: OwnedStore,
@@ -424,17 +474,20 @@ export class ObservationIndex {
         input.signal,
         builder.accept,
       );
-      if (!store.completedStream(reference))
+      if (!store.completedStream(reference)) {
         throw new Error('Missing completed observation writer.');
+      }
       return builder.finish(reference, true);
     } catch (error) {
       await settleNativeCleanup([() => builder.dispose()], error);
       throw error;
     }
   }
+
   get work() {
     return this.scratch.work;
   }
+
   async completedWithoutGcSelections(signal: AbortSignal): Promise<ObservationIndex['completed']> {
     ObservationIndex.assert(this);
     signal.throwIfAborted();
@@ -448,22 +501,25 @@ export class ObservationIndex {
       proof.maxDirectoryEntries !== (this.options.maxDirectoryEntries ?? 100000) ||
       this.completed[2] !== proof.footerStart ||
       this.completed[3] !== this.rows - 1
-    )
+    ) {
       throw new Error('Missing original retained-only observation completion.');
+    }
     const path = this.reference[2],
       root = this.store.root,
       { handle, identity } = await root.openRead(path, proof.native);
     try {
       signal.throwIfAborted();
       const named = await root.stat(path);
-      if (!named || !sameNative(identity, named, true))
+      if (!named || !sameNative(identity, named, true)) {
         throw new Error('Native source name changed.');
+      }
     } finally {
       await handle.close();
     }
     signal.throwIfAborted();
     return this.completed;
   }
+
   async node(offset: number): Promise<{ node: ObservedNode; release: () => void }> {
     ObservationIndex.assert(this);
     this.life.active++;
@@ -472,8 +528,9 @@ export class ObservationIndex {
       r = await this.scratch.record(offset);
       ObservationIndex.assert(this);
       const n = tuple(r.value);
-      if (n[0] !== 'observed-directory' && n[0] !== 'observed-file')
+      if (n[0] !== 'observed-directory' && n[0] !== 'observed-file') {
         throw new Error('Invalid observation node.');
+      }
       let held = true;
       return {
         node: r.value as ObservedNode,
@@ -491,6 +548,7 @@ export class ObservationIndex {
       throw error;
     }
   }
+
   async *children(node: ObservedDirectory): AsyncGenerator<ObservedChild> {
     ObservationIndex.assert(this);
     this.life.active++;
@@ -503,19 +561,28 @@ export class ObservationIndex {
       this.life.active--;
     }
   }
+
   async *walk(offset = this.root): AsyncGenerator<ObservedNode> {
     const lease = await this.node(offset);
     try {
       yield lease.node;
-      if (lease.node[0] === 'observed-directory')
-        for await (const e of this.children(lease.node)) if (e[5] !== null) yield* this.walk(e[5]);
+      if (lease.node[0] === 'observed-directory') {
+        for await (const e of this.children(lease.node)) {
+          if (e[5] !== null) {
+            yield* this.walk(e[5]);
+          }
+        }
+      }
     } finally {
       lease.release();
     }
   }
+
   private async lookup<T>(read: () => Promise<T>): Promise<T> {
     ObservationIndex.assert(this);
-    if (this.life.lookup) throw new Error('Observation directory lookup active.');
+    if (this.life.lookup) {
+      throw new Error('Observation directory lookup active.');
+    }
     this.life.lookup = true;
     try {
       return await read();
@@ -523,6 +590,7 @@ export class ObservationIndex {
       this.life.lookup = false;
     }
   }
+
   async directory(
     path: string,
   ): Promise<{ node: ObservedDirectory; offset: number; release: () => void }> {
@@ -532,11 +600,14 @@ export class ObservationIndex {
       return { node: lease.node as ObservedDirectory, offset: page.offset, release: lease.release };
     });
   }
+
   async file(path: string): Promise<{ node: ObservedFile; offset: number; release: () => void }> {
     return this.lookup(async () => {
       const page = await this.directories.get(parentPath(path)),
         entry = await this.directories.child(page, baseName(path), 'file');
-      if (!entry || entry[5] === null) throw new Error('Unknown observed managed file.');
+      if (!entry || entry[5] === null) {
+        throw new Error('Unknown observed managed file.');
+      }
       const lease = await this.node(entry[5]);
       if (lease.node[0] !== 'observed-file' || lease.node[1] !== path) {
         lease.release();
@@ -545,18 +616,24 @@ export class ObservationIndex {
       return { node: lease.node, offset: entry[5], release: lease.release };
     });
   }
+
   async checkFile(path: string, partition: string, native: NativeIdentity): Promise<void> {
     const lease = await this.file(path);
     try {
       equal([lease.node[3], lease.node[2]], [partition, native], 'original GC target');
-      if (lease.node[5] !== 'delete') throw new Error('GC target was retained.');
+      if (lease.node[5] !== 'delete') {
+        throw new Error('GC target was retained.');
+      }
     } finally {
       lease.release();
     }
   }
+
   async checkParent(path: string, span: Value): Promise<void> {
     const r = tuple(span, 'span', 4);
-    if (r[1] !== this.reference[4]) throw new Error('Foreign observation parent span.');
+    if (r[1] !== this.reference[4]) {
+      throw new Error('Foreign observation parent span.');
+    }
     const lease = await this.directory(path);
     try {
       equal(
@@ -568,17 +645,28 @@ export class ObservationIndex {
       lease.release();
     }
   }
+
   async dispose(): Promise<void> {
-    if (this.life.disposed) return;
-    if (this.life.busy) throw new Error('Observation retirement active.');
-    if (this.life.lookup) throw new Error('Observation directory lookup active.');
+    if (this.life.disposed) {
+      return;
+    }
+    if (this.life.busy) {
+      throw new Error('Observation retirement active.');
+    }
+    if (this.life.lookup) {
+      throw new Error('Observation directory lookup active.');
+    }
     this.life.retiring = true;
     this.life.busy = true;
     try {
       this.directories.close();
-      if (this.life.active) throw new Error('Observation index still has active readers.');
+      if (this.life.active) {
+        throw new Error('Observation index still has active readers.');
+      }
       await this.scratch.close();
-      if (this.ownsReference) await this.store.retireProducedMetadata(this.reference);
+      if (this.ownsReference) {
+        await this.store.retireProducedMetadata(this.reference);
+      }
       this.life.disposed = true;
     } finally {
       this.life.busy = false;
@@ -592,11 +680,14 @@ interface DirectoryPage {
   entries: ObservedChild[] | null;
   charge: number;
 }
+
 // One charged page per active ancestor. Shared-parent target admissions use a
 // binary lookup, not a repeated directory/projection scan for each file or batch.
 class ObservationDirectories {
   private readonly frames: DirectoryPage[] = [];
+
   constructor(private readonly index: ObservationIndex) {}
+
   private async push(offset: number) {
     const lease = await this.index.node(offset);
     if (lease.node[0] !== 'observed-directory') {
@@ -611,11 +702,13 @@ class ObservationDirectories {
       charge: 0,
     });
   }
+
   private pop() {
     const p = this.frames.pop()!;
     this.index.options.budget.release(p.charge);
     p.release();
   }
+
   async child(page: DirectoryPage, name: string, kind: string): Promise<ObservedChild | undefined> {
     if (page.entries === null) {
       page.entries = [];
@@ -632,33 +725,50 @@ class ObservationDirectories {
       const mid = (lo + hi) >>> 1,
         e = page.entries[mid],
         c = Number(e[2] === 'directory') - Number(kind === 'directory') || compareName(e[1], name);
-      if (c < 0) lo = mid + 1;
-      else hi = mid;
+      if (c < 0) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
     }
     const e = page.entries[lo];
     return e?.[1] === name && e[2] === kind ? e : undefined;
   }
+
   async get(path: string): Promise<DirectoryPage> {
     ObservationIndex.assert(this.index);
-    if (!this.frames.length) await this.push(this.index.root);
+    if (!this.frames.length) {
+      await this.push(this.index.root);
+    }
     while (this.frames.length > 1) {
       const top = this.frames[this.frames.length - 1].node[1];
-      if (top === path || path.startsWith(top + '/')) break;
+      if (top === path || path.startsWith(top + '/')) {
+        break;
+      }
       this.pop();
     }
     let page = this.frames[this.frames.length - 1];
-    if (page.node[1] === path) return page;
+    if (page.node[1] === path) {
+      return page;
+    }
     const suffix = page.node[1] ? path.slice(page.node[1].length + 1) : path;
     for (const name of suffix.split('/').filter(Boolean)) {
       const e = await this.child(page, name, 'directory');
-      if (!e || e[5] === null) throw new Error('Unknown observed directory.');
+      if (!e || e[5] === null) {
+        throw new Error('Unknown observed directory.');
+      }
       await this.push(e[5]);
       page = this.frames[this.frames.length - 1];
     }
-    if (page.node[1] !== path) throw new Error('Wrong observation directory binding.');
+    if (page.node[1] !== path) {
+      throw new Error('Wrong observation directory binding.');
+    }
     return page;
   }
+
   close(): void {
-    while (this.frames.length) this.pop();
+    while (this.frames.length) {
+      this.pop();
+    }
   }
 }

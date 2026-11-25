@@ -35,10 +35,12 @@ interface WindowOptions {
   readonly exitGraceMs?: number;
   readonly lifecycle?: LifecycleResolver;
 }
+
 const windows = new WeakSet<ExclusiveWindow>();
 export class ExclusiveWindow {
   private readonly lifetime = new AbortController();
   readonly signal: AbortSignal;
+
   private constructor(
     readonly store: OwnedStore,
     private readonly assertion: () => undefined,
@@ -47,16 +49,21 @@ export class ExclusiveWindow {
     windows.add(this);
     this.signal = AbortSignal.any([signal, this.lifetime.signal]);
   }
+
   static assertReceipt(window: ExclusiveWindow, store: OwnedStore): void {
-    if (!windows.has(window) || window.store !== store)
+    if (!windows.has(window) || window.store !== store) {
       throw new Error('Unavailable exclusive window.');
+    }
     window.assertCurrent();
   }
+
   assertCurrent = (): undefined => {
     this.signal.throwIfAborted();
-    if (this.assertion() !== undefined)
+    if (this.assertion() !== undefined) {
       throw new Error('Exclusive-window assertion must be synchronous.');
+    }
   };
+
   get purgeWindow() {
     return {
       root: this.store.root,
@@ -64,9 +71,11 @@ export class ExclusiveWindow {
       assertCurrent: this.assertCurrent,
     };
   }
+
   close() {
     this.lifetime.abort(new Error('Exclusive window closed.'));
   }
+
   static async establish(
     store: OwnedStore,
     budget: WorkingBudget,
@@ -81,20 +90,25 @@ export class ExclusiveWindow {
     if (
       store.codec.options.access !== 'writable' ||
       (store.codec.options.role === 'distributed-worker' && !input.layeredWorker)
-    )
+    ) {
       throw new Error('Exclusive base window requires writable base role.');
+    }
     if (store.codec.options.role === 'distributed-worker') {
       input.layeredWorker!.assertBound(store);
       const seed = input.layeredWorker!.header[12];
-      if (!seed) throw new Error('Worker window requires a frozen Gradle seed owner.');
+      if (!seed) {
+        throw new Error('Worker window requires a frozen Gradle seed owner.');
+      }
       checkGradleSeed(store, seed, input.layeredWorker!.header[8]?.[0] ?? null);
     }
-    if (input.assertCurrent.constructor.name === 'AsyncFunction')
+    if (input.assertCurrent.constructor.name === 'AsyncFunction') {
       throw new Error('Exclusive-window assertion must be synchronous.');
+    }
     const assert = () => {
       signal.throwIfAborted();
-      if (input.assertCurrent() !== undefined)
+      if (input.assertCurrent() !== undefined) {
         throw new Error('Exclusive-window assertion must be synchronous.');
+      }
     };
     assert();
     const initial = store.codec.schemas.documents['local-state'].parse(await store.state()),
@@ -111,8 +125,9 @@ export class ExclusiveWindow {
       );
     };
     await checkRoot();
-    if (['prepare-pending', 'prepare-failed', 'completed'].includes(initial[4]))
+    if (['prepare-pending', 'prepare-failed', 'completed'].includes(initial[4])) {
       throw new Error('Exclusive window outside active post lifecycle.');
+    }
     const timeout = input.timeoutMs ?? 180000,
       clientTimeout = input.clientTimeoutMs ?? 60000,
       exitGrace = input.exitGraceMs ?? 5000;
@@ -123,8 +138,9 @@ export class ExclusiveWindow {
       clientTimeout < 1 ||
       !Number.isSafeInteger(exitGrace) ||
       exitGrace < 0
-    )
+    ) {
       throw new Error('Invalid quiescence deadline.');
+    }
     const deadline = performance.now() + timeout,
       limited = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
     let installations: Reference | undefined;
@@ -144,9 +160,11 @@ export class ExclusiveWindow {
         exitGrace,
       });
       // Tool operations cannot omit/replace the owner's required inventory or mint a grant.
-      if (tool === 'gradle') store.codec.schemas.ref('installations').parse(installations);
-      else if (installations !== undefined)
+      if (tool === 'gradle') {
+        store.codec.schemas.ref('installations').parse(installations);
+      } else if (installations !== undefined) {
         throw new Error('Unexpected Maven installation inventory.');
+      }
       limited.throwIfAborted();
       assert();
       const current = store.codec.schemas.documents['local-state'].parse(await store.state());
@@ -154,7 +172,9 @@ export class ExclusiveWindow {
       await checkRoot();
       limited.throwIfAborted();
       assert();
-      if (installations) await store.retireProducedMetadata(installations);
+      if (installations) {
+        await store.retireProducedMetadata(installations);
+      }
       assert();
       limited.throwIfAborted();
       return { status: 'ready', window: new ExclusiveWindow(store, input.assertCurrent, signal) };

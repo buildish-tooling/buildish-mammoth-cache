@@ -21,6 +21,7 @@ import type { ObservationIndex } from './observation-index';
 import type { Reference } from './owned-store';
 
 export type GcCursor = ['cursor', string, number, number, number, Reference | null];
+
 type Frame = [
   'frame',
   number,
@@ -30,11 +31,14 @@ type Frame = [
   string | null,
   Value,
 ];
+
 export type GcBatch = ['gc-batch', number, number];
+
 interface GcBatchLimits {
   operations?: number;
   bytes?: number;
 }
+
 // Batch cells: unit-spool start/end, observation nextByte/nextRecord/boundary,
 // frame-spool start/end. Ephemeral work bound to the original process-owned index.
 export class GcProgram {
@@ -44,13 +48,16 @@ export class GcProgram {
     readonly batches: InstallScratch,
     readonly final: GcCursor,
   ) {}
+
   static validateLimits(limits: GcBatchLimits) {
     const operations = limits.operations ?? 16384,
       bytes = limits.bytes ?? 8 * 1024 * 1024;
-    if (![operations, bytes].every((n) => Number.isSafeInteger(n) && n > 0))
+    if (![operations, bytes].every((n) => Number.isSafeInteger(n) && n > 0)) {
       throw new Error('Invalid GC batch thresholds.');
+    }
     return { operations, bytes };
   }
+
   static async create(index: ObservationIndex, limits: GcBatchLimits = {}): Promise<GcProgram> {
     const { operations, bytes } = GcProgram.validateLimits(limits);
     const store = index.store,
@@ -87,14 +94,18 @@ export class GcProgram {
           for await (const m of originalGcMembers(index, header)) {
             m.accept?.();
             size += encodeRecord(m.row).length;
-            if (tuple(m.row)[0] === 'target') targets++;
+            if (tuple(m.row)[0] === 'target') {
+              targets++;
+            }
           }
           await units.append(['gc-source-unit', header, end, record, boundary]);
           count += targets;
           encoded += size;
         }
         // Close only AFTER complete units: one oversized unit remains indivisible.
-        if (count >= operations || encoded >= bytes) await flush(end, record);
+        if (count >= operations || encoded >= bytes) {
+          await flush(end, record);
+        }
       };
       for await (const item of store.rows(
         index.reference,
@@ -119,7 +130,9 @@ export class GcProgram {
             break;
           }
           case 'unit-open':
-            if (unit) throw new Error('Nested GC observation units.');
+            if (unit) {
+              throw new Error('Nested GC observation units.');
+            }
             unit = ['gc-unit-open', ...r.slice(1, 4)];
             unitDelete = r[5] === 'delete';
             f.row[6] = r.slice(1, 4);
@@ -139,7 +152,9 @@ export class GcProgram {
           }
           case 'unit-close':
             f.row[6] = null;
-            if (!unit) throw new Error('Missing GC observation unit.');
+            if (!unit) {
+              throw new Error('Missing GC observation unit.');
+            }
             await finishUnit(unit, unitDelete, item.end, item.record + 1);
             unit = null;
             break;
@@ -154,15 +169,20 @@ export class GcProgram {
             break;
         }
       }
-      if (!final) throw new Error('GC cursor is not an original semantic boundary.');
+      if (!final) {
+        throw new Error('GC cursor is not an original semantic boundary.');
+      }
       return new GcProgram(index, units, batches, final);
     } catch (e) {
       await Promise.allSettled([units.close(), batches?.close()]);
       throw e;
     } finally {
-      for (const f of frames) f.release();
+      for (const f of frames) {
+        f.release();
+      }
     }
   }
+
   async *evidence(start: number, end: number): AsyncGenerator<Value> {
     yield ['gc-context', this.index.reference];
     for await (const v of this.units.rows(start, end)) {
@@ -176,13 +196,15 @@ export class GcProgram {
       yield ['gc-unit-close', header[1], header[2]];
     }
   }
+
   async close() {
     const results = await Promise.allSettled([this.units.close(), this.batches.close()]);
     const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (errors.length)
+    if (errors.length) {
       throw new AggregateError(
         errors.map((r) => r.reason),
         'GC program cleanup failed.',
       );
+    }
   }
 }

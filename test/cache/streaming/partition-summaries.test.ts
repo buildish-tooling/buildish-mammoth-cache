@@ -70,7 +70,9 @@ const summaryBackend = {
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 function summary() {
   const hard = ['.mammoth/**'],
@@ -163,7 +165,9 @@ it('bounds path count and suppresses descendant noise without attributing opaque
 });
 it('bounds UTF-8 sample bytes as well as count and rejects reuse after disposal or a model change', () => {
   const { out, model } = summary();
-  for (let i = 0; i < 20; i++) out.hint('data', 'unselected contents', i + 'é'.repeat(700));
+  for (let i = 0; i < 20; i++) {
+    out.hint('data', 'unselected contents', i + 'é'.repeat(700));
+  }
   const data = out.snapshot()[0];
   expect(data.examples).toHaveLength(2);
   expect(data.examples.reduce((n, p) => n + Buffer.byteLength(p), 0)).toBeLessThanOrEqual(4096);
@@ -177,7 +181,9 @@ it('bounds escaped file examples and releases their budget even when the reporte
   const charges = vi.spyOn(WorkingBudget.prototype, 'holdRecord');
   out.capture(false);
   out.unsupportedLayout('data', 'caches/ic/a\n\u001b\u202e.txt');
-  for (let i = 0; i < 1000; i++) out.unsupportedLayout('data', `caches/ic/${i}/` + 'é'.repeat(800));
+  for (let i = 0; i < 1000; i++) {
+    out.unsupportedLayout('data', `caches/ic/${i}/` + 'é'.repeat(800));
+  }
   const sampleBudget = charges.mock.contexts[0] as WorkingBudget;
   expect(sampleBudget).not.toBe(budget);
   expect(charges.mock.calls.length).toBeLessThanOrEqual(8);
@@ -331,7 +337,9 @@ it.each([
       const scratchSpies = scratch.map((name) => vi.spyOn(InstallScratch.prototype, name));
       const initial = { ...f.store.root.work };
       const io = [fs.open, fs.readFile, fs.readdir, fs.unlink].map((fn) => vi.mocked(fn));
-      for (const spy of io) spy.mockClear();
+      for (const spy of io) {
+        spy.mockClear();
+      }
       const info: string[] = [],
         warnings: string[] = [];
       const capture = await captureObservations(f.store, {
@@ -383,7 +391,9 @@ it.each([
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).toContain(`Omitted ${units} Gradle files`);
         expect(warnings[0]).toContain('a: caches/9.9.2/kotlin-dsl/ic/file0');
-        if (units > 8) expect(warnings[0]).toContain('Additional examples omitted');
+        if (units > 8) {
+          expect(warnings[0]).toContain('Additional examples omitted');
+        }
       } else {
         expect(warnings).toEqual([]);
       }
@@ -418,7 +428,9 @@ it.each([
       owners.mockRestore();
       streams.mockRestore();
       batches.mockRestore();
-      for (const spy of scratchSpies) spy.mockRestore();
+      for (const spy of scratchSpies) {
+        spy.mockRestore();
+      }
     }
     expect(results[0].owners).toBeGreaterThan(0);
     expect(results[0].matches).toBeGreaterThan(0);
@@ -471,7 +483,9 @@ it('retains actual deletion counts after an admitted capture fails part way thro
   await f.files('', { 'data/a.lock': 'a', 'data/b.lock': 'b' });
   const info = vi.fn();
   vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-    if (point === 'observation-purge-unlinked') throw new Error('capture interrupted');
+    if (point === 'observation-purge-unlinked') {
+      throw new Error('capture interrupted');
+    }
   });
   await expect(
     captureObservations(f.store, {

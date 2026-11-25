@@ -28,8 +28,9 @@ export async function installGradleLifecycleCapture(
     store.codec.options.model.tuple[2] !== 'gradle' ||
     (store.codec.options.role === 'distributed-worker' && layerVersion === undefined) ||
     store.codec.options.access !== 'writable'
-  )
+  ) {
     throw new Error('Operational capture requires writable Gradle base role.');
+  }
   const directory = registrationDirectory(store);
   await store.makeParents(directory + '/placeholder');
   await installGradleBuildResultCapture(store.root.path, context, {

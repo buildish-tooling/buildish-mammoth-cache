@@ -56,7 +56,9 @@ async function read(bytes: Buffer, options = expected()) {
   const result = await readWorkerArchive(byteSource(bytes), {
     ...options,
     async consumeFile({ body }) {
-      for await (const b of body) fileBytes += b.length;
+      for await (const b of body) {
+        fileBytes += b.length;
+      }
     },
     async event(v) {
       seen.push(v);
@@ -125,29 +127,46 @@ it.each([
   'extra-control',
 ])('rejects %s without releasing a valid contribution', async (mutation) => {
   const trace = workerTrace('W1');
-  if (mutation === 'missing-pair')
+  if (mutation === 'missing-pair') {
     trace.splice(
       trace.findIndex((w) => w[0] === 'control' && w[1] === 6),
       1,
     );
-  if (mutation === 'wrong-ordinal')
+  }
+  if (mutation === 'wrong-ordinal') {
     (trace.find((w) => w[0] === 'control' && w[1] === 6)![2] as Value[])[2] = 2;
-  if (mutation === 'wrong-content')
+  }
+  if (mutation === 'wrong-content') {
     (trace.find((w) => w[0] === 'control' && w[1] === 6)![2] as Value[])[3] = '0'.repeat(64);
-  if (mutation === 'old-arity')
+  }
+  if (mutation === 'old-arity') {
     (trace.find((w) => w[0] === 'control' && w[1] === 6)![2] as Value[]).splice(
       3,
       0,
       '0'.repeat(64),
     );
-  if (mutation === 'old-profile') (trace[0][1] as Value[])[2] = 'worker-tar-v1';
-  if (mutation === 'body-tamper') trace.find((w) => w[0] === 'file' && w[1] === 2)![3] = '616264';
-  if (mutation === 'unit-count')
+  }
+  if (mutation === 'old-profile') {
+    (trace[0][1] as Value[])[2] = 'worker-tar-v1';
+  }
+  if (mutation === 'body-tamper') {
+    trace.find((w) => w[0] === 'file' && w[1] === 2)![3] = '616264';
+  }
+  if (mutation === 'unit-count') {
     ((trace.find((w) => w[0] === 'control' && w[1] === 8)![2] as Value[])[4] as Value[])[0] = 3;
-  if (mutation === 'final-seal') (trace[trace.length - 1][1] as Value[])[6] = '0'.repeat(64);
-  if (mutation === 'wrong-context') ((trace[0][1] as Value[])[4] as Value[])[4] = 'B';
-  if (mutation === 'wrong-channel') (trace[1][2] as Value[])[1] = 1;
-  if (mutation === 'extra-control') trace.push(['control', 21, ['dir-open', 2, '']]);
+  }
+  if (mutation === 'final-seal') {
+    (trace[trace.length - 1][1] as Value[])[6] = '0'.repeat(64);
+  }
+  if (mutation === 'wrong-context') {
+    ((trace[0][1] as Value[])[4] as Value[])[4] = 'B';
+  }
+  if (mutation === 'wrong-channel') {
+    (trace[1][2] as Value[])[1] = 1;
+  }
+  if (mutation === 'extra-control') {
+    trace.push(['control', 21, ['dir-open', 2, '']]);
+  }
   const options = expected();
   await expect(read(traceArchive(trace), options)).rejects.toThrow();
   expect(options.budget.retained).toBe(0);
@@ -161,10 +180,14 @@ it('does not accept a valid application seal before a late gzip failure', async 
     readWorkerArchive(byteSource(bytes), {
       ...expected(),
       async consumeFile({ body }) {
-        for await (const b of body) void b;
+        for await (const b of body) {
+          void b;
+        }
       },
       async event(value) {
-        if ((value as Value[])[0] === 'complete') complete = true;
+        if ((value as Value[])[0] === 'complete') {
+          complete = true;
+        }
       },
     }),
   ).rejects.toThrow('CRC');
@@ -235,14 +258,18 @@ it.each([
     );
     const raw = gunzipSync(out.bytes);
     expect(raw.includes(' mtime=')).toBe(paxTime !== null);
-    if (paxTime !== null) expect(raw.includes(` mtime=${paxTime}\n`)).toBe(true);
+    if (paxTime !== null) {
+      expect(raw.includes(` mtime=${paxTime}\n`)).toBe(true);
+    }
     let actual = -1;
     const opts = simple();
     await readWorkerArchive(byteSource(out.bytes), {
       ...opts,
       async consumeFile({ header, body }) {
         actual = header.mtimeMs;
-        for await (const b of body) void b;
+        for await (const b of body) {
+          void b;
+        }
       },
     });
     expect(actual).toBe(time);
@@ -261,7 +288,9 @@ it('calls guarded sources around bytes and rejects instability before completion
     ...simple(),
     snapshots: [],
     async assertStable() {
-      if (++calls === 2) throw new Error('tree changed');
+      if (++calls === 2) {
+        throw new Error('tree changed');
+      }
     },
   };
   await expect(write(options, simpleEvents())).rejects.toThrow('tree changed');
@@ -322,14 +351,17 @@ const workspace = 'caches/8.10/transforms/' + 'a'.repeat(32);
 async function* workspaceChannel(usage = false, missing = false): AsyncGenerator<WorkerEvent> {
   yield { type: 'channel-open' };
   const paths = ['', 'caches', 'caches/8.10', 'caches/8.10/transforms', workspace];
-  for (const path of paths) yield { type: 'dir-open', path };
+  for (const path of paths) {
+    yield { type: 'dir-open', path };
+  }
   yield {
     type: usage ? 'used-unit-open' : 'unit-open',
     unit: ['artifact-transform', workspace, 'subtree'],
   };
   for (const name of missing ? ['metadata.bin'] : ['metadata.bin', 'results.bin']) {
-    if (usage) yield { type: 'used', name };
-    else
+    if (usage) {
+      yield { type: 'used', name };
+    } else {
       yield {
         type: 'file',
         path: workspace + '/' + name,
@@ -341,11 +373,14 @@ async function* workspaceChannel(usage = false, missing = false): AsyncGenerator
         })(),
         assertStable: guard,
       };
+    }
   }
   yield { type: 'dir-open', path: workspace + '/transformed' };
   yield { type: 'dir-close', path: workspace + '/transformed' };
   yield { type: usage ? 'used-unit-close' : 'unit-close' };
-  for (const path of [...paths].reverse()) yield { type: 'dir-close', path };
+  for (const path of [...paths].reverse()) {
+    yield { type: 'dir-close', path };
+  }
   yield { type: 'channel-close' };
 }
 async function* emptyChannel(): AsyncGenerator<WorkerEvent> {
@@ -368,7 +403,9 @@ it('checks interleaved workspace facts, meaningful directories and constant mark
   await readWorkerArchive(byteSource(out.bytes), {
     ...opts,
     async consumeFile({ body }) {
-      for await (const b of body) void b;
+      for await (const b of body) {
+        void b;
+      }
     },
     async event(v) {
       seen.push(v);
@@ -500,7 +537,9 @@ it('reader independently rejects upsert/usage overlap before the now-invalid tra
     readWorkerArchive(byteSource(gzipSync(raw)), {
       ...simple(),
       async consumeFile({ body }) {
-        for await (const b of body) void b;
+        for await (const b of body) {
+          void b;
+        }
       },
     }),
   ).rejects.toThrow('Overlapping upsert');
@@ -615,8 +654,9 @@ it('rejects a directory-only workspace without its complete-unit wrapper', async
       { ...simple(), snapshots: [], assertStable: guard },
       (async function* () {
         yield { type: 'channel-open' };
-        for (const path of ['', 'caches', 'caches/8.10', 'caches/8.10/transforms', workspace])
+        for (const path of ['', 'caches', 'caches/8.10', 'caches/8.10/transforms', workspace]) {
           yield { type: 'dir-open', path };
+        }
         yield { type: 'dir-close', path: workspace };
       })(),
     ),
@@ -629,8 +669,9 @@ it('rejects unsupported workspace surfaces instead of treating them as ordinary 
       (async function* () {
         yield { type: 'channel-open' };
         const root = 'caches/8.10/transforms/not-a-hash';
-        for (const path of ['', 'caches', 'caches/8.10', 'caches/8.10/transforms', root])
+        for (const path of ['', 'caches', 'caches/8.10', 'caches/8.10/transforms', root]) {
           yield { type: 'dir-open', path };
+        }
         yield {
           type: 'file',
           path: root + '/file',
@@ -692,7 +733,9 @@ it('aborts a pending membership read and disposes its storage', async () => {
     {
       ...options,
       async consumeFile({ body }) {
-        for await (const chunk of body) void chunk;
+        for await (const chunk of body) {
+          void chunk;
+        }
       },
     },
     controller.signal,
@@ -782,7 +825,9 @@ it.each([true, false])(
     const options = { ...expected(), model, snapshots: ['metadata'], assertStable: guard };
     async function* channel(root: string, name: string): AsyncGenerator<WorkerEvent> {
       yield { type: 'channel-open' };
-      for (const path of ['', 'repository', root]) yield { type: 'dir-open', path };
+      for (const path of ['', 'repository', root]) {
+        yield { type: 'dir-open', path };
+      }
       yield { type: 'unit-open', unit: ['maven-directory', root, 'direct'] };
       yield {
         type: 'file',
@@ -794,7 +839,9 @@ it.each([true, false])(
         assertStable: guard,
       };
       yield { type: 'unit-close' };
-      for (const path of [root, 'repository', '']) yield { type: 'dir-close', path };
+      for (const path of [root, 'repository', '']) {
+        yield { type: 'dir-close', path };
+      }
       yield { type: 'channel-close' };
     }
     const operation = write(
@@ -805,8 +852,9 @@ it.each([true, false])(
         yield* channel(overlap ? 'repository/g' : 'repository/h', '_remote.repositories');
       })(),
     );
-    if (overlap) await expect(operation).rejects.toThrow('Mixed Maven publication');
-    else {
+    if (overlap) {
+      await expect(operation).rejects.toThrow('Mixed Maven publication');
+    } else {
       const out = await operation;
       await read(out.bytes, { ...expected(), model });
     }
@@ -880,7 +928,9 @@ it('rejects an unsupported workspace-surface empty leaf', async () => {
           'caches/8.10/transforms',
           'caches/8.10/transforms/not-a-hash',
         ];
-        for (const path of paths) yield { type: 'dir-open', path };
+        for (const path of paths) {
+          yield { type: 'dir-open', path };
+        }
         yield { type: 'dir-close', path: paths[4] };
       })(),
     ),
@@ -917,13 +967,16 @@ it('rejects snapshot upsert overlapping an aggregate usage-only Maven unit', asy
         yield* emptyChannel();
         for (const usage of [true, false]) {
           yield { type: 'channel-open' };
-          for (const path of ['', 'repository', 'repository/g']) yield { type: 'dir-open', path };
+          for (const path of ['', 'repository', 'repository/g']) {
+            yield { type: 'dir-open', path };
+          }
           yield {
             type: usage ? 'used-unit-open' : 'unit-open',
             unit: ['maven-directory', 'repository/g', 'direct'],
           };
-          if (usage) yield { type: 'used', name: 'a.jar' };
-          else
+          if (usage) {
+            yield { type: 'used', name: 'a.jar' };
+          } else {
             yield {
               type: 'file',
               path: 'repository/g/_remote.repositories',
@@ -933,8 +986,11 @@ it('rejects snapshot upsert overlapping an aggregate usage-only Maven unit', asy
               bytes: (async function* () {})(),
               assertStable: guard,
             };
+          }
           yield { type: usage ? 'used-unit-close' : 'unit-close' };
-          for (const path of ['repository/g', 'repository', '']) yield { type: 'dir-close', path };
+          for (const path of ['repository/g', 'repository', '']) {
+            yield { type: 'dir-close', path };
+          }
           yield { type: 'channel-close' };
         }
       })(),
@@ -1016,15 +1072,20 @@ it.each(['channel', 'archive'] as const)(
       for (const wrapped of trace) {
         if (wrapped[0] === 'control') {
           const control = wrapped[2] as Value[];
-          if (control[0] === 'channel-open' && control[1] === 0) collecting = true;
+          if (control[0] === 'channel-open' && control[1] === 0) {
+            collecting = true;
+          }
           if (collecting && control[0] === 'channel-close') {
             sha = eventDigest('channel-events', rows);
             control[3] = sha;
             break;
           }
-          if (collecting) rows.push(control);
-        } else if (collecting && (wrapped[0] === 'file' || wrapped[0] === 'directory'))
+          if (collecting) {
+            rows.push(control);
+          }
+        } else if (collecting && (wrapped[0] === 'file' || wrapped[0] === 'directory')) {
           rows.push(wrapped[0] === 'file' ? wrapped[2] : wrapped[1]);
+        }
       }
       ((trace.at(-1)![1] as Value[])[5] as Value[][])[0][4] = sha;
     }

@@ -33,7 +33,9 @@ export async function assertEmptyManagedArea(
   work = walkWork(),
 ): Promise<void> {
   const max = options.maxDirectoryEntries ?? 100000;
-  if (!Number.isSafeInteger(max) || max < 1) throw new Error('Invalid directory entry allowance.');
+  if (!Number.isSafeInteger(max) || max < 1) {
+    throw new Error('Invalid directory entry allowance.');
+  }
   const stat = (absolute: string) => {
     options.signal?.throwIfAborted();
     work.stats++;
@@ -47,21 +49,27 @@ export async function assertEmptyManagedArea(
     if (!raw.isDirectory() || String(raw.dev) !== root.binding[3]) {
       const partition = scope.owner();
       const unsafe = !raw.isFile() || String(raw.dev) !== root.binding[3];
-      if (unsafe && (raw.isDirectory() || scope.blocksUnsafeLeaf()))
+      if (unsafe && (raw.isDirectory() || scope.blocksUnsafeLeaf())) {
         throw new Error(
           `Unsafe native entry ${JSON.stringify(relative)} in the managed cache area` +
             (partition ? ` for partition ${JSON.stringify(partition[0])}` : '') +
             `. ${remedy}`,
         );
-      if (partition)
+      }
+      if (partition) {
         throw new Error(
           `Managed cache path ${JSON.stringify(relative)} already exists in partition ` +
             `${JSON.stringify(partition[0])}. ${remedy}`,
         );
+      }
       return;
     }
-    if (!scope.hasDescendants) return;
-    if (depth > 100) throw new Error('Native tree depth exceeded.');
+    if (!scope.hasDescendants) {
+      return;
+    }
+    if (depth > 100) {
+      throw new Error('Native tree depth exceeded.');
+    }
     const before = nativeIdentity(raw);
     const release = options.budget.holdRecord(512 + Buffer.byteLength(relative));
     try {
@@ -72,14 +80,19 @@ export async function assertEmptyManagedArea(
       for await (const entry of directory) {
         options.signal?.throwIfAborted();
         work.entries++;
-        if (++entries > max) throw directoryBreadthError(relative, max, 'restore admission');
+        if (++entries > max) {
+          throw directoryBreadthError(relative, max, 'restore admission');
+        }
         componentSchema.parse(entry.name);
         const child = joinPath(relative, entry.name);
         const next = scope.child(child);
-        if (next) await visit(pathSchema.parse(child), next, depth + 1);
+        if (next) {
+          await visit(pathSchema.parse(child), next, depth + 1);
+        }
       }
-      if (!sameNative(before, nativeIdentity(await stat(absolute)), true))
+      if (!sameNative(before, nativeIdentity(await stat(absolute)), true)) {
         throw new Error('Native directory changed during restore admission.');
+      }
     } finally {
       release();
     }

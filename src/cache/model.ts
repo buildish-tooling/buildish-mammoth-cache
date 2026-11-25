@@ -72,10 +72,11 @@ export function createCachePartitions(
   if (
     builtInPresetIds.has('dependency-artifacts') &&
     configuredPartitions.some((p) => p.id === 'modules')
-  )
+  ) {
     throw new Error(
       "Gradle partition 'modules' was retired. Configure 'dependency-artifacts' and 'module-support' instead; disable both to exclude the former modules coverage.",
     );
+  }
   const configuredById = new Map(
     configuredPartitions.map((partition) => [partition.id, partition]),
   );
@@ -150,8 +151,9 @@ function createPartition(
   purgeableGlobs: readonly string[] = [],
   readOnlyLayer = false,
 ): CachePartitionDefinition {
-  if (writer && publication !== 'single-writer')
+  if (writer && publication !== 'single-writer') {
     throw new Error(`Partition '${id}' writer requires single-writer publication.`);
+  }
   const deduplicatedIncludeGlobs = deduplicatePaths(relativeIncludeGlobs);
   const ordinaryExcludeGlobs = deduplicatePaths([
     ...hardCacheExcludeGlobs,
@@ -184,11 +186,14 @@ export function validatePartitionConflictHandling(
 ): void {
   for (const partition of partitions) {
     const workspace = buildToolId === 'gradle' && isWorkspacePartition(partition);
-    if (workspace && ((partition.publication ?? 'aggregate') !== 'aggregate' || partition.writer))
+    if (workspace && ((partition.publication ?? 'aggregate') !== 'aggregate' || partition.writer)) {
       throw new Error(
         `Partition '${partition.id}' Gradle workspaces require aggregate publication without a writer.`,
       );
-    if (!partition.conflictHandling) continue;
+    }
+    if (!partition.conflictHandling) {
+      continue;
+    }
     const maven =
       buildToolId === 'maven' &&
       partition.relativeIncludeGlobs.length > 0 &&
@@ -207,9 +212,10 @@ export function validatePartitionConflictHandling(
         : partition.conflictHandling === 'choose-worker-entry'
           ? !archive
           : true)
-    )
+    ) {
       throw new Error(
         `Partition '${partition.id}' conflict policy requires aggregate Maven directories, Gradle workspaces, or choose-worker-entry on Gradle build-cache paths.`,
       );
+    }
   }
 }

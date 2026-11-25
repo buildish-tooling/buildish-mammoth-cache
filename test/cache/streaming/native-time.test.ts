@@ -70,7 +70,9 @@ it.each([0, 1000, 1700000000123, 1795305600001])(
       const [part] = await f.stage.seal(f.signal);
       const n = await f.store.root.stat(part.nativeRoot + '/a');
       expect(BigInt(n![8]) / 1000000n).toBe(BigInt(ms));
-      if (ms % 1000 === 0) expect(BigInt(n![8])).toBe(BigInt(ms) * 1000000n);
+      if (ms % 1000 === 0) {
+        expect(BigInt(n![8])).toBe(BigInt(ms) * 1000000n);
+      }
       index = await WorkerNativeIndex.capture(f.store, [part], f.budget, f.signal);
       copy = await MetadataSnapshot.copy(
         index,

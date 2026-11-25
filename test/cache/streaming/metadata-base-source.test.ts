@@ -159,7 +159,9 @@ it('does not grant an EOF receipt on observer failure, and isolates callback ide
   let rows = 0;
   await expect(
     discover(f, async (row) => {
-      if (++rows === 4) throw new Error('sink failed');
+      if (++rows === 4) {
+        throw new Error('sink failed');
+      }
       row[2][4] = 'corrupt';
     }),
   ).rejects.toThrow('sink failed');
@@ -181,10 +183,18 @@ it.each(['tree', 'missing', 'hardlink', 'reserved', 'wrong-owner', 'budget'])(
   async (kind) => {
     const f = await fixture(),
       file = f.store.root.resolve(f.payload + '/repository/group/unit0/version/a.jar');
-    if (kind === 'tree') await writeFile(f.store.root.resolve(f.root + '/tree.ndjson'), 'old');
-    if (kind === 'missing') await rm(f.store.root.resolve(f.root + '/envelope.json'));
-    if (kind === 'hardlink') await link(file, f.store.root.resolve(f.payload + '/alias'));
-    if (kind === 'reserved') await mkdir(f.store.root.resolve(f.payload + '/.mammoth'));
+    if (kind === 'tree') {
+      await writeFile(f.store.root.resolve(f.root + '/tree.ndjson'), 'old');
+    }
+    if (kind === 'missing') {
+      await rm(f.store.root.resolve(f.root + '/envelope.json'));
+    }
+    if (kind === 'hardlink') {
+      await link(file, f.store.root.resolve(f.payload + '/alias'));
+    }
+    if (kind === 'reserved') {
+      await mkdir(f.store.root.resolve(f.payload + '/.mammoth'));
+    }
     if (kind === 'wrong-owner') {
       await writeFile(f.store.root.resolve(f.payload + '/unowned'), 'wrong owner');
     }
@@ -200,7 +210,9 @@ it.each(['tree', 'missing', 'hardlink', 'reserved', 'wrong-owner', 'budget'])(
           async () => {},
         ),
       ).rejects.toThrow('budget');
-    } else await expect(discover(f)).rejects.toThrow();
+    } else {
+      await expect(discover(f)).rejects.toThrow();
+    }
     expect(f.budget.retained).toBe(0);
   },
 );

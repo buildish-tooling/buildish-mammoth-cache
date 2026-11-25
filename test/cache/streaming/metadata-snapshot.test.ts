@@ -72,7 +72,9 @@ it('copies from the original selected hierarchy with own output identities and n
     const original = (await f.store.root.stat('state/shared/a'))!,
       copied = (await f.store.root.stat(snapshot.nativeRoot + '/state/shared/a'))!;
     expect(copied[4]).not.toBe(original[4]);
-    if (process.platform !== 'win32') expect(copied[6] & 0o777).toBe(0o755);
+    if (process.platform !== 'win32') {
+      expect(copied[6] & 0o777).toBe(0o755);
+    }
     expect(
       await readFile(f.store.root.resolve(snapshot.nativeRoot + '/state/shared/a'), 'utf8'),
     ).toBe('body');
@@ -90,7 +92,9 @@ it('copies from the original selected hierarchy with own output identities and n
           sameNative(lease.node[3] as NativeIdentity, (await f.store.root.stat(path))!, true),
         ).toBe(true);
         expect(lease.node[4]).toBeNull();
-        for await (const edge of snapshot!.children(lease.node)) await checkOutput(edge[2]);
+        for await (const edge of snapshot!.children(lease.node)) {
+          await checkOutput(edge[2]);
+        }
       } finally {
         lease.release();
       }

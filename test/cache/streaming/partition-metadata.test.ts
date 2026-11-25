@@ -63,7 +63,9 @@ function summarize(input = rows(), platform: NodeJS.Platform = 'linux') {
   const budget = new WorkingBudget(),
     summary = new PartitionMetadataSummary(model, 'data', budget, metadataSummaryProfile(platform));
   try {
-    for (const row of input) summary.accept(row);
+    for (const row of input) {
+      summary.accept(row);
+    }
     return summary.finish();
   } finally {
     summary.dispose();
@@ -100,27 +102,43 @@ it.each([
 ])('detects metadata %s', (kind) => {
   const input = rows(),
     baseline = summarize();
-  if (kind === 'path') input[2][1] = 'data/b';
-  if (kind === 'size') input[2][2][5] = '4';
-  if (kind === 'mtime') input[2][2][8] = '201';
-  if (kind === 'file-mode') input[2][2][6] |= 0o111;
-  if (kind === 'directory-mode') input[1][2][6] = 0o40700;
-  if (kind === 'addition') input.splice(3, 0, ['file', 'data/b', n('file')]);
-  if (kind === 'deletion') input.splice(2, 1);
-  if (kind === 'type')
+  if (kind === 'path') {
+    input[2][1] = 'data/b';
+  }
+  if (kind === 'size') {
+    input[2][2][5] = '4';
+  }
+  if (kind === 'mtime') {
+    input[2][2][8] = '201';
+  }
+  if (kind === 'file-mode') {
+    input[2][2][6] |= 0o111;
+  }
+  if (kind === 'directory-mode') {
+    input[1][2][6] = 0o40700;
+  }
+  if (kind === 'addition') {
+    input.splice(3, 0, ['file', 'data/b', n('file')]);
+  }
+  if (kind === 'deletion') {
+    input.splice(2, 1);
+  }
+  if (kind === 'type') {
     input.splice(
       2,
       1,
       ['dir-open', 'data/a', n('directory')],
       ['dir-close', 'data/a', n('directory')],
     );
-  if (kind === 'empty')
+  }
+  if (kind === 'empty') {
     input.splice(
       3,
       0,
       ['dir-open', 'data/empty', n('directory')],
       ['dir-close', 'data/empty', n('directory')],
     );
+  }
   expect(summarize(input)).not.toEqual(baseline);
 });
 it('compares Windows writable state without reconstructing Unix execute/read bits', () => {
@@ -148,7 +166,9 @@ it('does not retain a caller-mutable normalization profile', () => {
     profile = metadataSummaryProfile('linux');
   const summary = new PartitionMetadataSummary(model, 'data', budget, profile);
   profile[2] = 'windows-owner-writable';
-  for (const row of rows()) summary.accept(row);
+  for (const row of rows()) {
+    summary.accept(row);
+  }
   expect(summary.finish()).toEqual(summarize());
   summary.dispose();
   expect(budget.retained).toBe(0);

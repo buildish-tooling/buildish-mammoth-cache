@@ -30,6 +30,7 @@ import {
 import { compareName } from './tree-state';
 
 export type InstallUnit = readonly [string, string, string];
+
 // candidate, operation/branch, logicalPath, desired/native kind, partition index,
 // source node/current node, complete semantic unit, children byte span
 export type Selection = readonly [
@@ -44,6 +45,7 @@ export type Selection = readonly [
   number,
   number,
 ];
+
 export interface DesiredIndex {
   readonly partition: number;
   readonly root: number;
@@ -106,10 +108,12 @@ export async function selectInstall(
         d.partition < 0 ||
         d.partition >= model.partitions.length,
     )
-  )
+  ) {
     throw new Error('Invalid desired partition contexts.');
-  if (!Number.isSafeInteger(maxDirectoryEntries) || maxDirectoryEntries < 1)
+  }
+  if (!Number.isSafeInteger(maxDirectoryEntries) || maxDirectoryEntries < 1) {
     throw new Error('Invalid output directory allowance.');
+  }
   const claim = scratch.claim();
   const replacementMask = desired.reduce(
     (mask, d) =>
@@ -119,7 +123,11 @@ export async function selectInstall(
     0n,
   );
   const partition = (mask: bigint) => {
-    for (let i = 0; i < model.partitions.length; i++) if (mask === 1n << BigInt(i)) return i;
+    for (let i = 0; i < model.partitions.length; i++) {
+      if (mask === 1n << BigInt(i)) {
+        return i;
+      }
+    }
     return -1;
   };
   const unit = (
@@ -148,7 +156,9 @@ export async function selectInstall(
     const held: { release: () => void }[] = [];
     try {
       const oldLease = oldOffset === null ? null : await indexedNode(scratch, oldOffset);
-      if (oldLease) held.push(oldLease);
+      if (oldLease) {
+        held.push(oldLease);
+      }
       const old = oldLease?.node ?? null;
       const sources: { partition: number; offset: number; node: IndexedNode }[] = [];
       for (const source of incoming) {
@@ -162,19 +172,23 @@ export async function selectInstall(
         !workspace &&
         !direct &&
         (nodeMask(old) & replacementMask) === 0n
-      )
+      ) {
         return null;
+      }
       const files = sources.filter((s) => s.node[1] === 'file'),
         dirs = sources.filter((s) => s.node[1] === 'directory');
-      if (files.length > 1 || (files.length && dirs.length))
+      if (files.length > 1 || (files.length && dirs.length)) {
         throw new Error('Selected desired file/directory collision.');
-      if (old?.[1] === 'protected' && sources.length)
+      }
+      if (old?.[1] === 'protected' && sources.length) {
         throw new Error('Selected outcome overlaps protected native entry.');
+      }
       if (
         sources.some((source) => nodeIsIntact(source.node)) &&
         (old || sources.length !== 1 || dirs.length !== 1 || pruneAggregates)
-      )
+      ) {
         throw new Error('Intact source directory is no longer eligible.');
+      }
       const mask = sources.reduce((m, s) => m | nodeMask(s.node), 0n),
         single = partition(mask);
       let scope = workspace;
@@ -189,25 +203,34 @@ export async function selectInstall(
         for (const node of [
           ...dirs.map((s) => s.node),
           ...(pruneAggregates && old?.[1] === 'directory' ? [old] : []),
-        ])
+        ]) {
           if (nodeIsIntact(node)) {
             jar ||= node[11] === 'intact-jars';
           } else {
-            for await (const child of indexedEntries(scratch, node))
-              if (child[1] === 'file' && (child[0] === 'classes.jar' || child[0] === 'sources.jar'))
+            for await (const child of indexedEntries(scratch, node)) {
+              if (
+                child[1] === 'file' &&
+                (child[0] === 'classes.jar' || child[0] === 'sources.jar')
+              ) {
                 jar = true;
+              }
+            }
           }
+        }
         scope = [workspaceKind(path, jar ? [path + '/classes.jar'] : []), path, 'subtree'];
       }
       let directHere: InstallUnit | null = null;
       if (model.tuple[2] === 'maven' && (path === 'repository' || path.startsWith('repository/'))) {
-        for (const source of dirs)
-          if (model.partitions[source.partition][3] === 'aggregate')
-            for await (const child of indexedEntries(scratch, source.node))
+        for (const source of dirs) {
+          if (model.partitions[source.partition][3] === 'aggregate') {
+            for await (const child of indexedEntries(scratch, source.node)) {
               if (child[1] === 'file') {
                 directHere = ['maven-directory', path, 'direct'];
                 break;
               }
+            }
+          }
+        }
       }
       if (
         pruneAggregates &&
@@ -216,11 +239,12 @@ export async function selectInstall(
         (path === 'repository' || path.startsWith('repository/')) &&
         directHere === null
       ) {
-        for await (const child of indexedEntries(scratch, old))
+        for await (const child of indexedEntries(scratch, old)) {
           if (child[1] === 'file') {
             directHere = ['maven-directory', path, 'direct'];
             break;
           }
+        }
       }
       const appendOp = async (
         p: number,
@@ -238,17 +262,19 @@ export async function selectInstall(
       if (files.length) {
         const source = files[0],
           p = source.partition;
-        if (old && !physicalOld(p))
+        if (old && !physicalOld(p)) {
           throw new Error('Replacement preimage is not wholly owned by selected partition.');
+        }
         return appendOp(p, source.offset, oldOffset, 'file', unit(p, path, 'file', scope, direct));
       }
       if (path && single >= 0 && dirs.length === 1 && sources.length === 1) {
         const p = single,
           source = dirs[0],
           snapshot = model.partitions[p][3] === 'single-writer';
-        if (!old && !snapshot && scope === null && source.node[6] === 0)
+        if (!old && !snapshot && scope === null && source.node[6] === 0) {
           return appendOp(p, source.offset, null, 'directory', ['directory', path, 'subtree']);
-        if ((snapshot || scope !== null) && (!old || physicalOld(p)))
+        }
+        if ((snapshot || scope !== null) && (!old || physicalOld(p))) {
           return appendOp(
             p,
             source.offset,
@@ -256,15 +282,19 @@ export async function selectInstall(
             'directory',
             unit(p, path, 'directory', scope, null),
           );
+        }
         if (
           scope === null &&
           source.node[7] === source.node[8] &&
           model.partitions[p][3] === 'aggregate'
         ) {
-          if (old?.[1] === 'directory' && !pruneAggregates) return null;
+          if (old?.[1] === 'directory' && !pruneAggregates) {
+            return null;
+          }
           if (old?.[1] !== 'directory') {
-            if (old && !physicalOld(p))
+            if (old && !physicalOld(p)) {
               throw new Error('Empty directory presence cannot replace protected preimage.');
+            }
             return appendOp(p, source.offset, oldOffset, 'directory', [
               'empty-directory',
               path,
@@ -285,7 +315,7 @@ export async function selectInstall(
           authoritative &&
           physicalOld(p) &&
           (old[1] === 'file' || model.partitions[p][3] === 'single-writer' || scope !== null)
-        )
+        ) {
           return appendOp(
             p,
             null,
@@ -293,10 +323,14 @@ export async function selectInstall(
             old[1] as 'file' | 'directory',
             unit(p, path, old[1] as 'file' | 'directory', scope, direct),
           );
-        if (old[1] !== 'directory') return null;
+        }
+        if (old[1] !== 'directory') {
+          return null;
+        }
       }
-      if (old && old[1] !== 'directory' && dirs.length)
+      if (old && old[1] !== 'directory' && dirs.length) {
         throw new Error('Structural shape replacement escapes a complete selected unit.');
+      }
       // Name-order merge uses one page frontier per input, not width×producer records.
       const readers: {
         source: number;
@@ -330,7 +364,9 @@ export async function selectInstall(
               process.platform === 'darwin'
                 ? name.normalize('NFD').toUpperCase()
                 : name.toUpperCase();
-            if (aliases.has(key)) throw new Error('Native case/normalization path alias.');
+            if (aliases.has(key)) {
+              throw new Error('Native case/normalization path alias.');
+            }
             const charge = 64 + 4 * Buffer.byteLength(key);
             scratch.budget.retain(charge);
             aliasCharge += charge;
@@ -340,7 +376,7 @@ export async function selectInstall(
             previousKind: Value = null,
             desiredKind: Value = null;
           const children: { partition: number; offset: number }[] = [];
-          for (const reader of readers)
+          for (const reader of readers) {
             if (!reader.head.done && reader.head.value[0] === name) {
               if (reader.source === -1) {
                 previous = reader.head.value[2];
@@ -350,6 +386,7 @@ export async function selectInstall(
                 desiredKind = reader.head.value[1];
               }
             }
+          }
           const childPath = path ? path + '/' + name : name;
           const child = await visit(childPath, previous, children, scope, directHere);
           let survives = children.length > 0 || previous !== null;
@@ -357,13 +394,16 @@ export async function selectInstall(
             const record = await scratch.record(child);
             try {
               const selected = record.value as Selection;
-              if (selected[1] === 'operation' && selected[5] === null) survives = false;
+              if (selected[1] === 'operation' && selected[5] === null) {
+                survives = false;
+              }
             } finally {
               record.release();
             }
           }
-          if (survives && ++outputCount > maxDirectoryEntries)
+          if (survives && ++outputCount > maxDirectoryEntries) {
             throw directoryBreadthError(path, maxDirectoryEntries, 'install selection');
+          }
           if (child !== null) {
             tail = await scratch.append(
               ['selected-edge', tail, name, child, previousKind, desiredKind ?? previousKind],
@@ -371,26 +411,34 @@ export async function selectInstall(
             );
             count++;
           }
-          for (const reader of readers)
-            if (!reader.head.done && reader.head.value[0] === name)
+          for (const reader of readers) {
+            if (!reader.head.done && reader.head.value[0] === name) {
               reader.head = await reader.iterator.next();
+            }
+          }
         }
       } finally {
         try {
-          for (const reader of readers) await reader.iterator.return(undefined);
+          for (const reader of readers) {
+            await reader.iterator.return(undefined);
+          }
         } finally {
           aliases.clear();
           scratch.budget.release(aliasCharge);
         }
       }
-      if (!count) return null;
+      if (!count) {
+        return null;
+      }
       const [start, end] = await selectionPage(scratch, tail, claim.token, signal);
       return scratch.append(
         ['candidate', 'branch', path, 'directory', -1, null, oldOffset, null, start, end],
         claim.token,
       );
     } finally {
-      for (const lease of held) lease.release();
+      for (const lease of held) {
+        lease.release();
+      }
     }
   }
   try {

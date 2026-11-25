@@ -35,6 +35,7 @@ export interface WorkerMergeInput {
   readonly authorizedSnapshots?: readonly string[];
   readonly producerId?: string;
 }
+
 import { MetadataSnapshot } from './metadata-snapshot';
 export interface WorkerSnapshotRequirement {
   readonly partition: string;
@@ -42,6 +43,7 @@ export interface WorkerSnapshotRequirement {
   readonly required: boolean;
   readonly baseline?: MetadataSnapshot;
 }
+
 export interface WorkerMergeOptions {
   readonly budget: WorkingBudget;
   readonly ordinaryOrder: readonly string[];
@@ -50,6 +52,7 @@ export interface WorkerMergeOptions {
   readonly maxDirectoryEntries?: number;
   readonly signal?: AbortSignal;
 }
+
 export interface WorkerMergeResult {
   readonly stage: WorkerStage;
   readonly partitions: readonly StagedPartition[];
@@ -62,12 +65,14 @@ export interface WorkerMergeResult {
   readonly warnings: Readonly<{ count: number; details: readonly string[] }>;
   dispose(): Promise<void>;
 }
+
 export interface WorkerMergeCursor {
   input: WorkerMergeInput;
   reader: WorkerFrontier;
   head: FrontierItem | null;
   snapshots: readonly string[];
 }
+
 const control = (c: WorkerMergeCursor): readonly Value[] =>
   c.head?.type === 'control' ? tuple(c.head.value) : [];
 const completedInputs = new WeakMap<
@@ -83,14 +88,17 @@ const completedInputs = new WeakMap<
 >();
 export function assertCompletedWorkerInputs(store: OwnedStore, result: WorkerMergeResult) {
   const binding = completedInputs.get(result);
-  if (!binding || binding.store !== store || binding.disposed)
+  if (!binding || binding.store !== store || binding.disposed) {
     throw new Error('Unbound/retired worker merge inputs.');
+  }
   return Object.freeze({ policy: binding.policy, order: binding.order, max: binding.max });
 }
 export function claimCompletedWorkerInputs(store: OwnedStore, result: WorkerMergeResult) {
   const evidence = assertCompletedWorkerInputs(store, result),
     binding = completedInputs.get(result)!;
-  if (binding.claimed) throw new Error('Worker merge already claimed.');
+  if (binding.claimed) {
+    throw new Error('Worker merge already claimed.');
+  }
   binding.claimed = true;
   return evidence;
 }
@@ -136,7 +144,9 @@ export async function mergeWorkerArchives(
         }),
       ),
     );
-    if (inputs.length > 16) throw new Error('Worker merge producer admission exceeded.');
+    if (inputs.length > 16) {
+      throw new Error('Worker merge producer admission exceeded.');
+    }
     order = ordinaryOrder(options.ordinaryOrder);
     const jobs = new Set<string>();
     for (const req of options.snapshots!) {
@@ -146,10 +156,13 @@ export async function mergeWorkerArchives(
         partition[3] !== 'single-writer' ||
         (partition[4] !== null && partition[4] !== req.job) ||
         snapshotRequirements.has(req.partition)
-      )
+      ) {
         throw new Error('Invalid snapshot writer selection.');
+      }
       nameSchema.parse(req.job);
-      if (req.baseline) MetadataSnapshot.assertReceipt(req.baseline, store, req.partition);
+      if (req.baseline) {
+        MetadataSnapshot.assertReceipt(req.baseline, store, req.partition);
+      }
       snapshotRequirements.set(req.partition, req);
     }
     if (
@@ -160,24 +173,31 @@ export async function mergeWorkerArchives(
           p[4] !== store.codec.options.context[4] &&
           !snapshotRequirements.has(p[0]),
       )
-    )
+    ) {
       throw new Error('Missing complete snapshot writer selection.');
+    }
     for (const input of inputs) {
       nameSchema.parse(input.job);
-      if (jobs.has(input.job) || input.job !== input.context[4])
+      if (jobs.has(input.job) || input.job !== input.context[4]) {
         throw new Error('Unbound/duplicate merge producer.');
+      }
       jobs.add(input.job);
-      for (const id of input.authorizedSnapshots!)
-        if (snapshotRequirements.get(id)?.job !== input.job)
+      for (const id of input.authorizedSnapshots!) {
+        if (snapshotRequirements.get(id)?.job !== input.job) {
           throw new Error('Snapshot authorization mismatch.');
+        }
+      }
     }
     signal.throwIfAborted();
     const max = options.maxDirectoryEntries ?? 100000;
-    if (!Number.isSafeInteger(max) || max < 1)
+    if (!Number.isSafeInteger(max) || max < 1) {
       throw new Error('Invalid directory entry allowance.');
+    }
     stage = await WorkerStage.create(store, options.budget);
   } catch (error) {
-    for (const input of inputs) input.source.destroy();
+    for (const input of inputs) {
+      input.source.destroy();
+    }
     throw error;
   }
   const advance = async (c: WorkerMergeCursor) => {
@@ -185,8 +205,9 @@ export async function mergeWorkerArchives(
   };
   const expectControl = (c: WorkerMergeCursor, tag: string, path?: string) => {
     const r = control(c);
-    if (r[0] !== tag || (path !== undefined && r[2] !== path))
+    if (r[0] !== tag || (path !== undefined && r[2] !== path)) {
       throw new Error('Unexpected merge frontier ' + tag);
+    }
     return r;
   };
   let selected: (c: WorkerMergeCursor) => boolean = () => false;
@@ -196,11 +217,14 @@ export async function mergeWorkerArchives(
       partition = store.codec.options.model.owner(path),
       handling = partition[5];
     const sorted = [...eligible].sort((a, b) => {
-        if (handling === 'choose-worker-entry')
+        if (handling === 'choose-worker-entry') {
           return a.input.job < b.input.job ? -1 : a.input.job > b.input.job ? 1 : 0;
+        }
         const ah = a.head,
           bh = b.head;
-        if (ah?.type !== 'file' || bh?.type !== 'file') throw new Error('Missing file frontier.');
+        if (ah?.type !== 'file' || bh?.type !== 'file') {
+          throw new Error('Missing file frontier.');
+        }
         return (
           bh.file.header.mtimeMs - ah.file.header.mtimeMs ||
           order.indexOf(a.input.job) - order.indexOf(b.input.job)
@@ -212,19 +236,24 @@ export async function mergeWorkerArchives(
     try {
       for (const c of group) {
         const h = c.head;
-        if (h?.type !== 'file' || h.file.path !== path) throw new Error('Unaligned merge file.');
+        if (h?.type !== 'file' || h.file.path !== path) {
+          throw new Error('Unaligned merge file.');
+        }
         const header = h.file.header;
-        if (c === chosen) pending = await stage.write(h.file, signal);
-        else
+        if (c === chosen) {
+          pending = await stage.write(h.file, signal);
+        } else {
           for await (const b of h.file.body) {
             void b;
             signal.throwIfAborted();
           }
+        }
         // Body acknowledgement precedes the independently validated metadata rendezvous.
         await advance(c);
         const meta = expectControl(c, 'file-meta');
-        if (selected(c))
+        if (selected(c)) {
           candidates.push([c.input.job, String(meta[3]), header.size, header.mtimeMs, header.mode]);
+        }
       }
       if (chosen) {
         const launcher = normalizeMode(store.codec.options.model.tuple[2], path, 0o644) === 0o755;
@@ -232,16 +261,21 @@ export async function mergeWorkerArchives(
           handling === 'choose-worker-entry' || partition[3] === 'single-writer'
             ? candidates.find((c) => c[0] === chosen.input.job)!
             : reduceOrdinary(candidates, order, options.ordinaryPolicy, launcher);
-        if (!reduced || !pending) throw new Error('Missing selected ordinary file.');
+        if (!reduced || !pending) {
+          throw new Error('Missing selected ordinary file.');
+        }
         if (
           handling === 'choose-worker-entry' &&
           candidates.some((c) => c[1] !== reduced[1] || c[2] !== reduced[2])
-        )
+        ) {
           warning('Selected worker entry at ' + path);
+        }
         await pending.finish(reduced[1], reduced[2], reduced[4], reduced[3]);
         await activity.member('upsert', path, partition[0], signal);
       }
-      for (const c of group) await advance(c);
+      for (const c of group) {
+        await advance(c);
+      }
     } finally {
       await pending?.close();
     }
@@ -270,7 +304,9 @@ export async function mergeWorkerArchives(
     }
     while (true) {
       const ready = group.filter((c) => c.head?.type === 'file');
-      if (!ready.length) break;
+      if (!ready.length) {
+        break;
+      }
       const path = ready
         .map((c) => (c.head!.type === 'file' ? c.head!.file.path : ''))
         .sort((a, b) => compareName(baseName(a), baseName(b)))[0];
@@ -281,7 +317,9 @@ export async function mergeWorkerArchives(
     }
     while (true) {
       const ready = group.filter((c) => control(c)[0] === 'dir-open');
-      if (!ready.length) break;
+      if (!ready.length) {
+        break;
+      }
       const child = ready
         .map((c) => String(control(c)[2]))
         .sort((a, b) => compareName(baseName(a), baseName(b)))[0];
@@ -290,7 +328,9 @@ export async function mergeWorkerArchives(
         child,
       );
     }
-    for (const c of group) expectControl(c, 'dir-close', path);
+    for (const c of group) {
+      expectControl(c, 'dir-close', path);
+    }
     if (emptySelected) {
       await stage.ensure(
         store.codec.options.model.owner(path + '/.workspace-directory-probe')[0],
@@ -298,7 +338,9 @@ export async function mergeWorkerArchives(
       );
       await activity.ensure(signal);
     }
-    for (const c of group) await advance(c);
+    for (const c of group) {
+      await advance(c);
+    }
     await stage.leave(path, signal);
     await activity.leave(path, signal);
   };
@@ -322,22 +364,29 @@ export async function mergeWorkerArchives(
         await projection?.enter(String(r[2]), signal);
       } else if (r[0] === 'dir-close') {
         const path = stack.pop();
-        if (path !== r[2]) throw new Error('Unbalanced usage projection.');
+        if (path !== r[2]) {
+          throw new Error('Unbalanced usage projection.');
+        }
         await projection?.leave(path, signal);
-      } else if (r[0] === 'used-unit-open')
+      } else if (r[0] === 'used-unit-open') {
         await projection?.unitOpen(unitSchema.parse(r.slice(2, 5)), 'used', signal);
-      else if (r[0] === 'used-unit-close') await projection?.unitClose(signal);
-      else if (r[0] === 'used')
+      } else if (r[0] === 'used-unit-close') {
+        await projection?.unitClose(signal);
+      } else if (r[0] === 'used') {
         await projection?.member(
           'used',
           joinPath(stack[stack.length - 1], String(r[2])),
           String(r[3]),
           signal,
         );
-      else throw new Error('Unexpected usage frontier.');
+      } else {
+        throw new Error('Unexpected usage frontier.');
+      }
       await advance(c);
     }
-    if (stack.length) throw new Error('Incomplete usage projection.');
+    if (stack.length) {
+      throw new Error('Incomplete usage projection.');
+    }
     projection?.seal(signal);
   };
   try {
@@ -365,7 +414,9 @@ export async function mergeWorkerArchives(
     }
     while (cursors.some((c) => c.head)) {
       const ready = cursors.filter((c) => control(c)[0] === 'channel-open');
-      if (!ready.length) throw new Error('Invalid global channel frontier.');
+      if (!ready.length) {
+        throw new Error('Invalid global channel frontier.');
+      }
       const key = Math.min(
           ...ready.map((c) =>
             globalChannelKey(store.codec.options.model, c.snapshots, Number(control(c)[1])),
@@ -381,13 +432,18 @@ export async function mergeWorkerArchives(
           ? (c) => order.includes(c.input.job)
           : (c) => snapshotRequirements.get(partition!)?.job === c.input.job;
       if (partition) {
-        if (group.filter(selected).length !== 1)
+        if (group.filter(selected).length !== 1) {
           throw new Error('Ambiguous snapshot writer contribution.');
+        }
         selectedSnapshots.add(partition);
       }
-      for (const c of group) await advance(c);
+      for (const c of group) {
+        await advance(c);
+      }
       if (key === 1) {
-        for (const c of group) await usage(c);
+        for (const c of group) {
+          await usage(c);
+        }
       } else {
         activity = await ActivityProjection.create(
           store,
@@ -408,24 +464,31 @@ export async function mergeWorkerArchives(
         await advance(c);
         if (control(c)[0] === 'complete') {
           await advance(c);
-          if (c.head) throw new Error('Trailing archive event.');
+          if (c.head) {
+            throw new Error('Trailing archive event.');
+          }
         }
       }
     }
     const summaries = await Promise.all(cursors.map((c) => c.reader.completion));
-    for (const req of snapshotRequirements.values())
+    for (const req of snapshotRequirements.values()) {
       if (!selectedSnapshots.has(req.partition)) {
-        if (inputs.some((input) => input.job === req.job))
+        if (inputs.some((input) => input.job === req.job)) {
           throw new Error('Admitted snapshot writer omitted selected partition ' + req.partition);
-        if (req.required) throw new Error('Missing required snapshot writer ' + req.job);
-        if (!req.baseline || req.baseline.partition !== req.partition)
+        }
+        if (req.required) {
+          throw new Error('Missing required snapshot writer ' + req.job);
+        }
+        if (!req.baseline || req.baseline.partition !== req.partition) {
           throw new Error('Missing prepared optional snapshot baseline.');
+        }
         await withAbort(
           req.baseline.verify(signal, options.budget, options.maxDirectoryEntries),
           signal,
         );
         inheritedSnapshots.push(req.baseline);
       }
+    }
     const partitions = await stage.seal(signal);
     signal.throwIfAborted();
     const result: WorkerMergeResult = {
@@ -457,7 +520,9 @@ export async function mergeWorkerArchives(
         } catch (error) {
           errors.push(error);
         }
-        if (errors.length) throw new AggregateError(errors, 'Worker merge cleanup failed.');
+        if (errors.length) {
+          throw new AggregateError(errors, 'Worker merge cleanup failed.');
+        }
       },
     };
     completedInputs.set(result, {
@@ -471,7 +536,9 @@ export async function mergeWorkerArchives(
     return Object.freeze(result);
   } catch (error) {
     controller.abort(error);
-    for (const input of inputs) input.source.destroy();
+    for (const input of inputs) {
+      input.source.destroy();
+    }
     await Promise.all(cursors.map((c) => c.reader.close()));
     const cleanups = await Promise.allSettled(projections.map((p) => p.dispose()));
     const failures = cleanups
@@ -482,10 +549,11 @@ export async function mergeWorkerArchives(
     } catch (cleanup) {
       failures.push(cleanup);
     }
-    if (failures.length)
+    if (failures.length) {
       throw new AggregateError([error, ...failures], 'Worker merge failed; cleanup blocked.', {
         cause: error,
       });
+    }
     throw error;
   }
 }

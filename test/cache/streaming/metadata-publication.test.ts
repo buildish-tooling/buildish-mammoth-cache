@@ -32,7 +32,9 @@ const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [],
   sources: MetadataPublicationSource[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const s of sources.splice(0)) await s.dispose();
+  for (const s of sources.splice(0)) {
+    await s.dispose();
+  }
   for (const f of fixtures.splice(0)) {
     expect(f.budget.retained).toBe(0);
     await f.close();
@@ -58,12 +60,13 @@ async function fixture(files = 2) {
   const f = await installFixture('maven', { model });
   fixtures.push(f);
   await f.store.initialize(f.bindings);
-  for (let i = 0; i < files; i++)
+  for (let i = 0; i < files; i++) {
     await f.files('', {
       ['data/shared/' + i]: 'data-' + i,
       ['cache/shared/' + i]: 'cache-' + i,
       ['state/shared/' + i]: 'state-' + i,
     });
+  }
   const captureBefore = { ...f.store.root.work },
     captureCodecBefore = { ...recordEncodingWork };
   const timingLogs: string[] = [];
@@ -107,8 +110,9 @@ it('publishes descriptor-only multi-root objects, returning each before the next
       const p = key.includes('-pstate-')
         ? 'state'
         : JSON.parse(await readFile(paths[0], 'utf8'))[3][2];
-      if (p === 'state')
+      if (p === 'state') {
         expect(await readFile(f.store.root.resolve('data/shared/0'), 'utf8')).toBe('data-0');
+      }
     } else {
       expect(moves).toHaveBeenCalledTimes(6);
       expect(await readFile(f.store.root.resolve('state/shared/0'), 'utf8')).toBe('state-0');
@@ -131,7 +135,9 @@ it.each(['null', 'throw', 'lost'] as const)(
     const f = await fixture(),
       warnings: string[] = [];
     f.save.mockImplementation(async () => {
-      if (mode !== 'null') throw new Error(mode);
+      if (mode !== 'null') {
+        throw new Error(mode);
+      }
       return null as unknown as number;
     });
     expect(
@@ -144,8 +150,9 @@ it.each(['null', 'throw', 'lost'] as const)(
     expect(f.restore).not.toHaveBeenCalled();
     expect(f.lookup).not.toHaveBeenCalled();
     expect(warnings).toHaveLength(1);
-    for (const p of ['data', 'cache', 'state'])
+    for (const p of ['data', 'cache', 'state']) {
       expect(await readFile(f.store.root.resolve(p + '/shared/0'), 'utf8')).toBe(p + '-0');
+    }
   },
 );
 it.each(['null', 'throw', 'lost'] as const)(
@@ -154,8 +161,12 @@ it.each(['null', 'throw', 'lost'] as const)(
     const f = await fixture();
     let calls = 0;
     f.save.mockImplementation(async () => {
-      if (++calls < 3) return 1;
-      if (mode !== 'null') throw new Error(mode);
+      if (++calls < 3) {
+        return 1;
+      }
+      if (mode !== 'null') {
+        throw new Error(mode);
+      }
       return null as unknown as number;
     });
     expect((await publishMetadataBase(f.source, f.backend, request)).outcome).toBe('abandoned');
@@ -229,12 +240,15 @@ it('returns earlier roots after partial evacuation and cancellation', async () =
     rename = f.store.root.renameAbsent.bind(f.store.root);
   let calls = 0;
   vi.spyOn(f.store.root, 'renameAbsent').mockImplementation(async (...args) => {
-    if (++calls === 2) throw new Error('EXDEV');
+    if (++calls === 2) {
+      throw new Error('EXDEV');
+    }
     return rename(...args);
   });
   await expect(publishMetadataBase(f.source, f.backend, request)).rejects.toThrow('EXDEV');
-  for (const p of ['data', 'cache'])
+  for (const p of ['data', 'cache']) {
     expect(await readFile(f.store.root.resolve(p + '/shared/0'), 'utf8')).toBe(p + '-0');
+  }
   expect(f.save).not.toHaveBeenCalled();
 });
 it('returns every safe independent root while retaining an occupied return root and actionable stage paths', async () => {
@@ -256,15 +270,18 @@ it('treats empty seed partitions as explicit empties and supports admitted prior
   const empty = await fixture(0);
   const result = await publishMetadataBase(empty.source, empty.backend, request);
   expect(result.outcome).toBe('published');
-  if (result.outcome === 'published')
+  if (result.outcome === 'published') {
     expect(result.generation[8]).toEqual([
       ['empty', 'data'],
       ['empty', 'state'],
     ]);
+  }
   expect(empty.save).toHaveBeenCalledTimes(1);
   const f = await fixture(),
     first = await publishMetadataBase(f.source, f.backend, request);
-  if (first.outcome !== 'published') throw new Error('fixture');
+  if (first.outcome !== 'published') {
+    throw new Error('fixture');
+  }
   const source = await MetadataPublicationSource.capture(f.store, '', { budget: f.budget });
   sources.push(source);
   const before = f.store.root.work.renames;
@@ -299,8 +316,11 @@ it('keeps relocation/return work fixed as descendants grow, charging capture, na
     let inputControlBytes = 0;
     const save = sdk.backend.saveCache.bind(sdk.backend);
     sdk.backend.saveCache = async (paths, key, options) => {
-      for (const file of paths)
-        if (file.endsWith('.json')) inputControlBytes += (await stat(file)).size;
+      for (const file of paths) {
+        if (file.endsWith('.json')) {
+          inputControlBytes += (await stat(file)).size;
+        }
+      }
       return save(paths, key, options);
     };
     await publishMetadataBase(f.source, sdk.backend, request);
@@ -332,8 +352,9 @@ it('keeps relocation/return work fixed as descendants grow, charging capture, na
         resolvedArchiveRoots: call.members?.length ?? 0,
       });
     }
-    for (const object of sdk.objects.values())
+    for (const object of sdk.objects.values()) {
       compressedArchiveBytes += (await stat(object.directory + '/cache.tgz')).size;
+    }
     const sdkWork = {
       calls: sdk.calls.length,
       inputRegularFiles: 3 * count + 3,
@@ -445,7 +466,9 @@ it('folds candidate coordinate groups across selected physical sources, excludin
     backend,
     request,
   );
-  if (result.outcome !== 'published') throw new Error('fixture');
+  if (result.outcome !== 'published') {
+    throw new Error('fixture');
+  }
   expect(result.generation[9]).toEqual([['data', 'state']]);
   expect(await readFile(f.store.root.resolve('repository/stale/state'), 'utf8')).toBe('stale');
   expect(
@@ -473,16 +496,21 @@ it.each(['null', 'throw', 'lost'] as const)(
     const f = await fixture();
     let calls = 0;
     f.save.mockImplementation(async () => {
-      if (++calls === 1) return 1;
-      if (mode !== 'null') throw new Error(mode);
+      if (++calls === 1) {
+        return 1;
+      }
+      if (mode !== 'null') {
+        throw new Error(mode);
+      }
       return null as unknown as number;
     });
     expect((await publishMetadataBase(f.source, f.backend, request)).outcome).toBe('abandoned');
     expect(f.save).toHaveBeenCalledTimes(2);
     expect(f.restore).not.toHaveBeenCalled();
     expect(f.lookup).not.toHaveBeenCalled();
-    for (const p of ['data', 'cache', 'state'])
+    for (const p of ['data', 'cache', 'state']) {
       expect(await readFile(f.store.root.resolve(p + '/shared/0'), 'utf8')).toBe(p + '-0');
+    }
   },
 );
 it('owns partial evacuation before cancellation and returns earlier independent roots', async () => {
@@ -495,8 +523,9 @@ it('owns partial evacuation before cancellation and returns earlier independent 
   });
   sources.push(source);
   vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-    if (point === 'metadata-source-evacuated')
+    if (point === 'metadata-source-evacuated') {
       controller.abort(new Error('cancelled mid-evacuation'));
+    }
   });
   await expect(publishMetadataBase(source, f.backend, request)).rejects.toThrow(
     'cancelled mid-evacuation',
@@ -511,7 +540,9 @@ it('resolves success-then-after-stat failures on the reverse attempt without los
   let calls = 0;
   vi.spyOn(f.store.root, 'renameAbsent').mockImplementation(async (...args) => {
     const result = await rename(...args);
-    if (++calls <= 2) throw new Error('after stat failed');
+    if (++calls <= 2) {
+      throw new Error('after stat failed');
+    }
     return result;
   });
   await expect(publishMetadataBase(f.source, f.backend, request)).rejects.toThrow(

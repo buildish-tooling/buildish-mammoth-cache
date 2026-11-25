@@ -34,8 +34,12 @@ const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 const contexts: MetadataInstallContext[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const c of contexts.splice(0)) await c.dispose();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const c of contexts.splice(0)) {
+    await c.dispose();
+  }
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture(
   partitions = 2,
@@ -78,7 +82,7 @@ async function fixture(
     await mkdir(f.store.root.resolve(payload), { recursive: true });
     const descriptor = createMetadataDescriptor(model, [model.family, model.id, id, h, h, h]);
     await writeFile(f.store.root.resolve(root + '/envelope.json'), descriptor.bytes);
-    for (let i = 0; i < units; i++)
+    for (let i = 0; i < units; i++) {
       await f.files(payload, {
         [(options.snapshot ? 'state/' : 'repository/') +
         'shared/unit-' +
@@ -86,6 +90,7 @@ async function fixture(
         '/file-' +
         id]: 'new-' + id + '-' + i,
       });
+    }
     entries.push(['object', id, descriptor.reference]);
     materialized.push({ partition: id, root });
   }
@@ -117,11 +122,13 @@ function difference(after: ReturnType<typeof nativeWork>, before: ReturnType<typ
 }
 it('installs multiple native projections using original index selectors and no hash/preimage catalogue', async () => {
   const f = await fixture(2, 3);
-  for (const id of f.ids)
-    for (let i = 0; i < f.units; i++)
+  for (const id of f.ids) {
+    for (let i = 0; i < f.units; i++) {
       await f.files('', {
         ['repository/shared/unit-' + String(i).padStart(3, '0') + '/file-' + id]: 'old',
       });
+    }
+  }
   const c = await discover(f),
     builds = f.store.root.work.indexBuilds;
   const plan = await freezeMetadataInstallPlan(f.store, c, f.budget);
@@ -129,8 +136,8 @@ it('installs multiple native projections using original index selectors and no h
   expect(f.store.root.work.indexBuilds - builds).toBe(1); // current only; native source indexes are borrowed
   expect(c.work.memberRows).toBe(0);
   await executeInstall(f.store, plan, f.budget, { batchOperations: 2 });
-  for (const id of f.ids)
-    for (let i = 0; i < f.units; i++)
+  for (const id of f.ids) {
+    for (let i = 0; i < f.units; i++) {
       expect(
         await readFile(
           f.store.root.resolve(
@@ -139,6 +146,8 @@ it('installs multiple native projections using original index selectors and no h
           'utf8',
         ),
       ).toBe('new-' + id + '-' + i);
+    }
+  }
   expect(f.store.root.work.bodyHashCalls).toBe(0);
   expect(f.budget.retained).toBe(0);
   expect(() => c.take()).toThrow('closed');
@@ -264,9 +273,13 @@ it.each(['state', 'cancel', 'changed-current'])(
       state[4] = 'prepare-failed';
       await f.store.updateState(state);
     }
-    if (kind === 'changed-current') await f.files('', { 'state/extra': 'extra' });
+    if (kind === 'changed-current') {
+      await f.files('', { 'state/extra': 'extra' });
+    }
     const controller = new AbortController();
-    if (kind === 'cancel') controller.abort(new Error('cancel early'));
+    if (kind === 'cancel') {
+      controller.abort(new Error('cancel early'));
+    }
     await expect(
       executeInstall(f.store, plan, f.budget, { signal: controller.signal }),
     ).rejects.toThrow();
@@ -319,11 +332,13 @@ it('counts complete four-partition/shared-coordinate discovery, install and clea
   const result = [];
   for (const units of [4, 16]) {
     const f = await fixture(4, units);
-    for (const id of f.ids)
-      for (let i = 0; i < units; i++)
+    for (const id of f.ids) {
+      for (let i = 0; i < units; i++) {
         await f.files('', {
           ['repository/shared/unit-' + String(i).padStart(3, '0') + '/file-' + id]: 'old-' + id,
         });
+      }
+    }
     const nativeBefore = { ...f.store.root.work },
       codecBefore = { ...recordEncodingWork };
     const c = await discover(f),
@@ -358,13 +373,15 @@ it('counts complete four-partition/shared-coordinate discovery, install and clea
     'metadataRowsRead',
     'metadataRowsWritten',
     'cleanupEntries',
-  ] as const)
+  ] as const) {
     expect(result[1].work[key]).toBeLessThan(
       result[0].work[key] * 5 +
         (key === 'scratchReadBytes' || key === 'scratchWriteBytes' ? 65536 : 0),
     );
-  for (const key of Object.keys(result[0].codec))
+  }
+  for (const key of Object.keys(result[0].codec)) {
     expect(result[1].codec[key]).toBeLessThan(result[0].codec[key] * 5);
+  }
   await writeFile(
     'build/ls2b-current-metadata-install-counts.json',
     JSON.stringify(result, null, 2) + '\n',
@@ -374,8 +391,9 @@ it('counts complete four-partition/shared-coordinate discovery, install and clea
 it('uses one current-root selector with no subtree drain as snapshot descendants grow', async () => {
   for (const count of [4, 16]) {
     const f = await fixture(1, 0, { snapshot: true });
-    for (let i = 0; i < count; i++)
+    for (let i = 0; i < count; i++) {
       await f.files('', { ['state/shared/unit-' + i + '/old']: 'old' });
+    }
     const c = await discover(f),
       plan = await freezeMetadataInstallPlan(f.store, c, f.budget);
     const native = f.store.root.work.nativeWalks,
@@ -398,7 +416,9 @@ it.each(['old-backup', 'new-installed'])(
     const f = await fixture(1, 2, {
       snapshot: true,
       fail: async (name) => {
-        if (!armed || fired) return;
+        if (!armed || fired) {
+          return;
+        }
         if (
           (phase === 'old-backup' && name === 'install-old-backed-up') ||
           (phase === 'new-installed' && name === 'install-rename-before-stat' && ++renames === 2)
@@ -416,12 +436,13 @@ it.each(['old-backup', 'new-installed'])(
       'injected metadata rename failure',
     );
     expect(fired).toBe(true);
-    if (phase === 'old-backup')
+    if (phase === 'old-backup') {
       expect(await readFile(f.store.root.resolve('state/old'), 'utf8')).toBe('old');
-    else
+    } else {
       expect(await readFile(f.store.root.resolve('state/shared/unit-000/file-p0'), 'utf8')).toBe(
         'new-p0-0',
       );
+    }
     expect(() => c.take()).toThrow('closed');
     expect(f.budget.retained).toBe(0);
   },

@@ -33,6 +33,7 @@ interface Workflow {
     { needs?: string[]; if?: string; steps: { uses?: string; with?: Record<string, string> }[] }
   >;
 }
+
 describe('distributed Gradle workflow examples', () => {
   it.each(['gradle-distributed.yml', 'gradle-optional-metadata-writer.yml'])(
     'uses one compatible partition policy in every participating job in %s',
@@ -75,7 +76,9 @@ describe('distributed Gradle workflow examples', () => {
             expect(config.dependentJobs).not.toContain(writer);
             expect(config.dependentJobs).toEqual(['build']);
             expect(workflow.jobs[writer]!.if).toContain('inputs.run_metadata');
-          } else expect(config.dependentJobs).toContain(writer);
+          } else {
+            expect(config.dependentJobs).toContain(writer);
+          }
         }
       }
     },

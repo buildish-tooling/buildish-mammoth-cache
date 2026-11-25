@@ -44,6 +44,7 @@ export class MetadataSnapshot {
   #active = true;
   #borrowers = 0;
   #retired = false;
+
   private constructor(
     readonly store: OwnedStore,
     readonly partition: string,
@@ -57,22 +58,27 @@ export class MetadataSnapshot {
     snapshots.add(this);
     Object.freeze(this);
   }
+
   static assertReceipt(snapshot: MetadataSnapshot, store: OwnedStore, partition: string): void {
     if (
       !snapshots.has(snapshot) ||
       !snapshot.#active ||
       snapshot.store !== store ||
       snapshot.partition !== partition
-    )
+    ) {
       throw new Error('Unavailable independent metadata snapshot.');
+    }
   }
+
   assertBound(store: OwnedStore, partition: string): void {
     MetadataSnapshot.assertReceipt(this, store, partition);
   }
+
   sourceDescriptor(): SnapshotDescriptor {
     this.assertBound(this.store, this.partition);
     return structuredClone(this.descriptor);
   }
+
   borrow(): () => void {
     this.assertBound(this.store, this.partition);
     this.#borrowers++;
@@ -84,6 +90,7 @@ export class MetadataSnapshot {
       }
     };
   }
+
   async verify(
     signal: AbortSignal,
     budget = this.options.budget,
@@ -91,8 +98,9 @@ export class MetadataSnapshot {
   ): Promise<void> {
     this.assertBound(this.store, this.partition);
     signal.throwIfAborted();
-    if (budget !== this.options.budget || max !== (this.options.maxDirectoryEntries ?? 100000))
+    if (budget !== this.options.budget || max !== (this.options.maxDirectoryEntries ?? 100000)) {
       throw new Error('Snapshot policy/budget mismatch.');
+    }
     const parent = await this.store.root.stat(parentPath(this.nativeRoot)),
       root = await this.store.root.stat(this.nativeRoot);
     if (
@@ -101,18 +109,22 @@ export class MetadataSnapshot {
       !sameObject(parent, this.descriptor[2]) ||
       parent[6] !== this.descriptor[2][6] ||
       !sameNative(root, this.descriptor[3], true)
-    )
+    ) {
       throw new Error('Independent snapshot root/parent changed.');
+    }
     signal.throwIfAborted();
   }
+
   node(offset: number) {
     this.assertBound(this.store, this.partition);
     return indexedNode(this.scratch, offset);
   }
+
   children(node: Parameters<typeof indexedEntries>[1]) {
     this.assertBound(this.store, this.partition);
     return indexedEntries(this.scratch, node);
   }
+
   static async copy(
     source: MetadataPublicationSource | WorkerNativeIndex,
     partition: string,
@@ -120,16 +132,20 @@ export class MetadataSnapshot {
     options: NativeOperationOptions,
   ): Promise<MetadataSnapshot> {
     const worker = source instanceof WorkerNativeIndex;
-    if (worker) WorkerNativeIndex.assert(source);
-    else source.assert();
+    if (worker) {
+      WorkerNativeIndex.assert(source);
+    } else {
+      source.assert();
+    }
     const store = source.store,
       max = options.maxDirectoryEntries ?? 100000;
     const sourceBudget = worker ? source.budget : source.options.budget,
       sourceMax = worker
         ? source.maxDirectoryEntries
         : (source.options.maxDirectoryEntries ?? 100000);
-    if (sourceBudget !== options.budget || sourceMax !== max)
+    if (sourceBudget !== options.budget || sourceMax !== max) {
       throw new Error('Snapshot copy policy/budget mismatch.');
+    }
     const root = worker ? source.root(partition) : source.index,
       nativeRoot = worker ? source.nativeRoot(partition) : source.nativeRoot;
     const signal = options.signal ?? new AbortController().signal;
@@ -138,20 +154,28 @@ export class MetadataSnapshot {
     return MetadataSnapshot.produce(store, partition, origin, options, async (target, accept) => {
       async function visit(offset: number, physicalRoot = false): Promise<void> {
         signal.throwIfAborted();
-        if (worker) WorkerNativeIndex.assert(source, store);
-        else source.assert();
+        if (worker) {
+          WorkerNativeIndex.assert(source, store);
+        } else {
+          source.assert();
+        }
         const lease = await source.node(offset);
         try {
           const node = lease.node;
-          if (!physicalRoot && !(nodeMask(node) & bit)) return;
+          if (!physicalRoot && !(nodeMask(node) & bit)) {
+            return;
+          }
           const path = node[2],
             expected = node[3] as NativeIdentity,
             input = path ? joinPath(nativeRoot, path) : nativeRoot,
             output = path ? target + '/' + path : target;
-          if (node[1] === 'protected') throw new Error('Protected member in independent snapshot.');
+          if (node[1] === 'protected') {
+            throw new Error('Protected member in independent snapshot.');
+          }
           if (node[1] === 'file') {
-            if (store.codec.options.model.owner(path)[0] !== partition)
+            if (store.codec.options.model.owner(path)[0] !== partition) {
               throw new Error('Snapshot file ownership mismatch.');
+            }
             store.root.work.opens++;
             const handle = await open(
               store.root.resolve(output),
@@ -169,15 +193,17 @@ export class MetadataSnapshot {
                 bytes += chunk.length;
                 store.root.work.writeBytes += chunk.length;
               }
-              if (BigInt(bytes) !== BigInt(expected[5]))
+              if (BigInt(bytes) !== BigInt(expected[5])) {
                 throw new Error('Snapshot copy length mismatch.');
+              }
               await handle.chmod(expected[6] & 0o777);
               store.root.work.modeChanges++;
               await handle.utimes(Number(expected[7]) / 1e9, Number(expected[8]) / 1e9);
               store.root.work.stats++;
               const native = nativeIdentity(await handle.stat({ bigint: true }));
-              if (native[3] !== store.root.binding[3] || BigInt(native[5]) !== BigInt(bytes))
+              if (native[3] !== store.root.binding[3] || BigInt(native[5]) !== BigInt(bytes)) {
                 throw new Error('Invalid copied snapshot native output.');
+              }
               await handle.close();
               await accept(['file', path, native]);
             } finally {
@@ -191,10 +217,16 @@ export class MetadataSnapshot {
             }
             const created = (await store.root.stat(output))!;
             await accept(['dir-open', path, created]);
-            for await (const edge of source.children(node))
-              if (edge[1] === 'file') await visit(edge[2]);
-            for await (const edge of source.children(node))
-              if (edge[1] === 'directory') await visit(edge[2]);
+            for await (const edge of source.children(node)) {
+              if (edge[1] === 'file') {
+                await visit(edge[2]);
+              }
+            }
+            for await (const edge of source.children(node)) {
+              if (edge[1] === 'directory') {
+                await visit(edge[2]);
+              }
+            }
             await phase.leave(input, expected);
             await chmod(store.root.resolve(output), expected[6] & 0o777);
             store.root.work.modeChanges++;
@@ -207,6 +239,7 @@ export class MetadataSnapshot {
       await visit(root, true);
     });
   }
+
   static empty(
     store: OwnedStore,
     partition: string,
@@ -219,6 +252,7 @@ export class MetadataSnapshot {
       await accept(['dir-close', '', native]);
     });
   }
+
   private static async produce(
     store: OwnedStore,
     partition: string,
@@ -228,8 +262,9 @@ export class MetadataSnapshot {
   ): Promise<MetadataSnapshot> {
     if (
       store.codec.options.model.partitions.find((p) => p[0] === partition)?.[3] !== 'single-writer'
-    )
+    ) {
       throw new Error('Independent snapshot requires authoritative partition.');
+    }
     options = Object.freeze({ ...options });
     const signal = options.signal ?? new AbortController().signal,
       parent = store.prefix + 'snapshots/' + randomUUID(),
@@ -250,8 +285,9 @@ export class MetadataSnapshot {
         async (accept) => {
           await produce(target, async (value) => {
             const row = value as Value[];
-            if (row[0] === 'file')
+            if (row[0] === 'file') {
               payloadBytes = add(payloadBytes, Number((row[2] as NativeIdentity)[5]));
+            }
             await accept({ value, start: ordinal, end: ++ordinal, record: ordinal });
           });
         },
@@ -282,9 +318,11 @@ export class MetadataSnapshot {
         [
           () => scratch?.close(),
           async () => {
-            if (owner) await retireOwnedDirectory(store, parent, owner, options.budget);
-            else if (await store.root.stat(parent))
+            if (owner) {
+              await retireOwnedDirectory(store, parent, owner, options.budget);
+            } else if (await store.root.stat(parent)) {
               throw new Error('Unresolved snapshot copy retained at ' + store.root.resolve(parent));
+            }
           },
         ],
         error,
@@ -292,6 +330,7 @@ export class MetadataSnapshot {
       throw error;
     }
   }
+
   /** Current handoff cleanup only: checks exact private endpoints, grants no source/index authority. */
   static async retireHandoff(
     store: OwnedStore,
@@ -310,13 +349,15 @@ export class MetadataSnapshot {
       !sameObject(actualParent, descriptor[2]) ||
       actualParent[6] !== descriptor[2][6] ||
       !sameNative(actualRoot, descriptor[3], true)
-    )
+    ) {
       throw new Error(
         'Snapshot cleanup ownership changed; retained at ' + store.root.resolve(parent),
       );
+    }
     options.signal?.throwIfAborted();
     await retireOwnedDirectory(store, parent, descriptor[2], options.budget);
   }
+
   /** Fresh post admission of the actual independent root; descriptor bits grant no source capability. */
   static async admit(
     store: OwnedStore,
@@ -338,8 +379,9 @@ export class MetadataSnapshot {
           !sameObject(parent, descriptor[2]) ||
           parent[6] !== descriptor[2][6] ||
           !sameNative(root, descriptor[3], true)
-        )
+        ) {
           throw new Error('Persisted snapshot root/parent changed.');
+        }
       };
       await endpoint();
       let ordinal = 0,
@@ -359,11 +401,13 @@ export class MetadataSnapshot {
               event.tag === 'protected-child' ||
               event.identity[3] !== store.root.binding[3] ||
               (event.tag === 'file' && event.links !== '1')
-            )
+            ) {
               throw new Error('Invalid independent snapshot native member.');
+            }
             if (event.tag === 'file') {
-              if (store.codec.options.model.owner(event.path)[0] !== partition)
+              if (store.codec.options.model.owner(event.path)[0] !== partition) {
                 throw new Error('Independent snapshot partition mismatch.');
+              }
               payloadBytes = add(payloadBytes, Number(event.identity[5]));
             }
             const value: Value = [
@@ -397,9 +441,14 @@ export class MetadataSnapshot {
       throw error;
     }
   }
+
   async retire(): Promise<void> {
-    if (this.#retired) return;
-    if (this.#borrowers) throw new Error('Independent snapshot hierarchy still borrowed.');
+    if (this.#retired) {
+      return;
+    }
+    if (this.#borrowers) {
+      throw new Error('Independent snapshot hierarchy still borrowed.');
+    }
     await settleNativeCleanup([
       () => this.dispose(),
       () =>
@@ -412,9 +461,14 @@ export class MetadataSnapshot {
     ]);
     this.#retired = true;
   }
+
   async dispose(): Promise<void> {
-    if (this.#borrowers) throw new Error('Independent snapshot hierarchy still borrowed.');
-    if (!this.#active) return;
+    if (this.#borrowers) {
+      throw new Error('Independent snapshot hierarchy still borrowed.');
+    }
+    if (!this.#active) {
+      return;
+    }
     this.#active = false;
     await this.scratch.close();
   }

@@ -33,6 +33,7 @@ export interface BuildToolLifecycle {
   quiesce(input: ConsumerWindowInput): Promise<Reference | undefined>;
   removeKnownHooks(root: string): Promise<readonly string[]>;
 }
+
 export interface ConsumerWindowInput {
   readonly store: OwnedStore;
   readonly budget: WorkingBudget;
@@ -44,5 +45,6 @@ export interface ConsumerWindowInput {
   readonly clientTimeout: number;
   readonly exitGrace: number;
 }
+
 /** Always selected from the currently validated owner, including OLD-owner recovery. */
 export type LifecycleResolver = (tool: Context[7]) => Promise<BuildToolLifecycle>;

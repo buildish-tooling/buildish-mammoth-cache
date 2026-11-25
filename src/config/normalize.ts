@@ -91,10 +91,13 @@ export function normalizeSharedActionConfig(
 
 function parseDirectoryEntryLimit(input: string): number {
   const text = input.trim();
-  if (!text) return DEFAULT_MAX_DIRECTORY_ENTRIES;
+  if (!text) {
+    return DEFAULT_MAX_DIRECTORY_ENTRIES;
+  }
   const limit = Number(text);
-  if (!/^[0-9]+$/u.test(text) || !Number.isSafeInteger(limit) || limit < 1)
+  if (!/^[0-9]+$/u.test(text) || !Number.isSafeInteger(limit) || limit < 1) {
     throw new Error('cache-max-directory-entries must be a positive safe integer.');
+  }
   return limit;
 }
 

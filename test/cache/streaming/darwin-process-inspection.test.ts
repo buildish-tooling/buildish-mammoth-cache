@@ -43,7 +43,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 const self = '501 42 node /opt/node/bin/node mammoth.cjs\n';
 function table(line: string) {
@@ -113,7 +115,9 @@ it.each([
 });
 it('bounds partial storage and never retains the process catalogue', () => {
   const parser = new DarwinProcessTable(501, 42);
-  for (const byte of Buffer.from(self)) parser.push(Buffer.from([byte]));
+  for (const byte of Buffer.from(self)) {
+    parser.push(Buffer.from([byte]));
+  }
   for (let n = 0; n < 10000; n++) {
     parser.push(Buffer.from('501 99 node /node other\n'));
     expect(parser.bufferedBytes).toBe(0);
@@ -129,7 +133,9 @@ it('bounds partial storage and never retains the process catalogue', () => {
 it('decodes fragmented Unicode only after complete record and rejects invalid UTF8', () => {
   const bytes = Buffer.from(self + '501 99 java /space é/home/bin/java Other\n'),
     parser = new DarwinProcessTable(501, 42);
-  for (const byte of bytes) parser.push(Buffer.from([byte]));
+  for (const byte of bytes) {
+    parser.push(Buffer.from([byte]));
+  }
   expect(parser.finish()).toEqual({ remaining: false, uncertain: false });
   expect(() => new DarwinProcessTable(501, 42).push(Buffer.from([255, 10]))).toThrow();
 });
@@ -153,7 +159,9 @@ function fake(resistant: boolean) {
     f.emit('close', code);
   };
   f.kill = vi.fn((signal: string) => {
-    if (!resistant || signal === 'SIGKILL') f.close(null);
+    if (!resistant || signal === 'SIGKILL') {
+      f.close(null);
+    }
     return true;
   });
   return f;
@@ -180,16 +188,22 @@ it.each(['nonzero', 'error', 'bad-record', 'missing-lf'] as const)(
   'denies failed owned observation %s',
   async (kind) => {
     const f = child((f) => {
-      if (kind === 'error') f.emit('error', new Error('private diagnostic not logged'));
+      if (kind === 'error') {
+        f.emit('error', new Error('private diagnostic not logged'));
+      }
       f.stdout.write(
         kind === 'bad-record'
           ? 'bad\n'
           : actualSelf().trimEnd() + (kind === 'missing-lf' ? '' : '\n'),
       );
-      if (kind !== 'bad-record') f.close(kind === 'nonzero' ? 1 : 0);
+      if (kind !== 'bad-record') {
+        f.close(kind === 'nonzero' ? 1 : 0);
+      }
     });
     expect((await inspectDarwinDaemons(new AbortController().signal)).uncertain).toBe(true);
-    if (kind === 'bad-record') expect(f.kill).toHaveBeenCalledWith('SIGTERM');
+    if (kind === 'bad-record') {
+      expect(f.kill).toHaveBeenCalledWith('SIGTERM');
+    }
   },
 );
 it('does not spawn on pre-cancelled inspection', async () => {
@@ -238,10 +252,11 @@ it.skipIf(process.platform === 'win32').each(['clean', 'remaining', 'uncertain']
     darwin();
     child((f) => {
       f.stdout.write(actualSelf());
-      if (kind !== 'clean')
+      if (kind !== 'clean') {
         f.stdout.write(
           `${process.geteuid!()} 99 java /jdk/bin/java ${kind === 'remaining' ? main : '@hidden'}\n`,
         );
+      }
       f.close();
     });
     const gate = await ExclusiveWindow.establish(f.store, f.budget, {
@@ -253,7 +268,9 @@ it.skipIf(process.platform === 'win32').each(['clean', 'remaining', 'uncertain']
     expect(spawn).toHaveBeenCalledTimes(1);
     if (kind === 'clean') {
       expect(gate.status).toBe('ready');
-      if (gate.status !== 'ready') throw new Error(gate.message);
+      if (gate.status !== 'ready') {
+        throw new Error(gate.message);
+      }
       gate.window.close();
       expect(((await f.store.state()) as unknown[])[4]).toBe('build-ready');
     } else {
@@ -275,14 +292,16 @@ it.skipIf(process.platform === 'win32')(
   async () => {
     darwin();
     const costs = [];
-    for (const installs of [1, 16])
+    for (const installs of [1, 16]) {
       for (const width of [4, 16]) {
         const f = await quiescenceFixture();
         cleanup.push(async () => {
           expect(f.budget.retained).toBe(0);
           await f.close();
         });
-        for (let n = 0; n < installs; n++) await f.register('version-' + n);
+        for (let n = 0; n < installs; n++) {
+          await f.register('version-' + n);
+        }
         await f.files(
           '',
           Object.fromEntries(Array.from({ length: width }, (_, n) => ['data/file-' + n, 'body'])),
@@ -298,9 +317,13 @@ it.skipIf(process.platform === 'win32')(
           lifecycle: gradleResolver({ stop }),
           exitGraceMs: 0,
         });
-        if (gate.status !== 'ready') throw new Error(gate.message);
+        if (gate.status !== 'ready') {
+          throw new Error(gate.message);
+        }
         expect(stop).toHaveBeenCalledTimes(installs);
-        for (let n = 0; n < width; n++) gate.window.assertCurrent();
+        for (let n = 0; n < width; n++) {
+          gate.window.assertCurrent();
+        }
         gate.window.close();
         expect(native.kill).not.toHaveBeenCalled();
         const w = f.store.root.work;
@@ -310,6 +333,7 @@ it.skipIf(process.platform === 'win32')(
           opens: w.opens - before.opens,
         });
       }
+    }
     expect(spawn).toHaveBeenCalledTimes(4);
     expect(costs[0]).toEqual(costs[1]);
     expect(costs[2]).toEqual(costs[3]);

@@ -65,10 +65,11 @@ export function createGitHubBaseCacheBackend(
   let warned = false;
   const supportsRoot = (operationRoot = root) => {
     if (operationRoot !== undefined && /[\s"]/u.test(operationRoot)) {
-      if (!warned)
+      if (!warned) {
         warn(
           'Base cache unavailable: the GitHub cache toolkit cannot quote cache-root paths containing whitespace or double quotes. Use a runner/cache home without these characters. Workflow artifact exchange remains available.',
         );
+      }
       warned = true;
       return false;
     }
@@ -88,7 +89,9 @@ export function createGitHubBaseCacheBackend(
       options?: BaseCacheOperationOptions,
     ) {
       const operationRoot = options?.archiveRoot ?? root;
-      if (!supportsRoot(operationRoot)) return undefined;
+      if (!supportsRoot(operationRoot)) {
+        return undefined;
+      }
       return await withCacheRoot(operationRoot, paths, (relativePaths) =>
         cacheBackend.restoreCache(
           relativePaths,
@@ -101,12 +104,15 @@ export function createGitHubBaseCacheBackend(
     },
     async saveCache(paths: string[], key: string, options?: BaseCacheOperationOptions) {
       const operationRoot = options?.archiveRoot ?? root;
-      if (!supportsRoot(operationRoot)) return -1;
+      if (!supportsRoot(operationRoot)) {
+        return -1;
+      }
       if (!canConfirmSave()) {
-        if (!warned)
+        if (!warned) {
           warn(
             'Base cache save unavailable: finalized direct confirmation requires GitHub cache service V2. Restore remains available.',
           );
+        }
         warned = true;
         return -1;
       }
@@ -116,7 +122,9 @@ export function createGitHubBaseCacheBackend(
     },
     async lookupCache(paths, key, options) {
       const operationRoot = options?.archiveRoot ?? root;
-      if (!supportsRoot(operationRoot)) return undefined;
+      if (!supportsRoot(operationRoot)) {
+        return undefined;
+      }
       return await withCacheRoot(operationRoot, paths, (relativePaths) =>
         cacheBackend.restoreCache(relativePaths, key, [], { lookupOnly: true }, true),
       );
@@ -136,12 +144,15 @@ async function withCacheRoot<T>(
   paths: string[],
   operation: (paths: string[]) => Promise<T>,
 ): Promise<T> {
-  if (root === undefined) return await operation(paths);
+  if (root === undefined) {
+    return await operation(paths);
+  }
   const relativePaths = paths.map((pattern) => {
     const negated = pattern.startsWith('!');
     const relative = path.relative(root, negated ? pattern.slice(1) : pattern);
-    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative))
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
       throw new Error('Cache archive path is outside the cache root.');
+    }
     return (
       (negated ? '!' : '') +
       (relative || '.').split(path.sep).join('/') +
@@ -163,8 +174,11 @@ async function withCacheRoot<T>(
     return await operation(relativePaths);
   } finally {
     process.chdir(cwd);
-    if (workspace === undefined) delete process.env.GITHUB_WORKSPACE;
-    else process.env.GITHUB_WORKSPACE = workspace;
+    if (workspace === undefined) {
+      delete process.env.GITHUB_WORKSPACE;
+    } else {
+      process.env.GITHUB_WORKSPACE = workspace;
+    }
     release();
   }
 }

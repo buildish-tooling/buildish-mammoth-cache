@@ -21,6 +21,7 @@ export interface GradleInstallation {
   readonly gradleUserHome: string;
   readonly javaHome: string;
 }
+
 // The PowerShell job owns its native pipeline. Stop-Job on timeout terminates only
 // that pipeline, including client descendants; never any daemon from process discovery.
 const windowsStop = `
@@ -66,8 +67,9 @@ export async function stopGradleInstallation(
   timeoutMs: number,
 ): Promise<void> {
   signal.throwIfAborted();
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error('Invalid stop-client deadline.');
+  }
   const env = {
     ...process.env,
     JAVA_HOME: installation.javaHome,
@@ -117,16 +119,21 @@ export async function stopGradleInstallation(
       message.length === 2 &&
       message[0] === 'client-exit' &&
       Number.isSafeInteger(message[1])
-    )
+    ) {
       completion = message[1];
+    }
   });
   const terminate = () => {
     expired = true;
-    if (child.connected) child.send('stop', () => {});
+    if (child.connected) {
+      child.send('stop', () => {});
+    }
   };
   if (!windows) {
     signal.addEventListener('abort', terminate, { once: true });
-    if (signal.aborted) terminate();
+    if (signal.aborted) {
+      terminate();
+    }
   }
   try {
     const code = await new Promise<number | null>((resolve, reject) => {
@@ -136,8 +143,9 @@ export async function stopGradleInstallation(
       );
     });
     signal.throwIfAborted();
-    if (expired || code !== 0)
+    if (expired || code !== 0) {
       throw new Error('Gradle stop client failed or exceeded its deadline.');
+    }
   } finally {
     signal.removeEventListener('abort', terminate);
   }

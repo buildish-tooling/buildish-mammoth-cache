@@ -166,7 +166,9 @@ it.each([
     );
     if (kind === 'partial') {
       const entry = f.seeded.entries.find((e) => e[1] === 'dependency-metadata')!;
-      if (entry[0] !== 'object') throw new Error('fixture');
+      if (entry[0] !== 'object') {
+        throw new Error('fixture');
+      }
       f.objects.delete(entry[2][2]);
     }
     const ready = await f.prepare({
@@ -199,7 +201,9 @@ it.each(['seed-rename-before-stat', 'prepare-between-seed-and-live'])(
     await expect(
       f.prepare({
         fail: async (point) => {
-          if (point === failure) throw new Error('between routes');
+          if (point === failure) {
+            throw new Error('between routes');
+          }
         },
       }),
     ).rejects.toThrow('between routes');
@@ -345,7 +349,9 @@ it('does not adopt or retire a replacement installed after the original seed sta
   await expect(
     f.prepare({
       fail: async (point) => {
-        if (point !== 'seed-before-owner-seal') return;
+        if (point !== 'seed-before-owner-seal') {
+          return;
+        }
         const [id] = await readdir(f.root + '/' + f.store.prefix + 'seed');
         root = f.root + '/' + f.store.prefix + 'seed/' + id;
         await rename(root, root + '.original');

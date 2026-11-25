@@ -29,7 +29,9 @@ beforeAll(async () => {
   await entrypointBundles(root);
 }, 30000);
 afterAll(async () => {
-  if (root) await rm(root, { recursive: true, force: true });
+  if (root) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 const toolInputs = { 'cache-partitions': JSON.stringify([{ id: 'data', includes: ['data/**'] }]) };
 it.each(['maven', 'gradle'] as const)(
@@ -39,12 +41,13 @@ it.each(['maven', 'gradle'] as const)(
     await j.run('main');
     expect((await j.state())[STREAMING_INVOCATION_STATE]).toContain('streaming-lifecycle');
     expect((await j.state())[JOB_SINGLE_RUN_OWNER_TOKEN_STATE]).toBeTruthy();
-    if (tool === 'gradle')
+    if (tool === 'gradle') {
       expect(await j.outputs()).toMatchObject({
         'wrapper-count': '1',
         'gradle-versions': '8.5',
         'wrapper-reused-count': '1',
       });
+    }
     expect(await j.outputs()).toMatchObject({
       'base-cache-restore-status': 'miss',
       'job-mode': 'standalone',
@@ -72,13 +75,17 @@ it.each(['maven', 'gradle'] as const)(
         ...toolInputs,
         ...(mode === 'disabled' ? { 'cache-enabled': 'false' } : { 'read-only': 'true' }),
       });
-      if (mode === 'disabled') await j.write('data/keep', 'keep');
+      if (mode === 'disabled') {
+        await j.write('data/keep', 'keep');
+      }
       await j.run('main', { MAMMOTH_TEST_PROCESS: mode === 'disabled' ? 'remaining' : 'clean' });
       expect((await j.trace()).filter(([name]) => name === 'process-inspection')).toHaveLength(
         tool === 'gradle' && mode === 'read-only' ? 1 : 0,
       );
       await j.clearTrace();
-      if (mode === 'read-only') await j.write('data/keep', 'keep');
+      if (mode === 'read-only') {
+        await j.write('data/keep', 'keep');
+      }
       await j.run('post', {
         'INPUT_CONFIG-FILE': '/missing/config',
         GITHUB_EVENT_PATH: '/missing/event.json',

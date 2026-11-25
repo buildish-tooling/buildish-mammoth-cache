@@ -28,8 +28,9 @@ export function tarHeader(
     [116, 8, 0],
     [124, 12, size],
     [136, 12, options.time ?? 0],
-  ])
+  ]) {
     b.write(value.toString(8).padStart(length - 1, '0') + '\0', offset, 'ascii');
+  }
   b[156] = (options.type ?? '0').charCodeAt(0);
   b.write('ustar\0', 257, 'ascii');
   b.write('00', 263, 'ascii');
@@ -65,8 +66,9 @@ export function paxRecord(key: string, value: string | Buffer): Buffer {
     Buffer.from('\n'),
   ]);
   let length = suffix.length + 1;
-  while (length !== String(length).length + suffix.length)
+  while (length !== String(length).length + suffix.length) {
     length = String(length).length + suffix.length;
+  }
   return Buffer.concat([Buffer.from(String(length)), suffix]);
 }
 export const ends = Buffer.alloc(1024);

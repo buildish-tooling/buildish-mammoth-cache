@@ -23,7 +23,9 @@ import { stopGradleInstallation } from '../../../src/build-tool/gradle/stop-clie
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture(hang: boolean | 'tree' = false) {
   const root = await mkdtemp(path.resolve('build/stop-client-'));
@@ -33,11 +35,12 @@ async function fixture(hang: boolean | 'tree' = false) {
     log = root + '/result.json';
   await mkdir(home + '/bin', { recursive: true });
   const leaf = root + '/leaf.cjs';
-  if (hang === 'tree')
+  if (hang === 'tree') {
     await writeFile(
       leaf,
       "process.on('SIGTERM',()=>{});require('fs').writeFileSync(process.env.MAMMOTH_TEST_LOG+'.resistant','ready');setTimeout(()=>process.exit(0),10000);",
     );
+  }
   await writeFile(
     script,
     `require('fs').writeFileSync(process.env.MAMMOTH_TEST_LOG,JSON.stringify({pid:process.pid,args:process.argv.slice(2),java:process.env.JAVA_HOME,opts:process.env.JAVA_OPTS,gradle:process.env.GRADLE_OPTS}));${hang === 'tree' ? `const child=require('child_process').spawn(process.execPath,[${JSON.stringify(leaf)}],{stdio:'ignore'});require('fs').writeFileSync(process.env.MAMMOTH_TEST_LOG+'.child',String(child.pid));setInterval(()=>{},1000);` : hang ? 'setTimeout(()=>{},60000);' : ''}`,
@@ -49,7 +52,9 @@ async function fixture(hang: boolean | 'tree' = false) {
       ? '@echo off\r\n"%MAMMOTH_TEST_NODE%" "%MAMMOTH_TEST_SCRIPT%" %*\r\nexit /b %ERRORLEVEL%\r\n'
       : '#!/bin/sh\nexec "$MAMMOTH_TEST_NODE" "$MAMMOTH_TEST_SCRIPT" "$@"\n',
   );
-  if (process.platform !== 'win32') await chmod(launcher, 0o755);
+  if (process.platform !== 'win32') {
+    await chmod(launcher, 0o755);
+  }
   vi.stubEnv('MAMMOTH_TEST_NODE', process.execPath);
   vi.stubEnv('MAMMOTH_TEST_SCRIPT', script);
   vi.stubEnv('MAMMOTH_TEST_LOG', log);
@@ -104,7 +109,9 @@ async function ended(pid: number): Promise<boolean> {
       const result = await promisify(execFile)('/bin/ps', ['-p', String(pid), '-o', 'stat=']);
       return /^Z/.test(result.stdout.trim());
     } catch (error) {
-      if ((error as { code: unknown }).code === 1) return true;
+      if ((error as { code: unknown }).code === 1) {
+        return true;
+      }
       throw error;
     }
   }
@@ -112,7 +119,9 @@ async function ended(pid: number): Promise<boolean> {
     const stat = await readFile('/proc/' + pid + '/stat', 'utf8');
     return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] === 'Z';
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
     return true;
   }
 }
@@ -130,7 +139,9 @@ it.skipIf(!['linux', 'darwin'].includes(process.platform))(
             await readFile(f.log);
             return true;
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+              throw error;
+            }
             return false;
           }
         },

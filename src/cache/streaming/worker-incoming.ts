@@ -38,6 +38,7 @@ export interface AcceptedWorkerMerge {
     activityIndexDirectories: number;
   }>;
 }
+
 const accepted = new WeakMap<
   object,
   { store: OwnedStore; max: number; context: MetadataInstallContext }
@@ -52,8 +53,9 @@ export async function acceptWorkerMerge(
   signal = new AbortController().signal,
   timing?: TimingOptions['timing'],
 ): Promise<AcceptedWorkerMerge> {
-  if (result.stage.budget !== budget)
+  if (result.stage.budget !== budget) {
     throw new Error('Worker acceptance requires the shared working budget.');
+  }
   const options = { timing, signal };
   const input = claimCompletedWorkerInputs(store, result),
     copies: MetadataSnapshot[] = [],
@@ -82,7 +84,9 @@ export async function acceptWorkerMerge(
     // Independent bytes precede authority/consumption and use the original selected hierarchy.
     for (const partition of result.selectedSnapshots) {
       const origin = result.snapshotOrigins.find((row) => row.partition === partition);
-      if (!origin) throw new Error('Missing selected snapshot origin.');
+      if (!origin) {
+        throw new Error('Missing selected snapshot origin.');
+      }
       const copy = await timed(options, `worker snapshot copy [partition=${partition}]`, () =>
         MetadataSnapshot.copy(nativeIndex!, partition, ['worker', origin.producerId], {
           budget,
@@ -108,12 +112,13 @@ export async function acceptWorkerMerge(
         ),
       ),
     ) as Reference;
-    for (const snapshot of result.inheritedSnapshots)
+    for (const snapshot of result.inheritedSnapshots) {
       await timed(
         options,
         `worker inherited snapshot verification [partition=${snapshot.partition}]`,
         () => snapshot.verify(signal, budget, input.max),
       );
+    }
     // Every archive/loser/seal/EOF, activity and snapshot gate completed before this transfer.
     context = MetadataInstallContext.fromWorkerNative(store, nativeIndex, result, {
       budget,
@@ -135,11 +140,12 @@ export async function acceptWorkerMerge(
         const failed = results.filter(
           (result): result is PromiseRejectedResult => result.status === 'rejected',
         );
-        if (failed.length)
+        if (failed.length) {
           throw new AggregateError(
             failed.map((result) => result.reason),
             'Worker accepted owners cleanup failed.',
           );
+        }
       },
       incoming: Object.freeze(incoming),
       snapshots: Object.freeze(snapshots),
@@ -151,7 +157,9 @@ export async function acceptWorkerMerge(
       }),
     });
     accepted.set(value, { store, max: input.max, context });
-    if (!incoming.length) await context.dispose();
+    if (!incoming.length) {
+      await context.dispose();
+    }
     return value;
   } catch (error) {
     const settled = await timed(
@@ -170,12 +178,13 @@ export async function acceptWorkerMerge(
       failures = settled
         .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
         .map((r) => r.reason);
-    if (failures.length)
+    if (failures.length) {
       throw new AggregateError(
         [error, ...failures],
         'Worker acceptance failed; owned cleanup blocked.',
         { cause: error },
       );
+    }
     throw error;
   }
 }
@@ -188,7 +197,9 @@ export async function installWorkerMerge(
   beforeInstall?: () => Promise<void>,
 ): Promise<void> {
   const binding = accepted.get(result);
-  if (!binding || binding.store !== store) throw new Error('Unbound accepted worker merge.');
+  if (!binding || binding.store !== store) {
+    throw new Error('Unbound accepted worker merge.');
+  }
   const plan = await freezeMetadataInstallPlan(store, binding.context, budget, {
     signal,
     maxDirectoryEntries: binding.max,

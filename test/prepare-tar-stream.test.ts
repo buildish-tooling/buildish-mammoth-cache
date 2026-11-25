@@ -71,10 +71,11 @@ describe('reproducible isolated patch preparation', () => {
         const generated = path.join(root, patchedTarRoot, 'extract.js');
         const expected = await readFile(generated, 'utf8');
         expect(expected).toContain('opts.mammothStrict === true');
-        for (const name of ['extract.js', 'mammoth.cjs', 'index.d.ts'])
+        for (const name of ['extract.js', 'mammoth.cjs', 'index.d.ts']) {
           expect(await readFile(path.join(root, patchedTarRoot, name))).toEqual(
             await readFile(path.join(patchedTarRoot, name)),
           );
+        }
         expect(await readFile(path.join(root, patchedTarRoot, 'LICENSE'))).toEqual(
           await readFile('node_modules/tar-stream/LICENSE'),
         );

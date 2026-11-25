@@ -35,7 +35,9 @@ import type { WorkerSourceView } from './worker-walk';
 // Protocol: docs/dev/cache-protocol.md#worker-artifact-names-and-discovery.
 export function workerArtifactPrefix(model: ResolvedModel, context: Context): string {
   const c = contextSchema.parse(context);
-  if (c[7] !== model.tuple[2]) throw new Error('Worker artifact build tool mismatch.');
+  if (c[7] !== model.tuple[2]) {
+    throw new Error('Worker artifact build tool mismatch.');
+  }
   familySchema.parse(model.family);
   const producer = ['producer', c[0], c[1], c[2], c[3], c[4], c[6], c[7]] as const;
   encodeRecord(producer);
@@ -53,8 +55,9 @@ export function workerArtifactName(
     owner.model.id !== model.id ||
     owner.model.family !== model.family ||
     !encodeRecord(owner.context).equals(encodeRecord(context))
-  )
+  ) {
     throw new Error('Worker artifact source identity mismatch.');
+  }
   const decision = H('worker-decision', [
     'decision',
     survivor.index.reference[4],
@@ -63,15 +66,23 @@ export function workerArtifactName(
   return workerArtifactPrefix(model, context) + context[5] + '-d' + decision + '.tar.gz';
 }
 export function workerArtifactAttempt(name: string, prefix: string): number | null {
-  if (!name.startsWith(prefix)) return null;
+  if (!name.startsWith(prefix)) {
+    return null;
+  }
   const match = /^([1-9][0-9]*)-d[a-f0-9]{64}\.tar\.gz$/.exec(name.slice(prefix.length));
-  if (!match) throw new Error('Malformed raw worker artifact candidate.');
+  if (!match) {
+    throw new Error('Malformed raw worker artifact candidate.');
+  }
   return positiveSchema.parse(Number(match[1]));
 }
 export function workerDigest(value: string | null): string | null {
-  if (value === null) return null;
+  if (value === null) {
+    return null;
+  }
   const match = /^(?:sha256:)?([a-fA-F0-9]{64})$/.exec(value);
-  if (!match) throw new Error('Unsupported worker artifact digest.');
+  if (!match) {
+    throw new Error('Unsupported worker artifact digest.');
+  }
   return match[1].toLowerCase();
 }
 const descriptorSchema = z.object({
@@ -86,24 +97,29 @@ export function workerDescriptor(
 ): Readonly<WorkflowArtifactDescriptor> {
   const d = descriptorSchema.parse(input),
     hash = workerDigest(d.digest);
-  if (expectedName !== undefined && d.name !== expectedName)
+  if (expectedName !== undefined && d.name !== expectedName) {
     throw new Error('Worker artifact service name mismatch.');
+  }
   return Object.freeze({ ...d, digest: hash === null ? null : 'sha256:' + hash });
 }
 export function rawWorkerBackend(
   backend: WorkflowArtifactBackend,
   scope?: ArtifactLookupScope,
 ): void {
-  if (backend.capabilities.supportsRawWorkerArchives !== true)
+  if (backend.capabilities.supportsRawWorkerArchives !== true) {
     throw new Error('Artifact backend must explicitly support raw worker archives.');
-  if (scope && !backend.capabilities.supportsCrossExecutionLookup)
+  }
+  if (scope && !backend.capabilities.supportsCrossExecutionLookup) {
     throw new Error('Artifact backend lacks cross-execution lookup support.');
+  }
 }
 export function workerScope(
   scope: ArtifactLookupScope | undefined,
   context: Context,
 ): ArtifactLookupScope | undefined {
-  if (!scope) return undefined;
+  if (!scope) {
+    return undefined;
+  }
   const result = Object.freeze({ ...scope, repository: scope.repository.trim() });
   nameSchema.parse(result.token);
   positiveSchema.parse(result.runId);
@@ -111,8 +127,9 @@ export function workerScope(
     !/^[^/\s]+\/[^/\s]+$/.test(result.repository) ||
     result.repository !== context[1] ||
     String(result.runId) !== context[3]
-  )
+  ) {
     throw new Error('Worker artifact lookup scope differs from expected execution.');
+  }
   return result;
 }
 
@@ -122,7 +139,9 @@ export function workerSnapshotAuthorization(
   job: string,
   input: readonly string[],
 ): readonly string[] {
-  if (input.length > 64) throw new Error('Worker snapshot authorization admission exceeded.');
+  if (input.length > 64) {
+    throw new Error('Worker snapshot authorization admission exceeded.');
+  }
   const seen = new Set<string>();
   for (const id of input) {
     const partition = model.partitions.find((p) => p[0] === id);
@@ -131,8 +150,9 @@ export function workerSnapshotAuthorization(
       !partition ||
       partition[3] !== 'single-writer' ||
       (partition[4] !== null && partition[4] !== job)
-    )
+    ) {
       throw new Error('Invalid worker snapshot authorization/owner.');
+    }
     seen.add(id);
   }
   return Object.freeze([...input]);

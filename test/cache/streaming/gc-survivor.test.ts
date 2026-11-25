@@ -24,7 +24,9 @@ import { sameNative } from '../../../src/cache/streaming/native';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const fixture of fixtures.splice(0)) await fixture.close();
+  for (const fixture of fixtures.splice(0)) {
+    await fixture.close();
+  }
 });
 it.each([false, true])(
   'borrows original survivor hierarchy with mutation=%s and no additional index or capture',
@@ -34,8 +36,9 @@ it.each([false, true])(
     const files = ['expired-a', 'expired-b', 'retained'];
     await f.files('', Object.fromEntries(files.map((name) => [`data/shared/${name}`, name])));
     if (changed) {
-      for (const name of files.slice(0, 2))
+      for (const name of files.slice(0, 2)) {
         await utimes(f.store.root.resolve(`data/shared/${name}`), 1.234, 1.234);
+      }
       await utimes(f.store.root.resolve('data/shared'), 2.345, 2.345);
     }
     const original = (await f.store.root.stat('data/shared'))!;
@@ -59,9 +62,15 @@ it.each([false, true])(
       async function visit(offset: number): Promise<void> {
         const lease = await source!.node(offset);
         try {
-          if (lease.node[1] === 'file') names.push(lease.node[2]);
-          if (lease.node[2] === 'data/shared') expect(lease.node[3]).toEqual(survivingNative);
-          for await (const edge of source!.children(lease.node)) await visit(edge[2]);
+          if (lease.node[1] === 'file') {
+            names.push(lease.node[2]);
+          }
+          if (lease.node[2] === 'data/shared') {
+            expect(lease.node[3]).toEqual(survivingNative);
+          }
+          for await (const edge of source!.children(lease.node)) {
+            await visit(edge[2]);
+          }
         } finally {
           lease.release();
         }
@@ -83,7 +92,9 @@ it('never grants survivor authority after cancellation during actual GC', async 
   const controller = new AbortController();
   const f = await observationFixture('maven', {
     fail: async (name) => {
-      if (name === 'gc-target-deleted') controller.abort(new Error('cancel survivor'));
+      if (name === 'gc-target-deleted') {
+        controller.abort(new Error('cancel survivor'));
+      }
     },
   });
   fixtures.push(f);

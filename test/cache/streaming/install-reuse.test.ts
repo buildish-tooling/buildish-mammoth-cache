@@ -24,7 +24,9 @@ import type { Value } from '../../../src/cache/streaming/encoding';
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture() {
   const f = await installFixture();
@@ -88,18 +90,21 @@ it('validates activity streams regardless of caller reference identity', async (
     })(),
   );
   const validations = f.store.root.work.metadataValidations;
-  for (let i = 0; i < 2; i++)
+  for (let i = 0; i < 2; i++) {
     for await (const row of f.store.rows(ref, 'activity', {
       budget: f.budget,
       partition: null,
-    }))
+    })) {
       void row;
+    }
+  }
   expect(f.store.root.work.metadataValidations).toBe(validations + 2);
   for await (const row of f.store.rows(structuredClone(ref), 'activity', {
     budget: f.budget,
     partition: null,
-  }))
+  })) {
     void row;
+  }
   expect(f.store.root.work.metadataValidations).toBe(validations + 3);
   await writeFile(f.store.root.resolve(ref[2]), 'changed bytes');
   await expect(
@@ -107,8 +112,9 @@ it('validates activity streams regardless of caller reference identity', async (
       for await (const row of f.store.rows(ref, 'activity', {
         budget: f.budget,
         partition: null,
-      }))
+      })) {
         void row;
+      }
     })(),
   ).rejects.toThrow();
   expect(f.budget.retained).toBe(0);
@@ -139,8 +145,9 @@ it('cancels a genuine completed-reference read while its real beforeAccept callb
         entered();
         await new Promise<void>(() => {});
       },
-    ))
+    )) {
       void row;
+    }
   })();
   const rejected = expect(work).rejects.toThrow('cancel callback');
   await ready;
@@ -154,12 +161,15 @@ it.each(['same-size', 'appended-row'])(
     const f = await fixture();
     let altered = false;
     vi.spyOn(f.store, 'fail').mockImplementation(async (point) => {
-      if (point !== 'immutable-file-written' || altered) return;
+      if (point !== 'immutable-file-written' || altered) {
+        return;
+      }
       altered = true;
       const folder = f.store.root.resolve(f.store.prefix + 'files');
       const name = (await readdir(folder)).find((n) => n.endsWith('.tmp'))!;
-      if (kind === 'appended-row') await appendFile(folder + '/' + name, '["used","z","data"]\n');
-      else {
+      if (kind === 'appended-row') {
+        await appendFile(folder + '/' + name, '["used","z","data"]\n');
+      } else {
         const { readFile } = await import('node:fs/promises');
         const bytes = await readFile(folder + '/' + name);
         const at = bytes.indexOf(Buffer.from('["used","a"'));

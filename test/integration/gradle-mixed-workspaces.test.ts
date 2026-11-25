@@ -27,8 +27,11 @@ const enabled =
   !!process.env.BUILDISH_TEST_JAVA_21_HOME &&
   !!process.env.BUILDISH_TEST_JAVA_25_HOME;
 type Fixture = Awaited<ReturnType<typeof mixedWorkspaceJobs>>;
+
 type Job = Awaited<ReturnType<Fixture['job']>>;
+
 type Evidence = Awaited<ReturnType<Job['evidence']>>;
+
 function kotlinTaskKey(log: string) {
   const key = /Build cache key for task ':kotlin:probe' is ([a-f0-9]{32})/u.exec(log)?.[1];
   assert(key, 'Expected Kotlin task cache key');
@@ -76,15 +79,21 @@ async function restored(j: Job, expected: ReturnType<typeof union>) {
   const actual = await j.evidence();
   expect(actual.units).toEqual(expected.units);
   expect(actual.archives).toEqual(expected.archives);
-  for (const unit of expected.units.values())
-    for (const empty of unit.workspace.emptyDirectories)
+  for (const unit of expected.units.values()) {
+    for (const empty of unit.workspace.emptyDirectories) {
       expect((await lstat(path.join(j.home, empty))).isDirectory()).toBe(true);
+    }
+  }
 }
 async function published(j: Job, original: ReturnType<typeof union>) {
   expect((await j.post()).outcome).toBe('published');
   const actual = await j.evidence();
-  for (const [key, value] of original.units) expect(actual.units.get(key)).toEqual(value);
-  for (const [key, value] of original.archives) expect(actual.archives.get(key)).toEqual(value);
+  for (const [key, value] of original.units) {
+    expect(actual.units.get(key)).toEqual(value);
+  }
+  for (const [key, value] of original.archives) {
+    expect(actual.archives.get(key)).toEqual(value);
+  }
   return actual;
 }
 function distinctCommonOrigins(a: Evidence, b: Evidence, kind: 'groovy' | 'kotlin-script') {
@@ -144,8 +153,9 @@ test.skipIf(!enabled)(
         'artifact-transform',
         'kotlin-script',
         'kotlin-plugin-spec-accessors',
-      ] as const)
+      ] as const) {
         expect(kinds.has(kind), kind).toBe(true);
+      }
       // Gradle distributions produce either directory- or JAR-form accessors.
       expect(kinds.has('kotlin-accessor-jars') || kinds.has('kotlin-accessor-directories')).toBe(
         true,
@@ -179,12 +189,13 @@ test.skipIf(!enabled)(
       for (const [left, right] of [
         [ea, eb],
         [eb, ea],
-      ])
+      ]) {
         expect(
           [...left.units].filter(
             ([key, u]) => u.workspace.kind === 'artifact-transform' && !right.units.has(key),
           ),
         ).toHaveLength(2);
+      }
       distinctCommonOrigins(ea, eb, 'kotlin-script');
       distinctCommonOrigins(ea, ec, 'groovy');
       expect([...ea.units.keys()].some((k) => k.includes('/accessors/') && eb.units.has(k))).toBe(
@@ -201,7 +212,9 @@ test.skipIf(!enabled)(
         expect([...left.units.keys()].some((k) => !right.units.has(k))).toBe(true);
         expect([...left.archives.keys()].some((k) => !right.archives.has(k))).toBe(true);
       }
-      for (const j of [c, b, a]) expect((await j.post()).outcome).toBe('worker-uploaded');
+      for (const j of [c, b, a]) {
+        expect((await j.post()).outcome).toBe('worker-uploaded');
+      }
       const expected = union(ec, eb, ea);
       const aggregate = await f.job('aggregate', {
         jdk: '21',
@@ -257,7 +270,9 @@ test.skipIf(!enabled)(
       });
       expect(java25).not.toContain(':compileJava FROM-CACHE');
       expect(await classMajor(inputs)).toBe(69);
-      for (const task of [':portable', ':strict']) expect(java25).toContain(task + ' FROM-CACHE');
+      for (const task of [':portable', ':strict']) {
+        expect(java25).toContain(task + ' FROM-CACHE');
+      }
       await rm(path.join(inputs.root, 'build'), { recursive: true });
       const java21 = await inputs.run('compiler21-hit-changed-input', {
         cache: 'enabled',
@@ -314,10 +329,11 @@ test.skipIf(!enabled)(
       const saves = f.backend.calls.filter((call) => call.kind === 'save');
       expect(saves.some((call) => call.key.includes('-g-'))).toBe(true);
       expect(saves.some((call) => call.key.includes('-p-'))).toBe(true);
-      for (const save of saves)
+      for (const save of saves) {
         expect(save.paths).toEqual(
           save.key.includes('-p-') ? ['envelope.json', 'payload/'] : ['record.json'],
         );
+      }
       await writeFile(
         path.join(f.root, 'invocations.json'),
         JSON.stringify(f.invocations, null, 2) + '\n',
@@ -325,9 +341,11 @@ test.skipIf(!enabled)(
       console.log('Mixed fixture Gradle invocations:', f.invocations.length);
       passed = true;
     } finally {
-      if (passed && process.env.BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT !== '1')
+      if (passed && process.env.BUILDISH_MAMMOTH_CACHE_KEEP_LOCAL_IT !== '1') {
         await rm(f.root, { recursive: true, force: true });
-      else console.log('Mixed fixture evidence retained:', f.root);
+      } else {
+        console.log('Mixed fixture evidence retained:', f.root);
+      }
     }
   },
   600_000,

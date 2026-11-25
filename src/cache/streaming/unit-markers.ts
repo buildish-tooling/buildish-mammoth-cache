@@ -23,6 +23,7 @@ export class UnitMarkers {
   private readonly seenFiles = new Set<string>();
   private readonly seenDirectories = new Set<string>();
   private jarKind = false;
+
   constructor(readonly unit: Unit) {
     const [kind] = unit;
     this.fileMarkers =
@@ -46,36 +47,53 @@ export class UnitMarkers {
               ? ['classes', 'sources']
               : [];
   }
+
   private relative(path: string): string {
     const root = this.unit[1];
-    if (path === root) return '';
-    if (!path.startsWith(root + '/')) throw new Error('Marker outside unit.');
+    if (path === root) {
+      return '';
+    }
+    if (!path.startsWith(root + '/')) {
+      throw new Error('Marker outside unit.');
+    }
     return path.slice(root.length + 1);
   }
+
   private marker(path: string, directory: boolean): void {
     const rel = this.relative(path);
     if (!directory) {
       const marker = this.fileMarkers.find((m) => m === rel);
-      if (marker !== undefined) this.seenFiles.add(marker);
-      if (rel === 'classes.jar' || rel === 'sources.jar') this.jarKind = true;
+      if (marker !== undefined) {
+        this.seenFiles.add(marker);
+      }
+      if (rel === 'classes.jar' || rel === 'sources.jar') {
+        this.jarKind = true;
+      }
     }
-    for (const marker of this.directoryMarkers)
-      if ((directory && rel === marker) || rel.startsWith(marker + '/'))
+    for (const marker of this.directoryMarkers) {
+      if ((directory && rel === marker) || rel.startsWith(marker + '/')) {
         this.seenDirectories.add(marker);
+      }
+    }
   }
+
   file(path: string): void {
     this.marker(path, false);
   }
+
   directory(path: string): void {
     this.marker(path, true);
   }
+
   finish(): void {
     if (
       this.fileMarkers.some((p) => !this.seenFiles.has(p)) ||
       this.directoryMarkers.some((p) => !this.seenDirectories.has(p))
-    )
+    ) {
       throw new Error('Missing required workspace markers.');
-    if (this.unit[0] === 'kotlin-accessor-directories' && this.jarKind)
+    }
+    if (this.unit[0] === 'kotlin-accessor-directories' && this.jarKind) {
       throw new Error('Workspace kind does not match markers.');
+    }
   }
 }

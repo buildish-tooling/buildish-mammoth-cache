@@ -53,6 +53,7 @@ export class MetadataPublicationSource {
   #claimed = false;
   #leased = false;
   readonly #releaseMetadata: () => void;
+
   private constructor(
     readonly store: OwnedStore,
     readonly nativeRoot: string,
@@ -69,50 +70,65 @@ export class MetadataPublicationSource {
     sources.add(this);
     Object.freeze(this);
   }
+
   assert(): void {
-    if (!sources.has(this) || !this.#active)
+    if (!sources.has(this) || !this.#active) {
       throw new Error('Closed/unbound metadata publication source.');
+    }
     this.hierarchy?.assert();
     if (this.borrowed) {
       this.borrowed.assertBound(this.store);
-      if (this.borrowed.upstream.kind !== 'native-metadata')
+      if (this.borrowed.upstream.kind !== 'native-metadata') {
         throw new Error('Expected native source.');
+      }
       DiscoveredMetadataBase.assertReceipt(this.borrowed.upstream.source, this.store);
     }
   }
+
   claim(): void {
     this.assert();
-    if (this.#claimed) throw new Error('Metadata publication source already attempted.');
+    if (this.#claimed) {
+      throw new Error('Metadata publication source already attempted.');
+    }
     this.#claimed = true;
     this.#leased = true;
   }
+
   release(): void {
     this.#leased = false;
   }
+
   summary(partition: string): PartitionMetadata {
     this.assert();
     const value = this.metadata.get(partition);
-    if (!value) throw new Error('Unavailable metadata source partition.');
+    if (!value) {
+      throw new Error('Unavailable metadata source partition.');
+    }
     return structuredClone(value);
   }
+
   /** Active hierarchy view. A future genuine survivor owner adapts these reads without a new catalogue. */
   node(offset: number): ReturnType<typeof indexedNode> {
     this.assert();
     return this.hierarchy ? this.hierarchy.node(offset) : indexedNode(this.scratch!, offset);
   }
+
   children(node: IndexedNode): ReturnType<typeof indexedEntries> {
     this.assert();
     return this.hierarchy ? this.hierarchy.children(node) : indexedEntries(this.scratch!, node);
   }
+
   /** Borrow only the exact live native input; decoded refs/index offsets grant no authority. */
   static borrow(input: IndexedMetadataInput): MetadataPublicationSource {
     input.assertBound(input.context.store);
-    if (input.upstream.kind !== 'native-metadata')
+    if (input.upstream.kind !== 'native-metadata') {
       throw new Error('Expected admitted native metadata.');
+    }
     const source = input.upstream.source;
     DiscoveredMetadataBase.assertReceipt(source, input.context.store);
-    if (source.nativeRoot !== input.nativeRoot || source.partition !== input.partition)
+    if (source.nativeRoot !== input.nativeRoot || source.partition !== input.partition) {
       throw new Error('Metadata source root/partition mismatch.');
+    }
     return new MetadataPublicationSource(
       input.context.store,
       input.nativeRoot,
@@ -126,6 +142,7 @@ export class MetadataPublicationSource {
       input,
     );
   }
+
   /** The copied or freshly admitted independent root retains its original index owner. */
   static async snapshot(snapshot: MetadataSnapshot): Promise<MetadataPublicationSource> {
     MetadataSnapshot.assertReceipt(snapshot, snapshot.store, snapshot.partition);
@@ -158,6 +175,7 @@ export class MetadataPublicationSource {
       throw error;
     }
   }
+
   /** Borrow actual completed GC outcomes without rebuilding the original hierarchy. */
   static async survivors(owner: GcSurvivorOwner): Promise<MetadataPublicationSource> {
     GcSurvivorOwner.assertReceipt(owner);
@@ -168,7 +186,9 @@ export class MetadataPublicationSource {
       GcSurvivorOwner.assertReceipt(owner);
       for await (const edge of index.children(node)) {
         GcSurvivorOwner.assertReceipt(owner);
-        if (edge[5] !== null && !edge[6]) yield [edge[1], edge[2] as IndexedNode[1], edge[5]];
+        if (edge[5] !== null && !edge[6]) {
+          yield [edge[1], edge[2] as IndexedNode[1], edge[5]];
+        }
       }
     }
     const hierarchy: PublicationHierarchy = {
@@ -181,7 +201,9 @@ export class MetadataPublicationSource {
           const observed = lease.node;
           let node: IndexedNode;
           if (observed[0] === 'observed-file') {
-            if (observed[5] === 'delete') throw new Error('Deleted survivor file.');
+            if (observed[5] === 'delete') {
+              throw new Error('Deleted survivor file.');
+            }
             node = [
               'node',
               'file',
@@ -196,7 +218,9 @@ export class MetadataPublicationSource {
               observed[7],
             ];
           } else {
-            if (observed[10][5]) throw new Error('Deleted survivor directory.');
+            if (observed[10][5]) {
+              throw new Error('Deleted survivor directory.');
+            }
             node = [
               'node',
               'directory',
@@ -229,11 +253,14 @@ export class MetadataPublicationSource {
       },
       async *children(node) {
         GcSurvivorOwner.assertReceipt(owner);
-        if (node[1] !== 'directory') return;
+        if (node[1] !== 'directory') {
+          return;
+        }
         const lease = await index.node(node[7]);
         try {
-          if (lease.node[0] !== 'observed-directory' || lease.node[1] !== node[2])
+          if (lease.node[0] !== 'observed-directory' || lease.node[1] !== node[2]) {
             throw new Error('Survivor directory cursor mismatch.');
+          }
           yield* survivingChildren(lease.node);
         } finally {
           lease.release();
@@ -257,6 +284,7 @@ export class MetadataPublicationSource {
       throw error;
     }
   }
+
   /** Real initial native discovery for independent source producers; never recapture a post survivor view. */
   static async capture(
     store: OwnedStore,
@@ -281,10 +309,12 @@ export class MetadataPublicationSource {
             logicalRoot: '',
             metadata: 'exclude',
           })) {
-            if (e.tag === 'protected-child')
+            if (e.tag === 'protected-child') {
               throw new Error('Unexpected protected publication source.');
-            if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1'))
+            }
+            if (e.identity[3] !== store.root.binding[3] || (e.tag === 'file' && e.links !== '1')) {
               throw new Error('Aliased/cross-filesystem publication source.');
+            }
             await accept({
               value: [
                 e.tag === 'file' ? 'file' : e.tag === 'directory-open' ? 'dir-open' : 'dir-close',
@@ -326,13 +356,20 @@ export class MetadataPublicationSource {
       throw error;
     }
   }
+
   async dispose(): Promise<void> {
-    if (this.#leased) throw new Error('Publication source has an active SDK/move lifetime.');
-    if (!this.#active) return;
+    if (this.#leased) {
+      throw new Error('Publication source has an active SDK/move lifetime.');
+    }
+    if (!this.#active) {
+      return;
+    }
     this.#active = false;
     this.#releaseMetadata();
     this.hierarchy?.release();
-    if (!this.borrowed && this.scratch) await this.scratch.close();
+    if (!this.borrowed && this.scratch) {
+      await this.scratch.close();
+    }
   }
 }
 
@@ -365,21 +402,32 @@ async function foldMetadata(
         selected = physicalRoot ? summaries : summaries.filter(({ bit }) => (mask & bit) !== 0n);
       releaseFrame = options.budget.holdRecord(128 + selected.length * 64);
       if (node[1] === 'file') {
-        for (const { summary } of selected)
+        for (const { summary } of selected) {
           summary.accept(['file', node[2], node[3] as NativeIdentity]);
-      } else if (node[1] === 'directory') {
-        for (const { summary } of selected)
-          summary.accept(['dir-open', node[2], node[3] as NativeIdentity]);
-        if (lease.orderedChildren) {
-          for await (const edge of lease.orderedChildren()) await visit(edge[2]);
-        } else {
-          for await (const edge of hierarchy.children(node))
-            if (edge[1] === 'file') await visit(edge[2]);
-          for await (const edge of hierarchy.children(node))
-            if (edge[1] === 'directory') await visit(edge[2]);
         }
-        for (const { summary } of selected)
+      } else if (node[1] === 'directory') {
+        for (const { summary } of selected) {
+          summary.accept(['dir-open', node[2], node[3] as NativeIdentity]);
+        }
+        if (lease.orderedChildren) {
+          for await (const edge of lease.orderedChildren()) {
+            await visit(edge[2]);
+          }
+        } else {
+          for await (const edge of hierarchy.children(node)) {
+            if (edge[1] === 'file') {
+              await visit(edge[2]);
+            }
+          }
+          for await (const edge of hierarchy.children(node)) {
+            if (edge[1] === 'directory') {
+              await visit(edge[2]);
+            }
+          }
+        }
+        for (const { summary } of selected) {
           summary.accept(['dir-close', node[2], node[3] as NativeIdentity]);
+        }
       }
     } finally {
       releaseFrame();
@@ -390,7 +438,9 @@ async function foldMetadata(
     await visit(root, true);
     return new Map(summaries.map(({ id, summary }) => [id, summary.finish()]));
   } finally {
-    for (const { summary } of summaries) summary.dispose();
+    for (const { summary } of summaries) {
+      summary.dispose();
+    }
   }
 }
 
@@ -400,6 +450,7 @@ export class MetadataPublicationSet {
   #claimed = false;
   readonly store: OwnedStore;
   readonly options: MetadataDiscoveryOptions;
+
   private constructor(private readonly selected: ReadonlyMap<string, MetadataPublicationSource>) {
     const first = selected.values().next().value!;
     this.store = first.store;
@@ -415,6 +466,7 @@ export class MetadataPublicationSet {
     sets.add(this);
     Object.freeze(this);
   }
+
   static select(
     live: MetadataPublicationSource,
     overrides: readonly (readonly [string, MetadataPublicationSource])[] = [],
@@ -423,8 +475,9 @@ export class MetadataPublicationSet {
     if (
       overrides.length > live.store.codec.options.model.partitions.length ||
       new Set(overrides.map((p) => p[0])).size !== overrides.length
-    )
+    ) {
       throw new Error('Duplicate/unbounded metadata source overrides.');
+    }
     const selected = new Map(live.store.codec.options.model.partitions.map((p) => [p[0], live]));
     for (const [p, source] of overrides) {
       source.assert();
@@ -435,18 +488,27 @@ export class MetadataPublicationSet {
         source.options.budget !== live.options.budget ||
         (source.options.maxDirectoryEntries ?? 100000) !==
           (live.options.maxDirectoryEntries ?? 100000)
-      )
+      ) {
         throw new Error('Snapshot source owner/model/policy mismatch.');
+      }
       source.summary(p);
       selected.set(p, source);
     }
-    for (const [p, source] of selected) source.summary(p);
+    for (const [p, source] of selected) {
+      source.summary(p);
+    }
     return new MetadataPublicationSet(selected);
   }
+
   assert(): void {
-    if (!sets.has(this)) throw new Error('Unbound metadata source set.');
-    for (const source of new Set(this.selected.values())) source.assert();
+    if (!sets.has(this)) {
+      throw new Error('Unbound metadata source set.');
+    }
+    for (const source of new Set(this.selected.values())) {
+      source.assert();
+    }
   }
+
   components(): readonly {
     readonly source: MetadataPublicationSource;
     readonly partitions: readonly string[];
@@ -455,26 +517,41 @@ export class MetadataPublicationSet {
     const components = new Map<MetadataPublicationSource, string[]>();
     for (const [p, source] of this.selected) {
       let partitions = components.get(source);
-      if (!partitions) components.set(source, (partitions = []));
+      if (!partitions) {
+        components.set(source, (partitions = []));
+      }
       partitions.push(p);
     }
     return [...components].map(([source, partitions]) => ({ source, partitions }));
   }
+
   summary(partition: string): PartitionMetadata {
-    if (!sets.has(this)) throw new Error('Unbound metadata source set.');
+    if (!sets.has(this)) {
+      throw new Error('Unbound metadata source set.');
+    }
     const source = this.selected.get(partition);
-    if (!source) throw new Error('Missing selected partition source.');
+    if (!source) {
+      throw new Error('Missing selected partition source.');
+    }
     return source.summary(partition);
   }
+
   assertPartition(partition: string): void {
-    if (!sets.has(this)) throw new Error('Unbound metadata source set.');
+    if (!sets.has(this)) {
+      throw new Error('Unbound metadata source set.');
+    }
     const source = this.selected.get(partition);
-    if (!source) throw new Error('Missing selected partition source.');
+    if (!source) {
+      throw new Error('Missing selected partition source.');
+    }
     source.assert();
   }
+
   claim(): void {
     this.assert();
-    if (this.#claimed) throw new Error('Metadata publication source set already attempted.');
+    if (this.#claimed) {
+      throw new Error('Metadata publication source set already attempted.');
+    }
     this.#claimed = true;
     const claimed: MetadataPublicationSource[] = [];
     try {
@@ -483,11 +560,16 @@ export class MetadataPublicationSet {
         claimed.push(source);
       }
     } catch (error) {
-      for (const source of claimed) source.release();
+      for (const source of claimed) {
+        source.release();
+      }
       throw error;
     }
   }
+
   release(): void {
-    for (const source of new Set(this.selected.values())) source.release();
+    for (const source of new Set(this.selected.values())) {
+      source.release();
+    }
   }
 }

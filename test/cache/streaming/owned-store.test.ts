@@ -31,7 +31,9 @@ import { rawSha, type Value } from '../../../src/cache/streaming/encoding';
 import { localFixtures } from './local-fixtures';
 const roots: string[] = [];
 afterEach(async () => {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 async function fixture(fail?: Failpoint) {
   const root = await mkdtemp(path.resolve('build/owned-store-'));
@@ -44,7 +46,9 @@ async function fixture(fail?: Failpoint) {
 }
 async function collect(source: AsyncIterable<Uint8Array>): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const b of source) chunks.push(Buffer.from(b));
+  for await (const b of source) {
+    chunks.push(Buffer.from(b));
+  }
   return Buffer.concat(chunks);
 }
 it('captures bigint native identities and distinguishes locator identity from mutable directory facts', async () => {
@@ -122,17 +126,20 @@ it('streams local records into Q without a whole-file size quota', async () => {
     'installations',
     { budget, partition: null },
     (async function* () {
-      for (let i = 0; i < count; i++)
+      for (let i = 0; i < count; i++) {
         yield [
           'installation',
           ['gradle-installation', 1, f.options.invocation, '/gradle', 'v' + i, '/cache', '/java'],
         ] as Value;
+      }
     })(),
   );
   expect(ref[3]).toBeGreaterThan(65536);
   let records = 0;
   await f.store.readStream(ref, 'installations', { budget, partition: null }, async (row) => {
-    if (Array.isArray(row) && row[0] === 'installation') records++;
+    if (Array.isArray(row) && row[0] === 'installation') {
+      records++;
+    }
   });
   expect(records).toBe(count);
   expect(budget.retained).toBe(0);
@@ -144,7 +151,9 @@ it.each(['fixed-file-written', 'fixed-rename', 'fixed-publication-barrier'])(
   async (point) => {
     let armed = false;
     const f = await fixture(async (name) => {
-      if (armed && name === point) throw new Error(point);
+      if (armed && name === point) {
+        throw new Error(point);
+      }
     });
     const state = await f.store.initialize(f.bindings),
       next = structuredClone(state) as Value[];
@@ -154,7 +163,9 @@ it.each(['fixed-file-written', 'fixed-rename', 'fixed-publication-barrier'])(
     const reload = await OwnedStore.bind(f.root, f.codec),
       actual = (await reload.state()) as Value[];
     expect(actual[3]).toBe(point === 'fixed-file-written' ? 0 : 1);
-    if (point === 'fixed-file-written') await reload.updateState(next);
+    if (point === 'fixed-file-written') {
+      await reload.updateState(next);
+    }
     expect(((await reload.state()) as Value[])[3]).toBe(1);
   },
 );
@@ -228,9 +239,11 @@ it('cancels an owned stream and closes/discards its unpublished candidate', asyn
 
 it('removes verified unpublished Q files after repeated post-rename failure', async () => {
   const f = await fixture(async (name) => {
-    if (name === 'immutable-rename') throw new Error('publication failed');
+    if (name === 'immutable-rename') {
+      throw new Error('publication failed');
+    }
   });
-  for (let i = 0; i < 3; i++)
+  for (let i = 0; i < 3; i++) {
     await expect(
       f.store.write(
         'worker-archive',
@@ -239,6 +252,7 @@ it('removes verified unpublished Q files after repeated post-rename failure', as
         })(),
       ),
     ).rejects.toThrow('publication failed');
+  }
   const { readdir } = await import('node:fs/promises');
   expect(await readdir(f.store.root.resolve(f.prefix + 'files'))).toEqual([]);
 });
@@ -248,8 +262,11 @@ it('permits only attributable rename fields while ordinary birth identity stays 
   const n = (await f.store.root.stat('file'))!;
   for (const index of [5, 6, 8] as const) {
     const changed = structuredClone(n);
-    if (index === 6) changed[index]++;
-    else changed[index] = String(BigInt(changed[index]) + 1n);
+    if (index === 6) {
+      changed[index]++;
+    } else {
+      changed[index] = String(BigInt(changed[index]) + 1n);
+    }
     expect(sameRename(n, changed)).toBe(false);
   }
   const changed = structuredClone(n);
@@ -299,7 +316,9 @@ it('shares cancellation through owned/local stream layers and releases a pending
     [Symbol.asyncIterator]() {
       return {
         async next() {
-          if (index++ === 0) return { done: false as const, value: ['dir-open', ''] as Value };
+          if (index++ === 0) {
+            return { done: false as const, value: ['dir-open', ''] as Value };
+          }
           entered();
           return new Promise<IteratorResult<Value>>(() => {});
         },

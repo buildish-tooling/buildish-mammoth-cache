@@ -62,13 +62,16 @@ export interface StreamingPrepareDependencies extends Omit<LifecycleOptions, 'bu
   readonly nonce?: string;
   readonly reportSink?: () => Promise<ReportSink>;
 }
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#provider-composition-and-activation-boundary.
 // Action prepare composition. Never calls legacy bootstrap, snapshots or cutoff inventory.
 async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
   const host = d.runtimeHost,
     ci = d.ciProvider.context,
     claim = await claimSingleRunPrepareExecution({ ciContext: ci, saveState: host.saveState });
-  if (!claim.accepted) throw new Error(claim.message);
+  if (!claim.accepted) {
+    throw new Error(claim.message);
+  }
   let layerPreparation: StreamingPrepareResult | undefined;
   try {
     const adapter = d.buildToolAdapterFactory(),
@@ -103,12 +106,17 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       );
       await provision();
       await adapter.installBuildHooks(ci);
-      for (const warning of provisioning!.warnings) host.warning(warning);
-      for (const [key, value] of Object.entries(provisioning!.additionalOutputs))
+      for (const warning of provisioning!.warnings) {
+        host.warning(warning);
+      }
+      for (const [key, value] of Object.entries(provisioning!.additionalOutputs)) {
         host.setOutput(key, value);
+      }
       outputs(host, config, null, null, 0, '', false);
       await prepareSummary(d, 'disabled');
-      if (tool === 'gradle') host.setOutput('gradle-ro-dep-cache', '');
+      if (tool === 'gradle') {
+        host.setOutput('gradle-ro-dep-cache', '');
+      }
       return { outcome: 'disabled' as const };
     }
     const hard = adapter.getHardCacheExcludeGlobs(),
@@ -155,7 +163,9 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
           host.warning(
             `Worker merge selected winners for ${warnings.count} differing contributions.`,
           );
-          for (const detail of warnings.details) host.warning(detail);
+          for (const detail of warnings.details) {
+            host.warning(detail);
+          }
         }
       },
       saveAnchor: (raw) => host.saveState(STREAMING_INVOCATION_STATE, raw),
@@ -174,9 +184,12 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       },
     });
     layerPreparation = result;
-    for (const warning of provisioning?.warnings ?? []) host.warning(warning);
-    for (const [key, value] of Object.entries(provisioning?.additionalOutputs ?? {}))
+    for (const warning of provisioning?.warnings ?? []) {
+      host.warning(warning);
+    }
+    for (const [key, value] of Object.entries(provisioning?.additionalOutputs ?? {})) {
       host.setOutput(key, value);
+    }
     outputs(
       host,
       config,
@@ -191,7 +204,9 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       result.restoreStatus,
     );
     await prepareSummary(d, result.restoreStatus);
-    if (tool === 'gradle' && !result.gradleSeed) host.setOutput('gradle-ro-dep-cache', '');
+    if (tool === 'gradle' && !result.gradleSeed) {
+      host.setOutput('gradle-ro-dep-cache', '');
+    }
     return result;
   } catch (error) {
     const failure = layerPreparation?.gradleSeed
@@ -226,14 +241,17 @@ function outputs(
         : 'not-configured',
     'dependent-delta-artifact-count': String(workers),
   };
-  for (const [name, value] of Object.entries(values)) host.setOutput(name, value);
+  for (const [name, value] of Object.entries(values)) {
+    host.setOutput(name, value);
+  }
 }
 
 async function prepareSummary(d: StreamingPrepareDependencies, outcome: string) {
   const assert = () => {
     d.signal?.throwIfAborted();
-    if (d.assertCurrent() !== undefined)
+    if (d.assertCurrent() !== undefined) {
       throw new Error('Lifecycle assertion must be synchronous.');
+    }
   };
   assert();
   const sink = await d.reportSink?.();
@@ -252,7 +270,9 @@ async function cleanupFailedLayer(
   advertised: boolean,
   e: unknown,
 ): Promise<unknown> {
-  if (!prepared.gradleSeed) return e;
+  if (!prepared.gradleSeed) {
+    return e;
+  }
   const { store, gradleSeed: seed } = prepared;
   const options = {
     ...d,
@@ -309,8 +329,9 @@ export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
       const path = gradleSeedPath(result.store, result.gradleSeed);
       const assertActivation = () => {
         d.signal?.throwIfAborted();
-        if (d.assertCurrent() !== undefined)
+        if (d.assertCurrent() !== undefined) {
           throw new Error('Layer activation lifetime assertion must be synchronous.');
+        }
       };
       assertActivation();
       d.runtimeHost.saveState(
@@ -320,8 +341,9 @@ export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
       advertised = true;
       d.runtimeHost.setOutput('gradle-ro-dep-cache', path);
       assertActivation();
-      if (d.config.exportLayerEnvironment)
+      if (d.config.exportLayerEnvironment) {
         d.runtimeHost.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', path);
+      }
       assertActivation();
       d.runtimeHost.saveState(
         STREAMING_LAYER_ACTIVATED_STATE,
@@ -334,7 +356,9 @@ export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
       prepared && 'gradleSeed' in prepared && prepared.gradleSeed
         ? await cleanupFailedLayer(d, prepared, advertised, error)
         : error;
-    if (prepared) d.runtimeHost.saveState(JOB_PREPARE_FAILED_STATE, 'true');
+    if (prepared) {
+      d.runtimeHost.saveState(JOB_PREPARE_FAILED_STATE, 'true');
+    }
     throw failure;
   }
 }

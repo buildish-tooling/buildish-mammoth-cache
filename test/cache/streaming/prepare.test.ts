@@ -233,21 +233,24 @@ it('composes two real worker archives in configured order, installing complete s
     'data/only-B': 'B',
     'data/shared': 'equivalent',
     'state/from-A': 'complete snapshot',
-  }))
+  })) {
     expect(await readFile(f.store.root.resolve(name), 'utf8')).toBe(body);
+  }
   expect(ready.workerCount).toBe(2);
-  for (const worker of ['A', 'B'])
+  for (const worker of ['A', 'B']) {
     expect(
       logs.some((s) => s.includes(`Finished incoming worker SDK restore [worker=${worker}]`)),
     ).toBe(true);
+  }
   for (const label of [
     'worker discovery',
     'shared worker validation and merge',
     'worker install',
     'handoff creation',
     'cleanup and retirement',
-  ])
+  ]) {
     expect(logs.some((s) => s.includes('Finished ' + label))).toBe(true);
+  }
   expect(logs.some((s) => s.includes('outgoing worker SDK save'))).toBe(false);
   expect(service.list).toHaveBeenCalledTimes(1);
   expect(service.download.mock.calls.map(([id]) => id)).toEqual([2, 1]);
@@ -284,7 +287,9 @@ it.each([
       ...request,
       policy: { ...request.policy, ordinaryOrder: initial },
       installHooks: async () => {
-        if (fail) throw new Error('hook failed');
+        if (fail) {
+          throw new Error('hook failed');
+        }
       },
     };
     await expect(prepareStreaming(retry)).rejects.toThrow('hook failed');
@@ -513,7 +518,9 @@ it('checks the caller lifetime after complete worker merge before the first base
     prepareStreaming({
       ...request,
       assertCurrent: () => {
-        if (revoked) throw new Error('merge lifetime revoked');
+        if (revoked) {
+          throw new Error('merge lifetime revoked');
+        }
       },
     }),
   ).rejects.toThrow();
@@ -615,8 +622,9 @@ it('restores v2 native objects with exact fallback lineage and independent selec
   expect(ready.restoreStatus).toBe('fallback-lineage-hit');
   expect(ready.restoredKey).toBe(generation[11]);
   expect(await readFile(f.store.root.resolve('data/new'), 'utf8')).toBe('base');
-  for (const name of ['data/keep.lock', 'state/keep.lock'])
+  for (const name of ['data/keep.lock', 'state/keep.lock']) {
     expect(await readFile(f.store.root.resolve(name), 'utf8')).toBe('protected');
+  }
   const opened = await OpenedInvocation.open(ready.anchor, f.budget),
     handoff = await LifecycleHandoff.read(ready.store, opened.state[6]!, { budget: f.budget });
   try {
@@ -639,14 +647,20 @@ it.each([false, true])(
         state: { 'state/new': 'snapshot' },
       }),
       entry = entries[0];
-    if (entry[0] !== 'object') throw new Error('object');
+    if (entry[0] !== 'object') {
+      throw new Error('object');
+    }
     const saved = source.objects.get(entry[2][2])!;
-    if (!available) source.objects.delete(entry[2][2]);
+    if (!available) {
+      source.objects.delete(entry[2][2]);
+    }
     const request = {
       ...f.request,
       cacheBackend: async () => source.api,
       fail: async (name: string) => {
-        if (name === 'prepare-base-installed') throw new Error('install interrupted');
+        if (name === 'prepare-base-installed') {
+          throw new Error('install interrupted');
+        }
       },
     };
     await expect(prepareStreaming(request)).rejects.toThrow('install interrupted');
@@ -654,8 +668,11 @@ it.each([false, true])(
     expect(opened.state[4]).toBe('prepare-failed');
     expect(opened.state[6]).toBeNull();
     const restores = source.restore.mock.calls.length;
-    if (available) source.objects.delete(entry[2][2]);
-    else source.objects.set(entry[2][2], saved);
+    if (available) {
+      source.objects.delete(entry[2][2]);
+    } else {
+      source.objects.set(entry[2][2], saved);
+    }
     await expect(prepareStreaming(request)).rejects.toThrow('fresh dedicated root');
     expect(source.restore).toHaveBeenCalledTimes(restores);
   },
@@ -672,7 +689,9 @@ it('checks caller lifetime after awaited v2 base acquisition before live install
     ...source.api,
     restoreCache: async (...args) => {
       const result = await restore(...args);
-      if (args[0].some((p) => p.replaceAll('\\', '/').includes('/payload'))) revoked = true;
+      if (args[0].some((p) => p.replaceAll('\\', '/').includes('/payload'))) {
+        revoked = true;
+      }
       return result;
     },
   };
@@ -682,7 +701,9 @@ it('checks caller lifetime after awaited v2 base acquisition before live install
       ...f.request,
       cacheBackend: async () => api,
       assertCurrent: () => {
-        if (revoked) throw new Error('base lifetime revoked');
+        if (revoked) {
+          throw new Error('base lifetime revoked');
+        }
       },
     }),
   ).rejects.toThrow();
@@ -697,10 +718,14 @@ it('rejects lifetime revocation after the actual durable ready commit', async ()
     prepareStreaming({
       ...f.request,
       fail: async (name) => {
-        if (name === 'prepare-ready') revoked = true;
+        if (name === 'prepare-ready') {
+          revoked = true;
+        }
       },
       assertCurrent: () => {
-        if (revoked) throw new Error('ready lifetime revoked');
+        if (revoked) {
+          throw new Error('ready lifetime revoked');
+        }
       },
     }),
   ).rejects.toThrow('ready lifetime revoked');
@@ -715,9 +740,11 @@ it.each(['cold', 'empty', 'mixed'] as const)(
         f,
         kind === 'empty' ? {} : { data: { 'data/a': 'a' }, state: { 'state/a': 'a' } },
       );
-    for (const entry of entries)
-      if (entry[0] === 'object' && (kind === 'cold' || (kind === 'mixed' && entry[1] === 'data')))
+    for (const entry of entries) {
+      if (entry[0] === 'object' && (kind === 'cold' || (kind === 'mixed' && entry[1] === 'data'))) {
         source.objects.delete(entry[2][2]);
+      }
+    }
     const ready = await prepareStreaming({ ...f.request, cacheBackend: async () => source.api });
     expect(ready.restoreStatus).toBe(
       kind === 'cold'
@@ -895,8 +922,9 @@ it('walks shared managed directories once with linear metadata work and no paylo
       'scratchLogicalWriteBytes',
       'bodyHashCalls',
       'unlinks',
-    ] as const)
+    ] as const) {
       expect(root.work[key]).toBe(0);
+    }
   }
 });
 
@@ -925,8 +953,12 @@ it.each(['absent', 'running', 'uncertain', 'error', 'abort'] as const)(
     const controller = new AbortController();
     const reason = new Error('prepare canceled');
     const inspect = vi.fn(async () => {
-      if (kind === 'error') throw new Error('process record unavailable');
-      if (kind === 'abort') controller.abort(reason);
+      if (kind === 'error') {
+        throw new Error('process record unavailable');
+      }
+      if (kind === 'abort') {
+        controller.abort(reason);
+      }
       return { remaining: kind === 'running', uncertain: kind === 'uncertain' };
     });
     const stop = vi.fn(async () => {});
@@ -958,13 +990,15 @@ it.each(['absent', 'running', 'uncertain', 'error', 'abort'] as const)(
       expect(f.provision).toHaveBeenCalledOnce();
       expect(f.hooks).toHaveBeenCalledOnce();
     } else {
-      if (kind === 'abort') await expect(result).rejects.toBe(reason);
-      else
+      if (kind === 'abort') {
+        await expect(result).rejects.toBe(reason);
+      } else {
         await expect(result).rejects.toThrow(
           kind === 'running'
             ? 'A running Gradle daemon was detected'
             : 'Could not establish that Gradle daemons are absent',
         );
+      }
       expect(cache).not.toHaveBeenCalled();
       expect(f.provision).not.toHaveBeenCalled();
       expect(f.hooks).not.toHaveBeenCalled();

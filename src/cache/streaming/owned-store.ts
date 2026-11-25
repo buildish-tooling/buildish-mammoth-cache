@@ -53,6 +53,7 @@ import {
 } from './local-stream';
 
 export type Reference = ['ref', string, string, number, string];
+
 export interface WrittenLocalStream {
   readonly reference: Reference;
   readonly native: NativeIdentity;
@@ -68,13 +69,19 @@ export const locatorSchema = z
   .refine((r) => r[3] === `.mammoth/v1/${r[2]}/state.json`);
 export async function readFixedMetadata(root: NativeRoot, relative: string): Promise<Value | null> {
   const current = await root.stat(relative);
-  if (!current) return null;
-  if (BigInt(current[5]) > 65536n) throw new Error('Fixed document exceeds record bound.');
+  if (!current) {
+    return null;
+  }
+  if (BigInt(current[5]) > 65536n) {
+    throw new Error('Fixed document exceeds record bound.');
+  }
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of root.read(relative, current)) {
     size = add(size, chunk.length);
-    if (size > 65536) throw new Error('Fixed document grew.');
+    if (size > 65536) {
+      throw new Error('Fixed document grew.');
+    }
     chunks.push(chunk);
   }
   return decodeRecord(Buffer.concat(chunks));
@@ -83,7 +90,9 @@ export async function readFixedMetadata(root: NativeRoot, relative: string): Pro
 /** Control records only; old payload and plans never become cleanup authority. */
 export async function completedPreviousOwner(root: NativeRoot): Promise<string | null> {
   const raw = await readFixedMetadata(root, '.mammoth/v1/current.json');
-  if (raw === null) return null;
+  if (raw === null) {
+    return null;
+  }
   const locator = locatorSchema.parse(raw),
     state = await readFixedMetadata(root, locator[3]);
   if (
@@ -93,10 +102,11 @@ export async function completedPreviousOwner(root: NativeRoot): Promise<string |
     state[1] !== 2 ||
     state[2] !== locator[2] ||
     state[4] !== 'completed'
-  )
+  ) {
     throw new Error(
       'Interrupted lifecycle; use a fresh dedicated root or handle retained data manually.',
     );
+  }
   const reference = ownedReferenceSchema(locator[2], 'bindings').parse(state[5]);
   const binding = await readFixedMetadata(root, reference[2]);
   if (
@@ -104,13 +114,15 @@ export async function completedPreviousOwner(root: NativeRoot): Promise<string |
     binding.length !== 9 ||
     binding[1] !== 2 ||
     !Array.isArray(binding[5])
-  )
+  ) {
     throw new Error('Missing previous root binding.');
+  }
   const bytes = encodeRecord(binding);
   equal([bytes.length, rawSha(bytes)], [reference[3], reference[4]], 'previous bindings');
   const anchor = binding[5];
-  if (anchor[0] !== root.path || !sameObject(nativeIdentitySchema.parse(anchor[1]), root.binding))
+  if (anchor[0] !== root.path || !sameObject(nativeIdentitySchema.parse(anchor[1]), root.binding)) {
     throw new Error('Previous root binding changed.');
+  }
   return locator[2];
 }
 
@@ -120,19 +132,27 @@ export class OwnedStore {
   private readonly writtenNative = new WeakMap<object, NativeIdentity>();
   private readonly admittedNative = new WeakMap<object, NativeIdentity>();
   private readonly writtenStreams = new WeakMap<object, WrittenLocalStream>();
+
   /** Only the exact reference returned by this writer can transfer its original N. */
   completedFile(reference: Reference): NativeIdentity | undefined {
     const original = this.writtenReferences.get(reference);
-    if (original) equal(reference, original, 'completed file reference');
+    if (original) {
+      equal(reference, original, 'completed file reference');
+    }
     return this.writtenNative.get(reference);
   }
+
   completedStream(reference: Value): WrittenLocalStream | undefined {
     const proof =
       reference && typeof reference === 'object' ? this.writtenStreams.get(reference) : undefined;
-    if (proof) equal(reference, proof.reference, 'completed stream reference');
+    if (proof) {
+      equal(reference, proof.reference, 'completed stream reference');
+    }
     return proof;
   }
+
   readonly prefix: string;
+
   private constructor(
     readonly root: NativeRoot,
     readonly codec: LocalCodec,
@@ -140,6 +160,7 @@ export class OwnedStore {
   ) {
     this.prefix = codec.schemas.prefix;
   }
+
   static async bind(
     root: string,
     codec: LocalCodec,
@@ -147,21 +168,27 @@ export class OwnedStore {
   ): Promise<OwnedStore> {
     return new OwnedStore(await NativeRoot.bind(root), codec, fail);
   }
+
   async makeParents(relative: string): Promise<void> {
-    if (relative !== '.mammoth/v1/current.json') this.codec.schemas.owned.parse(relative);
+    if (relative !== '.mammoth/v1/current.json') {
+      this.codec.schemas.owned.parse(relative);
+    }
     await this.root.verifyRoot();
     let current = '';
     for (const part of relative.split('/').slice(0, -1)) {
       current = current ? current + '/' + part : part;
       const before = await this.root.stat(current);
       if (before) {
-        if (before[2] !== 'directory') throw new Error('Owned parent is not a directory.');
+        if (before[2] !== 'directory') {
+          throw new Error('Owned parent is not a directory.');
+        }
         continue;
       }
       await mkdir(this.root.resolve(current));
       this.root.work.directoryCreations++;
     }
   }
+
   async write(
     purpose: string,
     source: AsyncIterable<Uint8Array>,
@@ -170,14 +197,16 @@ export class OwnedStore {
   ): Promise<Reference> {
     return this.writeAt(purpose, this.prefix + 'files/' + randomUUID(), source, signal, budget);
   }
+
   /** SDK raw upload names artifacts from the file basename; pin it before Q publication. */
   async writeNamedWorkerArchive(
     name: string,
     source: AsyncIterable<Uint8Array>,
     signal = new AbortController().signal,
   ): Promise<Reference> {
-    if (typeof name !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,232}\.tar\.gz$/.test(name))
+    if (typeof name !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,232}\.tar\.gz$/.test(name)) {
       throw new Error('Invalid raw worker artifact filename.');
+    }
     return this.writeAt(
       'worker-archive',
       this.prefix + 'archives/' + randomUUID() + '/' + name,
@@ -185,6 +214,7 @@ export class OwnedStore {
       signal,
     );
   }
+
   /** Native SDK metadata has fixed basenames before its immutable Q is exposed. */
   async writeNativeMetadata(
     root: string,
@@ -194,15 +224,19 @@ export class OwnedStore {
     budget?: WorkingBudget,
   ): Promise<Reference> {
     this.codec.schemas.owned.parse(root);
-    if (!['envelope.json', 'record.json'].includes(name))
+    if (!['envelope.json', 'record.json'].includes(name)) {
       throw new Error('Unknown native metadata name.');
+    }
     const purpose = {
       'envelope.json': 'envelope',
       'record.json': 'generation',
     }[name];
-    if (!purpose) throw new Error('Unknown native metadata name.');
+    if (!purpose) {
+      throw new Error('Unknown native metadata name.');
+    }
     return this.writeAt(purpose, root + '/' + name, source, signal, budget);
   }
+
   private async writeAt(
     purpose: string,
     target: string,
@@ -229,8 +263,9 @@ export class OwnedStore {
     const checkWritten = async () => {
       this.root.work.stats++;
       const raw = await handle.stat({ bigint: true });
-      if (raw.nlink !== 1n || !sameNative(previousNative, nativeIdentity(raw), true))
+      if (raw.nlink !== 1n || !sameNative(previousNative, nativeIdentity(raw), true)) {
         throw new Error('Owned candidate changed outside its writer.');
+      }
     };
     const wrote = async (length: number) => {
       this.root.work.stats++;
@@ -240,11 +275,12 @@ export class OwnedStore {
         raw.nlink !== 1n ||
         Number(raw.size) !== length ||
         created.some((v, i) => ![5, 7, 8, 9].includes(i) && v !== after[i])
-      )
+      ) {
         throw new Error('Owned candidate write identity/length changed.');
+      }
       previousNative = after;
     };
-    if (budget)
+    if (budget) {
       writer = new BufferedWriter(
         handle,
         budget,
@@ -258,16 +294,20 @@ export class OwnedStore {
         checkWritten,
         () => wrote(writer!.written),
       );
+    }
     let bytes = 0;
     let movedIdentity: NativeIdentity | undefined;
     try {
-      if (createdRaw.nlink !== 1n || createdRaw.size !== 0n)
+      if (createdRaw.nlink !== 1n || createdRaw.size !== 0n) {
         throw new Error('Unsafe owned candidate.');
+      }
       for await (const chunk of abortableValues(source, signal)) {
-        if (!(chunk instanceof Uint8Array) || chunk.byteLength > 256 * 1024)
+        if (!(chunk instanceof Uint8Array) || chunk.byteLength > 256 * 1024) {
           throw new Error('Invalid owned stream chunk.');
-        if (writer) await writer.append(chunk);
-        else {
+        }
+        if (writer) {
+          await writer.append(chunk);
+        } else {
           await checkWritten();
           this.root.work.metadataWriteCalls++;
           await handle.writeFile(chunk);
@@ -277,7 +317,9 @@ export class OwnedStore {
         hash.update(chunk);
         bytes = add(bytes, chunk.byteLength);
       }
-      if (!bytes) throw new Error('Empty referenced bytes.');
+      if (!bytes) {
+        throw new Error('Empty referenced bytes.');
+      }
       signal.throwIfAborted();
       await writer?.flush();
       await checkWritten();
@@ -289,8 +331,9 @@ export class OwnedStore {
       await this.fail('immutable-rename');
       await this.fail('immutable-publication-barrier');
       const published = await this.root.stat(target);
-      if (!published || !sameNative(movedIdentity, published, true))
+      if (!published || !sameNative(movedIdentity, published, true)) {
         throw new Error('Published owned candidate changed.');
+      }
       signal.throwIfAborted();
       const reference = this.codec.schemas
         .ref(purpose)
@@ -305,13 +348,16 @@ export class OwnedStore {
         // retire only our same native object; crashes leave discoverable owned files.
         for (const name of [candidate, target]) {
           const current = await this.root.stat(name);
-          if (!current) continue;
+          if (!current) {
+            continue;
+          }
           if (
             name === target
               ? !movedIdentity || !sameNative(movedIdentity, current, true)
               : !sameObject(created, current)
-          )
+          ) {
             throw new Error('Unpublished candidate ownership is ambiguous.', { cause: error });
+          }
           await unlink(this.root.resolve(name));
         }
       } catch (cleanup) {
@@ -327,6 +373,7 @@ export class OwnedStore {
       await handle.close();
     }
   }
+
   async writeDocument(value: Value): Promise<Reference> {
     const valid = this.codec.validate(value),
       purpose = String((valid as Value[])[0]),
@@ -340,8 +387,9 @@ export class OwnedStore {
         'relocation',
         'retirement',
       ].includes(purpose)
-    )
+    ) {
       throw new Error('Fixed document cannot be a Q candidate.');
+    }
     return this.write(
       purpose,
       (async function* () {
@@ -349,6 +397,7 @@ export class OwnedStore {
       })(),
     );
   }
+
   async writeStream(
     purpose: LocalPurpose,
     options: Omit<LocalStreamOptions, 'codec'>,
@@ -382,8 +431,9 @@ export class OwnedStore {
     );
     // Only context-independent stream grammars participate in this producer handoff.
     if (purpose === 'observations') {
-      if (!seal || seal.sha !== reference[4] || seal.bytes !== reference[3])
+      if (!seal || seal.sha !== reference[4] || seal.bytes !== reference[3]) {
         throw new Error('Incomplete local writer seal.');
+      }
       const header = [
         'local-stream',
         1,
@@ -408,26 +458,36 @@ export class OwnedStore {
     }
     return reference;
   }
+
   async *read(reference: Value, purpose: string): AsyncGenerator<Buffer> {
     const ref = this.codec.schemas.ref(purpose).parse(reference),
       hash = createHash('sha256');
     let bytes = 0;
     for await (const chunk of this.root.read(ref[2])) {
       bytes = add(bytes, chunk.length);
-      if (bytes > ref[3]) throw new Error('Owned reference length exceeded.');
+      if (bytes > ref[3]) {
+        throw new Error('Owned reference length exceeded.');
+      }
       hash.update(chunk);
       yield chunk;
     }
-    if (bytes !== ref[3] || hash.digest('hex') !== ref[4])
+    if (bytes !== ref[3] || hash.digest('hex') !== ref[4]) {
       throw new Error('Owned reference bytes changed.');
+    }
   }
+
   async readDocument(reference: Value, purpose: string): Promise<Value> {
     const ref = this.codec.schemas.ref(purpose).parse(reference);
-    if (ref[3] > 65536) throw new Error('Local document exceeds record bound.');
+    if (ref[3] > 65536) {
+      throw new Error('Local document exceeds record bound.');
+    }
     const chunks: Buffer[] = [];
-    for await (const bytes of this.read(ref, purpose)) chunks.push(bytes);
+    for await (const bytes of this.read(ref, purpose)) {
+      chunks.push(bytes);
+    }
     return this.codec.decodeReferenced(Buffer.concat(chunks), ref);
   }
+
   async readStream(
     reference: Value,
     purpose: LocalPurpose,
@@ -446,6 +506,7 @@ export class OwnedStore {
       signal,
     );
   }
+
   async *rowBatches(
     reference: Value,
     purpose: LocalPurpose,
@@ -464,15 +525,18 @@ export class OwnedStore {
       batchChargeLimit,
     )) {
       this.root.work.metadataBatches++;
-      for (const row of batch)
+      for (const row of batch) {
         if (
           Array.isArray(row.value) &&
           !['local-stream', 'local-end'].includes(String(row.value[0]))
-        )
+        ) {
           this.root.work.metadataRowsRead++;
+        }
+      }
       yield batch;
     }
   }
+
   async *rows(
     reference: Value,
     purpose: LocalPurpose,
@@ -502,7 +566,9 @@ export class OwnedStore {
             row.value[0] !== 'local-end';
           if (data) {
             this.root.work.metadataRowsRead++;
-            if (beforeAccept) await withAbort(beforeAccept(row.value), signal);
+            if (beforeAccept) {
+              await withAbort(beforeAccept(row.value), signal);
+            }
           }
           signal.throwIfAborted();
           yield { value: row.value, start: row.start, end: row.end, record: record++ };
@@ -530,24 +596,32 @@ export class OwnedStore {
         Array.isArray(row.value) &&
         row.value[0] !== 'local-stream' &&
         row.value[0] !== 'local-end'
-      )
+      ) {
         this.root.work.metadataRowsRead++;
+      }
       yield row;
     }
-    if (!acceptedNative) throw new Error('Missing completed metadata read identity.');
-    if (reference && typeof reference === 'object')
+    if (!acceptedNative) {
+      throw new Error('Missing completed metadata read identity.');
+    }
+    if (reference && typeof reference === 'object') {
       this.admittedNative.set(reference, acceptedNative);
+    }
   }
+
   async readFixed(relative: string): Promise<Value | null> {
     return readFixedMetadata(this.root, relative);
   }
+
   private async fixed(relative: string, value: Value): Promise<void> {
     const bytes = this.codec.encode(value),
       candidate = relative + '.candidate';
     await this.makeParents(relative);
     const existing = await this.root.stat(candidate);
     if (existing) {
-      if (existing[2] !== 'file') throw new Error('Unsafe fixed-document candidate.');
+      if (existing[2] !== 'file') {
+        throw new Error('Unsafe fixed-document candidate.');
+      }
       await unlink(this.root.resolve(candidate));
     }
     this.root.work.opens++;
@@ -560,42 +634,53 @@ export class OwnedStore {
     }
     await this.fail('fixed-file-written');
     const target = await this.root.stat(relative);
-    if (target && target[2] !== 'file') throw new Error('Unsafe fixed target.');
+    if (target && target[2] !== 'file') {
+      throw new Error('Unsafe fixed target.');
+    }
     await rename(this.root.resolve(candidate), this.root.resolve(relative));
     this.root.work.renames++;
     await this.fail('fixed-rename');
     await this.fail('fixed-publication-barrier');
   }
+
   async locator(): Promise<z.infer<typeof locatorSchema> | null> {
     const value = await this.readFixed('.mammoth/v1/current.json');
     return value === null ? null : locatorSchema.parse(value);
   }
+
   async state(): Promise<Value> {
     const locator = await this.locator();
-    if (!locator || locator[2] !== this.codec.options.invocation)
+    if (!locator || locator[2] !== this.codec.options.invocation) {
       throw new Error('Invocation is not current.');
+    }
     const value = await this.readFixed(locator[3]);
-    if (value === null) throw new Error('Current state missing.');
+    if (value === null) {
+      throw new Error('Current state missing.');
+    }
     return this.codec.schemas.documents['local-state'].parse(value);
   }
+
   async initialize(bindings: Value, previous?: OwnedStore): Promise<Value> {
     if (
       previous &&
       (previous.codec.options.invocation === this.codec.options.invocation ||
         previous.root.path !== this.root.path ||
         !sameObject(previous.root.binding, this.root.binding))
-    )
+    ) {
       throw new Error('Invalid previous owner/root or same invocation.');
+    }
     await this.assertNoIntents();
     const locator = await this.locator();
     if (locator) {
       const old = await completedPreviousOwner(this.root);
-      if (old === this.codec.options.invocation)
+      if (old === this.codec.options.invocation) {
         throw new Error('Prepare cannot restart the same invocation.');
+      }
     }
     const b = this.codec.schemas.documents.bindings.parse(this.codec.validate(bindings));
-    if (b[5][0] !== this.root.path || !sameObject(b[5][1], this.root.binding))
+    if (b[5][0] !== this.root.path || !sameObject(b[5][1], this.root.binding)) {
       throw new Error('Bindings managed-root identity mismatch.');
+    }
     const ref = await this.writeDocument(b),
       state: Value = [
         'local-state',
@@ -616,44 +701,59 @@ export class OwnedStore {
     ]);
     return state;
   }
+
   async updateState(value: Value): Promise<void> {
     const before = this.codec.schemas.documents['local-state'].parse(await this.state()),
       next = this.codec.schemas.documents['local-state'].parse(value);
-    if (next[3] !== before[3] + 1) throw new Error('State revision did not advance once.');
+    if (next[3] !== before[3] + 1) {
+      throw new Error('State revision did not advance once.');
+    }
     await this.fixed(this.prefix + 'state.json', next);
   }
+
   async assertNoIntents(): Promise<void> {
     await checkRootIntents(this.root);
   }
 
   async retireAdmittedMetadata(reference: Reference): Promise<void> {
     const expected = this.admittedNative.get(reference);
-    if (!expected) throw new Error('Missing completed admitted metadata disposal owner.');
+    if (!expected) {
+      throw new Error('Missing completed admitted metadata disposal owner.');
+    }
     const actual = await this.root.stat(reference[2]);
-    if (!actual || !sameNative(expected, actual, true))
+    if (!actual || !sameNative(expected, actual, true)) {
       throw new Error('Admitted metadata changed; retained at ' + this.root.resolve(reference[2]));
+    }
     await unlink(this.root.resolve(reference[2]));
     this.root.work.unlinks++;
     this.root.work.cleanupFiles++;
     this.admittedNative.delete(reference);
   }
+
   hasAdmittedMetadata(reference: Reference): boolean {
     return this.admittedNative.has(reference);
   }
+
   /** Original successful writer identity authorizes disposal, never a decoded reference or content rehash. */
   async retireProducedMetadata(reference: Reference): Promise<void> {
     const expected = this.writtenNative.get(reference);
-    if (!expected) throw new Error('Missing original produced metadata disposal owner.');
+    if (!expected) {
+      throw new Error('Missing original produced metadata disposal owner.');
+    }
     const actual = await this.root.stat(reference[2]);
-    if (!actual) return;
-    if (!sameNative(expected, actual, true))
+    if (!actual) {
+      return;
+    }
+    if (!sameNative(expected, actual, true)) {
       throw new Error('Produced metadata changed; retained at ' + this.root.resolve(reference[2]));
+    }
     await unlink(this.root.resolve(reference[2]));
     this.root.work.unlinks++;
     this.root.work.cleanupFiles++;
     this.writtenNative.delete(reference);
     this.writtenStreams.delete(reference);
   }
+
   /** These Q purposes are referenced only by root-state cells, never arbitrary streams. */
   async retireReplacedDocument(reference: Value): Promise<void> {
     if (
@@ -661,18 +761,24 @@ export class OwnedStore {
       !['bindings', 'install-progress', 'gc-progress', 'publication', 'quiescence'].includes(
         String(reference[1]),
       )
-    )
+    ) {
       throw new Error('Retirement requires a root-state document.');
+    }
     const ref = this.codec.schemas.ref(String(reference[1])).parse(reference),
       state = await this.state();
     const contains = (v: Value): boolean =>
       Array.isArray(v) && ((v[0] === 'ref' && v[2] === ref[2]) || v.some(contains));
-    if (contains(state)) throw new Error('Cannot retire referenced immutable bytes.');
+    if (contains(state)) {
+      throw new Error('Cannot retire referenced immutable bytes.');
+    }
     // Revalidate exact old bytes before unlink; no recursive or name-only cleanup.
-    for await (const chunk of this.read(ref, ref[1])) void chunk;
+    for await (const chunk of this.read(ref, ref[1])) {
+      void chunk;
+    }
     await unlink(this.root.resolve(ref[2]));
     this.root.work.unlinks++;
   }
+
   /** Purpose-exclusive install metadata, detached by its owning installer. */
   async retireInstallMetadata(reference: Value): Promise<void> {
     this.codec.schemas.ref('install-plan').parse(reference);
@@ -691,21 +797,34 @@ async function checkRootIntents(root: NativeRoot) {
     'workspace-apply-v2/intent.json',
     'workspace-apply-v3/intent.json',
     'cutoff-state-v2/current.json',
-  ])
-    if (await root.stat('.mammoth/' + name))
+  ]) {
+    if (await root.stat('.mammoth/' + name)) {
       throw new Error('Incompatible legacy destructive intent/lifecycle.');
+    }
+  }
   const base = '.mammoth/v1';
-  if (!(await root.stat(base))) return;
+  if (!(await root.stat(base))) {
+    return;
+  }
   for await (const entry of await opendir(root.resolve(base))) {
-    if (entry.name === 'current.json' || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
-    if (!entry.isDirectory() || entry.isSymbolicLink())
+    if (entry.name === 'current.json' || !/^[a-f0-9]{64}$/.test(entry.name)) {
+      continue;
+    }
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
       throw new Error('Unsafe invocation discovery directory.');
-    for (const file of ['install-intent.json', 'gc-intent.json'])
-      if (await root.stat(base + '/' + entry.name + '/' + file))
+    }
+    for (const file of ['install-intent.json', 'gc-intent.json']) {
+      if (await root.stat(base + '/' + entry.name + '/' + file)) {
         throw new Error('Pending root-local destructive intent.');
+      }
+    }
     const relocation = base + '/' + entry.name + '/relocation';
-    if (await root.stat(relocation))
-      for await (const marker of await opendir(root.resolve(relocation)))
-        if (marker.name.endsWith('.json')) throw new Error('Pending root-local relocation.');
+    if (await root.stat(relocation)) {
+      for await (const marker of await opendir(root.resolve(relocation))) {
+        if (marker.name.endsWith('.json')) {
+          throw new Error('Pending root-local relocation.');
+        }
+      }
+    }
   }
 }

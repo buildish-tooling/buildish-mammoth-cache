@@ -20,10 +20,12 @@ import type { OwnedStore } from './owned-store';
 import { baseName, joinPath, nativeAliasKey, parentPath, type WorkingBudget } from './tree-state';
 
 type Child = { name: string; sources: bigint; directories: bigint; alias: boolean };
+
 type SharedView = {
   names: ReadonlyMap<string, Child>;
   directories: ReadonlyMap<number, NativeIdentity>;
 };
+
 type Frame = {
   path: string;
   sources: bigint;
@@ -39,6 +41,7 @@ export class BaseMoveBoundaries {
   private enabled = true;
   private charged = 0;
   private readonly unregister: () => void;
+
   constructor(
     private readonly store: OwnedStore,
     private readonly budget: WorkingBudget,
@@ -50,7 +53,9 @@ export class BaseMoveBoundaries {
   }
 
   close(): void {
-    if (!this.enabled) return;
+    if (!this.enabled) {
+      return;
+    }
     this.enabled = false;
     this.views.clear();
     this.parents.length = 0;
@@ -73,11 +78,14 @@ export class BaseMoveBoundaries {
       this.budget.release(frame.charge);
       this.charged -= frame.charge;
     }
-    if (!this.enabled) return async () => false;
+    if (!this.enabled) {
+      return async () => false;
+    }
     const bit = 1n << BigInt(this.sources.findIndex((source) => source.partition === partition));
     const live = await this.directory('');
-    if (!live || !sameObject(live, this.store.root.binding))
+    if (!live || !sameObject(live, this.store.root.binding)) {
       throw new Error('Managed root was replaced.');
+    }
     this.parents.push({
       path: '',
       sources: (1n << BigInt(this.sources.length)) - 1n,
@@ -89,13 +97,19 @@ export class BaseMoveBoundaries {
 
   private async view(parent: Frame): Promise<SharedView | undefined> {
     const saved = this.views.get(parent.path);
-    if (saved) return saved;
-    if (!this.retain(192 + 4 * Buffer.byteLength(parent.path))) return undefined;
+    if (saved) {
+      return saved;
+    }
+    if (!this.retain(192 + 4 * Buffer.byteLength(parent.path))) {
+      return undefined;
+    }
     const names = new Map<string, Child>(),
       directories = new Map<number, NativeIdentity>();
     for (const [index, source] of this.sources.entries()) {
       const bit = 1n << BigInt(index);
-      if (!(parent.sources & bit)) continue;
+      if (!(parent.sources & bit)) {
+        continue;
+      }
       this.signal?.throwIfAborted();
       const payload = source.root + '/payload';
       const path = parent.path ? joinPath(payload, parent.path) : payload;
@@ -128,20 +142,24 @@ export class BaseMoveBoundaries {
         const key = nativeAliasKey(entry.name);
         let child = names.get(key);
         if (!child) {
-          if (!this.retain(192 + 4 * (Buffer.byteLength(key) + Buffer.byteLength(entry.name))))
+          if (!this.retain(192 + 4 * (Buffer.byteLength(key) + Buffer.byteLength(entry.name)))) {
             return undefined;
+          }
           child = { name: entry.name, sources: 0n, directories: 0n, alias: false };
           names.set(key, child);
         }
         child.alias ||= child.name !== entry.name;
         child.sources |= bit;
-        if (entry.isDirectory()) child.directories |= bit;
+        if (entry.isDirectory()) {
+          child.directories |= bit;
+        }
       }
       if (
         !(await this.matches(path, before)) ||
         (expectedParent && !(await this.matches(parentPath(path), expectedParent)))
-      )
+      ) {
         throw new Error('Staged restore boundary changed while listing.');
+      }
       directories.set(index, before);
     }
     const view = { names, directories };
@@ -161,8 +179,12 @@ export class BaseMoveBoundaries {
         ? nativeIdentity(native)
         : undefined;
     } catch (error) {
-      if (missing(error)) return null;
-      if ((error as NodeJS.ErrnoException).code === 'ENOTDIR') return undefined;
+      if (missing(error)) {
+        return null;
+      }
+      if ((error as NodeJS.ErrnoException).code === 'ENOTDIR') {
+        return undefined;
+      }
       throw error;
     }
   }
@@ -173,14 +195,20 @@ export class BaseMoveBoundaries {
   }
 
   private async live(path: string, parent: Frame): Promise<Frame['live']> {
-    if (!parent.live) return parent.live;
-    if (!(await this.matches(parent.path, parent.live))) return undefined;
+    if (!parent.live) {
+      return parent.live;
+    }
+    if (!(await this.matches(parent.path, parent.live))) {
+      return undefined;
+    }
     const child = await this.directory(path);
     return (await this.matches(parent.path, parent.live)) ? child : undefined;
   }
 
   private async intact(path: string, bit: bigint): Promise<boolean> {
-    if (!path || !this.enabled) return false;
+    if (!path || !this.enabled) {
+      return false;
+    }
     const parentName = parentPath(path);
     while (this.parents[this.parents.length - 1].path !== parentName) {
       const removed = this.parents.pop()!;
@@ -192,7 +220,9 @@ export class BaseMoveBoundaries {
       stagedParents: Frame['stagedParents'];
     if (sources && sources !== bit) {
       const view = await this.view(parent);
-      if (!view) return false;
+      if (!view) {
+        return false;
+      }
       stagedParents = view.directories;
       const child = view.names.get(nativeAliasKey(baseName(path)));
       sources =
@@ -201,9 +231,13 @@ export class BaseMoveBoundaries {
           : 0n;
     }
     const live = sources ? await this.live(path, parent) : undefined;
-    if (sources === bit && live === null) return true;
+    if (sources === bit && live === null) {
+      return true;
+    }
     const charge = 384 + 4 * Buffer.byteLength(path);
-    if (this.retain(charge)) this.parents.push({ path, sources, stagedParents, live, charge });
+    if (this.retain(charge)) {
+      this.parents.push({ path, sources, stagedParents, live, charge });
+    }
     return false;
   }
 }

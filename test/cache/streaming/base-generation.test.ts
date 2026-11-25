@@ -82,7 +82,9 @@ it('distinguishes unavailable object groups from declared empty partitions witho
   const f = await fixture(),
     seeded = await f.seed({ data: { 'data/a': 'body' } });
   const object = seeded.entries[0];
-  if (object[0] !== 'object') throw new Error('fixture');
+  if (object[0] !== 'object') {
+    throw new Error('fixture');
+  }
   f.objects.delete(object[2][2]);
   const result = await acquire(f);
   try {
@@ -99,15 +101,21 @@ it.each(['oversize', 'malformed', 'partial', 'foreign-key', 'extra-member'] as c
     const f = await fixture(),
       seeded = await f.seed({ data: { 'data/a': 'body' } }),
       original = f.restore.getMockImplementation()!;
-    if (mode === 'oversize')
+    if (mode === 'oversize') {
       await writeFile(seeded.target + '/record.json', Buffer.alloc(65537, 32));
-    if (mode === 'malformed') await writeFile(seeded.target + '/record.json', '[]\n');
-    if (mode === 'extra-member') await writeFile(seeded.target + '/unexpected', 'foreign member');
-    if (mode === 'partial' || mode === 'foreign-key')
+    }
+    if (mode === 'malformed') {
+      await writeFile(seeded.target + '/record.json', '[]\n');
+    }
+    if (mode === 'extra-member') {
+      await writeFile(seeded.target + '/unexpected', 'foreign member');
+    }
+    if (mode === 'partial' || mode === 'foreign-key') {
       f.restore.mockImplementation(async (...args) => {
         await original(...args);
         return mode === 'partial' ? undefined : 'unrelated-generation';
       });
+    }
     await expect(acquire(f)).rejects.toThrow();
     expect(f.restore).toHaveBeenCalledTimes(1);
     expect(await readdir(f.store.root.resolve(f.store.prefix + 'base'))).toEqual([]);
@@ -129,7 +137,9 @@ it('still validates an available malformed sibling after an earlier partition is
   const f = await fixture(),
     seeded = await f.seed({ data: { 'data/a': 'body' }, state: { 'state/a': 'snapshot' } });
   const [data, state] = seeded.entries;
-  if (data[0] !== 'object' || state[0] !== 'object') throw new Error('fixture');
+  if (data[0] !== 'object' || state[0] !== 'object') {
+    throw new Error('fixture');
+  }
   f.objects.delete(data[2][2]);
   await writeFile(f.objects.get(state[2][2])! + '/envelope.json', '[]\n');
   await expect(acquire(f)).rejects.toThrow();

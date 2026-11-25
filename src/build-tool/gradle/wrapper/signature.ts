@@ -251,13 +251,19 @@ async function resolveWindowsGpgCommand(env: NodeJS.ProcessEnv): Promise<string>
   const searchPath = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1];
   for (const entry of (searchPath ?? '').split(';')) {
     const directory = entry.trim().replace(/^"(.*)"$/u, '$1');
-    if (!directory) continue;
+    if (!directory) {
+      continue;
+    }
     const candidate = path.resolve(directory, 'gpg.exe');
     try {
-      if (!(await stat(candidate)).isFile()) continue;
+      if (!(await stat(candidate)).isFile()) {
+        continue;
+      }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        continue;
+      }
       throw error;
     }
     return await validateAbsoluteExecutablePath(candidate, 'GnuPG executable on PATH');

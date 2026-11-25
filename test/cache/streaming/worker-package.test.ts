@@ -67,7 +67,9 @@ it.each([false, true])(
       budget: f.budget,
       membership: await DiskMembership.create(f.store, f.budget),
       async consumeFile({ body }) {
-        for await (const b of body) bodyBytes += b.length;
+        for await (const b of body) {
+          bodyBytes += b.length;
+        }
       },
       async event() {
         controls++;
@@ -95,7 +97,9 @@ it('rejects a mutated live source without exposing a completed package', async (
     s,
   ) {
     await stable.call(this, s);
-    if (++calls === 1) await writeFile(path.join(f.root, 'd/a'), 'mutated');
+    if (++calls === 1) {
+      await writeFile(path.join(f.root, 'd/a'), 'mutated');
+    }
   });
   try {
     await expect(
@@ -113,7 +117,9 @@ it('does not expose a Q after failed final named publication, preserving sources
     view = await freezeSources(f),
     store = f.store;
   vi.spyOn(store, 'fail').mockImplementation(async (event) => {
-    if (event === 'immutable-publication-barrier') throw new Error('publication failed');
+    if (event === 'immutable-publication-barrier') {
+      throw new Error('publication failed');
+    }
   });
   await expect(
     FrozenWorkerArchive.package(store, view, 'worker-A.tar.gz', f.budget),
@@ -121,8 +127,9 @@ it('does not expose a Q after failed final named publication, preserving sources
   expect(await readFile(path.join(f.root, 'd/a'), 'utf8')).toBe('abc');
   await f.finish();
   expect(f.budget.retained).toBe(0);
-  for (const dir of await readdir(store.root.resolve(store.prefix + 'archives')))
+  for (const dir of await readdir(store.root.resolve(store.prefix + 'archives'))) {
     expect(await readdir(store.root.resolve(store.prefix + 'archives/' + dir))).toEqual([]);
+  }
 });
 it('rejects unsafe names before capture and rejects changed frozen archive identities', async () => {
   const f = await sourceFixture(),
@@ -172,7 +179,9 @@ it.each(['external-abort', 'sink-failure'])(
         signal: controller.signal,
       });
       await entered;
-      if (failure === 'external-abort') controller.abort(new Error('cancelled blocked source'));
+      if (failure === 'external-abort') {
+        controller.abort(new Error('cancelled blocked source'));
+      }
       await expect(pending).rejects.toThrow('did not freeze');
       await f.finish();
       expect(f.budget.retained).toBe(0);

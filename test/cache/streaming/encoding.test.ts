@@ -71,8 +71,9 @@ it('rejects malformed UTF-8/BOM/lone surrogates and admission before copying hug
     Buffer.from('\ufeff[]\n'),
     Buffer.from('["\\ud800"]\n'),
     Buffer.alloc(65537, 32),
-  ])
+  ]) {
     expect(() => decodeRecord(b)).toThrow();
+  }
   expect(() => encodeRecord(['x'.repeat(65536)])).toThrow();
   expect(() => canonical(['\ud800'])).toThrow();
   expect(() => add(Number.MAX_SAFE_INTEGER)).toThrow();
@@ -82,10 +83,14 @@ it('rejects malformed UTF-8/BOM/lone surrogates and admission before copying hug
 });
 it('streams split records with exact byte positions and no total quota', async () => {
   const source = async function* () {
-    for (const byte of Buffer.from('["é"]\n[0]\n')) yield Buffer.from([byte]);
+    for (const byte of Buffer.from('["é"]\n[0]\n')) {
+      yield Buffer.from([byte]);
+    }
   };
   const frames = [];
-  for await (const frame of decodeRecords(source())) frames.push(frame);
+  for await (const frame of decodeRecords(source())) {
+    frames.push(frame);
+  }
   expect(frames.map((f) => [f.start, f.end, f.index])).toEqual([
     [0, 7, 1],
     [7, 11, 2],
@@ -93,7 +98,9 @@ it('streams split records with exact byte positions and no total quota', async (
   expect(frames[0].raw.toString()).toBe('["é"]\n');
   let count = 0;
   async function* records() {
-    for (let n = 0; n < 10001; n++) yield ['x', n] as Value;
+    for (let n = 0; n < 10001; n++) {
+      yield ['x', n] as Value;
+    }
   }
   for await (const _ of decodeRecords(encodeRecords(records()))) {
     count++;
@@ -109,8 +116,9 @@ it('rejects over-limit/truncated NDJSON independently from whole stream size', a
           (async function* () {
             yield bytes;
           })(),
-        ))
+        )) {
           void frame;
+        }
       })(),
     ).rejects.toThrow();
   }
@@ -139,12 +147,15 @@ describe('exact configured-order reduction vectors', () => {
       (line) =>
         JSON.parse(line) as [string, 'strict' | 'newer-mtime', string[], Candidate[], Value[]],
     );
-  for (const [name, policy, order, candidates, expected] of rows)
+  for (const [name, policy, order, candidates, expected] of rows) {
     it(name, () => {
-      if (expected[0] === 'error')
+      if (expected[0] === 'error') {
         expect(() => reduceOrdinary(candidates, order, policy)).toThrow('conflict');
-      else expect(reduceOrdinary(candidates, order, policy)).toEqual(expected.slice(1));
+      } else {
+        expect(reduceOrdinary(candidates, order, policy)).toEqual(expected.slice(1));
+      }
     });
+  }
   it('deduplicates configuration stably and rejects duplicate actual contributors', () => {
     expect(ordinaryOrder(['B', 'A', 'B'])).toEqual(['B', 'A']);
     const c: Candidate = ['A', '0'.repeat(64), 0, 0, 420];

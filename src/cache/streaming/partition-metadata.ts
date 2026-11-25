@@ -56,6 +56,7 @@ export const nativeMetadataRowSchema = z.union([
   z.tuple([z.literal('file'), filePathSchema, nativeIdentitySchema.refine((n) => n[2] === 'file')]),
 ]);
 export type NativeMetadataRow = z.infer<typeof nativeMetadataRowSchema>;
+
 export const metadataSummaryProfileSchema = z.tuple([
   z.literal('native-metadata-summary'),
   z.literal(1),
@@ -64,6 +65,7 @@ export const metadataSummaryProfileSchema = z.tuple([
   z.literal('files-first-utf8-dfs'),
 ]);
 export type MetadataSummaryProfile = z.infer<typeof metadataSummaryProfileSchema>;
+
 export function metadataSummaryProfile(platform = process.platform): MetadataSummaryProfile {
   return [
     'native-metadata-summary',
@@ -82,6 +84,7 @@ export const partitionMetadataSchema = z.tuple([
   uintSchema,
 ]);
 export type PartitionMetadata = z.infer<typeof partitionMetadataSchema>;
+
 export function emptyPartitionMetadata(profile: MetadataSummaryProfile): PartitionMetadata {
   const normalized = metadataSummaryProfileSchema.parse(profile);
   return [
@@ -108,6 +111,7 @@ export class PartitionMetadataSummary {
     jars: UnitMarkers | null;
     hasJar: boolean;
   } | null = null;
+
   constructor(
     private readonly model: ResolvedModel,
     private readonly partition: string,
@@ -117,28 +121,38 @@ export class PartitionMetadataSummary {
     private readonly validateMembers = true,
   ) {
     this.profile = metadataSummaryProfileSchema.parse(profile);
-    if (!model.partitions.some((p) => p[0] === partition))
+    if (!model.partitions.some((p) => p[0] === partition)) {
       throw new Error('Unknown metadata partition.');
+    }
     this.tree = new TreeState(budget, maxDirectoryEntries);
     this.digest.update(this.profile);
   }
+
   private permission(n: NativeIdentity): number {
     return this.profile[2] === 'windows-owner-writable' ? n[6] & 0o200 : n[6] & 0o777;
   }
+
   private owner(path: string) {
-    if (recognizedRoot(this.model, path) === path)
+    if (recognizedRoot(this.model, path) === path) {
       throw new Error('Workspace root must be a directory.');
-    if (this.model.owner(path)[0] !== this.partition)
+    }
+    if (this.model.owner(path)[0] !== this.partition) {
       throw new Error('Wrong native metadata partition.');
+    }
   }
+
   /** Rows must come from one ordered stable selected-source phase, before its consumers mutate. */
   accept(row: NativeMetadataRow): void {
-    if (this.finished) throw new Error('Metadata summary is finished.');
+    if (this.finished) {
+      throw new Error('Metadata summary is finished.');
+    }
     const [tag, path, n] = row;
     if (tag === 'dir-open') {
       this.tree.open(path);
       if (this.validateMembers && isWorkspaceRoot(this.model, path)) {
-        if (this.workspace) throw new Error('Nested workspace root.');
+        if (this.workspace) {
+          throw new Error('Nested workspace root.');
+        }
         const kind = workspaceKind(path),
           unit: Unit = [kind, path, 'subtree'];
         this.workspace = {
@@ -159,7 +173,9 @@ export class PartitionMetadataSummary {
       }
     } else if (tag === 'file') {
       this.tree.file(path);
-      if (this.validateMembers) this.owner(path);
+      if (this.validateMembers) {
+        this.owner(path);
+      }
       const size = uintSchema.parse(Number(n[5]));
       this.files = add(this.files);
       this.bytes = add(this.bytes, size);
@@ -170,16 +186,18 @@ export class PartitionMetadataSummary {
         this.workspace &&
         (path === this.workspace.unit[1] + '/classes.jar' ||
           path === this.workspace.unit[1] + '/sources.jar')
-      )
+      ) {
         this.workspace.hasJar = true;
+      }
     } else {
       if (
         this.validateMembers &&
         path &&
         this.tree.leaf &&
         !isWorkspaceScaffolding(this.model, path)
-      )
+      ) {
         this.owner(path + '/.workspace-directory-probe');
+      }
       if (this.workspace?.unit[1] === path) {
         (this.workspace.hasJar && this.workspace.jars
           ? this.workspace.jars
@@ -190,9 +208,11 @@ export class PartitionMetadataSummary {
       this.tree.close(path);
     }
   }
+
   finish(): PartitionMetadata {
-    if (this.finished || !this.tree.complete || this.workspace)
+    if (this.finished || !this.tree.complete || this.workspace) {
       throw new Error('Incomplete metadata summary.');
+    }
     this.finished = true;
     return [
       'partition-metadata',
@@ -203,6 +223,7 @@ export class PartitionMetadataSummary {
       this.bytes,
     ];
   }
+
   dispose(): void {
     this.finished = true;
     this.tree.dispose();
@@ -223,6 +244,7 @@ export const pinnedPartitionMetadataSchema = z.tuple([
   partitionMetadataSchema,
 ]);
 export type PinnedPartitionMetadata = z.infer<typeof pinnedPartitionMetadataSchema>;
+
 export function decodePinnedPartitionMetadata(
   bytes: Buffer,
   model: ResolvedModel,
@@ -237,9 +259,12 @@ export function decodePinnedPartitionMetadata(
     'pinned metadata provenance',
   );
   equal(p[7], selected[0] === 'object' ? selected[2] : null, 'pinned materialized object');
-  if (!model.partitions.some((partition) => partition[0] === p[6]))
+  if (!model.partitions.some((partition) => partition[0] === p[6])) {
     throw new Error('Unknown pinned partition.');
-  if (p[7] === null) equal(p[9], emptyPartitionMetadata(p[8]), 'declared-empty metadata');
+  }
+  if (p[7] === null) {
+    equal(p[9], emptyPartitionMetadata(p[8]), 'declared-empty metadata');
+  }
   return p;
 }
 export function encodePinnedPartitionMetadata(pin: PinnedPartitionMetadata): Buffer {

@@ -39,9 +39,15 @@ const contexts: MetadataInstallContext[] = [];
 const restoreFixtures: MetadataFixture[] = [];
 afterEach(async () => {
   vi.unstubAllGlobals();
-  for (const context of contexts.splice(0)) await context.dispose();
-  for (const f of fixtures.splice(0)) await f.close();
-  for (const f of restoreFixtures.splice(0)) await f.close();
+  for (const context of contexts.splice(0)) {
+    await context.dispose();
+  }
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
+  for (const f of restoreFixtures.splice(0)) {
+    await f.close();
+  }
 });
 
 async function fixture(filesPerUnit: number, alias = false) {
@@ -67,8 +73,11 @@ async function fixture(filesPerUnit: number, alias = false) {
   const offers = [];
   for (const id of ['a', 'b']) {
     const files: Record<string, string> = {};
-    for (const unit of ['first', 'second'])
-      for (let i = 0; i < filesPerUnit; i++) files[`shared/${id}/${unit}/file-${i}`] = id;
+    for (const unit of ['first', 'second']) {
+      for (let i = 0; i < filesPerUnit; i++) {
+        files[`shared/${id}/${unit}/file-${i}`] = id;
+      }
+    }
     if (alias && id === 'a') {
       files['shared/a/first/A'] = '1';
       files['shared/a/first/a'] = '2';
@@ -108,7 +117,9 @@ it('keeps install records at shared and split boundaries as intact subtrees grow
       partition: null,
       installKind: () => 'directory',
     })) {
-      if (Array.isArray(row.value) && row.value[0] === 'install') movePaths.push(row.value[2]);
+      if (Array.isArray(row.value) && row.value[0] === 'install') {
+        movePaths.push(row.value[2]);
+      }
     }
     expect(movePaths).toEqual(['shared/a/first', 'shared/a/second', 'shared/b']);
     await executeInstall(f.store, plan, f.budget);
@@ -196,7 +207,9 @@ it('checks each staged parent once across shared depth and partition count', asy
       try {
         for (const id of ids) {
           const intact = await boundaries.begin(id);
-          for (const path of paths) expect(await intact(path)).toBe(false);
+          for (const path of paths) {
+            expect(await intact(path)).toBe(false);
+          }
         }
         expect(work.nativeListings - listings).toBe(count * depth);
         expect(work.stats - stats).toBeLessThanOrEqual(count * (4 * depth + 20));
@@ -244,18 +257,24 @@ it('stops boundary-only restore work below intact roots and preserves the exact 
     };
     const original = await discover();
     const full = original.context.source('a')!.upstream;
-    if (full.kind !== 'native-metadata') throw new Error('Missing base discovery.');
+    if (full.kind !== 'native-metadata') {
+      throw new Error('Missing base discovery.');
+    }
     const pin = full.source.pin();
     await original.context.dispose();
     const publisher = await discover('trusted-summary');
     const publishing = publisher.context.source('a')!.upstream;
-    if (publishing.kind !== 'native-metadata') throw new Error('Missing base discovery.');
+    if (publishing.kind !== 'native-metadata') {
+      throw new Error('Missing base discovery.');
+    }
     expect(publishing.source.pin()).toEqual(pin);
     expect(publisher.rows).toBeLessThan(original.rows);
     await publisher.context.dispose();
     const boundary = await discover('trusted-boundaries');
     const reader = boundary.context.source('a')!.upstream;
-    if (reader.kind !== 'native-metadata') throw new Error('Missing base discovery.');
+    if (reader.kind !== 'native-metadata') {
+      throw new Error('Missing base discovery.');
+    }
     expect(reader.source.pin()).toBeNull();
     boundaryWork.push([boundary.stats, boundary.listings, boundary.rows]);
     await executeInstall(
@@ -325,7 +344,9 @@ it.each(['read-only', 'distributed-worker'] as const)(
       expect(attempt.handoff.entries[0][3]).toEqual(['restored-object', f.entries[0][2]]);
       const entries = structuredClone(attempt.handoff.entries);
       const restored = entries[0][3];
-      if (restored?.[0] !== 'restored-object') throw new Error('Missing exact object reference.');
+      if (restored?.[0] !== 'restored-object') {
+        throw new Error('Missing exact object reference.');
+      }
       restored[1][4] = 'c'.repeat(64);
       expect(() =>
         checkHandoffGeneration(
@@ -402,7 +423,9 @@ it('keeps the accessor workspace kind when an intact directory has an uppercase 
     partition: null,
     installKind: () => 'directory',
   })) {
-    if (Array.isArray(row.value) && row.value[0] === 'install-unit-open') units.push(row.value);
+    if (Array.isArray(row.value) && row.value[0] === 'install-unit-open') {
+      units.push(row.value);
+    }
   }
   expect(units).toEqual([
     ['install-unit-open', 'kotlin-accessor-directories', workspace, 'subtree'],

@@ -25,26 +25,32 @@ const gradle = process.env.MAMMOTH_TEST_ENTRYPOINT_GRADLE_HOME,
   maven = process.env.MAMMOTH_TEST_ENTRYPOINT_MAVEN_HOME,
   required = process.env.MAMMOTH_REQUIRE_ENTRYPOINT_NATIVE === '1',
   configured = !!gradle && !!maven && !!process.env.JAVA_HOME;
-if (required && !configured)
+if (required && !configured) {
   throw new Error('Required entrypoint proof is missing installed tools.');
+}
 let root: string;
 beforeAll(async () => {
-  if (!configured) return;
+  if (!configured) {
+    return;
+  }
   root = await mkdtemp(path.resolve('build/entrypoint-native-'));
   // Only the remote SDK services are doubled. Native evidence and wrapper verification are real.
   await entrypointBundles(root, true);
 }, 30000);
 afterAll(async () => {
   // Opt-in native evidence stays under build/ for inspection without another tool build.
-  if (root) process.stdout.write('V7_NATIVE_EVIDENCE_ROOT ' + root + '\n');
+  if (root) {
+    process.stdout.write('V7_NATIVE_EVIDENCE_ROOT ' + root + '\n');
+  }
 });
 it.skipIf(!configured).each(['gradle', 'maven'] as const)(
   'actual %s entrypoints surround a real offline build using default tool/native code',
   async (tool) => {
     if (tool === 'gradle') {
       const baseline = await inspectGradleDaemons();
-      if (baseline.remaining || baseline.uncertain)
+      if (baseline.remaining || baseline.uncertain) {
         throw new Error('Native entrypoint proof requires a dedicated finished-consumer host.');
+      }
     }
     const j = await entrypointJob(root, tool, 'native-' + tool, {
       'cache-partitions': JSON.stringify([{ id: 'data', includes: ['data/**'] }]),

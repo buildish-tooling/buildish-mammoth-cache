@@ -79,10 +79,13 @@ it.each([false, true])(
       const snapshot = handoff.entries[1][4];
       expect(snapshot).not.toBeNull();
       const entry = seeded.entries[1];
-      if (entry[0] !== 'object' || !snapshot) throw new Error('fixture');
+      if (entry[0] !== 'object' || !snapshot) {
+        throw new Error('fixture');
+      }
       expect(snapshot[4]).toEqual(['base', entry[2]]);
-      if (empty) expect(await readdir(ready.store.root.resolve(snapshot[1]))).toEqual([]);
-      else {
+      if (empty) {
+        expect(await readdir(ready.store.root.resolve(snapshot[1]))).toEqual([]);
+      } else {
         await writeFile(f.root + '/state/value', 'later-live-value');
         expect(await readFile(ready.store.root.resolve(snapshot[1] + '/state/value'), 'utf8')).toBe(
           'baseline',
@@ -124,7 +127,9 @@ it('keeps an unavailable connected Maven group cold while an independent availab
     [['a', 'b'], ['c']],
   );
   const unavailable = seeded.entries[1];
-  if (unavailable[0] !== 'object') throw new Error('fixture');
+  if (unavailable[0] !== 'object') {
+    throw new Error('fixture');
+  }
   f.objects.delete(unavailable[2][2]);
   const ready = await f.prepare();
   expect(ready.restoreStatus).toBe('current-lineage-partial-hit');

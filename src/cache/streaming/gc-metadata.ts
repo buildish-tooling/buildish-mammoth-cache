@@ -36,7 +36,9 @@ export async function* originalGcMembers(
   if (r[1] === 'file') {
     const file = await index.file(String(r[2]));
     try {
-      if (file.node[5] !== 'delete') throw new Error('GC unit was retained.');
+      if (file.node[5] !== 'delete') {
+        throw new Error('GC unit was retained.');
+      }
     } finally {
       file.release();
     }
@@ -45,7 +47,9 @@ export async function* originalGcMembers(
     const dir = await index.directory(String(r[2]));
     try {
       const u = dir.node[9];
-      if (!u) throw new Error('Missing original GC unit.');
+      if (!u) {
+        throw new Error('Missing original GC unit.');
+      }
       equal([u[1], u[2], u[3], u[5]], [r[1], r[2], r[3], 'delete'], 'original complete GC unit');
     } finally {
       dir.release();
@@ -89,8 +93,9 @@ export async function* originalGcMembers(
             e[2] !== 'directory' &&
             !isCacheMetadataPath(path + '/' + e[1]) &&
             !isMavenTransientFile(e[1])
-          )
+          ) {
             throw new Error('Incomplete Maven GC coordinate: protected artifact sibling.');
+          }
           cleanup = false;
           continue;
         }
@@ -98,14 +103,20 @@ export async function* originalGcMembers(
         try {
           if (child.node[0] === 'observed-file') {
             const f = child.node;
-            if (f[5] !== 'delete') throw new Error('Partial GC selection in original unit.');
+            if (f[5] !== 'delete') {
+              throw new Error('Partial GC selection in original unit.');
+            }
             yield { row: ['target', f[1], f[3], f[2]], optional: false };
-            if (owner !== null && owner !== f[3]) cleanup = false;
+            if (owner !== null && owner !== f[3]) {
+              cleanup = false;
+            }
             owner ??= f[3];
           } else if (!direct) {
             const result = yield* expectedTree(child.node[1], false);
             cleanup &&= result.removed;
-            if (owner !== null && result.owner !== owner) cleanup = false;
+            if (owner !== null && result.owner !== owner) {
+              cleanup = false;
+            }
             owner ??= result.owner;
           }
         } finally {
@@ -120,7 +131,7 @@ export async function* originalGcMembers(
         }
       }
       let removed = false;
-      if (cleanup && owner !== null)
+      if (cleanup && owner !== null) {
         yield {
           row: ['target', d[1], owner, d[2]],
           optional: true,
@@ -128,6 +139,7 @@ export async function* originalGcMembers(
             removed = true;
           },
         };
+      }
       return { removed, owner };
     } finally {
       lease.release();

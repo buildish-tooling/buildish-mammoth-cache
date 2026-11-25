@@ -52,6 +52,7 @@ import { withAbort } from './abort';
 
 // Protocol: docs/dev/cache-protocol.md#usage-validation
 export type Membership = readonly ['member', 'file' | 'unit', string];
+
 /** Caller-owned sequential metadata storage; append/seal/dispose must honor cancellation. */
 export interface MembershipSpool {
   append(member: Membership, signal: AbortSignal): Promise<void>;
@@ -60,6 +61,7 @@ export interface MembershipSpool {
   fork(channel: number, signal: AbortSignal): Promise<MembershipSpool>;
   dispose(): Promise<void>;
 }
+
 export interface WorkerContext {
   readonly model: ResolvedModel;
   readonly context: Context;
@@ -68,6 +70,7 @@ export interface WorkerContext {
   readonly maxDirectoryEntries?: number;
   readonly membership: MembershipSpool;
 }
+
 const identitySchema = z.tuple([
   z.literal('identity'),
   z.literal(1),
@@ -151,6 +154,7 @@ export interface WorkerSummary {
   readonly channels: z.infer<typeof summarySchema>[];
   readonly eventSha: string;
 }
+
 interface Channel {
   cid: number;
   purpose: 'aggregate' | 'usage' | 'snapshot';
@@ -159,6 +163,7 @@ interface Channel {
   events: Digest;
   counts: Counts;
 }
+
 interface FileBinding {
   partition: string;
   ordinal: number;
@@ -168,16 +173,21 @@ interface FileBinding {
   time: number;
   sha?: string;
 }
+
 export function globalChannelKey(
   model: ResolvedModel,
   snapshots: readonly string[],
   cid: number,
 ): number {
   uintSchema.parse(cid);
-  if (cid < 2) return cid;
+  if (cid < 2) {
+    return cid;
+  }
   const id = snapshots[cid - 2],
     index = model.partitions.findIndex((p) => p[0] === id);
-  if (index < 0) throw new Error('Unknown input-local snapshot channel.');
+  if (index < 0) {
+    throw new Error('Unknown input-local snapshot channel.');
+  }
   return index + 2;
 }
 interface Projection {
@@ -186,6 +196,7 @@ interface Projection {
   count: number;
   read?: () => AsyncIterable<Value>;
 }
+
 export class WorkerState {
   sequence = 0;
   ordinal = 0;
@@ -212,13 +223,15 @@ export class WorkerState {
   private completed = false;
   private requiredUnit: string | null = null;
   private releaseHeader: (() => void) | null = null;
+
   constructor(
     readonly options: WorkerContext,
     readonly signal: AbortSignal,
   ) {
     contextSchema.parse(options.context);
-    if (options.context[7] !== options.model.tuple[2])
+    if (options.context[7] !== options.model.tuple[2]) {
       throw new Error('Context build tool mismatch.');
+    }
     const allowed = options.authorizedSnapshots;
     if (
       allowed.length > 64 ||
@@ -232,35 +245,48 @@ export class WorkerState {
               (p[4] === null || p[4] === options.context[4]),
           ),
       )
-    )
+    ) {
       throw new Error('Invalid snapshot authorization.');
+    }
   }
+
   private current(): Channel {
-    if (!this.channel) throw new Error('No current worker channel.');
+    if (!this.channel) {
+      throw new Error('No current worker channel.');
+    }
     return this.channel;
   }
+
   get cid(): number {
     return this.current().cid;
   }
+
   get purpose(): string {
     return this.current().purpose;
   }
+
   get currentPath(): string {
     return this.current().tree.path;
   }
+
   get file(): Readonly<FileBinding> {
-    if (!this.pendingFile) throw new Error('No pending file.');
+    if (!this.pendingFile) {
+      throw new Error('No pending file.');
+    }
     return this.pendingFile;
   }
+
   private declaration(index: number): [number, 'aggregate' | 'usage' | 'snapshot', string | null] {
-    if (!this.identity || index >= this.identity[7].length + 2)
+    if (!this.identity || index >= this.identity[7].length + 2) {
       throw new Error('Unexpected channel.');
+    }
     return [
       index,
       index === 0 ? 'aggregate' : index === 1 ? 'usage' : 'snapshot',
       index < 2 ? null : this.identity[7][index - 2],
     ];
   }
+
   identityTuple(snapshots: readonly string[]): Value[] {
     return [
       'identity',
@@ -273,26 +299,35 @@ export class WorkerState {
       snapshots,
     ];
   }
+
   channelOpenTuple(): Value[] {
     return ['channel-open', ...this.declaration(this.channelIndex)];
   }
+
   channelCloseTuple(): Value[] {
     const c = this.current();
     return ['channel-close', c.cid, [...c.counts], c.events.digest()];
   }
+
   unitCloseTuple(): Value[] {
-    if (!this.unit) throw new Error('No active unit.');
+    if (!this.unit) {
+      throw new Error('No active unit.');
+    }
     const u = this.unit,
       s = u.finish();
     return u.usage
       ? ['used-unit-close', this.cid, u.unit[0], u.unit[1], s.counts, s.semantic]
       : ['unit-close', this.cid, u.unit[0], u.unit[1], s.counts, s.semantic, s.comparison];
   }
+
   fileMetaTuple(): Value[] {
     const f = this.file;
-    if (f.sha === undefined) throw new Error('Body not hashed.');
+    if (f.sha === undefined) {
+      throw new Error('Body not hashed.');
+    }
     return ['file-meta', this.cid, f.ordinal, f.sha, f.partition];
   }
+
   completeTuple(): Value[] {
     return [
       'complete',
@@ -304,31 +339,39 @@ export class WorkerState {
       this.events.digest(),
     ];
   }
+
   headerName(path: string, directory = false): string {
     pathSchema.parse(path);
     const c = this.current();
-    if (c.purpose === 'usage') throw new Error('Payload in usage channel.');
+    if (c.purpose === 'usage') {
+      throw new Error('Payload in usage channel.');
+    }
     return (
       (c.purpose === 'aggregate' ? 'payload/aggregate/' : `payload/snapshot/${c.partition}/`) +
       path +
       (directory && path ? '/' : '')
     );
   }
+
   private ownership(path: string): string {
     const p = this.options.model.owner(path),
       c = this.current();
     if (
       (c.purpose === 'snapshot' && p[0] !== c.partition) ||
       (c.purpose !== 'snapshot' && p[3] !== 'aggregate')
-    )
+    ) {
       throw new Error('Channel partition ownership mismatch.');
+    }
     return p[0];
   }
+
   private requireFileUnit(path: string): void {
     const root = recognizedRoot(this.options.model, path);
-    if (root !== null && (!this.unit || this.unit.unit[1] !== root || root === path))
+    if (root !== null && (!this.unit || this.unit.unit[1] !== root || root === path)) {
       throw new Error('Missing recognized complete unit.');
+    }
   }
+
   payloadHeader(header: WorkerTarHeader): void {
     if (
       this.completed ||
@@ -336,8 +379,9 @@ export class WorkerState {
       this.pendingFile ||
       this.closeRoot !== null ||
       this.requiredUnit !== null
-    )
+    ) {
       throw new Error('Payload interrupts required metadata/close.');
+    }
     const c = this.current(),
       prefix =
         c.purpose === 'aggregate'
@@ -345,11 +389,14 @@ export class WorkerState {
           : c.purpose === 'snapshot'
             ? `payload/snapshot/${c.partition}/`
             : '';
-    if (!prefix || !header.name.startsWith(prefix))
+    if (!prefix || !header.name.startsWith(prefix)) {
       throw new Error('Invalid payload namespace/channel.');
+    }
     let path = header.name.slice(prefix.length);
     if (header.type === 'directory' && path) {
-      if (!path.endsWith('/')) throw new Error('Missing directory slash.');
+      if (!path.endsWith('/')) {
+        throw new Error('Missing directory slash.');
+      }
       path = path.slice(0, -1);
     }
     pathSchema.parse(path);
@@ -370,13 +417,15 @@ export class WorkerState {
         header.mode !== 493 ||
         header.mtimeMs !== 0 ||
         this.unit?.unit[2] === 'direct'
-      )
+      ) {
         throw new Error('Invalid directory header/unit boundary.');
+      }
       this.pendingDirectory = path;
     } else {
       modeSchema.parse(header.mode);
-      if (normalizeMode(this.options.model.tuple[2], path, header.mode) !== header.mode)
+      if (normalizeMode(this.options.model.tuple[2], path, header.mode) !== header.mode) {
         throw new Error('Noncanonical launcher mode.');
+      }
       c.tree.file(path);
       this.requireFileUnit(path);
       this.pendingFile = {
@@ -392,21 +441,27 @@ export class WorkerState {
     this.events.update(fact);
     c.events.update(fact);
   }
+
   body(sha: string, bytes: number): void {
     const f = this.pendingFile;
-    if (!f || f.size !== bytes || f.sha !== undefined)
+    if (!f || f.size !== bytes || f.sha !== undefined) {
       throw new Error('Body length/state mismatch.');
+    }
     shaSchema.parse(sha);
     f.sha = sha;
   }
+
   private async append(type: 'file' | 'unit', path: string): Promise<void> {
     const member: Membership = ['member', type, path];
     this.upserts.update(member);
     this.upsertCount = add(this.upsertCount);
     await withAbort(this.options.membership.append(member, this.signal), this.signal);
   }
+
   private async advance(): Promise<void> {
-    if (!this.replay) throw new Error('Unsealed upsert membership.');
+    if (!this.replay) {
+      throw new Error('Unsealed upsert membership.');
+    }
     const item = await withAbort(this.replay.next(), this.signal);
     if (item.done) {
       this.replayHead = null;
@@ -416,13 +471,15 @@ export class WorkerState {
       if (
         this.replayCount !== this.upsertCount ||
         this.replayDigest.digest() !== this.upserts.digest()
-      )
+      ) {
         throw new Error('Changed upsert membership spool.');
+      }
       return;
     }
     const member = membershipSchema.parse(item.value);
-    if (this.replayPrevious && compareMembership(this.replayPrevious, member) >= 0)
+    if (this.replayPrevious && compareMembership(this.replayPrevious, member) >= 0) {
       throw new Error('Unordered membership spool.');
+    }
     const release = this.options.budget.holdRecord(Buffer.byteLength(member[2]) + 128);
     this.releaseReplay?.();
     this.releaseReplay = release;
@@ -431,14 +488,21 @@ export class WorkerState {
     this.replayCount = add(this.replayCount);
     this.replayDigest.update(member);
   }
+
   private async usage(type: 'file' | 'unit', path: string): Promise<void> {
     const member: Membership = ['member', type, path];
-    while (this.replayHead && compareMembership(this.replayHead, member) < 0) await this.advance();
-    if (this.replayHead && compareMembership(this.replayHead, member) === 0)
+    while (this.replayHead && compareMembership(this.replayHead, member) < 0) {
+      await this.advance();
+    }
+    if (this.replayHead && compareMembership(this.replayHead, member) === 0) {
       throw new Error('Overlapping upsert and usage membership.');
+    }
   }
+
   async control(value: Value): Promise<void> {
-    if (this.completed) throw new Error('Member after completion.');
+    if (this.completed) {
+      throw new Error('Member after completion.');
+    }
     const raw = tuple(value),
       tag = raw[0];
     if (!this.identity) {
@@ -452,8 +516,9 @@ export class WorkerState {
       let previous = -1;
       for (const id of identity[7]) {
         const index = this.options.model.partitions.findIndex((p) => p[0] === id);
-        if (!this.options.authorizedSnapshots.includes(id) || index <= previous)
+        if (!this.options.authorizedSnapshots.includes(id) || index <= previous) {
           throw new Error('Unauthorized/unordered snapshot channel.');
+        }
         previous = index;
       }
       this.identity = identity;
@@ -464,13 +529,15 @@ export class WorkerState {
       (this.pendingFile && tag !== 'file-meta') ||
       (this.pendingDirectory !== null && tag !== 'dir-open') ||
       (this.closeRoot !== null && (tag !== 'dir-close' || raw[2] !== this.closeRoot))
-    )
+    ) {
       throw new Error('Missing immediate metadata/close.');
+    }
     if (
       this.requiredUnit !== null &&
       tag !== (this.current().purpose === 'usage' ? 'used-unit-open' : 'unit-open')
-    )
+    ) {
       throw new Error('Missing recognized complete unit wrapper.');
+    }
     if (tag === 'complete') {
       const complete = completeSchema.parse(value);
       if (
@@ -479,20 +546,23 @@ export class WorkerState {
         this.unit ||
         this.pendingFile ||
         this.pendingDirectory !== null
-      )
+      ) {
         throw new Error('Incomplete worker channels.');
+      }
       equal(complete, this.completeTuple(), 'final seal');
       await this.checkPublicationUnits();
       this.completed = true;
       return;
     }
-    if (typeof tag !== 'string' || !Object.hasOwn(controls, tag))
+    if (typeof tag !== 'string' || !Object.hasOwn(controls, tag)) {
       throw new Error('Unknown worker control.');
+    }
     const c = controls[tag as keyof typeof controls].parse(value);
     this.sequence = add(this.sequence);
     if (c[0] === 'channel-open') {
-      if (this.channel || this.pendingFile || this.pendingDirectory !== null)
+      if (this.channel || this.pendingFile || this.pendingDirectory !== null) {
         throw new Error('Channel already open.');
+      }
       equal(c.slice(1), this.declaration(this.channelIndex), 'channel declaration');
       if (
         c[2] !== 'aggregate' &&
@@ -513,30 +583,42 @@ export class WorkerState {
       };
     } else {
       const channel = this.current();
-      if (c[1] !== channel.cid) throw new Error('Wrong input-local channel id.');
+      if (c[1] !== channel.cid) {
+        throw new Error('Wrong input-local channel id.');
+      }
       switch (c[0]) {
         case 'dir-open': {
           if (channel.purpose === 'usage') {
-            if (this.pendingDirectory !== null) throw new Error('Payload in usage.');
-          } else if (this.pendingDirectory !== c[2])
+            if (this.pendingDirectory !== null) {
+              throw new Error('Payload in usage.');
+            }
+          } else if (this.pendingDirectory !== c[2]) {
             throw new Error('Missing immediate directory header.');
+          }
           this.releaseHeader?.();
           this.releaseHeader = null;
           this.pendingDirectory = null;
           channel.tree.open(c[2]);
           channel.counts[1] = add(channel.counts[1]);
-          if (this.unit) this.unit.directory(c[2], 'open');
-          else if (isWorkspaceRoot(this.options.model, c[2])) this.requiredUnit = c[2];
+          if (this.unit) {
+            this.unit.directory(c[2], 'open');
+          } else if (isWorkspaceRoot(this.options.model, c[2])) {
+            this.requiredUnit = c[2];
+          }
           break;
         }
         case 'dir-close': {
-          if (this.unit?.unit[1] === c[2]) throw new Error('Missing unit close.');
+          if (this.unit?.unit[1] === c[2]) {
+            throw new Error('Missing unit close.');
+          }
           if (c[2] && channel.tree.leaf) {
             recognizedRoot(this.options.model, c[2] + '/.workspace-directory-probe');
             const owner = this.ownership(c[2] + '/.workspace-directory-probe');
             this.unit?.ownership(owner);
           }
-          if (this.unit) this.unit.directory(c[2], 'close');
+          if (this.unit) {
+            this.unit.directory(c[2], 'close');
+          }
           channel.tree.close(c[2]);
           this.closeRoot = null;
           break;
@@ -548,8 +630,9 @@ export class WorkerState {
             !channel.tree.emptyDirectory ||
             c[3] !== channel.tree.path ||
             (c[0] === 'used-unit-open') !== (channel.purpose === 'usage')
-          )
+          ) {
             throw new Error('Invalid unit open boundary.');
+          }
           const descriptor = unitSchema.parse([c[2], c[3], c[4]]);
           this.unit = new UnitProjection(
             this.options.model,
@@ -558,8 +641,12 @@ export class WorkerState {
           );
           this.requiredUnit = null;
           channel.counts[2] = add(channel.counts[2]);
-          if (channel.purpose === 'aggregate') await this.append('unit', c[3]);
-          if (channel.purpose === 'usage') await this.usage('unit', c[3]);
+          if (channel.purpose === 'aggregate') {
+            await this.append('unit', c[3]);
+          }
+          if (channel.purpose === 'usage') {
+            await this.usage('unit', c[3]);
+          }
           if (channel.purpose !== 'aggregate' && this.unitProjection) {
             const projection = this.unitProjection;
             const member: Membership = ['member', 'unit', c[3]];
@@ -571,12 +658,18 @@ export class WorkerState {
         }
         case 'file-meta': {
           const f = this.pendingFile;
-          if (!f || f.sha === undefined) throw new Error('Orphan/unhashed file metadata.');
+          if (!f || f.sha === undefined) {
+            throw new Error('Orphan/unhashed file metadata.');
+          }
           equal(c, this.fileMetaTuple(), 'file metadata');
-          if (this.unit) this.unit.file(f.path, f.partition, f.size, f.mode, f.time, f.sha);
+          if (this.unit) {
+            this.unit.file(f.path, f.partition, f.size, f.mode, f.time, f.sha);
+          }
           channel.counts[0] = add(channel.counts[0]);
           channel.counts[4] = add(channel.counts[4], f.size);
-          if (channel.purpose === 'aggregate') await this.append('file', f.path);
+          if (channel.purpose === 'aggregate') {
+            await this.append('file', f.path);
+          }
           this.releaseHeader?.();
           this.releaseHeader = null;
           this.pendingFile = null;
@@ -585,28 +678,39 @@ export class WorkerState {
         case 'unit-close':
         case 'used-unit-close': {
           const u = this.unit;
-          if (!u || u.unit[1] !== channel.tree.path || u.usage !== (c[0] === 'used-unit-close'))
+          if (!u || u.unit[1] !== channel.tree.path || u.usage !== (c[0] === 'used-unit-close')) {
             throw new Error('Invalid unit close boundary.');
+          }
           equal(c, this.unitCloseTuple(), 'unit summary');
-          if (u.unit[2] === 'direct') channel.tree.endFiles();
-          else this.closeRoot = u.unit[1];
+          if (u.unit[2] === 'direct') {
+            channel.tree.endFiles();
+          } else {
+            this.closeRoot = u.unit[1];
+          }
           this.unit = null;
           break;
         }
         case 'used': {
-          if (channel.purpose !== 'usage') throw new Error('Usage outside usage channel.');
+          if (channel.purpose !== 'usage') {
+            throw new Error('Usage outside usage channel.');
+          }
           const path = joinPath(channel.tree.path, c[2]);
           channel.tree.file(path);
           this.requireFileUnit(path);
-          if (this.ownership(path) !== c[3]) throw new Error('Wrong used partition.');
-          if (this.unit) this.unit.file(path, c[3], 0, 420, 0, '0'.repeat(64));
+          if (this.ownership(path) !== c[3]) {
+            throw new Error('Wrong used partition.');
+          }
+          if (this.unit) {
+            this.unit.file(path, c[3], 0, 420, 0, '0'.repeat(64));
+          }
           channel.counts[3] = add(channel.counts[3]);
           await this.usage('file', path);
           break;
         }
         case 'channel-close': {
-          if (!channel.tree.complete || this.unit || this.closeRoot !== null)
+          if (!channel.tree.complete || this.unit || this.closeRoot !== null) {
             throw new Error('Unbalanced channel.');
+          }
           equal(c, this.channelCloseTuple(), 'channel summary');
           if (channel.purpose === 'aggregate') {
             const replay = await withAbort(this.options.membership.seal(this.signal), this.signal);
@@ -625,7 +729,9 @@ export class WorkerState {
             this.unitProjection = undefined;
           }
           if (channel.purpose === 'usage') {
-            while (this.replayHead) await this.advance();
+            while (this.replayHead) {
+              await this.advance();
+            }
           }
           this.summaries.push([
             channel.cid,
@@ -643,12 +749,17 @@ export class WorkerState {
     if (c[0] === 'channel-close') {
       this.channel = null;
       this.channelIndex++;
-    } else this.current().events.update(c);
+    } else {
+      this.current().events.update(c);
+    }
   }
+
   // Protocol: docs/dev/cache-protocol.md#profiles-and-common-rules
   // One unit-root frontier per publication channel; never a global coordinate map.
   private async checkPublicationUnits(): Promise<void> {
-    if (this.options.model.tuple[2] !== 'maven' || this.projections.length < 2) return;
+    if (this.options.model.tuple[2] !== 'maven' || this.projections.length < 2) {
+      return;
+    }
     const frontiers = this.projections.map((p) => ({
       p,
       iterator: p.read!()[Symbol.asyncIterator](),
@@ -662,8 +773,9 @@ export class WorkerState {
       while (true) {
         const row = await withAbort(f.iterator.next(), this.signal);
         if (row.done) {
-          if (f.count !== f.p.count || f.digest.digest() !== f.p.digest.digest())
+          if (f.count !== f.p.count || f.digest.digest() !== f.p.digest.digest()) {
             throw new Error('Changed publication ownership spool.');
+          }
           f.head = null;
           f.previous = null;
           f.release?.();
@@ -671,8 +783,9 @@ export class WorkerState {
           return;
         }
         const member = membershipSchema.parse(row.value);
-        if (f.previous && compareMembership(f.previous, member) >= 0)
+        if (f.previous && compareMembership(f.previous, member) >= 0) {
           throw new Error('Unordered publication ownership spool.');
+        }
         const release = this.options.budget.holdRecord(Buffer.byteLength(member[2]) + 128);
         f.release?.();
         f.release = release;
@@ -686,19 +799,26 @@ export class WorkerState {
       }
     };
     try {
-      for (const f of frontiers) await advance(f);
+      for (const f of frontiers) {
+        await advance(f);
+      }
       while (true) {
         let first: (typeof frontiers)[number] | undefined;
         for (const f of frontiers) {
-          if (f.head && (!first || compareMembership(f.head, first.head!) < 0)) first = f;
+          if (f.head && (!first || compareMembership(f.head, first.head!) < 0)) {
+            first = f;
+          }
         }
-        if (!first) return;
+        if (!first) {
+          return;
+        }
         if (
           frontiers.some(
             (f) => f !== first && f.head && compareMembership(f.head, first.head!) === 0,
           )
-        )
+        ) {
           throw new Error('Mixed Maven publication ownership of one complete unit.');
+        }
         await advance(first);
       }
     } finally {
@@ -708,15 +828,19 @@ export class WorkerState {
         f.release = null;
         await f.iterator.return?.();
       });
-      if (this.signal.aborted) void Promise.allSettled(retirements);
-      else {
+      if (this.signal.aborted) {
+        void Promise.allSettled(retirements);
+      } else {
         const results = await Promise.allSettled(retirements);
         await rejectRetirement(results);
       }
     }
   }
+
   finish(): WorkerSummary {
-    if (!this.completed || !this.identity) throw new Error('Missing worker completion.');
+    if (!this.completed || !this.identity) {
+      throw new Error('Missing worker completion.');
+    }
     return {
       identity: this.identity,
       counts: [...this.totals],
@@ -724,6 +848,7 @@ export class WorkerState {
       eventSha: this.events.digest(),
     };
   }
+
   async dispose(): Promise<void> {
     this.releaseReplay?.();
     this.releaseReplay = null;
@@ -736,12 +861,17 @@ export class WorkerState {
       const spools = new Set([this.options.membership, ...this.projections.map((p) => p.spool)]);
       const results = await Promise.allSettled([...spools].map((spool) => spool.dispose()));
       const failed = results.find((r) => r.status === 'rejected');
-      if (failed?.status === 'rejected') throw failed.reason;
+      if (failed?.status === 'rejected') {
+        throw failed.reason;
+      }
     } finally {
       if (this.replay?.return) {
         const retirement = this.replay.return();
-        if (this.signal.aborted) void retirement.catch(() => {});
-        else await retirement;
+        if (this.signal.aborted) {
+          void retirement.catch(() => {});
+        } else {
+          await retirement;
+        }
       }
     }
   }
@@ -749,5 +879,7 @@ export class WorkerState {
 
 async function rejectRetirement(results: PromiseSettledResult<unknown>[]): Promise<void> {
   const failed = results.find((r) => r.status === 'rejected');
-  if (failed?.status === 'rejected') throw failed.reason;
+  if (failed?.status === 'rejected') {
+    throw failed.reason;
+  }
 }

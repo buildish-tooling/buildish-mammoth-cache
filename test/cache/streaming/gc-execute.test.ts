@@ -29,7 +29,9 @@ import { observationFixture } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture(count = 4, fail?: (name: string) => Promise<void>) {
   const f = await observationFixture('maven', { fail });
@@ -48,7 +50,9 @@ it('executes shared-parent complete batches and commits the real final root boun
   expect(() => result.owner.assert()).not.toThrow();
   expect(result.cursor[3]).toBeGreaterThan(0);
   expect(result.cursor[5]).toBeNull();
-  for (let n = 0; n < 4; n++) expect(await f.store.root.stat('data/f0' + n)).toBeNull();
+  for (let n = 0; n < 4; n++) {
+    expect(await f.store.root.stat('data/f0' + n)).toBeNull();
+  }
   expect(f.store.codec.schemas.documents['local-state'].parse(await f.store.state())[4]).toBe(
     'post-active',
   );
@@ -81,13 +85,18 @@ it('defers Maven origin marker until all ordinary siblings and preserves protect
   const deleted: string[] = [];
   const f = await observationFixture('maven', {
     fail: async (name) => {
-      if (name !== 'gc-target-deleted') return;
+      if (name !== 'gc-target-deleted') {
+        return;
+      }
       for (const path of [
         'repository/a/_remote.repositories',
         'repository/a/a.jar',
         'repository/a/z.pom',
-      ])
-        if (!(await f.store.root.stat(path)) && !deleted.includes(path)) deleted.push(path);
+      ]) {
+        if (!(await f.store.root.stat(path)) && !deleted.includes(path)) {
+          deleted.push(path);
+        }
+      }
     },
   });
   fixtures.push(f);
@@ -97,8 +106,9 @@ it('defers Maven origin marker until all ordinary siblings and preserves protect
     'repository/a/z.pom': 'pom',
     'repository/a/keep.lock': 'lock',
   });
-  for (const path of ['_remote.repositories', 'a.jar', 'z.pom'])
+  for (const path of ['_remote.repositories', 'a.jar', 'z.pom']) {
     await utimes(f.store.root.resolve('repository/a/' + path), 1.234, 1.234);
+  }
   await captureObservations(f.store, { budget: f.budget });
   await executeGc(f.store, { budget: f.budget, batchOperations: 1 });
   expect(await readFile(f.store.root.resolve('repository/a/keep.lock'), 'utf8')).toBe('lock');
@@ -119,8 +129,9 @@ it('retains a whole Maven coordinate with an excluded artifact sibling before an
   await captureObservations(f.store, { budget: f.budget });
   const before = f.store.root.work.unlinks;
   await executeGc(f.store, { budget: f.budget });
-  for (const name of ['_remote.repositories', 'owned.jar', 'excluded.jar'])
+  for (const name of ['_remote.repositories', 'owned.jar', 'excluded.jar']) {
     expect(await readFile(f.store.root.resolve(root + '/' + name), 'utf8')).toBe('x');
+  }
   // Metadata cleanup is permitted; live payload identities remain exactly original.
   expect(f.store.root.work.unlinks).toBeGreaterThanOrEqual(before);
   await f.finish();
@@ -139,7 +150,9 @@ it('starts no further parent checkpoint after cancellation in a nested dirty cha
   let liveCheckpoints = 0,
     deleting = false;
   vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'gc-target-deleted') deleting = true;
+    if (name === 'gc-target-deleted') {
+      deleting = true;
+    }
   });
   const created = InstallParentPhase.prototype.created;
   vi.spyOn(InstallParentPhase.prototype, 'created').mockImplementation(async function (
@@ -166,12 +179,13 @@ it('starts no further parent checkpoint after cancellation in a nested dirty cha
 it('derives cached full post-GC projections independently of native parent clocks', async () => {
   const f = await observationFixture('gradle');
   fixtures.push(f);
-  for (const id of ['a', 'b'])
+  for (const id of ['a', 'b']) {
     for (const name of ['metadata.bin', 'results.bin', 'transformed/a']) {
       const path = 'caches/transforms-4/' + id.repeat(32) + '/' + name;
       await f.files('', { [path]: 'old' });
       await utimes(f.store.root.resolve(path), 1.234, 1.234);
     }
+  }
   await f.files('', {
     'data/z-file': 'retained',
     'data/a-dir/new': 'retained',
@@ -181,7 +195,7 @@ it('derives cached full post-GC projections independently of native parent clock
   const result = await executeGc(f.store, { budget: f.budget });
   const index = result.owner.index;
   try {
-    for await (const node of index.walk())
+    for await (const node of index.walk()) {
       if (node[0] === 'observed-directory') {
         if (!(await f.store.root.stat(node[1]))) {
           expect(node[10][5]).toBe(1);
@@ -190,7 +204,7 @@ it('derives cached full post-GC projections independently of native parent clock
         const entries = await readdir(f.store.root.resolve(node[1]), { withFileTypes: true });
         entries.sort((a, b) => Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)));
         const digest = new Digest('ancestor-children');
-        for (const e of entries)
+        for (const e of entries) {
           digest.update([
             e.name,
             e.isFile()
@@ -201,8 +215,10 @@ it('derives cached full post-GC projections independently of native parent clock
                   ? 'symlink'
                   : 'other',
           ]);
+        }
         expect(node[10][7]).toBe(digest.digest());
       }
+    }
   } finally {
     await f.finish();
   }
@@ -214,7 +230,9 @@ it('retains actual partial deletions on failure and grants no completion or repl
   const f = await fixture(4);
   let deleted = 0;
   vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'gc-target-deleted' && ++deleted === 2) throw new Error('partial deletion');
+    if (name === 'gc-target-deleted' && ++deleted === 2) {
+      throw new Error('partial deletion');
+    }
   });
   await expect(executeGc(f.store, { budget: f.budget })).rejects.toThrow('partial deletion');
   expect(await f.store.root.stat('data/f00')).toBeNull();
@@ -265,16 +283,21 @@ it('counts original capture, actual selected GC and cleanup across shared-parent
     expect(f.store.codec.schemas.documents['local-state'].parse(await f.store.state())[4]).toBe(
       'post-active',
     );
-    for (let n = 0; n < count; n++)
+    for (let n = 0; n < count; n++) {
       expect(await f.store.root.stat('data/shared/file-' + String(n).padStart(3, '0'))).toBeNull();
+    }
     await f.finish();
     expect(f.budget.retained).toBe(0);
     results.push({ count, selectedPayloadUnlinks: count, work, encoding });
   }
-  for (const key of Object.keys(results[0].work))
-    if (results[0].work[key]) expect(results[1].work[key]).toBeLessThan(results[0].work[key] * 4.5);
-  for (const key of Object.keys(results[0].encoding))
+  for (const key of Object.keys(results[0].work)) {
+    if (results[0].work[key]) {
+      expect(results[1].work[key]).toBeLessThan(results[0].work[key] * 4.5);
+    }
+  }
+  for (const key of Object.keys(results[0].encoding)) {
     expect(results[1].encoding[key]).toBeLessThan(results[0].encoding[key] * 4.5);
+  }
   await writeFile('build/ls2-gc-counts.json', JSON.stringify(results, null, 2) + '\n');
 });
 
@@ -344,12 +367,19 @@ it.each(['missing', 'threshold', 'abort', 'barrier'] as const)(
     await f.files('', { 'data/keep': 'keep' });
     const observation = await captureObservations(f.store, { budget: f.budget }),
       controller = new AbortController();
-    if (failure === 'missing') await unlink(f.store.root.resolve(observation.reference[2]));
-    if (failure === 'abort') controller.abort(new Error('Retained-only GC aborted'));
-    if (failure === 'barrier')
+    if (failure === 'missing') {
+      await unlink(f.store.root.resolve(observation.reference[2]));
+    }
+    if (failure === 'abort') {
+      controller.abort(new Error('Retained-only GC aborted'));
+    }
+    if (failure === 'barrier') {
       vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-        if (name === 'gc-deletions-durable') throw new Error('Retained-only GC barrier failed');
+        if (name === 'gc-deletions-durable') {
+          throw new Error('Retained-only GC barrier failed');
+        }
       });
+    }
     const options = {
       budget: f.budget,
       signal: controller.signal,
@@ -375,10 +405,14 @@ it.each(['missing', 'threshold', 'abort', 'barrier'] as const)(
 it('grants no survivor authority when the deletion barrier fails after all native removals', async () => {
   const f = await fixture(4);
   vi.spyOn(f.store, 'fail').mockImplementation(async (name) => {
-    if (name === 'gc-deletions-durable') throw new Error('barrier failed');
+    if (name === 'gc-deletions-durable') {
+      throw new Error('barrier failed');
+    }
   });
   await expect(executeGc(f.store, { budget: f.budget })).rejects.toThrow('barrier failed');
-  for (let n = 0; n < 4; n++) expect(await f.store.root.stat('data/f0' + n)).toBeNull();
+  for (let n = 0; n < 4; n++) {
+    expect(await f.store.root.stat('data/f0' + n)).toBeNull();
+  }
   await expect(GcSurvivorOwner.execute(f.observed.index!, { budget: f.budget })).rejects.toThrow();
   expect(f.store.codec.schemas.documents['local-state'].parse(await f.store.state())[4]).toBe(
     'post-active',

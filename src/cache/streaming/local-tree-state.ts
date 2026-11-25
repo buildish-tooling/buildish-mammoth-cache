@@ -62,6 +62,7 @@ interface Projection {
   charge: number;
   evidence: Digest;
 }
+
 interface ActiveUnit {
   markers: UnitMarkers | null;
   unit: Unit;
@@ -71,6 +72,7 @@ interface ActiveUnit {
   expected: string | null;
   owner: string | null;
 }
+
 // Protocol: docs/dev/cache-lifecycle-protocol.md#frozen-observation-and-gc-schemas
 /** Child projections are per-open-directory and charged alongside managed name state. */
 export class LocalTreeState {
@@ -79,6 +81,7 @@ export class LocalTreeState {
   private active: ActiveUnit | null = null;
   private closeRoot: string | null = null;
   private required: string | null = null;
+
   constructor(
     private readonly purpose: 'activity' | 'observations',
     private readonly schemas: LocalSchemas,
@@ -87,45 +90,64 @@ export class LocalTreeState {
   ) {
     this.tree = new TreeState(budget, maxEntries);
   }
+
   private frame(): Projection {
-    if (!this.frames.length) throw new Error('No observation directory.');
+    if (!this.frames.length) {
+      throw new Error('No observation directory.');
+    }
     return this.frames[this.frames.length - 1];
   }
+
   private owner(path: string): string {
     const partition = this.schemas.options.model.owner(path)[0];
     if (this.active && this.active.unit[0] !== 'maven-directory') {
-      if (this.active.owner !== null && this.active.owner !== partition)
+      if (this.active.owner !== null && this.active.owner !== partition) {
         throw new Error('Split local workspace owner.');
+      }
       this.active.owner = partition;
     }
     return partition;
   }
+
   private bind(name: string, native: readonly Value[], kind: 'file' | 'directory'): void {
-    if (this.purpose !== 'observations') return;
+    if (this.purpose !== 'observations') {
+      return;
+    }
     const child = this.frame().children.get(name);
-    if (!child || child[0] !== kind || child[1] !== native[3] || child[2] !== native[4])
+    if (!child || child[0] !== kind || child[1] !== native[3] || child[2] !== native[4]) {
       throw new Error('Managed fact differs from frozen child projection.');
+    }
   }
+
   accept(value: Value): void {
-    if (!Array.isArray(value) || typeof value[0] !== 'string')
+    if (!Array.isArray(value) || typeof value[0] !== 'string') {
       throw new Error('Invalid local tree row.');
+    }
     const tag = value[0];
     if (
       this.required !== null &&
       tag !== 'unit-open' &&
       !(this.purpose === 'observations' && tag === 'child')
-    )
+    ) {
       throw new Error('Missing local complete unit wrapper.');
-    if (this.closeRoot !== null && (tag !== 'dir-close' || value[1] !== this.closeRoot))
+    }
+    if (this.closeRoot !== null && (tag !== 'dir-close' || value[1] !== this.closeRoot)) {
       throw new Error('Missing local unit root close.');
-    if (tag !== 'child' && this.frames.length) this.frame().phase = 'body';
+    }
+    if (tag !== 'child' && this.frames.length) {
+      this.frame().phase = 'body';
+    }
     if (tag === 'dir-open') {
       const row =
         this.purpose === 'observations'
           ? this.schemas.rows.observationDirectory.parse(value)
           : z.tuple([z.literal('dir-open'), pathSchema]).parse(value);
-      if (this.active?.unit[2] === 'direct') throw new Error('Directory inside direct local unit.');
-      if (this.frames.length) this.bind(baseName(row[1]), row[2] ?? [], 'directory');
+      if (this.active?.unit[2] === 'direct') {
+        throw new Error('Directory inside direct local unit.');
+      }
+      if (this.frames.length) {
+        this.bind(baseName(row[1]), row[2] ?? [], 'directory');
+      }
       this.tree.open(row[1]);
       this.active?.markers?.directory(row[1]);
       const evidence = new Digest('observation-unit');
@@ -145,22 +167,29 @@ export class LocalTreeState {
         charge,
         evidence,
       });
-      if (!this.active && isWorkspaceRoot(this.schemas.options.model, row[1]))
+      if (!this.active && isWorkspaceRoot(this.schemas.options.model, row[1])) {
         this.required = row[1];
+      }
     } else if (tag === 'child') {
-      if (this.purpose !== 'observations') throw new Error('Child projection in activity.');
+      if (this.purpose !== 'observations') {
+        throw new Error('Child projection in activity.');
+      }
       const row = this.schemas.rows.child.parse(value),
         f = this.frame(),
         directory = row[2] === 'directory';
-      if (f.phase === 'body' || (!directory && f.phase === 'directory'))
+      if (f.phase === 'body' || (!directory && f.phase === 'directory')) {
         throw new Error('Late/unordered child projection.');
+      }
       if (directory && f.phase === 'non-directory') {
         f.phase = 'directory';
         f.last = null;
       }
-      if (f.children.has(row[1]) || (f.last !== null && compareName(f.last, row[1]) >= 0))
+      if (f.children.has(row[1]) || (f.last !== null && compareName(f.last, row[1]) >= 0)) {
         throw new Error('Duplicate/unordered frozen child.');
-      if (f.count === this.maxEntries) throw new Error('Observation directory breadth exceeded.');
+      }
+      if (f.count === this.maxEntries) {
+        throw new Error('Observation directory breadth exceeded.');
+      }
       const name = Buffer.from(row[1]).toString('utf8'),
         charge = 128 + 4 * (Buffer.byteLength(name) + row[3].length + row[4].length);
       this.budget.retain(charge);
@@ -178,8 +207,9 @@ export class LocalTreeState {
           : activityUnit.parse(value);
       const unit = unitSchema.parse(row.slice(1, 4));
       validateUnit(this.schemas.options.model, unit);
-      if (this.active || !this.tree.emptyDirectory || unit[1] !== this.tree.path)
+      if (this.active || !this.tree.emptyDirectory || unit[1] !== this.tree.path) {
         throw new Error('Invalid local unit boundary.');
+      }
       this.active = {
         unit,
         activity: row[4],
@@ -189,7 +219,9 @@ export class LocalTreeState {
         owner: null,
         markers: null,
       };
-      if (this.active.decision === 'delete') this.active.markers = new UnitMarkers(unit);
+      if (this.active.decision === 'delete') {
+        this.active.markers = new UnitMarkers(unit);
+      }
       this.required = null;
     } else if (tag === 'file' || tag === 'upsert' || tag === 'used') {
       let name: string, partition: string;
@@ -199,8 +231,9 @@ export class LocalTreeState {
         partition = row[2];
         const path = joinPath(this.tree.path, name);
         this.bind(name, row[3], 'file');
-        if (this.active && (row[4] !== this.active.activity || row[5] !== this.active.decision))
+        if (this.active && (row[4] !== this.active.activity || row[5] !== this.active.decision)) {
           throw new Error('Mixed local unit decisions.');
+        }
         this.active?.digest?.update(['file', path, partition, row[3]]);
       } else {
         const row = z
@@ -208,38 +241,48 @@ export class LocalTreeState {
           .parse(value);
         name = row[1];
         partition = row[2];
-        if (this.active && this.active.activity !== row[0])
+        if (this.active && this.active.activity !== row[0]) {
           throw new Error('Mixed local unit activity.');
+        }
       }
       const path = joinPath(this.tree.path, name);
       this.tree.file(path);
       this.active?.markers?.file(path);
-      if (this.owner(path) !== partition)
+      if (this.owner(path) !== partition) {
         throw new Error('Wrong local activity/observation owner.');
+      }
       const root = recognizedRoot(this.schemas.options.model, path);
-      if (root !== null && (!this.active || this.active.unit[1] !== root || root === path))
+      if (root !== null && (!this.active || this.active.unit[1] !== root || root === path)) {
         throw new Error('Missing local file unit.');
+      }
     } else if (tag === 'unit-close') {
       const row =
           this.purpose === 'observations'
             ? closeObservationUnit.parse(value)
             : closeActivityUnit.parse(value),
         a = this.active;
-      if (!a || row[1] !== a.unit[0] || row[2] !== a.unit[1] || this.tree.path !== row[2])
+      if (!a || row[1] !== a.unit[0] || row[2] !== a.unit[1] || this.tree.path !== row[2]) {
         throw new Error('Unbalanced local unit.');
+      }
       a.markers?.finish();
-      if (a.digest)
+      if (a.digest) {
         equal(
           [row[3]!, a.expected],
           [a.digest.digest(), a.digest.digest()],
           'observation unit evidence',
         );
-      if (a.unit[2] === 'direct') this.tree.endFiles();
-      else this.closeRoot = a.unit[1];
+      }
+      if (a.unit[2] === 'direct') {
+        this.tree.endFiles();
+      } else {
+        this.closeRoot = a.unit[1];
+      }
       this.active = null;
     } else if (tag === 'dir-close') {
       const row = closeDirectory.parse(value);
-      if (this.active?.unit[1] === row[1]) throw new Error('Missing local unit close.');
+      if (this.active?.unit[1] === row[1]) {
+        throw new Error('Missing local unit close.');
+      }
       if (row[1] && this.tree.leaf) {
         const probe = row[1] + '/.workspace-directory-probe';
         let owned = true;
@@ -251,8 +294,9 @@ export class LocalTreeState {
             (this.active && (this.active.owner !== null || this.active.decision !== 'retain')) ||
             !(error instanceof Error) ||
             error.message !== 'Unowned managed path.'
-          )
+          ) {
             throw error;
+          }
           // Physical observation scaffolding is evidence, never a managed contribution.
           owned = false;
         }
@@ -262,22 +306,32 @@ export class LocalTreeState {
             this.purpose === 'observations' &&
             isWorkspaceScaffolding(this.schemas.options.model, row[1])
           )
-        )
+        ) {
           recognizedRoot(this.schemas.options.model, probe);
+        }
       }
       this.tree.close(row[1]);
       this.closeRoot = null;
       const f = this.frames.pop();
-      if (!f || f.path !== row[1]) throw new Error('Unbalanced observation frame.');
+      if (!f || f.path !== row[1]) {
+        throw new Error('Unbalanced observation frame.');
+      }
       this.budget.release(f.charge);
-    } else throw new Error('Unknown local tree row.');
+    } else {
+      throw new Error('Unknown local tree row.');
+    }
   }
+
   finish(): void {
-    if (!this.tree.complete || this.active || this.frames.length)
+    if (!this.tree.complete || this.active || this.frames.length) {
       throw new Error('Incomplete local tree.');
+    }
   }
+
   dispose(): void {
     this.tree.dispose();
-    while (this.frames.length) this.budget.release(this.frames.pop()!.charge);
+    while (this.frames.length) {
+      this.budget.release(this.frames.pop()!.charge);
+    }
   }
 }

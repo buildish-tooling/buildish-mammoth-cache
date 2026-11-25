@@ -40,7 +40,9 @@ export async function retireBackup(
 ) {
   const store = readers.store,
     budget = readers.budget;
-  if (!(await store.root.stat(physical))) return;
+  if (!(await store.root.stat(physical))) {
+    return;
+  }
   if (observed[2] === 'file') {
     await owned.parents(physical);
     const native = await checkInstallMember(
@@ -56,8 +58,9 @@ export async function retireBackup(
       signal,
     );
     const actual = await owned.stat(physical);
-    if (!actual || !sameNative(native, actual, true))
+    if (!actual || !sameNative(native, actual, true)) {
       throw new Error('Backup file changed before retirement.');
+    }
     signal.throwIfAborted();
     await unlink(store.root.resolve(physical));
     store.root.work.unlinks++;
@@ -103,8 +106,9 @@ export async function retireBackup(
         rootNative: observed,
         observed: async (row, path, native) => {
           const value = row as readonly Value[];
-          while (frames.length && frames[frames.length - 1].path !== parentPath(path))
+          while (frames.length && frames[frames.length - 1].path !== parentPath(path)) {
             await closeDirectory();
+          }
           if (value[0] === 'directory') {
             frames.push({
               path,
@@ -115,8 +119,9 @@ export async function retireBackup(
               const original = await metadata.directoryNative(
                 logical + path.slice(physical.length),
               );
-              if (!original || !sameNative(original, native, true))
+              if (!original || !sameNative(original, native, true)) {
                 await phase!.created(path, native);
+              }
             }
           } else {
             await selectors.append(['remove-file', path, native]);
@@ -125,14 +130,18 @@ export async function retireBackup(
       },
       signal,
     );
-    while (frames.length) await closeDirectory();
+    while (frames.length) {
+      await closeDirectory();
+    }
     for await (const value of selectors.rows(0, selectors.position)) {
       signal.throwIfAborted();
       const row = value as readonly Value[],
         path = String(row[1]),
         native = row[2] as NativeIdentity;
       const parent = path === physical ? owned : phase!;
-      if (path === physical) await phase?.barrier();
+      if (path === physical) {
+        await phase?.barrier();
+      }
       await parent.parents(path);
       const actual = await parent.stat(path);
       // No member can disappear during this stable cleanup phase. Already missing
@@ -142,8 +151,9 @@ export async function retireBackup(
         (row[0] === 'remove-file'
           ? !sameNative(native, actual, true)
           : !sameDirectoryObject(native, actual))
-      )
+      ) {
         throw new Error('Backup retirement member changed.');
+      }
       signal.throwIfAborted();
       if (row[0] === 'remove-file') {
         await unlink(store.root.resolve(path));
@@ -156,7 +166,9 @@ export async function retireBackup(
       await store.fail('install-backup-member-retired');
     }
   } finally {
-    for (const frame of frames) frame.release();
+    for (const frame of frames) {
+      frame.release();
+    }
     phase?.release();
     await closeRetirementFiles(
       files,
@@ -169,9 +181,10 @@ export async function retireBackup(
 async function closeRetirementFiles(files: InstallScratch[], ledger?: Promise<void>) {
   const results = await Promise.allSettled([...files.map((f) => f.close()), ledger]);
   const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-  if (failed.length)
+  if (failed.length) {
     throw new AggregateError(
       failed.map((r) => r.reason),
       'Backup selector cleanup failed.',
     );
+  }
 }

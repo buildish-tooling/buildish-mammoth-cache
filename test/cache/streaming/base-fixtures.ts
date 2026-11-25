@@ -26,7 +26,9 @@ export { nativeCacheBackend } from './native-cache-fixture';
 const roots: string[] = [];
 export async function cleanupBaseFixtures() {
   await cleanupSdk();
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 export async function baseFixture(model?: ResolvedModel) {
   const root = await mkdtemp(path.resolve('build/native-base-'));

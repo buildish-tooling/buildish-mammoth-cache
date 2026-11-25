@@ -45,12 +45,14 @@ export interface BasePostRequest extends LifecycleOptions {
   readonly onCaptureInfo?: (message: string) => void;
   readonly onWarning?: (message: string) => void;
 }
+
 export interface BasePostResult {
   readonly outcome:
     'published' | 'no-change' | 'skipped-not-quiescent' | 'feature-unavailable' | 'abandoned';
   readonly key: string | null;
   readonly message?: string;
 }
+
 const same = (a: Value, b: Value) => encodeRecord(a).equals(encodeRecord(b));
 /** Fresh post consumes the successful compact handoff and the actual GC survivor owner. */
 export async function postStreamingBase(input: BasePostRequest): Promise<BasePostResult> {
@@ -66,8 +68,9 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
   let failure: unknown, answer: BasePostResult | undefined;
   try {
     const { role, access, model, invocation } = store.codec.options;
-    if (access !== 'writable' || role === 'distributed-worker')
+    if (access !== 'writable' || role === 'distributed-worker') {
       throw new Error('Base post requires writable base role.');
+    }
     if (attempt.state[4] === 'completed') {
       const terminal = attempt.state[7]!;
       if (
@@ -78,8 +81,9 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           'feature-unavailable',
           'abandoned',
         ].includes(terminal[1])
-      )
+      ) {
         throw new Error('Invalid base completion.');
+      }
       await attempt.guard();
       answer = { outcome: terminal[1] as BasePostResult['outcome'], key: terminal[2] };
     } else {
@@ -90,8 +94,9 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
         (r) => r.status,
       );
       if (gate.status !== 'ready') {
-        if (request.required || role === 'distributed-aggregator')
+        if (request.required || role === 'distributed-aggregator') {
           throw new Error('Required base post is not quiescent: ' + gate.message);
+        }
         const retained = [
           ...attempt.handoff.entries
             .filter((entry) => entry[4] !== null)
@@ -104,7 +109,9 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           (retained.length
             ? '; owned snapshots/activity retained for manual handling: ' + retained.join(', ')
             : '');
-        if (retained.length) request.onWarning?.(message);
+        if (retained.length) {
+          request.onWarning?.(message);
+        }
         await attempt.finish(['outcome', 'skipped-not-quiescent', null, null, null]);
         answer = { outcome: 'skipped-not-quiescent', key: null, message };
       } else {
@@ -154,8 +161,11 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
               ? 'Cache save skipped: cache backend is unavailable.'
               : 'Cache publication abandoned: outgoing cache confirmation unavailable.',
           );
-          for (const entry of attempt.handoff.entries)
-            if (entry[4]) await MetadataSnapshot.retireHandoff(store, entry[4], options);
+          for (const entry of attempt.handoff.entries) {
+            if (entry[4]) {
+              await MetadataSnapshot.retireHandoff(store, entry[4], options);
+            }
+          }
           await captured.dispose();
           captured = undefined;
           await attempt.finish(['outcome', outcome, null, null, null]);
@@ -166,27 +176,31 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           const live = await MetadataPublicationSource.survivors(owner);
           sources.push(live);
           const overrides: [string, MetadataPublicationSource][] = [];
-          for (const entry of attempt.handoff.entries)
+          for (const entry of attempt.handoff.entries) {
             if (entry[4]) {
               const partition = model.partitions.find((p) => p[0] === entry[1])!;
               if (
                 partition[3] !== 'single-writer' ||
                 ownsLocalSnapshot(partition, store.codec.options)
-              )
+              ) {
                 throw new Error('Unexpected retained snapshot source selection.');
+              }
               const snapshot = await MetadataSnapshot.admit(store, entry[4], options);
               snapshots.push(snapshot);
               const source = await MetadataPublicationSource.snapshot(snapshot);
               sources.push(source);
               overrides.push([entry[1], source]);
             }
-          for (const partition of model.partitions)
+          }
+          for (const partition of model.partitions) {
             if (
               partition[3] === 'single-writer' &&
               !ownsLocalSnapshot(partition, store.codec.options) &&
               !overrides.some(([p]) => p === partition[0])
-            )
+            ) {
               throw new Error('Missing independent authoritative snapshot root.');
+            }
+          }
           let set = MetadataPublicationSet.select(live, overrides);
           const choices = await timed(options, 'partition reuse planning', async () => {
             const choices: MetadataPublicationChoice[] = [];
@@ -206,12 +220,13 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
                 compatibleOrigin &&
                 same(pin[8], metadataSummaryProfile()) &&
                 same(pin[9], summary);
-              if (reuse)
+              if (reuse) {
                 choices.push(pin[7] === null ? ['empty', partition] : ['reuse', partition, pin[7]]);
-              else
+              } else {
                 choices.push(
                   summary[3] === 0 && summary[4] === 0 ? ['empty', partition] : ['new', partition],
                 );
+              }
             }
             for (const choice of choices) {
               request.summaries?.choice(choice[1], choice[0]);
@@ -226,9 +241,10 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           const unchanged = prior !== null && same(entries, prior[8]),
             lineage = lineageId(attempt.handoff.header[2]);
           // This exit precedes candidate groups/root plans/layouts/generation and output-only copies.
-          if (unchanged && prior[5] === lineage) answer = { outcome: 'no-change', key: prior[11] };
-          else {
-            for (const choice of choices)
+          if (unchanged && prior[5] === lineage) {
+            answer = { outcome: 'no-change', key: prior[11] };
+          } else {
+            for (const choice of choices) {
               if (choice[0] === 'new') {
                 const partition = model.partitions.find((p) => p[0] === choice[1])!;
                 if (ownsLocalSnapshot(partition, store.codec.options)) {
@@ -244,6 +260,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
                   overrides.push([partition[0], source]);
                 }
               }
+            }
             set = MetadataPublicationSet.select(live, overrides);
             const result = await timed(
               options,
@@ -302,6 +319,8 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
     window?.close();
     attempt.close();
   }
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) {
+    throw failure;
+  }
   return answer!;
 }

@@ -29,7 +29,9 @@ it.each(['gradle', 'maven'])(
     const prefixes = new Map<string, string>();
     for (const [name, job] of Object.entries(workflow.jobs)) {
       for (const step of job.steps) {
-        if (!step.with?.['job-mode']?.startsWith('distributed-')) continue;
+        if (!step.with?.['job-mode']?.startsWith('distributed-')) {
+          continue;
+        }
         const prefix = step.with['cache-key-prefix']!;
         if (tool === 'gradle' && name === 'layered_workers') {
           // Each warm-layer qualification owns a fresh producer, including on reruns.
@@ -143,8 +145,9 @@ it.each(['gradle', 'maven'])(
       includes: ['it-portability/**'],
       publication: 'aggregate',
     });
-    if (tool === 'gradle')
+    if (tool === 'gradle') {
       expect(partitions).toContainEqual({ id: 'dependency-metadata', writer: 'aggregator' });
+    }
   },
 );
 

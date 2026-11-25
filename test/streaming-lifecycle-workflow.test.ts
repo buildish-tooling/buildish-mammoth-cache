@@ -31,6 +31,7 @@ type Step = {
   run?: string;
   if?: string;
 };
+
 type Job = {
   needs?: string[];
   steps: Step[];
@@ -38,6 +39,7 @@ type Job = {
   outputs?: Record<string, string>;
   'timeout-minutes': number;
 };
+
 const workflow = async (tool: string) =>
   parse(await readFile(`.github/workflows/it-reusable-${tool}.yml`, 'utf8')).jobs as Record<
     string,
@@ -50,7 +52,9 @@ it.each(['gradle', 'maven'])(
     const jobs = await workflow(tool);
     const prefix = tool === 'maven' ? 'maven_' : '';
     for (const [jobId, job] of Object.entries(jobs)) {
-      if (jobId.endsWith('duplicate_invocation_guard') || jobId === 'required_lifecycle') continue;
+      if (jobId.endsWith('duplicate_invocation_guard') || jobId === 'required_lifecycle') {
+        continue;
+      }
       const observe = job.steps.findIndex((step) => step.uses?.endsWith('/it-observe'));
       const action = job.steps.findIndex((step) => step.uses === `./actions/github/${tool}`);
       expect(observe).toBeGreaterThanOrEqual(0);

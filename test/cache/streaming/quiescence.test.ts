@@ -47,7 +47,9 @@ import {
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture(options: Parameters<typeof observationFixture>[1] = {}) {
   const f = await quiescenceFixture(options);
@@ -103,10 +105,14 @@ it('seals actual registrations once, runs compatible clients sequentially and is
   ).toBe(true);
   expect(opts.inspect).toHaveBeenCalledTimes(1);
   expect(opts.stop.mock.calls[0][0]).toMatchObject({ gradleUserHome: f.root, javaHome: a[6] });
-  if (gate.status !== 'ready') throw new Error(gate.message);
+  if (gate.status !== 'ready') {
+    throw new Error(gate.message);
+  }
   cleanup.push(() => gate.window.close());
   const work = { ...f.store.root.work };
-  for (let i = 0; i < 1000; i++) gate.window.assertCurrent();
+  for (let i = 0; i < 1000; i++) {
+    gate.window.assertCurrent();
+  }
   expect(f.store.root.work).toEqual(work);
   attempt.attachWindow(gate.window);
   const captured = await captureObservations(f.store, {
@@ -133,32 +139,43 @@ it.each([
     r = await f.register('8.5'),
     opts = options(),
     initial = await f.store.state();
-  if (kind === 'failed')
+  if (kind === 'failed') {
     await writeFile(f.store.root.resolve(registrationFailure(f.store)), 'failure');
-  if (kind === 'candidate')
+  }
+  if (kind === 'candidate') {
     await writeFile(
       f.store.root.resolve(registrationDirectory(f.store) + '/.registration-candidate'),
       'partial',
     );
-  if (kind === 'bad-name')
+  }
+  if (kind === 'bad-name') {
     await writeFile(
       f.store.root.resolve(registrationDirectory(f.store) + '/' + '0'.repeat(64) + '.json'),
       encodeRecord(r),
     );
-  if (kind === 'bad-json')
+  }
+  if (kind === 'bad-json') {
     await writeFile(
       f.store.root.resolve(
         registrationDirectory(f.store) + '/' + H('gradle-installation', r) + '.json',
       ),
       '[]\n',
     );
-  if (kind === 'missing-launcher')
+  }
+  if (kind === 'missing-launcher') {
     await import('node:fs/promises').then((fs) =>
       fs.rm(r[3] + '/bin/' + (process.platform === 'win32' ? 'gradle.bat' : 'gradle')),
     );
-  if (kind === 'stop') opts.stop.mockRejectedValue(new Error('client nonzero'));
-  if (kind === 'remaining') opts.inspect.mockResolvedValue({ remaining: true, uncertain: false });
-  if (kind === 'uncertain') opts.inspect.mockResolvedValue({ remaining: false, uncertain: true });
+  }
+  if (kind === 'stop') {
+    opts.stop.mockRejectedValue(new Error('client nonzero'));
+  }
+  if (kind === 'remaining') {
+    opts.inspect.mockResolvedValue({ remaining: true, uncertain: false });
+  }
+  if (kind === 'uncertain') {
+    opts.inspect.mockResolvedValue({ remaining: false, uncertain: true });
+  }
   const result = await ExclusiveWindow.establish(f.store, f.budget, opts);
   expect(result.status).toBe('skipped-not-quiescent');
   expect(await f.store.state()).toEqual(initial);
@@ -228,7 +245,9 @@ it('re-establishes live evidence on retry rather than trusting persisted quiesce
   await f.register('8.5');
   const opts = options(),
     first = await ExclusiveWindow.establish(f.store, f.budget, opts);
-  if (first.status !== 'ready') throw new Error(first.message);
+  if (first.status !== 'ready') {
+    throw new Error(first.message);
+  }
   first.window.close();
   const state = tuple(await f.store.state());
   opts.inspect.mockResolvedValue({ remaining: true, uncertain: false });
@@ -278,10 +297,12 @@ it('preserves cancellation even where native process inspection is unsupported',
 
 it('keeps payload growth out of process/registration work and streams sixteen installations sequentially', async () => {
   const costs = [];
-  for (const installs of [1, 16])
+  for (const installs of [1, 16]) {
     for (const files of [4, 16]) {
       const f = await fixture();
-      for (let n = 0; n < installs; n++) await f.register('version-' + n);
+      for (let n = 0; n < installs; n++) {
+        await f.register('version-' + n);
+      }
       await f.files(
         '',
         Object.fromEntries(Array.from({ length: files }, (_, n) => ['data/file-' + n, 'body'])),
@@ -292,7 +313,9 @@ it('keeps payload growth out of process/registration work and streams sixteen in
         streams = vi.spyOn(f.store, 'writeStream'),
         before = { ...f.store.root.work },
         gate = await ExclusiveWindow.establish(f.store, f.budget, { ...opts, lifecycle: resolver });
-      if (gate.status !== 'ready') throw new Error(gate.message);
+      if (gate.status !== 'ready') {
+        throw new Error(gate.message);
+      }
       gate.window.close();
       expect(opts.stop).toHaveBeenCalledTimes(installs);
       expect(opts.inspect).toHaveBeenCalledTimes(1);
@@ -315,6 +338,7 @@ it('keeps payload growth out of process/registration work and streams sixteen in
         opens: w.opens - before.opens,
       });
     }
+  }
   expect(costs[0]).toEqual(costs[1]);
   expect(costs[2]).toEqual(costs[3]);
   process.stdout.write('V5_WINDOW_COST ' + JSON.stringify(costs) + '\n');
@@ -329,8 +353,9 @@ it('matches independent Unicode registration/failure canonical bytes and framed 
     expect(encodeRecord(row).toString()).toBe(bytes);
     expect(decodeRecord(Buffer.from(bytes))).toEqual(row);
     expect(rawSha(Buffer.from(bytes))).toBe(part.match(/Raw SHA-256: `([a-f0-9]{64})`/)![1]);
-    if (kind === 'registration')
+    if (kind === 'registration') {
       expect(H('gradle-installation', row) + '.json').toBe(part.match(/Filename: `([^`]+)`/)![1]);
+    }
   }
 });
 
@@ -349,7 +374,9 @@ it('uses the caller consumer lifetime for Maven without Gradle registration or p
     gate = await ExclusiveWindow.establish(f.store, f.budget, opts);
   expect(opts.stop).not.toHaveBeenCalled();
   expect(opts.inspect).not.toHaveBeenCalled();
-  if (gate.status !== 'ready') throw new Error(gate.message);
+  if (gate.status !== 'ready') {
+    throw new Error(gate.message);
+  }
   gate.window.close();
   expect(tuple(await f.store.state())).toHaveLength(8);
 });
@@ -364,9 +391,15 @@ it.each(['path', 'identity', 'mode'] as const)(
       b = f.store.codec.schemas.documents.bindings.parse(
         await f.store.readDocument(state[5], 'bindings'),
       );
-    if (kind === 'path') b[5][0] += '/foreign';
-    if (kind === 'identity') b[5][1][4] = String(BigInt(b[5][1][4]) + 1n);
-    if (kind === 'mode') b[5][1][6] ^= 0o010;
+    if (kind === 'path') {
+      b[5][0] += '/foreign';
+    }
+    if (kind === 'identity') {
+      b[5][1][4] = String(BigInt(b[5][1][4]) + 1n);
+    }
+    if (kind === 'mode') {
+      b[5][1][6] ^= 0o010;
+    }
     state[3]++;
     state[5] = f.store.codec.schemas.ref('bindings').parse(await f.store.writeDocument(b));
     await f.store.updateState(state);
@@ -414,15 +447,16 @@ it.skipIf(process.platform === 'win32').each(['stop', 'inspect'] as const)(
     await f.register('8.5');
     const opts = options(),
       initial = await f.store.state();
-    if (phase === 'stop')
+    if (phase === 'stop') {
       opts.stop.mockImplementation(async () => {
         await chmod(f.root, 0o750);
       });
-    else
+    } else {
       opts.inspect.mockImplementation(async () => {
         await chmod(f.root, 0o750);
         return { remaining: false, uncertain: false };
       });
+    }
     const gate = await ExclusiveWindow.establish(f.store, f.budget, opts);
     expect(gate.status).toBe('skipped-not-quiescent');
     expect(await f.store.state()).toEqual(initial);
@@ -439,9 +473,12 @@ it.each(['missing', 'wrong-purpose'] as const)(
     const lifecycle: LifecycleResolver = async (tool) => ({
       ...(await resolveLifecycle(tool)),
       quiesce: async () => {
-        if (kind === 'missing') return undefined;
-        if (kind === 'wrong-purpose')
+        if (kind === 'missing') {
+          return undefined;
+        }
+        if (kind === 'wrong-purpose') {
           return f.store.codec.schemas.documents['local-state'].parse(before)[5];
+        }
         return f.store.writeStream(
           'installations',
           { budget: f.budget, partition: null },

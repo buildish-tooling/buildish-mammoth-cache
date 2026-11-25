@@ -70,8 +70,9 @@ it('registers operational locations before summary/Test/parent/version filters w
     'GradleVersion.current().baseVersion',
     'TestBuildResultCapture.suppress',
     'gradle.getParent()',
-  ])
+  ]) {
     expect(script.indexOf(filter)).toBeGreaterThan(start);
+  }
   expect(script).not.toContain('JsonGenerator');
   expect(script).not.toContain('.force(');
   expect(script).toContain('while (buffer.hasRemaining()) channel.write(buffer)');

@@ -135,7 +135,9 @@ function normalizeMarkdownTableSpacing(value: string): string {
   return value
     .split('\n')
     .map((line) => {
-      if (!line.startsWith('|')) return line;
+      if (!line.startsWith('|')) {
+        return line;
+      }
       return line
         .split('|')
         .map((cell) => {

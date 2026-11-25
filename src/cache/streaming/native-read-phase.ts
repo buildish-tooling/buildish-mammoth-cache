@@ -23,39 +23,52 @@ import { add } from './encoding';
 /** Guarded forward reads under one operation’s original native hierarchy. */
 export class NativeReadPhase {
   private readonly stack: string[] = [];
+
   constructor(
     private readonly root: NativeRoot,
     private readonly anchor = '',
   ) {}
+
   private async stat(path: string): Promise<NativeIdentity> {
     this.root.work.stats++;
     const raw = await lstat(path ? this.root.resolve(path) : this.root.path, { bigint: true });
-    if (raw.isFile() && raw.nlink !== 1n)
+    if (raw.isFile() && raw.nlink !== 1n) {
       throw new Error('Aliased selected preimage is unsupported.');
+    }
     return nativeIdentity(raw);
   }
+
   private async matches(path: string, expected: NativeIdentity): Promise<void> {
     const actual = await this.stat(path);
-    if (!sameNative(actual, expected, true)) throw new Error('Frozen native preimage changed.');
-    if (actual[3] !== this.root.binding[3]) throw new Error('Cross-filesystem native preimage.');
+    if (!sameNative(actual, expected, true)) {
+      throw new Error('Frozen native preimage changed.');
+    }
+    if (actual[3] !== this.root.binding[3]) {
+      throw new Error('Cross-filesystem native preimage.');
+    }
   }
+
   async enter(path: string, expected: NativeIdentity): Promise<void> {
     if (
       expected[2] !== 'directory' ||
       (this.stack.length
         ? parentPath(path) !== this.stack[this.stack.length - 1]
         : path !== this.anchor)
-    )
+    ) {
       throw new Error('Invalid active native parent chain.');
+    }
     await this.matches(path, expected);
     this.stack.push(path);
   }
+
   async leave(path: string, expected: NativeIdentity): Promise<void> {
-    if (this.stack[this.stack.length - 1] !== path)
+    if (this.stack[this.stack.length - 1] !== path) {
       throw new Error('Unbalanced native read phase.');
+    }
     await this.matches(path, expected);
     this.stack.pop();
   }
+
   async *read(
     path: string,
     expected: NativeIdentity,
@@ -67,8 +80,9 @@ export class NativeReadPhase {
       expected[2] !== 'file' ||
       !this.stack.length ||
       parentPath(path) !== this.stack[this.stack.length - 1]
-    )
+    ) {
       throw new Error('Leaf has no checked native parent.');
+    }
     await this.matches(path, expected);
     this.root.work.opens++;
     const handle = await open(
@@ -77,17 +91,21 @@ export class NativeReadPhase {
     );
     try {
       this.root.work.stats++;
-      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
+      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true)) {
         throw new Error('Preimage changed on open.');
+      }
       const stream = handle.createReadStream({ autoClose: false, highWaterMark: 65536 });
-      if (hashing) this.root.work.bodyHashStreams++;
+      if (hashing) {
+        this.root.work.bodyHashStreams++;
+      }
       for await (const chunk of abortableValues(stream, signal)) {
         this.root.work.readBytes = add(this.root.work.readBytes, chunk.length);
         yield chunk;
       }
       this.root.work.stats++;
-      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true))
+      if (!sameNative(expected, nativeIdentity(await handle.stat({ bigint: true })), true)) {
         throw new Error('Preimage changed during hash.');
+      }
       await this.matches(path, expected);
       signal.throwIfAborted();
     } finally {

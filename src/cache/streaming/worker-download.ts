@@ -47,11 +47,13 @@ export interface SelectedWorkerArtifact {
   readonly context: Context;
   readonly authorizedSnapshots: readonly string[];
 }
+
 // Protocol: docs/dev/cache-protocol.md#worker-transport.
 // SDK transport/download hashing is distinct from the SINGLE later TAR/gzip parse.
 // This immutable Q binds a raw downloaded file in place; no compressed payload copy.
 export class DownloadedWorkerArchive {
   private readonly lifecycle = { disposed: false, retired: false, streams: new Set<Readable>() };
+
   private constructor(
     readonly store: OwnedStore,
     readonly artifact: Readonly<WorkflowArtifactDescriptor>,
@@ -64,6 +66,7 @@ export class DownloadedWorkerArchive {
   ) {
     Object.freeze(this);
   }
+
   static async download(
     store: OwnedStore,
     backend: WorkflowArtifactBackend,
@@ -90,8 +93,9 @@ export class DownloadedWorkerArchive {
         artifact.name,
         workerArtifactPrefix(store.codec.options.model, context),
       ) !== context[5]
-    )
+    ) {
       throw new Error('Raw worker artifact name differs from selected context.');
+    }
     const container = store.prefix + 'worker/' + randomUUID(),
       directory = container + '/download';
     await store.makeParents(directory + '/placeholder');
@@ -123,8 +127,9 @@ export class DownloadedWorkerArchive {
         relative === '..' ||
         relative.startsWith('..' + path.sep) ||
         path.isAbsolute(relative)
-      )
+      ) {
         throw new Error('Unsafe raw worker download result/digest.');
+      }
       const afterContainer = await store.root.stat(container),
         afterRoot = await store.root.stat(directory);
       if (
@@ -134,15 +139,19 @@ export class DownloadedWorkerArchive {
         owner[6] !== afterContainer[6] ||
         !sameObject(downloadRoot, afterRoot) ||
         downloadRoot[6] !== afterRoot[6]
-      )
+      ) {
         throw new Error('Raw worker download namespace changed.');
+      }
       let file: string | undefined;
       for await (const entry of await opendir(store.root.resolve(directory), { bufferSize: 2 })) {
-        if (file || !entry.isFile())
+        if (file || !entry.isFile()) {
           throw new Error('Raw worker download requires exactly one regular file.');
+        }
         file = directory + '/' + entry.name;
       }
-      if (!file) throw new Error('Raw worker archive is missing.');
+      if (!file) {
+        throw new Error('Raw worker archive is missing.');
+      }
       await store.root.parents(file);
       store.root.work.stats++;
       const raw = await lstat(store.root.resolve(file), { bigint: true }),
@@ -152,8 +161,9 @@ export class DownloadedWorkerArchive {
         before[2] !== 'file' ||
         before[3] !== store.root.binding[3] ||
         BigInt(artifact.size) !== raw.size
-      )
+      ) {
         throw new Error('Raw worker file is aliased or has unexpected identity/size.');
+      }
       store.root.work.opens++;
       const handle = await open(
           store.root.resolve(file),
@@ -165,8 +175,9 @@ export class DownloadedWorkerArchive {
       try {
         store.root.work.stats++;
         const opened = await handle.stat({ bigint: true });
-        if (opened.nlink !== 1n || !sameNative(before, nativeIdentity(opened), true))
+        if (opened.nlink !== 1n || !sameNative(before, nativeIdentity(opened), true)) {
           throw new Error('Raw worker file changed on open.');
+        }
         for await (const chunk of abortableValues(
           handle.createReadStream({ autoClose: false, highWaterMark: 65536 }),
           signal,
@@ -178,18 +189,21 @@ export class DownloadedWorkerArchive {
         store.root.work.stats++;
         const after = await handle.stat({ bigint: true });
         identity = nativeIdentity(after);
-        if (after.nlink !== 1n || !sameNative(before, identity, true) || bytes !== artifact.size)
+        if (after.nlink !== 1n || !sameNative(before, identity, true) || bytes !== artifact.size) {
           throw new Error('Raw worker file changed during binding.');
+        }
       } finally {
         await handle.close();
       }
       const sha = hash.digest('hex'),
         reported = workerDigest(artifact.digest);
-      if (reported !== null && reported !== sha)
+      if (reported !== null && reported !== sha) {
         throw new Error('Raw worker compressed SHA-256 differs from service digest.');
+      }
       const named = await store.root.stat(file);
-      if (!named || !sameNative(identity!, named, true))
+      if (!named || !sameNative(identity!, named, true)) {
         throw new Error('Raw worker file name changed.');
+      }
       signal.throwIfAborted();
       const reference = Object.freeze(
         store.codec.schemas
@@ -217,15 +231,21 @@ export class DownloadedWorkerArchive {
       throw error;
     }
   }
+
   async assertStable(): Promise<void> {
-    if (this.lifecycle.disposed) throw new Error('Downloaded worker archive retired.');
+    if (this.lifecycle.disposed) {
+      throw new Error('Downloaded worker archive retired.');
+    }
     const actual = await this.store.root.stat(this.reference[2]);
-    if (!actual || !sameNative(this.identity, actual, true))
+    if (!actual || !sameNative(this.identity, actual, true)) {
       throw new Error('Downloaded worker archive changed.');
+    }
   }
+
   open(): Readable {
-    if (this.lifecycle.disposed || this.lifecycle.streams.size)
+    if (this.lifecycle.disposed || this.lifecycle.streams.size) {
       throw new Error('Downloaded worker archive is retired/already reading.');
+    }
     const stream = Readable.from(
       async function* (this: DownloadedWorkerArchive) {
         await this.assertStable();
@@ -239,6 +259,7 @@ export class DownloadedWorkerArchive {
     stream.once('close', () => this.lifecycle.streams.delete(stream));
     return stream;
   }
+
   input(): WorkerMergeInput {
     return {
       job: this.context[4],
@@ -248,6 +269,7 @@ export class DownloadedWorkerArchive {
       producerId: String(this.artifact.id),
     };
   }
+
   producer(): Value {
     return [
       'producer',
@@ -260,15 +282,20 @@ export class DownloadedWorkerArchive {
       ],
     ];
   }
+
   /** Caller retires committed producer references first; never delete while a reader is retained. */
   async dispose(): Promise<void> {
-    if (this.lifecycle.retired) return;
+    if (this.lifecycle.retired) {
+      return;
+    }
     this.lifecycle.disposed = true;
     await Promise.all(
       [...this.lifecycle.streams].map(
         (stream) =>
           new Promise<void>((resolve) => {
-            if (stream.closed) return resolve();
+            if (stream.closed) {
+              return resolve();
+            }
             stream.once('close', resolve);
             stream.destroy();
           }),

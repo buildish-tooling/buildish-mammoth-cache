@@ -38,7 +38,9 @@ beforeAll(async () => {
     await exec('mvn', ['--version'], { env: { ...process.env, MAVEN_ARGS: '', MAVEN_OPTS: '' } })
   ).stdout;
   const home = /Maven home: (.+)/u.exec(version)?.[1]?.trim();
-  if (!home) throw new Error(`Cannot locate installed Maven: ${version}`);
+  if (!home) {
+    throw new Error(`Cannot locate installed Maven: ${version}`);
+  }
   classpath = [root, path.join(home, 'lib', '*'), path.join(home, 'boot', '*')].join(
     path.delimiter,
   );
@@ -59,7 +61,9 @@ beforeAll(async () => {
 }, 30_000);
 afterAll(async () => {
   await cleanupBaseFixtures();
-  if (root) await rm(root, { recursive: true, force: true });
+  if (root) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 async function publish(remote: string, name: string, version: string, bytes: string, suffix = '') {
@@ -88,7 +92,9 @@ async function resolve(
     pathToFileURL(path.join(root, options.remote ?? 'remote-a')).href + '/',
     options.policy ?? 'always',
   ];
-  if (options.mirrorOf) args.push(options.mirrorOf);
+  if (options.mirrorOf) {
+    args.push(options.mirrorOf);
+  }
   const { stdout } = await exec(
     'java',
     [`-Duser.home=${path.join(root, 'home')}`, '-cp', classpath, 'ResolverProbe', ...args],
@@ -190,8 +196,9 @@ it.each([false, true])(
     // Mammoth must preserve the installed Resolver's native behavior in either case.
     const nativeBytes = await resolve(native, release, differentOrigin);
     expect(await resolve(local, release, differentOrigin)).toBe(nativeBytes);
-    if (excluded) expect(nativeBytes).toBe('A');
-    else {
+    if (excluded) {
+      expect(nativeBytes).toBe('A');
+    } else {
       const entries = async (repository: string) =>
         (await readFile(path.join(root, repository, marker), 'utf8'))
           .split(/\r?\n/u)
@@ -294,7 +301,9 @@ it('GC preserves protected coordinates with old marker timestamps and evicts ina
     const owner = await f.action(local, 'owner', { 'cache-gc-mode': 'timestamp' }, () => cutoff);
     await owner.prepare();
     await cloneSeed(local);
-    for (const name of [artifact, marker]) await utimes(path.join(owner.home, name), old, old);
+    for (const name of [artifact, marker]) {
+      await utimes(path.join(owner.home, name), old, old);
+    }
     if (used) {
       // Model a visible access on a noatime filesystem without changing mtime.
       await utimes(path.join(owner.home, artifact), Math.ceil(cutoff / 1000) + 1, old);
@@ -371,8 +380,9 @@ it('retains the complete Maven coordinate when excluded sources would survive GC
   );
   await owner.prepare();
   await cloneSourcesSeed('excluded-gc', 'a');
-  for (const file of [artifact, marker, sourcesArtifact])
+  for (const file of [artifact, marker, sourcesArtifact]) {
     await utimes(path.join(owner.home, file), 1700000000, 1700000000);
+  }
   const before = await readFile(path.join(owner.home, marker), 'utf8');
   expect((await owner.post()).outcome).toBe('published');
   expect(await readFile(path.join(owner.home, sourcesArtifact), 'utf8')).toBe('A-SOURCES');
@@ -400,7 +410,9 @@ it.each([false, true])(
     const winner = `policy-winner-${different}`,
       loser = `policy-loser-${different}`;
     const remote = different ? 'remote-b' : 'policy-same-bytes';
-    if (!different) await publish(remote, 'example', '1.0', 'A');
+    if (!different) {
+      await publish(remote, 'example', '1.0', 'A');
+    }
     expect(await resolve(winner)).toBe('A');
     expect(await resolve(loser, release, { id: 'origin-b', remote })).toBe(different ? 'B' : 'A');
     if (different) {
@@ -424,13 +436,15 @@ it.each([false, true])(
       await expect(
         resolve(local, release, { offline: true, id: 'origin-b', remote }),
       ).rejects.toThrow(/offline mode/u);
-      if (different)
+      if (different) {
         await expect(resolve(local, sourcesCoordinates, { offline: true })).rejects.toThrow(
           /offline mode/u,
         );
+      }
     }
-    if (different)
+    if (different) {
       await expect(readFile(path.join(target.home, sourcesArtifact))).rejects.toThrow();
+    }
   },
 );
 

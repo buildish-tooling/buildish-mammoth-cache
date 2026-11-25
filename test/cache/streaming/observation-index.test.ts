@@ -25,7 +25,9 @@ import { observationFixture, rows } from './observation-fixtures';
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture(count = 4) {
   const f = await observationFixture();
@@ -143,8 +145,12 @@ it.each([4, 16])(
         const b = tuple(row);
         for await (const value of program.evidence(Number(b[1]), Number(b[2]))) {
           const r = tuple(value);
-          if (r[0] === 'target') targets++;
-          if (r[0] === 'gc-parent') parents++;
+          if (r[0] === 'target') {
+            targets++;
+          }
+          if (r[0] === 'gc-parent') {
+            parents++;
+          }
         }
       }
       expect(targets).toBe(count);

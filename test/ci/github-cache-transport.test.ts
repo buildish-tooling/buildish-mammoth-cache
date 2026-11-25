@@ -129,7 +129,9 @@ it('restores process context after errors and serializes concurrent backend inst
       await new Promise((resolve) => setTimeout(resolve, 5));
       expect(process.cwd()).toBe(expected);
       seen.push(key);
-      if (key === 'first') throw new Error('transport failed');
+      if (key === 'first') {
+        throw new Error('transport failed');
+      }
       return key;
     },
   };

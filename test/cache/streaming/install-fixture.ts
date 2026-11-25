@@ -104,7 +104,9 @@ export async function installFixture(
     );
   const context: Context = [...localOptions().context];
   context[7] = tool;
-  if (configuration.job) context[4] = configuration.job;
+  if (configuration.job) {
+    context[4] = configuration.job;
+  }
   const options = {
       ...localOptions(),
       model,
@@ -119,8 +121,9 @@ export async function installFixture(
   async function files(base: string, entries: Record<string, string | null>) {
     for (const [logical, body] of Object.entries(entries)) {
       const native = store.root.resolve(base ? base + '/' + logical : logical);
-      if (body === null) await mkdir(native, { recursive: true });
-      else {
+      if (body === null) {
+        await mkdir(native, { recursive: true });
+      } else {
         await mkdir(path.dirname(native), { recursive: true });
         await writeFile(native, body);
       }

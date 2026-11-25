@@ -40,7 +40,9 @@ beforeAll(async () => {
   });
 });
 afterAll(async () => {
-  for (const root of [directory, ...roots]) await rm(root, { recursive: true, force: true });
+  for (const root of [directory, ...roots]) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 async function root() {
   const value = await mkdtemp(path.resolve('build/prepare-root-'));
@@ -59,7 +61,9 @@ function crash(mode: string, root: string, point: string) {
     run(mode, root, point);
   } catch (error) {
     status = (error as { status: unknown }).status;
-    if (status !== 73) process.stderr.write(String((error as { stderr?: Buffer }).stderr ?? error));
+    if (status !== 73) {
+      process.stderr.write(String((error as { stderr?: Buffer }).stderr ?? error));
+    }
   }
   expect(status).toBe(73);
 }

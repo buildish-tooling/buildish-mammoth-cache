@@ -58,8 +58,12 @@ const roots: string[] = [],
   budgets: WorkingBudget[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const budget of budgets.splice(0)) expect(budget.retained).toBe(0);
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const budget of budgets.splice(0)) {
+    expect(budget.retained).toBe(0);
+  }
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
   await cleanupBaseFixtures();
 });
 async function fixture(tool: 'maven' | 'gradle' = 'maven', inputs: Record<string, string> = {}) {
@@ -190,13 +194,14 @@ it.each(['maven', 'gradle'] as const)(
     expect(f.outputs.get('base-cache-restore-status')).toBe('miss');
     await mkdir(f.home + '/data');
     await writeFile(f.home + '/data/file', 'built');
-    if (tool === 'gradle')
+    if (tool === 'gradle') {
       f.post = {
         ...f.post,
         lifecycle: gradleResolver({
           inspect: async () => ({ remaining: false, uncertain: false }),
         }),
       };
+    }
     f.backend.mockImplementationOnce(async () => {
       expect(captureLines(f)[0]).toBe('Mammoth capture summary (complete):');
       expect(captureLines(f)[1]).toContain('captured=1 files/5 logical bytes');
@@ -204,7 +209,9 @@ it.each(['maven', 'gradle'] as const)(
     });
     f.loadReport.mockImplementation(async () => {
       const a = decodeInvocationAnchor(raw);
-      if (a[0] !== 'streaming-lifecycle') throw new Error('anchor');
+      if (a[0] !== 'streaming-lifecycle') {
+        throw new Error('anchor');
+      }
       const opened = await OpenedInvocation.open(a, f.budget);
       expect(opened.state[7]?.[1]).toBe('published');
       return { anyBuildFailed: false, warnings: [], summaryLines: [], logLines: [], builds: [] };
@@ -253,7 +260,9 @@ it('canonicalizes repeated configured producers before freezing and requests the
     artifactBackend: async () => service.api,
   });
   const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
-  if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  if (anchor[0] !== 'streaming-lifecycle') {
+    throw new Error('anchor');
+  }
   const opened = await OpenedInvocation.open(anchor, f.budget),
     handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
   try {
@@ -286,7 +295,9 @@ it('failed prepare cleans only known hooks without reading reports or publishing
   expect(f.artifacts.upload).not.toHaveBeenCalled();
   expect(f.loadReport).not.toHaveBeenCalled();
   const a = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
-  if (a[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  if (a[0] !== 'streaming-lifecycle') {
+    throw new Error('anchor');
+  }
   const state = (await OpenedInvocation.open(a, f.budget)).state;
   expect(state[4]).toBe('prepare-failed');
   expect(state[7]).toBeNull();
@@ -312,7 +323,9 @@ it('a denied Gradle window reports retained activity once without report/sink/ba
   const f = await fixture('gradle');
   await runStreamingPrepare(f.deps);
   const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
-  if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  if (anchor[0] !== 'streaming-lifecycle') {
+    throw new Error('anchor');
+  }
   const opened = await OpenedInvocation.open(anchor, f.budget);
   const facts = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
   let activityPath: string;
@@ -366,11 +379,13 @@ it('guard and GitHub factory modules defer provider SDK/config/build-tool graphs
     ),
   ).toBe(false);
   const { readFile } = await import('node:fs/promises');
-  for (const tool of ['gradle', 'maven'])
-    for (const phase of ['main', 'post'])
+  for (const tool of ['gradle', 'maven']) {
+    for (const phase of ['main', 'post']) {
       expect(await readFile('src/ci/github/' + tool + '/' + phase + '.ts', 'utf8')).toContain(
         'streaming',
       );
+    }
+  }
 });
 
 it.each(['disabled', 'read-only'] as const)(
@@ -382,14 +397,16 @@ it.each(['disabled', 'read-only'] as const)(
     );
     f.hooks.mockImplementation(async () => installGradleBuildResultCapture(f.home, f.ci));
     await runStreamingPrepare(f.deps);
-    for (const name of [INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME])
+    for (const name of [INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME]) {
       expect(await readFile(f.home + '/init.d/' + name, 'utf8')).toBeTruthy();
+    }
     await runStreamingPost({
       ...f.post,
       removeHooks: async (root) => cleanupGradleBuildResultCapture(root),
     });
-    for (const name of [INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME])
+    for (const name of [INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME]) {
       await expect(readFile(f.home + '/init.d/' + name)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
     expect(f.loadReport).toHaveBeenCalledWith('gradle', f.ci.tempDirectory);
     expect(f.backend).not.toHaveBeenCalled();
   },
@@ -401,7 +418,9 @@ it('rounds fractional configured GC age conservatively once and freezes that sca
   });
   await runStreamingPrepare(f.deps);
   const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
-  if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  if (anchor[0] !== 'streaming-lifecycle') {
+    throw new Error('anchor');
+  }
   const opened = await OpenedInvocation.open(anchor, f.budget),
     handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
   try {
@@ -439,7 +458,9 @@ it.each(['base', 'read-only', 'worker', 'disabled'] as const)(
     const resolver = vi.fn(f.deps.lifecycle);
     await runStreamingPrepare({ ...f.deps, lifecycle: resolver });
     expect(resolver).toHaveBeenCalledTimes(mode === 'disabled' ? 0 : 1);
-    if (mode !== 'disabled') expect(resolver).toHaveBeenCalledWith('gradle');
+    if (mode !== 'disabled') {
+      expect(resolver).toHaveBeenCalledWith('gradle');
+    }
     expect(f.hooks).toHaveBeenCalledTimes(mode === 'base' ? 0 : 1);
     if (mode === 'base') {
       const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
@@ -464,22 +485,31 @@ it.each([
       controller = new AbortController();
     let current = true;
     const revoke = () => {
-      if (cancel) controller.abort(new Error('summary cancelled'));
-      else current = false;
+      if (cancel) {
+        controller.abort(new Error('summary cancelled'));
+      } else {
+        current = false;
+      }
     };
     await expect(
       runStreamingPrepare({
         ...f.deps,
         signal: controller.signal,
         assertCurrent: (): undefined => {
-          if (!current) throw new Error('lifetime revoked');
+          if (!current) {
+            throw new Error('lifetime revoked');
+          }
         },
         reportSink: async () => {
-          if (stage === 'factory') revoke();
+          if (stage === 'factory') {
+            revoke();
+          }
           return {
             ...f.sink,
             publishSummary: async () => {
-              if (stage === 'publish') revoke();
+              if (stage === 'publish') {
+                revoke();
+              }
             },
           };
         },
@@ -523,7 +553,9 @@ it.each(['unavailable', 'unconfirmed'] as const)(
     expect(warning).toHaveBeenCalledTimes(1);
     expect(f.sdk.calls.filter((c) => c.kind === 'save')).toEqual([]);
     const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
-    if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+    if (anchor[0] !== 'streaming-lifecycle') {
+      throw new Error('anchor');
+    }
     const opened = await OpenedInvocation.open(anchor, f.budget);
     expect(opened.state[7]).toEqual(['outcome', result.outcome, null, null, null]);
     expect(await readFile(f.home + '/data/a', 'utf8')).toBe('body');
@@ -543,7 +575,9 @@ it('reports an actual outgoing worker rejection without discovery or a success r
   expect(f.artifacts.get).not.toHaveBeenCalled();
   expect(f.artifacts.download).not.toHaveBeenCalled();
   const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
-  if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+  if (anchor[0] !== 'streaming-lifecycle') {
+    throw new Error('anchor');
+  }
   expect((await OpenedInvocation.open(anchor, f.budget)).state[7]).toEqual([
     'outcome',
     'abandoned',
@@ -564,7 +598,9 @@ it('routes an actual local return failure through the GitHub entrypoint to setFa
     this: (typeof NativeRoot)['prototype'],
     ...args
   ) {
-    if (args[1] === 'data') throw new Error('return destination unavailable');
+    if (args[1] === 'data') {
+      throw new Error('return destination unavailable');
+    }
     return rename.apply(this, args);
   });
   let complete!: (message: string) => void;
@@ -663,7 +699,9 @@ it.each(['cancel', 'report', 'sink-factory', 'sink-publish'] as const)(
       ]);
       expect(original!.length).toBeGreaterThan(0);
       expect(warning).not.toHaveBeenCalled();
-      if (stage === 'cancel') controller.abort(new Error('cancel publication'));
+      if (stage === 'cancel') {
+        controller.abort(new Error('cancel publication'));
+      }
     } finally {
       release();
     }
@@ -679,15 +717,20 @@ it.each(['cancel', 'report', 'sink-factory', 'sink-publish'] as const)(
     expect(f.artifacts.get).not.toHaveBeenCalled();
     expect(f.artifacts.download).not.toHaveBeenCalled();
     const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
-    if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+    if (anchor[0] !== 'streaming-lifecycle') {
+      throw new Error('anchor');
+    }
     const opened = await OpenedInvocation.open(anchor, f.budget);
     expect(opened.state[7]).toEqual(
       stage === 'cancel' ? null : ['outcome', 'abandoned', null, null, null],
     );
     expect(opened.state[4]).toBe(stage === 'cancel' ? 'post-active' : 'completed');
-    if (stage === 'cancel') expect(f.loadReport).not.toHaveBeenCalled();
-    if (stage === 'cancel' || stage === 'report' || stage === 'sink-factory')
+    if (stage === 'cancel') {
+      expect(f.loadReport).not.toHaveBeenCalled();
+    }
+    if (stage === 'cancel' || stage === 'report' || stage === 'sink-factory') {
       expect(f.sink.publishSummary).not.toHaveBeenCalled();
+    }
   },
 );
 
@@ -708,13 +751,16 @@ it.each(['failure', 'cancel', 'analytics-disabled'] as const)(
     const reason = new Error(mode + ' at index construction');
     const controller = new AbortController();
     const write = ObservationIndex.write;
-    if (mode !== 'analytics-disabled')
+    if (mode !== 'analytics-disabled') {
       vi.spyOn(ObservationIndex, 'write').mockImplementationOnce(async (...args) => {
-        if (mode === 'failure') throw reason;
+        if (mode === 'failure') {
+          throw reason;
+        }
         const index = await write.apply(ObservationIndex, args);
         controller.abort(reason);
         return index;
       });
+    }
     const post = runStreamingPost({
       ...f.post,
       signal: controller.signal,
@@ -755,7 +801,9 @@ it.each([true, false])(
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10000);
     const ready = await runStreamingPrepare({ ...f.deps, buildToolAdapterFactory: () => adapter });
     clock.mockRestore();
-    if (!('anchor' in ready)) throw new Error('fixture');
+    if (!('anchor' in ready)) {
+      throw new Error('fixture');
+    }
     await mkdir(f.home + '/data', { recursive: true });
     await writeFile(f.home + '/data/old.jar', 'old');
     await utimes(f.home + '/data/old.jar', 1.234, 1.234);
@@ -779,7 +827,9 @@ it.each(['model-policy', 'handoff-family'] as const)(
   async (kind) => {
     const f = await fixture('gradle', { 'dependency-cache-layer': 'true' });
     const ready = await runStreamingPrepare(f.deps);
-    if (!('anchor' in ready)) throw new Error('fixture');
+    if (!('anchor' in ready)) {
+      throw new Error('fixture');
+    }
     const opened = await OpenedInvocation.open(ready.anchor, f.budget);
     const bindings = structuredClone(opened.bindings),
       state = structuredClone(opened.state);
@@ -791,9 +841,13 @@ it.each(['model-policy', 'handoff-family'] as const)(
     if (kind === 'model-policy') {
       expect(rows[1][3]).toBe('retain-dependencies');
       rows[1].pop();
-    } else rows[0][5] = 'mammoth-s1-gradle-' + '0'.repeat(64);
+    } else {
+      rows[0][5] = 'mammoth-s1-gradle-' + '0'.repeat(64);
+    }
     const digest = new Digest('local-' + reference[1]);
-    for (const row of rows.slice(0, -1)) digest.update(row);
+    for (const row of rows.slice(0, -1)) {
+      digest.update(row);
+    }
     rows.at(-1)![2] = digest.digest();
     const bytes = Buffer.concat(rows.map((row) => encodeRecord(row)));
     await writeFile(f.home + '/' + reference[2], bytes);
@@ -803,7 +857,9 @@ it.each(['model-policy', 'handoff-family'] as const)(
       const encoded = encodeRecord(bindings);
       await writeFile(f.home + '/' + state[5][2], encoded);
       state[5] = ['ref', 'bindings', state[5][2], encoded.length, rawSha(encoded)];
-    } else state[6] = next as (typeof state)[6];
+    } else {
+      state[6] = next as (typeof state)[6];
+    }
     await writeFile(f.home + '/' + ready.store.prefix + 'state.json', encodeRecord(state));
     const capture = vi.spyOn(observationCapture, 'captureObservations');
     await expect(runStreamingPost({ ...f.post, lifecycle: f.deps.lifecycle })).rejects.toThrow(
@@ -886,7 +942,9 @@ it.each([true, false])(
     const output = vi.spyOn(worker.host, 'setOutput'),
       environment = vi.spyOn(worker.host, 'exportEnvironmentVariable');
     const result = await runStreamingPrepare(dependencies);
-    if (!('gradleSeed' in result) || !result.gradleSeed) throw new Error('No warm seed');
+    if (!('gradleSeed' in result) || !result.gradleSeed) {
+      throw new Error('No warm seed');
+    }
     expect(worker.state.get(STREAMING_LAYER_ACTIVATED_STATE)).toBe(
       result.store.codec.options.invocation,
     );
@@ -898,7 +956,9 @@ it.each([true, false])(
     if (exportEnvironment) {
       expect(environment).toHaveBeenCalledExactlyOnceWith('GRADLE_RO_DEP_CACHE', seed);
       expect(worker.host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE')).toBe(seed);
-    } else expect(environment).not.toHaveBeenCalled();
+    } else {
+      expect(environment).not.toHaveBeenCalled();
+    }
     expect(
       (await runStreamingPost({ ...worker.post, lifecycle: dependencies.lifecycle })).outcome,
     ).toBe('worker-uploaded');
@@ -937,7 +997,9 @@ it.each(['report', 'output', 'environment'] as const)(
       output(name, value);
       if (name === 'gradle-ro-dep-cache' && value) {
         seed = String(value);
-        if (failure === 'output') throw new Error('output failure');
+        if (failure === 'output') {
+          throw new Error('output failure');
+        }
       }
     });
     if (failure === 'environment') {
@@ -963,7 +1025,9 @@ it.each(['report', 'output', 'environment'] as const)(
     expect(worker.state.has(STREAMING_LAYER_ACTIVATED_STATE)).toBe(false);
     const raw = worker.state.get(STREAMING_INVOCATION_STATE)!;
     const anchor = decodeInvocationAnchor(raw);
-    if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+    if (anchor[0] !== 'streaming-lifecycle') {
+      throw new Error('anchor');
+    }
     const opened = await OpenedInvocation.open(anchor, worker.budget);
     if (failure === 'report') {
       expect(await readdir(worker.home + '/' + opened.store.prefix + 'seed')).toEqual([]);
@@ -1013,22 +1077,29 @@ it.each(['output', 'environment'] as const)(
       .spyOn(worker.host, 'exportEnvironmentVariable')
       .mockImplementation((name, value) => {
         publish(name, value);
-        if (point === 'environment') controller.abort(new Error('activation cancelled'));
+        if (point === 'environment') {
+          controller.abort(new Error('activation cancelled'));
+        }
       });
     vi.spyOn(worker.host, 'setOutput').mockImplementation((name, value) => {
       output(name, value);
-      if (name === 'gradle-ro-dep-cache' && value && point === 'output')
+      if (name === 'gradle-ro-dep-cache' && value && point === 'output') {
         controller.abort(new Error('activation cancelled'));
+      }
     });
     await expect(
       runStreamingPrepare({ ...dependencies, signal: controller.signal }),
     ).rejects.toThrow('activation cancelled');
-    if (point === 'output') expect(environment).not.toHaveBeenCalled();
-    else expect(environment).toHaveBeenCalledOnce();
+    if (point === 'output') {
+      expect(environment).not.toHaveBeenCalled();
+    } else {
+      expect(environment).toHaveBeenCalledOnce();
+    }
     expect(inspect).toHaveBeenCalledTimes(1);
     const seed = String(worker.outputs.get('gradle-ro-dep-cache'));
-    if (point === 'environment')
+    if (point === 'environment') {
       expect(worker.host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE')).toBe(seed);
+    }
     expect(await readFile(seed + '/modules-2/metadata-2.107/descriptors.bin', 'utf8')).toBe('seed');
     expect(await readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME, 'utf8')).toContain(
       'gradle-installation',
@@ -1090,7 +1161,9 @@ it.each(['advertisement-only', 'no-markers', 'foreign-terminal', 'aborted-work']
   async (interruption) => {
     const { worker, dependencies, inspect } = await warmLayerProvider();
     const ready = await runStreamingPrepare(dependencies);
-    if (!('gradleSeed' in ready) || !ready.gradleSeed) throw new Error('No warm seed');
+    if (!('gradleSeed' in ready) || !ready.gradleSeed) {
+      throw new Error('No warm seed');
+    }
     expect(worker.state.get(STREAMING_LAYER_ADVERTISEMENT_STATE)).toBe(
       ready.store.codec.options.invocation,
     );
@@ -1107,8 +1180,9 @@ it.each(['advertisement-only', 'no-markers', 'foreign-terminal', 'aborted-work']
       worker.outputs.delete('gradle-ro-dep-cache');
       worker.host.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', '');
     }
-    if (interruption === 'foreign-terminal')
+    if (interruption === 'foreign-terminal') {
       worker.state.set(STREAMING_LAYER_ACTIVATED_STATE, '0'.repeat(64));
+    }
     expect(await readFile(seed + '/modules-2/metadata-2.107/descriptors.bin', 'utf8')).toBe('seed');
     expect(await readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME, 'utf8')).toContain(
       'gradle-installation',
@@ -1119,7 +1193,9 @@ it.each(['advertisement-only', 'no-markers', 'foreign-terminal', 'aborted-work']
       return [];
     });
     const abort = new AbortController();
-    if (interruption === 'aborted-work') abort.abort(new Error('work already cancelled'));
+    if (interruption === 'aborted-work') {
+      abort.abort(new Error('work already cancelled'));
+    }
     expect(
       (
         await runStreamingPost({

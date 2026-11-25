@@ -24,7 +24,9 @@ beforeAll(async () => {
   await entrypointBundles(root);
 }, 30000);
 afterAll(async () => {
-  if (root) await rm(root, { recursive: true, force: true });
+  if (root) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 const inputs = { 'cache-partitions': JSON.stringify([{ id: 'data', includes: ['data/**'] }]) };
 it.each(['maven', 'gradle'] as const)(
@@ -52,7 +54,9 @@ it.each(['maven', 'gradle'] as const)(
     const files = await readdir(cold.store + '/cache');
     for (const file of files.filter((file) => file.endsWith('.json'))) {
       const value = JSON.parse(await readFile(cold.store + '/cache/' + file, 'utf8'));
-      if (value.key.includes('-p-data-')) await rm(cold.store + '/cache/' + file);
+      if (value.key.includes('-p-data-')) {
+        await rm(cold.store + '/cache/' + file);
+      }
     }
     const partial = await entrypointJob(root, tool, 'partial', inputs, cold.store);
     await partial.run('main');
@@ -112,8 +116,9 @@ it.each(['maven', 'gradle'] as const)(
       'data/a': 'A',
       'data/b': 'B',
       'snapshot/value': 'A',
-    }))
+    })) {
       expect(await readFile(aggregator.home + '/' + file, 'utf8')).toBe(body);
+    }
     await aggregator.run('post');
     const consumer = await entrypointJob(root, tool, 'consumer', partition, a.store);
     await consumer.run('main');
@@ -210,7 +215,9 @@ it('counts real delegated metadata work across shared directories without multip
     const j = await entrypointJob(root, 'maven', 'cost', inputs);
     await j.run('main');
     await j.clearTrace();
-    for (let n = 0; n < width; n++) await j.write('data/shared/f' + n, 'body');
+    for (let n = 0; n < width; n++) {
+      await j.write('data/shared/f' + n, 'body');
+    }
     await j.run('post');
     const work = (await j.trace()).find(([name]) => name === 'native-work')?.[1] as Record<
       string,
@@ -397,7 +404,9 @@ it.each(['maven', 'gradle'] as const)(
       'cache-max-directory-entries': '4',
     });
     await job.run('main');
-    for (let n = 0; n < 5; n++) await job.write('data/shared/' + n, 'retained');
+    for (let n = 0; n < 5; n++) {
+      await job.write('data/shared/' + n, 'retained');
+    }
     await expect(job.run('post', { 'INPUT_CACHE-MAX-DIRECTORY-ENTRIES': '100' })).rejects.toThrow(
       /during native walk at "data\/shared" \(cache-max-directory-entries=4\)/u,
     );

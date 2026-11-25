@@ -34,9 +34,13 @@ const javaImage = /^(?:javaw?|\/.*?\/bin\/javaw?)(?: +|$)/;
 // Display text is not argv. Check the entire marker first; a property containing
 // it can conservatively deny, but flattened argument boundaries cannot hide it.
 function javaDisplay(text: string): 'daemon' | 'other' | 'uncertain' {
-  if (text.includes(GRADLE_DAEMON_MAIN)) return 'daemon';
+  if (text.includes(GRADLE_DAEMON_MAIN)) {
+    return 'daemon';
+  }
   const image = javaImage.exec(text);
-  if (!image || /[@\\"']/.test(text)) return 'uncertain';
+  if (!image || /[@\\"']/.test(text)) {
+    return 'uncertain';
+  }
   let classpath = false;
   for (const [word] of text.slice(image[0].length).matchAll(/[^ ]+/g)) {
     if (classpath) {
@@ -51,9 +55,12 @@ function javaDisplay(text: string): 'daemon' | 'other' | 'uncertain' {
       /^-D[^= ]+(?:=.*)?$/.test(word) ||
       /^-X.+/.test(word) ||
       ['-ea', '-da', '-esa', '-dsa'].includes(word)
-    )
+    ) {
       continue;
-    if (/^[A-Za-z_$][A-Za-z0-9_$.]*$/.test(word) && !word.endsWith('.java')) return 'other';
+    }
+    if (/^[A-Za-z_$][A-Za-z0-9_$.]*$/.test(word) && !word.endsWith('.java')) {
+      return 'other';
+    }
     return 'uncertain';
   }
   return 'uncertain';
@@ -68,23 +75,31 @@ export class DarwinProcessTable {
   private remaining = false;
   private uncertain = false;
   private ended = false;
+
   constructor(
     private readonly uid: number,
     private readonly pid: number,
   ) {
-    if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(pid) || pid < 1)
+    if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(pid) || pid < 1) {
       throw new Error('Invalid process observer identity.');
+    }
   }
+
   get bufferedBytes() {
     return this.tail.length;
   }
+
   push(chunk: Buffer): void {
-    if (this.ended) throw new Error('Process table already ended.');
+    if (this.ended) {
+      throw new Error('Process table already ended.');
+    }
     let start = 0;
     while (start < chunk.length) {
       const lf = chunk.indexOf(10, start),
         end = lf < 0 ? chunk.length : lf;
-      if (this.tail.length + end - start > maxRecord) throw new Error('Oversized process record.');
+      if (this.tail.length + end - start > maxRecord) {
+        throw new Error('Oversized process record.');
+      }
       const part = chunk.subarray(start, end);
       if (lf < 0) {
         this.tail = Buffer.concat([this.tail, part]);
@@ -96,37 +111,54 @@ export class DarwinProcessTable {
       start = lf + 1;
     }
   }
+
   private record(line: string) {
     for (let n = 0; n < line.length; n++) {
       const code = line.charCodeAt(n);
-      if (code < 32 || code === 127) throw new Error('Invalid process display controls.');
+      if (code < 32 || code === 127) {
+        throw new Error('Invalid process display controls.');
+      }
     }
     const record = line.trimStart(),
       row = /^([0-9]+) +([0-9]+) +([^ ]+) /.exec(record);
     // ucomm is an accounting basename, not an argv image/path shifted into a missing column.
-    if (!row || row[3].includes('/')) throw new Error('Malformed process table record.');
+    if (!row || row[3].includes('/')) {
+      throw new Error('Malformed process table record.');
+    }
     const uid = Number(row[1]),
       pid = Number(row[2]);
-    if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(pid))
+    if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(pid)) {
       throw new Error('Invalid process identity.');
-    if (uid !== this.uid) return;
-    if (pid < 1) throw new Error('Invalid owned process identity.');
+    }
+    if (uid !== this.uid) {
+      return;
+    }
+    if (pid < 1) {
+      throw new Error('Invalid owned process identity.');
+    }
     if (pid === this.pid) {
-      if (this.self) throw new Error('Duplicate observer process record.');
+      if (this.self) {
+        throw new Error('Duplicate observer process record.');
+      }
       this.self = true;
     }
     const accountingJava = /^javaw?$/.test(row[3]),
       text = record.slice(row[0].length).trim();
     if (!accountingJava) {
-      if (javaImage.test(text)) this.uncertain = true;
+      if (javaImage.test(text)) {
+        this.uncertain = true;
+      }
       return;
     }
     const kind = javaDisplay(text);
     this.remaining ||= kind === 'daemon';
     this.uncertain ||= kind === 'uncertain';
   }
+
   finish(): DaemonInspection {
-    if (this.ended) throw new Error('Process table already ended.');
+    if (this.ended) {
+      throw new Error('Process table already ended.');
+    }
     this.ended = true;
     return {
       remaining: this.remaining,
@@ -159,21 +191,31 @@ export async function inspectDarwinDaemons(signal: AbortSignal): Promise<DaemonI
     });
   });
   const stop = () => {
-      if (closed || stopped) return;
+      if (closed || stopped) {
+        return;
+      }
       stopped = true;
       child.kill('SIGTERM');
       hard = setTimeout(() => {
-        if (!closed) child.kill('SIGKILL');
+        if (!closed) {
+          child.kill('SIGKILL');
+        }
       }, 500);
     },
     timer = setTimeout(stop, 30000);
   signal.addEventListener('abort', stop, { once: true });
-  if (signal.aborted) stop();
+  if (signal.aborted) {
+    stop();
+  }
   try {
-    for await (const chunk of child.stdout!) table.push(Buffer.from(chunk));
+    for await (const chunk of child.stdout!) {
+      table.push(Buffer.from(chunk));
+    }
     await finish;
     signal.throwIfAborted();
-    if (failed || stopped || code !== 0) throw new Error('Process inspection did not complete.');
+    if (failed || stopped || code !== 0) {
+      throw new Error('Process inspection did not complete.');
+    }
     return table.finish();
   } catch {
     stop();

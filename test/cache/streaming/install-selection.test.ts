@@ -30,7 +30,9 @@ import {
 import type { Value } from '../../../src/cache/streaming/encoding';
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture(tool: 'gradle' | 'maven' = 'gradle') {
   const f = await installFixture(tool);
@@ -81,8 +83,9 @@ async function select(
       null,
       signalValue,
       async (accept) => {
-        for await (const value of installCurrentRows(f.store, { budget: f.budget }))
+        for await (const value of installCurrentRows(f.store, { budget: f.budget })) {
           await accept({ value, start: ordinal, end: ++ordinal, record: ordinal });
+        }
       },
     );
     const sources = inputs.map((input) => ({
@@ -97,15 +100,20 @@ async function select(
       const record = await scratch.record(offset);
       try {
         const node = record.value as Selection;
-        if (node[1] === 'operation') ops.push(node);
-        else
-          for await (const value of scratch.rows(node[8], node[9]))
+        if (node[1] === 'operation') {
+          ops.push(node);
+        } else {
+          for await (const value of scratch.rows(node[8], node[9])) {
             await visit(Number((value as Value[])[2]));
+          }
+        }
       } finally {
         record.release();
       }
     }
-    if (root !== null) await visit(root);
+    if (root !== null) {
+      await visit(root);
+    }
     expect(f.store.root.work.renames).toBe(renames);
     expect(f.store.root.work.readBytes - f.store.root.work.scratchReadBytes - beforeReads).toBe(
       inputs.reduce((sum, i) => sum + i.reference[3], 0),
@@ -220,8 +228,9 @@ it.each(['final-append', 'no-op-read'] as const)(
                 value[0] === 'candidate' &&
                 value[1] === 'branch' &&
                 value[2] === ''
-              )
+              ) {
                 controller.abort(new Error('cancel terminal selection'));
+              }
               return at;
             });
           } else {

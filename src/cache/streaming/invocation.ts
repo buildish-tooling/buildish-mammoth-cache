@@ -48,6 +48,7 @@ const anchorSchema = z.tuple([
   nonceSchema,
 ]);
 export type InvocationAnchor = z.infer<typeof anchorSchema>;
+
 const disabledAnchorSchema = z.tuple([
   z.literal('streaming-disabled'),
   z.literal(1),
@@ -84,9 +85,13 @@ export class OpenedInvocation {
     opened.add(this);
     Object.freeze(this);
   }
+
   static assert(value: OpenedInvocation) {
-    if (!opened.has(value)) throw new Error('Unbound reopened invocation.');
+    if (!opened.has(value)) {
+      throw new Error('Unbound reopened invocation.');
+    }
   }
+
   static async open(
     anchor: InvocationAnchor,
     budget: WorkingBudget,
@@ -98,15 +103,20 @@ export class OpenedInvocation {
       root.path !== anchor[2] ||
       !sameObject(root.binding, anchor[3]) ||
       root.binding[6] !== anchor[3][6]
-    )
+    ) {
       throw new Error('Lifecycle root binding changed.');
+    }
     const result = await OpenedInvocation.current(root.path, budget, signal);
-    if (!result) throw new Error('Prepare did not publish an invocation.');
+    if (!result) {
+      throw new Error('Prepare did not publish an invocation.');
+    }
     equal([result.anchor[4], result.anchor[5]], [anchor[4], anchor[5]], 'CI invocation anchor');
-    if (!sameObject(result.anchor[3], anchor[3]) || result.anchor[3][6] !== anchor[3][6])
+    if (!sameObject(result.anchor[3], anchor[3]) || result.anchor[3][6] !== anchor[3][6]) {
       throw new Error('Lifecycle root changed while reopening.');
+    }
     return result;
   }
+
   static async current(
     path: string,
     budget: WorkingBudget,
@@ -116,14 +126,18 @@ export class OpenedInvocation {
     const root = await NativeRoot.bind(path),
       locator = await fixed(root, '.mammoth/v1/current.json');
     signal.throwIfAborted();
-    if (locator === null) return null;
+    if (locator === null) {
+      return null;
+    }
     const current = locatorSchema.parse(locator),
       id = current[2],
       rawState = tuple((await fixed(root, current[3]))!, 'local-state', 8);
     equal([rawState[1], rawState[2]], [2, id], 'current v2 invocation');
     const bindingRef = ownedReferenceSchema(id, 'bindings').parse(rawState[5]);
     const rawBindings = await fixed(root, bindingRef[2]);
-    if (rawBindings === null) throw new Error('Missing lifecycle bindings.');
+    if (rawBindings === null) {
+      throw new Error('Missing lifecycle bindings.');
+    }
     const encoded = encodeRecord(rawBindings);
     equal(
       [encoded.length, rawSha(encoded)],
@@ -170,8 +184,9 @@ export class OpenedInvocation {
       bindings[5][0] !== root.path ||
       !sameObject(bindings[5][1], root.binding) ||
       bindings[5][1][6] !== root.binding[6]
-    )
+    ) {
       throw new Error('Reopened root binding changed.');
+    }
     const store = await OwnedStore.bind(root.path, codec);
     equal(await store.state(), state, 'stable reopened state');
     await root.verifyRoot();

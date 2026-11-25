@@ -60,7 +60,9 @@ afterAll(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
 });
 async function fixture(options: Parameters<typeof observationFixture>[1] = {}) {
   const f = await observationFixture('gradle', options);
@@ -132,7 +134,9 @@ it.each(['root', 'invocation', 'canonical'] as const)('rejects %s anchor changes
     a[5] = 'b'.repeat(32);
     await expect(OpenedInvocation.open(a, f.budget)).rejects.toThrow('anchor');
   }
-  if (kind === 'canonical') expect(() => decodeInvocationAnchor(JSON.stringify(a))).toThrow();
+  if (kind === 'canonical') {
+    expect(() => decodeInvocationAnchor(JSON.stringify(a))).toThrow();
+  }
 });
 it.each(['model', 'bindings', 'missing-state'] as const)(
   'rejects corrupt or incomplete %s without importing current config',
@@ -140,8 +144,11 @@ it.each(['model', 'bindings', 'missing-state'] as const)(
     const f = await fixture(),
       state = tuple(await f.store.state()),
       reference = tuple(kind === 'model' ? f.bindings[6] : state[5]);
-    if (kind === 'missing-state') await rm(f.store.root.resolve(f.store.prefix + 'state.json'));
-    else await writeFile(f.store.root.resolve(String(reference[2])), Buffer.from('[]\n'));
+    if (kind === 'missing-state') {
+      await rm(f.store.root.resolve(f.store.prefix + 'state.json'));
+    } else {
+      await writeFile(f.store.root.resolve(String(reference[2])), Buffer.from('[]\n'));
+    }
     await expect(OpenedInvocation.open(f.a, f.budget)).rejects.toThrow();
   },
 );
@@ -225,7 +232,9 @@ it('does not return absent ownership after cancellation during the locator read'
     relative: string,
   ) {
     const result = await actual.call(this, relative);
-    if (relative === '.mammoth/v1/current.json') controller.abort(new Error('locator canceled'));
+    if (relative === '.mammoth/v1/current.json') {
+      controller.abort(new Error('locator canceled'));
+    }
     return result;
   });
   try {

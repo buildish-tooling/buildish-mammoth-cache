@@ -54,26 +54,31 @@ export async function checkMetadataBaseLayout(
 ): Promise<NativeIdentity> {
   store.codec.schemas.owned.parse(root);
   const before = await store.root.stat(root);
-  if (!before || before[2] !== 'directory' || before[3] !== store.root.binding[3])
+  if (!before || before[2] !== 'directory' || before[3] !== store.root.binding[3]) {
     throw new Error('Invalid metadata base root.');
+  }
   const wanted = new Set(['envelope.json', 'payload']);
   store.root.work.nativeListings++;
   for await (const entry of await opendir(store.root.resolve(root), { bufferSize: 4 })) {
     if (
       !wanted.delete(entry.name) ||
       (entry.name === 'payload' ? !entry.isDirectory() : !entry.isFile())
-    )
+    ) {
       throw new Error('Unexpected metadata base member.');
+    }
   }
   const after = await store.root.stat(root);
-  if (wanted.size || !after || !sameNative(before, after, true))
+  if (wanted.size || !after || !sameNative(before, after, true)) {
     throw new Error('Incomplete/changing metadata base layout.');
+  }
   return after;
 }
 const discoveries = new WeakSet<DiscoveredMetadataBase>();
 export type BaseSourceMode = 'trusted-summary' | 'trusted-boundaries';
+
 export type MetadataDiscoveryOptions = TimingOptions &
   Pick<WalkOptions, 'budget' | 'maxDirectoryEntries' | 'signal'>;
+
 /**
  * Genuine process-local completed native discovery, not content verification.
  * observe receives provisional metadata for the one active install/group hierarchy;
@@ -81,6 +86,7 @@ export type MetadataDiscoveryOptions = TimingOptions &
  */
 export class DiscoveredMetadataBase {
   #active = true;
+
   private constructor(
     readonly store: OwnedStore,
     readonly nativeRoot: string,
@@ -94,27 +100,38 @@ export class DiscoveredMetadataBase {
     discoveries.add(this);
     Object.freeze(this);
   }
+
   get reference(): ObjectRef {
     return structuredClone(this.ref);
   }
+
   get descriptor(): MetadataDescriptor {
     return structuredClone(this.control);
   }
+
   get summary(): PartitionMetadata {
-    if (!this.metadata) throw new Error('Base source has no reuse summary.');
+    if (!this.metadata) {
+      throw new Error('Base source has no reuse summary.');
+    }
     return structuredClone(this.metadata);
   }
+
   get partition(): string {
     return this.ref[1][2];
   }
+
   static assertReceipt(source: DiscoveredMetadataBase, store = source.store): void {
-    if (!discoveries.has(source) || !source.#active || source.store !== store)
+    if (!discoveries.has(source) || !source.#active || source.store !== store) {
       throw new Error('Metadata source is not an active discovery receipt.');
+    }
   }
+
   /** Successful initial materialization only. No caller-supplied identity or summary. */
   pin(): PinnedPartitionMetadata | null {
     DiscoveredMetadataBase.assertReceipt(this);
-    if (!this.metadata) return null;
+    if (!this.metadata) {
+      return null;
+    }
     const o = this.store.codec.options;
     return pinnedPartitionMetadataSchema.parse([
       'pinned-partition-metadata',
@@ -129,6 +146,7 @@ export class DiscoveredMetadataBase {
       this.metadata,
     ]);
   }
+
   /** Selected root/parent guards only; the original completed discovery remains admission. */
   async assertNativeRoot(): Promise<void> {
     DiscoveredMetadataBase.assertReceipt(this);
@@ -141,13 +159,16 @@ export class DiscoveredMetadataBase {
       !parent ||
       !sameObject(this.nativeIdentity, native) ||
       !sameObject(this.parentIdentity, parent)
-    )
+    ) {
       throw new Error('Metadata source root/parent changed.');
+    }
   }
+
   /** End the operation's authority; payload/scratch disposal stays with their existing owners. */
   close(): void {
     this.#active = false;
   }
+
   static async discover(
     store: OwnedStore,
     root: string,
@@ -169,7 +190,9 @@ export class DiscoveredMetadataBase {
     for await (const chunk of store.root.read(envelope, before)) {
       signal.throwIfAborted();
       bytes = add(bytes, chunk.length);
-      if (bytes > 65536) throw new Error('Metadata descriptor exceeds admission.');
+      if (bytes > 65536) {
+        throw new Error('Metadata descriptor exceeds admission.');
+      }
       chunks.push(chunk);
     }
     const descriptor = decodeMetadataDescriptor(Buffer.concat(chunks, bytes), ref, model);
@@ -196,7 +219,9 @@ export class DiscoveredMetadataBase {
         metadata: 'reject',
         intactDirectory: boundaryOnly
           ? (path) => {
-              if (path !== intact?.path) return undefined;
+              if (path !== intact?.path) {
+                return undefined;
+              }
               return workspaceRoot(path) === path &&
                 workspaceKind(path) === 'kotlin-accessor-directories'
                 ? 'workspace'
@@ -205,15 +230,19 @@ export class DiscoveredMetadataBase {
           : undefined,
         summaryOnlyFile: trusted ? () => !!intact : undefined,
       })) {
-        if (event.tag === 'protected-child') throw new Error('Protected metadata base child.');
+        if (event.tag === 'protected-child') {
+          throw new Error('Protected metadata base child.');
+        }
         if (
           (!trusted || !intact) &&
           (event.identity[3] !== store.root.binding[3] ||
             (event.tag === 'file' && event.links !== '1'))
-        )
+        ) {
           throw new Error('Aliased/cross-filesystem metadata base source.');
-        if (event.tag === 'directory-open' && event.path === '')
+        }
+        if (event.tag === 'directory-open' && event.path === '') {
           payloadIdentity = structuredClone(event.identity);
+        }
         const row: NativeMetadataRow = [
           event.tag === 'file' ? 'file' : event.tag === 'directory-open' ? 'dir-open' : 'dir-close',
           event.path,
@@ -222,8 +251,13 @@ export class DiscoveredMetadataBase {
         summary?.accept(row);
         // Observers may spool/reuse their input; they cannot rewrite the walker's identities.
         if (!intact) {
-          if (event.tag === 'directory-open' && reduction && (await reduction.canOmit(event.path)))
+          if (
+            event.tag === 'directory-open' &&
+            reduction &&
+            (await reduction.canOmit(event.path))
+          ) {
             intact = { path: event.path, kind: 'intact' };
+          }
           await observe(structuredClone(row));
         } else if (event.tag === 'directory-close' && event.path === intact.path) {
           await observe(structuredClone(row), event.directJars ? 'intact-jars' : intact.kind);
@@ -244,10 +278,13 @@ export class DiscoveredMetadataBase {
         !sameNative(before, controlAfter, true) ||
         !layoutAfter ||
         !sameNative(layout, layoutAfter, true)
-      )
+      ) {
         throw new Error('Metadata base control/layout changed.');
+      }
       signal.throwIfAborted();
-      if (!payloadIdentity) throw new Error('Missing discovered native root.');
+      if (!payloadIdentity) {
+        throw new Error('Missing discovered native root.');
+      }
       return new DiscoveredMetadataBase(
         store,
         nativeRoot,

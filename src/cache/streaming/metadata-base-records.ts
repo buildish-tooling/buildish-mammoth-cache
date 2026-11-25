@@ -43,6 +43,7 @@ export const metadataDescriptorSchema = z.tuple([
   identitySchema,
 ]);
 export type MetadataDescriptor = z.infer<typeof metadataDescriptorSchema>;
+
 export function assertMetadataModel(model: ResolvedModel): void {
   equal(
     model.familyProjection.slice(5),
@@ -81,8 +82,9 @@ export function decodeMetadataDescriptor(
   assertMetadataModel(model);
   const ref = objectRefSchema.parse(reference);
   checkIdentity(ref[1], model);
-  if (bytes.length !== ref[3] || rawSha(bytes) !== ref[4])
+  if (bytes.length !== ref[3] || rawSha(bytes) !== ref[4]) {
     throw new Error('Descriptor reference mismatch.');
+  }
   const descriptor = metadataDescriptorSchema.parse(decodeRecord(bytes));
   equal(descriptor[3], ref[1], 'descriptor identity');
   return descriptor;
@@ -103,6 +105,7 @@ const metadataGenerationSchema = z.tuple([
   z.number().int().nonnegative().safe().nullable(),
 ]);
 export type MetadataGeneration = z.infer<typeof metadataGenerationSchema>;
+
 export function metadataPartitionDecision(
   g: Pick<MetadataGeneration, 3 | 4 | 5 | 6 | 7 | 8 | 9 | 12>,
 ): string {
@@ -124,14 +127,21 @@ function validate(value: Value, model: ResolvedModel): MetadataGeneration {
   encodeRecord(value);
   const g = metadataGenerationSchema.parse(value);
   equal(g.slice(3, 5), [model.family, model.id], 'generation model/family');
-  if (g[8].length !== model.partitions.length) throw new Error('Incomplete generation partitions.');
+  if (g[8].length !== model.partitions.length) {
+    throw new Error('Incomplete generation partitions.');
+  }
   for (const [i, entry] of g[8].entries()) {
-    if (entry[1] !== model.partitions[i][0]) throw new Error('Generation partition order.');
-    if (entry[0] === 'object') checkIdentity(entry[2][1], model, entry[1]);
+    if (entry[1] !== model.partitions[i][0]) {
+      throw new Error('Generation partition order.');
+    }
+    if (entry[0] === 'object') {
+      checkIdentity(entry[2][1], model, entry[1]);
+    }
   }
   new RecoveryGroups(model).check(g[9]);
-  if (g[10] !== metadataPartitionDecision(g) || g[11] !== recordKey(g[3], g[5], g[6], g[10]))
+  if (g[10] !== metadataPartitionDecision(g) || g[11] !== recordKey(g[3], g[5], g[6], g[10])) {
     throw new Error('Generation decision/key mismatch.');
+  }
   return g;
 }
 export function createMetadataGeneration(
@@ -167,7 +177,8 @@ export function decodeMetadataGeneration(
   expectedKey?: string,
 ): MetadataGeneration {
   const g = validate(decodeRecord(bytes), model);
-  if (expectedKey !== undefined && g[11] !== expectedKey)
+  if (expectedKey !== undefined && g[11] !== expectedKey) {
     throw new Error('Unexpected pinned generation key.');
+  }
   return g;
 }

@@ -39,15 +39,18 @@ function matchesGlobSegments(
   pathIndex = 0,
   patternIndex = 0,
 ): boolean {
-  if (descendants && pathIndex === pathSegments.length)
+  if (descendants && pathIndex === pathSegments.length) {
     return patternIndex < patternSegments.length;
+  }
   if (patternIndex === patternSegments.length) {
     return pathIndex === pathSegments.length;
   }
 
   const patternSegment = patternSegments[patternIndex];
   if (patternSegment === 'globstar') {
-    if (descendants) return true;
+    if (descendants) {
+      return true;
+    }
     for (let nextPathIndex = pathIndex; nextPathIndex <= pathSegments.length; nextPathIndex += 1) {
       if (
         matchesGlobSegments(

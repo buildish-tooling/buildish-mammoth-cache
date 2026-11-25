@@ -33,7 +33,9 @@ export async function retireOwnedDirectory(
   event = 'disposable-member-retired',
 ) {
   relativePathSchema.parse(relative);
-  if (!relative.startsWith(store.prefix)) throw new Error('Foreign disposable namespace.');
+  if (!relative.startsWith(store.prefix)) {
+    throw new Error('Foreign disposable namespace.');
+  }
   const suffix = relative.slice(store.prefix.length),
     parts = suffix.split('/');
   const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -50,8 +52,9 @@ export async function retireOwnedDirectory(
     parts[0] === 'retired' &&
     /^[a-f0-9]{64}$/.test(parts[1]) &&
     parts[1] !== store.codec.options.invocation;
-  if (!disposable && !parentLedger && !retired)
+  if (!disposable && !parentLedger && !retired) {
     throw new Error('Not a reserved disposable container.');
+  }
   return retireTree(store, relative, expected, budget, event);
 }
 async function retireTree(
@@ -68,19 +71,25 @@ async function retireTree(
     check();
     store.root.work.stats++;
     const raw = await lstat(store.root.resolve(path), { bigint: true });
-    if (!raw.isFile() && !raw.isDirectory())
+    if (!raw.isFile() && !raw.isDirectory()) {
       throw new Error('Unsupported disposable member; never following links.');
+    }
     const native = nativeIdentity(raw);
-    if (native[3] !== store.root.binding[3]) throw new Error('Cross-filesystem disposable member.');
+    if (native[3] !== store.root.binding[3]) {
+      throw new Error('Cross-filesystem disposable member.');
+    }
     return native;
   }
   async function visit(path: string, identity: NativeIdentity, depth: number) {
-    if (depth > 199) throw new Error('Owned retirement depth exceeded.');
+    if (depth > 199) {
+      throw new Error('Owned retirement depth exceeded.');
+    }
     const release = budget.holdRecord(512 + Buffer.byteLength(path));
     try {
       let current = await stat(path);
-      if (!sameDirectoryObject(identity, current))
+      if (!sameDirectoryObject(identity, current)) {
         throw new Error('Disposable directory was replaced.');
+      }
       check();
       store.root.work.cleanupListings++;
       const directory = await opendir(store.root.resolve(path), { bufferSize: 1 });
@@ -88,16 +97,23 @@ async function retireTree(
         while (true) {
           check();
           const entry = await directory.read();
-          if (!entry) break;
+          if (!entry) {
+            break;
+          }
           store.root.work.cleanupEntries++;
           const before = await stat(path);
-          if (!sameNative(current, before, true)) throw new Error('Disposable parent changed.');
+          if (!sameNative(current, before, true)) {
+            throw new Error('Disposable parent changed.');
+          }
           const child = path + '/' + entry.name,
             native = await stat(child);
-          if (native[2] === 'directory') await visit(child, native, depth + 1);
-          else {
+          if (native[2] === 'directory') {
+            await visit(child, native, depth + 1);
+          } else {
             const now = await stat(child);
-            if (!sameNative(native, now, true)) throw new Error('Disposable file changed.');
+            if (!sameNative(native, now, true)) {
+              throw new Error('Disposable file changed.');
+            }
             check();
             await unlink(store.root.resolve(child));
             store.root.work.unlinks++;
@@ -105,16 +121,18 @@ async function retireTree(
             await store.fail(event);
           }
           const after = await stat(path);
-          if (!sameDirectoryObject(before, after))
+          if (!sameDirectoryObject(before, after)) {
             throw new Error('Disposable parent replaced during retirement.');
+          }
           current = after;
         }
       } finally {
         await directory.close();
       }
       const after = await stat(path);
-      if (!sameNative(current, after, true))
+      if (!sameNative(current, after, true)) {
         throw new Error('Disposable directory changed before retirement.');
+      }
       check();
       await rmdir(store.root.resolve(path));
       store.root.work.directoryRemovals++;
@@ -141,8 +159,9 @@ export async function retireInstallStaging(
     );
   const check = () => {
     options.signal?.throwIfAborted();
-    if (assertCurrent() !== undefined)
+    if (assertCurrent() !== undefined) {
       throw new Error('Install staging lifetime must be synchronous.');
+    }
   };
   const checkRoot = async () => {
     check();
@@ -166,27 +185,32 @@ export async function retireInstallStaging(
       !sameObject(current, expected) ||
       current[6] !== expected[6] ||
       current[3] !== store.root.binding[3]
-    )
+    ) {
       throw new Error('Frozen install container replaced or changed mode/device.');
+    }
     check();
   };
   await checkParent();
   const allowed = new Set(store.codec.options.model.partitions.map((p) => p[0]));
   for await (const entry of await opendir(store.root.resolve(parent))) {
     check();
-    if (!allowed.has(entry.name) || !entry.isDirectory() || entry.isSymbolicLink())
+    if (!allowed.has(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) {
       throw new Error('Unknown install staging child; preserved.');
+    }
     await checkParent();
     const child = parent + '/' + entry.name,
       native = await store.root.stat(child);
-    if (!native || native[2] !== 'directory' || native[3] !== store.root.binding[3])
+    if (!native || native[2] !== 'directory' || native[3] !== store.root.binding[3]) {
       throw new Error('Install staging child replaced.');
+    }
     await retireTree(store, child, native, options.budget, 'prepare-install-member-retired', check);
   }
   await checkParent();
   const directory = await opendir(store.root.resolve(parent));
   try {
-    if (await directory.read()) throw new Error('Install staging disposal incomplete.');
+    if (await directory.read()) {
+      throw new Error('Install staging disposal incomplete.');
+    }
   } finally {
     await directory.close();
   }

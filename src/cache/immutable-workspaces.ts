@@ -29,10 +29,18 @@ const partitionPath = (name: string): boolean =>
 export const isWorkspacePartition = (p: CachePartitionDefinition): boolean =>
   p.relativeIncludeGlobs.length > 0 && p.relativeIncludeGlobs.every(partitionPath);
 export function workspaceKind(root: string, files: readonly string[] = []) {
-  if (isTransformWorkspace(root)) return 'artifact-transform' as const;
-  if (root.includes('/groovy-dsl/')) return 'groovy' as const;
-  if (root.includes('/kotlin-dsl/scripts/')) return 'kotlin-script' as const;
-  if (root.endsWith('-PS')) return 'kotlin-plugin-spec-accessors' as const;
+  if (isTransformWorkspace(root)) {
+    return 'artifact-transform' as const;
+  }
+  if (root.includes('/groovy-dsl/')) {
+    return 'groovy' as const;
+  }
+  if (root.includes('/kotlin-dsl/scripts/')) {
+    return 'kotlin-script' as const;
+  }
+  if (root.endsWith('-PS')) {
+    return 'kotlin-plugin-spec-accessors' as const;
+  }
   return files.some((p) => p === root + '/classes.jar' || p === root + '/sources.jar')
     ? ('kotlin-accessor-jars' as const)
     : ('kotlin-accessor-directories' as const);

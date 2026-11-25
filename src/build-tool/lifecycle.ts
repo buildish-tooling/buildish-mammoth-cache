@@ -18,8 +18,12 @@ import type { BuildToolLifecycle, LifecycleResolver } from './lifecycle-types';
 import type { Context } from '../cache/streaming/schema';
 
 const defaultResolver: LifecycleResolver = async (tool) => {
-  if (tool === 'gradle') return (await import('./gradle/lifecycle')).gradleLifecycle;
-  if (tool === 'maven') return (await import('./maven/lifecycle')).mavenLifecycle;
+  if (tool === 'gradle') {
+    return (await import('./gradle/lifecycle')).gradleLifecycle;
+  }
+  if (tool === 'maven') {
+    return (await import('./maven/lifecycle')).mavenLifecycle;
+  }
   throw new Error('Unsupported build-tool lifecycle.');
 };
 /** Call only after binding the owner; a next-invocation tool cannot choose recovery. */
@@ -27,8 +31,12 @@ export async function resolveLifecycle(
   tool: Context[7],
   resolver = defaultResolver,
 ): Promise<BuildToolLifecycle> {
-  if (tool !== 'gradle' && tool !== 'maven') throw new Error('Unsupported build-tool lifecycle.');
+  if (tool !== 'gradle' && tool !== 'maven') {
+    throw new Error('Unsupported build-tool lifecycle.');
+  }
   const lifecycle = await resolver(tool);
-  if (lifecycle.tool !== tool) throw new Error('Build-tool lifecycle identity mismatch.');
+  if (lifecycle.tool !== tool) {
+    throw new Error('Build-tool lifecycle identity mismatch.');
+  }
   return lifecycle;
 }

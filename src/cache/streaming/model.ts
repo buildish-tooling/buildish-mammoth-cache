@@ -68,6 +68,7 @@ export const partitionDefinitionSchema = z
     }
   });
 export type Partition = z.infer<typeof partitionDefinitionSchema>;
+
 /** The writable job whose complete local snapshot is authoritative for publication. */
 export function ownsLocalSnapshot(
   partition: Partition,
@@ -103,6 +104,7 @@ export const modelSchema = z
   })
   .refine((v) => v[4].every((p) => v[3].every((glob) => p[2].includes(glob))));
 export type ModelTuple = z.infer<typeof modelSchema>;
+
 export interface ResolvedModel {
   readonly tuple: ModelTuple;
   readonly dependencyCacheLayer: boolean;
@@ -114,12 +116,14 @@ export interface ResolvedModel {
   admissionScope(): AdmissionScope;
   purge(path: string): readonly string[];
 }
+
 export interface AdmissionScope {
   readonly hasDescendants: boolean;
   child(path: string): AdmissionScope | undefined;
   owner(): Partition | undefined;
   blocksUnsafeLeaf(): boolean;
 }
+
 export function resolveModel(input: unknown, prefix: string, schemaVersion: number): ResolvedModel {
   return resolveModelWithProfiles(input, prefix, schemaVersion, STREAMING_PROFILES);
 }
@@ -131,12 +135,17 @@ function resolveModelWithProfiles(
   profiles: { readonly [K in keyof typeof STREAMING_PROFILES]: string },
 ): ResolvedModel {
   const raw = requireTuple(input as Value, 'model');
-  if (raw.length !== 5 && raw.length !== 6) throw new Error('Invalid model shape.');
+  if (raw.length !== 5 && raw.length !== 6) {
+    throw new Error('Invalid model shape.');
+  }
   const partitions = requireTuple(raw[4]);
-  if (partitions.length < 1 || partitions.length > 64)
+  if (partitions.length < 1 || partitions.length > 64) {
     throw new Error('Model partition admission exceeded.');
+  }
   encodeRecord(['model-header', raw[2], raw[3]]);
-  for (const partition of partitions) encodeRecord(['partition', ...requireTuple(partition)]);
+  for (const partition of partitions) {
+    encodeRecord(['partition', ...requireTuple(partition)]);
+  }
   const tuple = modelSchema.parse(input);
   validatePartitionConflictHandling(
     tuple[2],
@@ -164,16 +173,20 @@ function resolveModelWithProfiles(
   ] as const;
   const family = streamingFamilyId(tuple[2], H('family', familyProjection));
   const hard = createCacheGlobMatcher(tuple[3]);
-  for (const p of tuple[4])
+  for (const p of tuple[4]) {
     for (const rule of p[7] ?? []) {
       let prefix = '';
       for (const segment of rule.split('/')) {
-        if (segment.includes('*')) break;
+        if (segment.includes('*')) {
+          break;
+        }
         prefix = prefix ? prefix + '/' + segment : segment;
-        if (isCacheMetadataPath(prefix) || hard(prefix + '/.workspace-directory-probe'))
+        if (isCacheMetadataPath(prefix) || hard(prefix + '/.workspace-directory-probe')) {
           throw new Error('Purge rule targets a reserved or opaque hard-pruned scope.');
+        }
       }
     }
+  }
   const parts = tuple[4].map((p) => ({
     p,
     includes: createCacheGlobMatcher(p[1]),
@@ -182,11 +195,14 @@ function resolveModelWithProfiles(
   }));
   const findOwner = (path: string, candidates: typeof parts) => {
     let owner: Partition | undefined;
-    for (const item of candidates)
+    for (const item of candidates) {
       if (item.includes(path) && !item.excludes(path) && !item.purge(path)) {
-        if (owner) throw new Error('Ambiguous partition ownership.');
+        if (owner) {
+          throw new Error('Ambiguous partition ownership.');
+        }
         owner = item.p;
       }
+    }
     return owner;
   };
   function admissionScope(
@@ -199,14 +215,20 @@ function resolveModelWithProfiles(
       owner: () => findOwner(path, candidates),
       blocksUnsafeLeaf: () => candidates.some((item) => !item.excludes(path) && !item.purge(path)),
       child(child) {
-        if (isCacheMetadataPath(child) || hard(child, 'subtree')) return undefined;
+        if (isCacheMetadataPath(child) || hard(child, 'subtree')) {
+          return undefined;
+        }
         const matching: typeof parts = [],
           below: typeof parts = [];
         for (const item of descendants) {
-          if (item.excludes(child, 'subtree') || item.purge(child, 'subtree')) continue;
-          if (item.includes(child, 'descendants')) below.push(item);
-          else if (item.includes(child) && !item.excludes(child) && !item.purge(child))
+          if (item.excludes(child, 'subtree') || item.purge(child, 'subtree')) {
+            continue;
+          }
+          if (item.includes(child, 'descendants')) {
+            below.push(item);
+          } else if (item.includes(child) && !item.excludes(child) && !item.purge(child)) {
             matching.push(item);
+          }
         }
         return matching.length || below.length
           ? admissionScope(child, [...below, ...matching], below)
@@ -223,21 +245,29 @@ function resolveModelWithProfiles(
     partitions: tuple[4],
     admissionScope: () => admissionScope('', [], parts),
     purge(path) {
-      if (isCacheMetadataPath(path)) return [];
+      if (isCacheMetadataPath(path)) {
+        return [];
+      }
       const claims = parts.filter((item) => item.purge(path));
-      if (!claims.length) return [];
+      if (!claims.length) {
+        return [];
+      }
       if (!hard(path)) {
         const owners = parts.filter((item) => item.includes(path) && !item.excludes(path));
-        if (owners.length > 1 || owners.some((owner) => !claims.includes(owner)))
+        if (owners.length > 1 || owners.some((owner) => !claims.includes(owner))) {
           throw new Error('Purge conflicts with original partition ownership.');
+        }
       }
       return claims.map((item) => item.p[0]);
     },
     owner(path) {
-      if (isCacheMetadataPath(path) || hard(path))
+      if (isCacheMetadataPath(path) || hard(path)) {
         throw new Error('Reserved/excluded managed path.');
+      }
       const owner = findOwner(path, parts);
-      if (!owner) throw new Error('Unowned managed path.');
+      if (!owner) {
+        throw new Error('Unowned managed path.');
+      }
       return owner;
     },
   };
@@ -264,6 +294,7 @@ export const decisionSchema = z.tuple([
   shaSchema,
 ]);
 export type Decision = z.infer<typeof decisionSchema>;
+
 export function decisionId(decision: unknown): string {
   return H('decision', decisionSchema.parse(decision));
 }

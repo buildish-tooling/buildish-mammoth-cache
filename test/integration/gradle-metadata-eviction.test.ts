@@ -56,7 +56,9 @@ test.skipIf(!executable)(
         server.listen(0, '127.0.0.1', resolve);
       });
       const address = server.address();
-      if (!address || typeof address === 'string') throw new Error('loopback listener');
+      if (!address || typeof address === 'string') {
+        throw new Error('loopback listener');
+      }
       const { backend: cache } = await nativeCacheBackend();
       const inputs = {
         'cache-partitions': JSON.stringify([
@@ -114,11 +116,12 @@ tasks.register('resolve') { doLast { println configurations.libraries.singleFile
         inputs: { ...inputs, 'read-only': 'true' },
         cache,
       });
-      for (const file of ['settings.gradle', 'build.gradle'])
+      for (const file of ['settings.gradle', 'build.gradle']) {
         await writeFile(
           path.join(reader.workspace, file),
           await readFile(path.join(job.workspace, file)),
         );
+      }
       await reader.prepare();
       expect(reader.outputs['base-cache-restore-status']).toBe('current-lineage-hit');
       expect(

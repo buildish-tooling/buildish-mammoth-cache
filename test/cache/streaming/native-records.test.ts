@@ -227,12 +227,24 @@ it.each(['version', 'decision', 'key', 'missing', 'duplicate', 'object-key'])(
         [['data'], ['metadata']],
       );
     const bad = structuredClone(g) as unknown[];
-    if (kind === 'version') bad[1] = 1;
-    if (kind === 'decision') bad[10] = 'b'.repeat(64);
-    if (kind === 'key') bad[11] = 'bad';
-    if (kind === 'missing') bad[8] = [['empty', 'data']];
-    if (kind === 'duplicate') bad[9] = [['data'], ['data']];
-    if (kind === 'object-key') ((bad[8] as unknown[][])[0][2] as unknown[])[2] = 'bad';
+    if (kind === 'version') {
+      bad[1] = 1;
+    }
+    if (kind === 'decision') {
+      bad[10] = 'b'.repeat(64);
+    }
+    if (kind === 'key') {
+      bad[11] = 'bad';
+    }
+    if (kind === 'missing') {
+      bad[8] = [['empty', 'data']];
+    }
+    if (kind === 'duplicate') {
+      bad[9] = [['data'], ['data']];
+    }
+    if (kind === 'object-key') {
+      ((bad[8] as unknown[][])[0][2] as unknown[])[2] = 'bad';
+    }
     expect(() => decodeGeneration(Buffer.from(JSON.stringify(bad) + '\n'), m)).toThrow();
   },
 );

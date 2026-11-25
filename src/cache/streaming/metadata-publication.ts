@@ -38,6 +38,7 @@ import { RecoveryGroups, type ObjectRef, type GenerationEntry } from './native-r
 
 export type MetadataPublicationChoice =
   readonly ['new', string] | readonly ['empty', string] | readonly ['reuse', string, ObjectRef];
+
 export interface MetadataPublicationRequest {
   readonly lineage: string;
   readonly writer: string;
@@ -48,9 +49,11 @@ export interface MetadataPublicationRequest {
   readonly onWarning?: (message: string) => void;
   readonly summaries?: PartitionSummaries;
 }
+
 export type MetadataPublicationOutcome =
   | { readonly outcome: 'published'; readonly generation: MetadataGeneration }
   | { readonly outcome: 'abandoned'; readonly generation: null };
+
 type Move = readonly [
   'move',
   number | null,
@@ -60,7 +63,9 @@ type Move = readonly [
   NativeIdentity,
   NativeIdentity,
 ];
+
 type Shell = readonly ['shell', number | null, string, NativeIdentity];
+
 interface PartitionPlan {
   partition: string;
   root: string;
@@ -128,13 +133,15 @@ async function publishAttempt(
   if (
     choices.length !== model.partitions.length ||
     choices.some((c, i) => c[1] !== model.partitions[i][0])
-  )
+  ) {
     throw new Error('Incomplete/out-of-order metadata publication choices.');
+  }
   for (const choice of choices) {
     request.summaries?.choice(choice[1], choice[0]);
     const summary = source.summary(choice[1]);
-    if (choice[0] === 'empty' && (summary[3] !== 0 || summary[4] !== 0))
+    if (choice[0] === 'empty' && (summary[3] !== 0 || summary[4] !== 0)) {
       throw new Error('Nonempty source declared empty.');
+    }
   }
   const stage = store.prefix + 'base/' + randomUUID(),
     scratch = await InstallScratch.create(store, options.budget);
@@ -149,7 +156,9 @@ async function publishAttempt(
   let failures = 0;
   const localFailure = (message: string) => {
     failures++;
-    if (errors.length < 8) errors.push(new Error(message.slice(0, 4096)));
+    if (errors.length < 8) {
+      errors.push(new Error(message.slice(0, 4096)));
+    }
   };
   async function created(name: string): Promise<NativeIdentity> {
     signal.throwIfAborted();
@@ -157,8 +166,9 @@ async function publishAttempt(
     await mkdir(store.root.resolve(name));
     store.root.work.directoryCreations++;
     const native = await store.root.stat(name);
-    if (!native || native[2] !== 'directory' || native[3] !== store.root.binding[3])
+    if (!native || native[2] !== 'directory' || native[3] !== store.root.binding[3]) {
       throw new Error('Unresolved staging directory at ' + store.root.resolve(name));
+    }
     shells = await scratch.append(['shell', shells, name, native]);
     return native;
   }
@@ -174,7 +184,9 @@ async function publishAttempt(
       await handle.close();
     }
     const native = await store.root.stat(name);
-    if (!native) throw new Error('Unresolved control file at ' + store.root.resolve(name));
+    if (!native) {
+      throw new Error('Unresolved control file at ' + store.root.resolve(name));
+    }
     shells = await scratch.append(['shell', shells, name, native]);
   }
   async function readMove(offset: number): Promise<{ row: Move; release: () => void }> {
@@ -201,8 +213,9 @@ async function publishAttempt(
       !sameObject(row[5], originalParent) ||
       !stageParent ||
       !sameObject(row[6], stageParent)
-    )
+    ) {
       throw new Error('Move source/target parent changed.');
+    }
     return { original: await store.root.stat(row[2]), staged: await store.root.stat(row[3]) };
   }
   async function returnRoots(plan: PartitionPlan, attempted: number): Promise<void> {
@@ -213,15 +226,20 @@ async function publishAttempt(
       cursor = row[1];
       try {
         let e = await endpoints(row);
-        if (e.original && sameRename(row[4], e.original) && !e.staged) continue;
-        if (e.original || !e.staged || !sameRename(row[4], e.staged))
+        if (e.original && sameRename(row[4], e.original) && !e.staged) {
+          continue;
+        }
+        if (e.original || !e.staged || !sameRename(row[4], e.staged)) {
           throw new Error('Occupied/changed return endpoint.');
+        }
         // The immutable row already owns this reverse attempt before awaiting rename/after-stat.
         try {
           await store.root.renameAbsent(row[3], row[2], e.staged);
         } catch (error) {
           e = await endpoints(row);
-          if (!e.original || !sameRename(row[4], e.original) || e.staged) throw error;
+          if (!e.original || !sameRename(row[4], e.original) || e.staged) {
+            throw error;
+          }
         }
         await store.fail('metadata-source-returned');
       } catch {
@@ -255,8 +273,9 @@ async function publishAttempt(
       if (
         !current ||
         !(row[3][2] === 'file' ? sameNative(row[3], current, true) : sameObject(row[3], current))
-      )
+      ) {
         throw new Error('Known staging shell changed: ' + store.root.resolve(row[2]));
+      }
       // Only known control files and empty directories. Unknown members make rmdir fail and remain intact.
       if (current[2] === 'file') {
         await unlink(store.root.resolve(row[2]));
@@ -275,9 +294,11 @@ async function publishAttempt(
     const groups = await timed(options, 'shared publication staging planning', async () => {
       release = options.budget.holdRecord(36864 + model.partitions.length * 4096);
       await store.makeParents(stage);
-      if (choices.some((choice) => choice[0] === 'new')) await created(stage);
+      if (choices.some((choice) => choice[0] === 'new')) {
+        await created(stage);
+      }
       const stageParents = new Map<string, NativeIdentity>();
-      for (const c of choices)
+      for (const c of choices) {
         if (c[0] === 'new') {
           const descriptor = createMetadataDescriptor(model, [
               model.family,
@@ -299,12 +320,15 @@ async function publishAttempt(
             reference: descriptor.reference,
           });
         }
+      }
       const components = source.components(),
         coordinates: (number | null)[] = [],
         groups = new RecoveryGroups(model);
       const deriveGroups = request.groups === undefined && model.tuple[2] === 'maven';
       for (const component of components) {
-        if (!deriveGroups && !component.partitions.some((p) => plans.has(p))) continue;
+        if (!deriveGroups && !component.partitions.some((p) => plans.has(p))) {
+          continue;
+        }
         const physical = component.source,
           selected = component.partitions.reduce((mask, p) => mask | partitionBit(model, p), 0n);
         let coordinateHead: number | null = null;
@@ -325,13 +349,19 @@ async function publishAttempt(
               originalMask = nodeMask(n),
               mask = originalMask & selected,
               native = n[3] as NativeIdentity;
-            if (n[1] === 'protected' || !mask) return;
-            if (n[1] === 'file') direct?.add(model.owner(n[2])[0]);
+            if (n[1] === 'protected' || !mask) {
+              return;
+            }
+            if (n[1] === 'file') {
+              direct?.add(model.owner(n[2])[0]);
+            }
             const remaining = new Map<string, NativeIdentity>();
             let next = suppressed;
             for (const [p, parent] of parents) {
               const bit = partitionBit(model, p);
-              if (!(mask & bit) || suppressed & bit) continue;
+              if (!(mask & bit) || suppressed & bit) {
+                continue;
+              }
               const plan = plans.get(p)!,
                 target = plan.root + '/payload/' + n[2];
               if (originalMask === bit && n[6] === 0) {
@@ -348,12 +378,15 @@ async function publishAttempt(
                 request.summaries?.root(p, n[1] === 'file' ? 'file' : 'directory');
                 next |= bit;
               } else if (n[1] === 'directory') {
-                if (n[6] > 0)
+                if (n[6] > 0) {
                   request.summaries?.hint(p, 'excluded or unmanaged entries remain', n[2]);
-                if (originalMask !== bit)
+                }
+                if (originalMask !== bit) {
                   request.summaries?.hint(p, 'mixed partition ownership', n[2]);
-                if ((originalMask & ~selected) !== 0n)
+                }
+                if ((originalMask & ~selected) !== 0n) {
                   request.summaries?.hint(p, 'unselected contents', n[2]);
+                }
                 remaining.set(p, await created(target));
               }
             }
@@ -363,21 +396,28 @@ async function publishAttempt(
                 (deriveGroups && (components.length > 1 || (mask & (mask - 1n)) !== 0n)))
             ) {
               const owners = new Set<string>();
-              for await (const edge of physical.children(n))
-                if (edge[1] === 'file') await select(edge[2], native, remaining, next, owners);
+              for await (const edge of physical.children(n)) {
+                if (edge[1] === 'file') {
+                  await select(edge[2], native, remaining, next, owners);
+                }
+              }
               if (
                 deriveGroups &&
                 owners.size &&
                 (n[2] === 'repository' || n[2].startsWith('repository/'))
-              )
+              ) {
                 coordinateHead = await scratch.append([
                   'coordinate',
                   coordinateHead,
                   n[2],
                   [...owners],
                 ]);
-              for await (const edge of physical.children(n))
-                if (edge[1] === 'directory') await select(edge[2], native, remaining, next);
+              }
+              for await (const edge of physical.children(n)) {
+                if (edge[1] === 'directory') {
+                  await select(edge[2], native, remaining, next);
+                }
+              }
               for (const [p] of remaining) {
                 await chmod(
                   store.root.resolve(plans.get(p)!.root + '/payload/' + n[2]),
@@ -398,8 +438,9 @@ async function publishAttempt(
           );
           // Coordinate rows are preorder and linked backwards, giving descending directory paths.
           const owners = new Set<string>();
-          for await (const edge of physical.children(rootEntry.node))
+          for await (const edge of physical.children(rootEntry.node)) {
             await select(edge[2], rootEntry.node[3] as NativeIdentity, parents, 0n, owners);
+          }
         } finally {
           rootEntry.release();
         }
@@ -416,7 +457,9 @@ async function publishAttempt(
         ): Promise<Coordinate | null> {
           charges[index]();
           charges[index] = () => {};
-          if (offset === null) return null;
+          if (offset === null) {
+            return null;
+          }
           const row = await scratch.record(offset);
           try {
             charges[index] = options.budget.holdRecord(512 + encodeRecord(row.value).length * 4);
@@ -426,26 +469,33 @@ async function publishAttempt(
           }
         }
         try {
-          for (const [i, offset] of coordinates.entries()) heads.push(await coordinate(offset, i));
+          for (const [i, offset] of coordinates.entries()) {
+            heads.push(await coordinate(offset, i));
+          }
           while (heads.some((head) => head !== null)) {
             let path: string | undefined;
-            for (const head of heads)
+            for (const head of heads) {
               if (
                 head &&
                 (path === undefined ||
                   compareMembership(['member', 'unit', head[2]], ['member', 'unit', path]) > 0)
-              )
+              ) {
                 path = head[2];
+              }
+            }
             const owners: string[] = [];
-            for (let i = 0; i < heads.length; i++)
+            for (let i = 0; i < heads.length; i++) {
               if (heads[i]?.[2] === path) {
                 owners.push(...heads[i]![3]);
                 heads[i] = await coordinate(heads[i]![1], i);
               }
+            }
             groups.observe(owners);
           }
         } finally {
-          for (const release of charges) release();
+          for (const release of charges) {
+            release();
+          }
         }
       }
       await scratch.flush();
@@ -475,8 +525,9 @@ async function publishAttempt(
               row = held.row;
             try {
               const e = await endpoints(row);
-              if (!e.original || !sameNative(row[4], e.original, true) || e.staged)
+              if (!e.original || !sameNative(row[4], e.original, true) || e.staged) {
                 throw new Error('Evacuation endpoint changed.');
+              }
               attempted++; // Own the actual native attempt before rename and its after-stat.
               await store.root.renameAbsent(row[2], row[3], row[4]);
               cursor = row[1];
@@ -502,7 +553,9 @@ async function publishAttempt(
         } catch {
           confirmed = false;
         }
-        if (!Number.isSafeInteger(id) || id! <= 0) confirmed = false;
+        if (!Number.isSafeInteger(id) || id! <= 0) {
+          confirmed = false;
+        }
       } finally {
         await timed(
           { ...options, signal: undefined },
@@ -511,7 +564,7 @@ async function publishAttempt(
           () => (failures ? 'failed' : 'success'),
         );
       }
-      if (failures)
+      if (failures) {
         throw new AggregateError(
           errors,
           'Metadata source returns failed (' +
@@ -519,6 +572,7 @@ async function publishAttempt(
             '); retained stage ' +
             store.root.resolve(stage),
         );
+      }
       signal.throwIfAborted();
       if (!confirmed) {
         warn('object save unconfirmed');
@@ -557,7 +611,7 @@ async function publishAttempt(
         archiveRoot = store.root.resolve(stage);
       let id: number | undefined;
       try {
-        if (!unavailable())
+        if (!unavailable()) {
           id = await timed(
             options,
             'generation SDK save',
@@ -565,11 +619,15 @@ async function publishAttempt(
             (id) => (Number.isSafeInteger(id) && id! > 0 ? 'confirmed' : 'abandoned/unconfirmed'),
             () => 'abandoned/unconfirmed',
           );
+        }
       } catch {
         /* A lost response may already have published remotely; never discover/read it back. */
       }
-      if (Number.isSafeInteger(id) && id! > 0) result = { outcome: 'published', generation };
-      else warn('final record save unconfirmed');
+      if (Number.isSafeInteger(id) && id! > 0) {
+        result = { outcome: 'published', generation };
+      } else {
+        warn('final record save unconfirmed');
+      }
     }
     result ??= { outcome: 'abandoned', generation: null };
   } catch (error) {
@@ -595,7 +653,11 @@ async function publishAttempt(
     );
   }
   release();
-  if (failure !== undefined) throw failure;
-  if (failures) throw new AggregateError(errors, 'Metadata publication local failures.');
+  if (failure !== undefined) {
+    throw failure;
+  }
+  if (failures) {
+    throw new AggregateError(errors, 'Metadata publication local failures.');
+  }
   return result!;
 }

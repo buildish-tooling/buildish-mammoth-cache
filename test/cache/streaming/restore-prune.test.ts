@@ -81,8 +81,9 @@ it.each(['gradle', 'maven'] as const)(
       { pruneAggregates: true },
     );
     await executeInstall(f.store, plan, f.budget);
-    for (const name of ['metadata.bin', 'results.bin', 'nested/body'])
+    for (const name of ['metadata.bin', 'results.bin', 'nested/body']) {
       expect(await f.store.root.stat(unit + '/' + name)).toBeNull();
+    }
     expect(await readFile(f.store.root.resolve(unit + '/keep.lock'), 'utf8')).toBe('protected');
   },
 );
@@ -148,7 +149,9 @@ it('uses the existing shared current inventory with linear work at widths4/16', 
   const totals = [];
   for (const width of [4, 16]) {
     const f = await fixture('gradle', true);
-    for (let n = 0; n < width; n++) await f.files('', { ['shared/data/group/f' + n]: 'body' });
+    for (let n = 0; n < width; n++) {
+      await f.files('', { ['shared/data/group/f' + n]: 'body' });
+    }
     const inputs = [
       await f.incoming('data', { 'shared/data/group/new': 'new' }, 'trusted-base'),
       await f.incoming('state', {}, 'trusted-base'),

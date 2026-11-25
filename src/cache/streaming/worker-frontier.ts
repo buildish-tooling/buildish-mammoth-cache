@@ -23,6 +23,7 @@ import type { WorkerContext, WorkerSummary } from './worker-state';
 export type FrontierItem =
   | { readonly type: 'control'; readonly value: Value }
   | { readonly type: 'file'; readonly file: WorkerFile };
+
 // Protocol: docs/dev/cache-protocol.md#reader-state-machine.
 // One rendezvous slot. Advancing acknowledges body consumption FIRST; immediate
 // validated file-meta is a separate rendezvous. Never wait for it inside consumeFile.
@@ -39,6 +40,7 @@ export class WorkerFrontier {
   private waiting = false;
   private delivered = false;
   private failed = false;
+
   constructor(source: Readable, options: WorkerContext, signal: AbortSignal) {
     this.signal = AbortSignal.any([signal, this.controller.signal]);
     this.completion = readWorkerArchive(
@@ -80,9 +82,12 @@ export class WorkerFrontier {
       },
     );
   }
+
   private async offer(item: FrontierItem, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    if (this.slot || this.acknowledge) throw new Error('Unacknowledged worker frontier.');
+    if (this.slot || this.acknowledge) {
+      throw new Error('Unacknowledged worker frontier.');
+    }
     let release!: () => void;
     const acknowledged = new Promise<void>((resolve) => {
       release = resolve;
@@ -93,8 +98,11 @@ export class WorkerFrontier {
     this.notify?.();
     await withAbort(acknowledged, signal);
   }
+
   async next(): Promise<FrontierItem | null> {
-    if (this.waiting) throw new Error('Concurrent frontier consumer.');
+    if (this.waiting) {
+      throw new Error('Concurrent frontier consumer.');
+    }
     this.waiting = true;
     try {
       this.signal.throwIfAborted();
@@ -115,18 +123,26 @@ export class WorkerFrontier {
         this.notify = null;
       }
       this.signal.throwIfAborted();
-      if (this.failed) throw this.failure;
+      if (this.failed) {
+        throw this.failure;
+      }
       this.delivered = this.slot !== null;
       return this.slot;
     } finally {
       this.waiting = false;
     }
   }
+
   cancel(reason: unknown): void {
-    if (!this.controller.signal.aborted) this.controller.abort(reason);
+    if (!this.controller.signal.aborted) {
+      this.controller.abort(reason);
+    }
   }
+
   async close(): Promise<void> {
-    if (!this.done) this.cancel(new Error('Worker frontier closed.'));
+    if (!this.done) {
+      this.cancel(new Error('Worker frontier closed.'));
+    }
     await this.completion.catch(() => {});
     this.slot = null;
     this.acknowledge = null;

@@ -52,6 +52,7 @@ export const pathSchema = relativePathSchema.refine((v) => !isCacheMetadataPath(
 export const filePathSchema = pathSchema.refine((v) => v.length > 0);
 export const countsSchema = z.tuple([uintSchema, uintSchema, uintSchema, uintSchema, uintSchema]);
 export type Counts = z.infer<typeof countsSchema>;
+
 export const contextSchema = z.tuple([
   nameSchema,
   nameSchema,
@@ -63,6 +64,7 @@ export const contextSchema = z.tuple([
   buildToolSchema,
 ]);
 export type Context = z.infer<typeof contextSchema>;
+
 export const unitKindSchema = z.enum([
   'maven-directory',
   'artifact-transform',
@@ -73,11 +75,13 @@ export const unitKindSchema = z.enum([
   'kotlin-plugin-spec-accessors',
 ]);
 export type UnitKind = z.infer<typeof unitKindSchema>;
+
 export const scopeSchema = z.enum(['direct', 'subtree']);
 export const unitSchema = z
   .tuple([unitKindSchema, filePathSchema, scopeSchema])
   .refine(([kind, , scope]) => (kind === 'maven-directory') === (scope === 'direct'));
 export type Unit = z.infer<typeof unitSchema>;
+
 export const modeSchema = uintSchema.max(511).refine((v) => v === (0o644 | (v & 0o111)));
 export const portableSchema = z.tuple([
   z.literal('portable'),

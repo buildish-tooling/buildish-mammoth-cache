@@ -58,7 +58,9 @@ it.each(['upload-opened', 'upload-written'])(
       execFileSync(process.execPath, [bundle, 'start', f.root, sink, point], { stdio: 'pipe' });
     } catch (error) {
       status = (error as { status: unknown }).status;
-      if (status !== 73) process.stderr.write(String((error as { stderr?: Buffer }).stderr));
+      if (status !== 73) {
+        process.stderr.write(String((error as { stderr?: Buffer }).stderr));
+      }
     }
     expect(status).toBe(73);
     const opened = (await OpenedInvocation.current(f.root, f.budget))!,

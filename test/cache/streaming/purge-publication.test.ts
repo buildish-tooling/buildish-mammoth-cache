@@ -39,7 +39,9 @@ vi.mock('node:fs/promises', async (original) => {
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
   await cleanupBaseFixtures();
 });
 const config: NormalizedGradleConfig = {
@@ -134,8 +136,9 @@ it.each([false, true])(
     expect(managedMoves).toHaveLength(split ? 4 : 2);
     const after = (await f.store.root.stat(root + '/entry-a'))!;
     expect(split ? sameRename(before, after) : sameNative(before, after, true)).toBe(true);
-    if (split)
+    if (split) {
       expect(await readFile(f.store.root.resolve(root + '/keep.lock'), 'utf8')).toBe('private');
+    }
     const restored = await MetadataBaseRestore.acquire(
       f.store,
       sdk.backend,
@@ -149,14 +152,18 @@ it.each([false, true])(
       for await (const e of walkNative(f.store.root, source!.nativeRoot, {
         budget: f.budget,
         logicalRoot: '',
-      }))
-        if (e.tag === 'file') files.push(e.path);
+      })) {
+        if (e.tag === 'file') {
+          files.push(e.path);
+        }
+      }
       expect(files.sort()).toEqual([root + '/entry-a', root + '/entry-b']);
       expect(
         await readFile(f.store.root.resolve(source!.nativeRoot + '/' + root + '/entry-a'), 'utf8'),
       ).toBe('a');
-      for (const call of sdk.calls.filter((c) => c.kind === 'save'))
+      for (const call of sdk.calls.filter((c) => c.kind === 'save')) {
         expect(call.members).not.toContain('tree.ndjson');
+      }
     } finally {
       await restored.dispose();
     }

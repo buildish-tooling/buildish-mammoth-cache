@@ -43,7 +43,9 @@ export async function mixedWorkspaceJobs() {
   const java21 = process.env.BUILDISH_TEST_JAVA_21_HOME;
   const java25 = process.env.BUILDISH_TEST_JAVA_25_HOME;
   assert(executable && java21 && java25, 'Supply installed Gradle and JDK 21/25');
-  for (const home of [java21, java25]) await access(path.join(home, 'bin/javac'));
+  for (const home of [java21, java25]) {
+    await access(path.join(home, 'bin/javac'));
+  }
   await mkdir('build', { recursive: true });
   const root = await mkdtemp(path.resolve('build/gradle-mixed-workspaces-'));
   const backend = await nativeCacheBackend();
@@ -158,8 +160,9 @@ export async function mixedWorkspaceJobs() {
         return stdout;
       } catch (error) {
         const failure = error as Error & { stdout?: string; stderr?: string };
-        if (failure.stdout !== undefined || failure.stderr !== undefined)
+        if (failure.stdout !== undefined || failure.stderr !== undefined) {
           await writeFile(logPath, (failure.stdout ?? '') + (failure.stderr ?? ''));
+        }
         throw new Error(`Gradle stage ${label} failed; log: ${logPath}`, { cause: error });
       }
     }

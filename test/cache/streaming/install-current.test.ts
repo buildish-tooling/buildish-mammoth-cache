@@ -25,7 +25,9 @@ import { type Value } from '../../../src/cache/streaming/encoding';
 import { localFixtures } from './local-fixtures';
 const roots: string[] = [];
 afterEach(async () => {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 async function fixture() {
   const directory = await mkdtemp(path.resolve('build/install-current-'));
@@ -38,12 +40,15 @@ async function fixture() {
 it('captures one complete physical projection without reading untouched payload bodies', async () => {
   const f = await fixture();
   await mkdir(path.join(f.directory, 'cache/shared'), { recursive: true });
-  for (const file of ['cache/a', 'cache/shared/a', 'cache/shared/b', 'unmanaged'])
+  for (const file of ['cache/a', 'cache/shared/a', 'cache/shared/b', 'unmanaged']) {
     await writeFile(path.join(f.directory, file), 'untouched body');
+  }
   const work = walkWork(),
     before = f.store.root.work.readBytes;
   const rows: Value[] = [];
-  for await (const row of installCurrentRows(f.store, { budget: f.budget }, work)) rows.push(row);
+  for await (const row of installCurrentRows(f.store, { budget: f.budget }, work)) {
+    rows.push(row);
+  }
   expect(f.store.root.work.readBytes).toBe(before);
   expect(
     rows.filter((r) => Array.isArray(r) && r[0] === 'file').map((r) => (r as Value[])[1]),
@@ -61,16 +66,20 @@ it('records every adjacent protected link by native IDs without following their 
   const f = await fixture();
   await mkdir(path.join(f.directory, 'target'));
   await writeFile(path.join(f.directory, 'target/file'), 'payload');
-  for (const name of ['link-a', 'link-b'])
+  for (const name of ['link-a', 'link-b']) {
     await symlink(
       path.join(f.directory, 'target'),
       path.join(f.directory, name),
       process.platform === 'win32' ? 'junction' : 'dir',
     );
+  }
   const work = walkWork(),
     protectedRows: Value[][] = [];
-  for await (const row of installCurrentRows(f.store, { budget: f.budget }, work))
-    if (Array.isArray(row) && row[0] === 'parent-child') protectedRows.push([...row]);
+  for await (const row of installCurrentRows(f.store, { budget: f.budget }, work)) {
+    if (Array.isArray(row) && row[0] === 'parent-child') {
+      protectedRows.push([...row]);
+    }
+  }
   expect(protectedRows.map((r) => [r[2], r[3]])).toEqual([
     ['link-a', 'symlink'],
     ['link-b', 'symlink'],
@@ -83,7 +92,9 @@ it('records every adjacent protected link by native IDs without following their 
 });
 it('bounds direct-child names and releases both producer and validator charges on failure', async () => {
   const f = await fixture();
-  for (let i = 0; i < 5; i++) await writeFile(path.join(f.directory, String(i)), 'body');
+  for (let i = 0; i < 5; i++) {
+    await writeFile(path.join(f.directory, String(i)), 'body');
+  }
   await expect(
     collect(installCurrentRows(f.store, { budget: f.budget, maxDirectoryEntries: 3 })),
   ).rejects.toThrow('breadth');
@@ -97,5 +108,7 @@ it('bounds direct-child names and releases both producer and validator charges o
 });
 
 async function collect(source: AsyncIterable<Value>) {
-  for await (const row of source) void row;
+  for await (const row of source) {
+    void row;
+  }
 }

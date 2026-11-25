@@ -24,7 +24,9 @@ import { WorkingBudget } from '../../../src/cache/streaming/tree-state';
 import type { Context } from '../../../src/cache/streaming/schema';
 const roots: string[] = [];
 export async function cleanupLifecycleFixtures() {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 async function directory(label: string) {
   const root = await mkdtemp(path.resolve('build/ls4-' + label + '-'));

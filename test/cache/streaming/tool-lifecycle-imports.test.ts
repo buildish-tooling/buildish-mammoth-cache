@@ -40,7 +40,9 @@ vi.mock('../../../src/build-tool/gradle/build-results', () => {
 });
 beforeEach(() => {
   vi.resetModules();
-  for (const key of Object.keys(loads) as (keyof typeof loads)[]) loads[key] = 0;
+  for (const key of Object.keys(loads) as (keyof typeof loads)[]) {
+    loads[key] = 0;
+  }
 });
 it('executes only the needed modules across guard, Maven, Gradle quiescence and cleanup routes', async () => {
   {

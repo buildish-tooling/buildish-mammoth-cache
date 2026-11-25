@@ -45,7 +45,9 @@ const backend: BaseCacheBackend = {
   isFeatureAvailable: () => true,
   restoreCache: async () => undefined,
   saveCache: async () => {
-    if (mode === 'post-crash') process.exit(73);
+    if (mode === 'post-crash') {
+      process.exit(73);
+    }
     return 1;
   },
   isMissingPathsError: () => false,
@@ -59,7 +61,9 @@ if (mode === 'post' || mode === 'post-crash') {
     removeHooks: async () => {},
     cacheBackend: async () => backend,
   });
-  if (result.outcome !== 'published') throw new Error('Post did not publish: ' + result.outcome);
+  if (result.outcome !== 'published') {
+    throw new Error('Post did not publish: ' + result.outcome);
+  }
 } else {
   if (mode === 'start' || mode === 'success') {
     await mkdir(root + '/data', { recursive: true });
@@ -90,8 +94,12 @@ if (mode === 'post' || mode === 'post-crash') {
     assertCurrent: (): undefined => {},
     now: () => 12345,
     fail: async (name) => {
-      if (name === point) process.exit(73);
+      if (name === point) {
+        process.exit(73);
+      }
     },
   });
 }
-if (budget.retained) throw new Error('Process leaked budget.');
+if (budget.retained) {
+  throw new Error('Process leaked budget.');
+}

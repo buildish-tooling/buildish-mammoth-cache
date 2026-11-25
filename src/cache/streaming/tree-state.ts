@@ -43,36 +43,56 @@ export class WorkingBudget {
   private records = 0;
   private peak = 0;
   private releaseOptionalNames?: () => void;
+
   constructor(readonly limit = 16 * 1024 * 1024) {
-    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Invalid working budget.');
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('Invalid working budget.');
+    }
   }
+
   retain(bytes: number): void {
-    if (this.tryRetainNames(bytes)) return;
+    if (this.tryRetainNames(bytes)) {
+      return;
+    }
     this.releaseOptionalNames?.();
-    if (!this.tryRetainNames(bytes))
+    if (!this.tryRetainNames(bytes)) {
       throw new Error('Active metadata/name working budget exceeded.');
+    }
   }
+
   tryRetainNames(bytes: number): boolean {
-    if (this.names + bytes > this.limit) return false;
+    if (this.names + bytes > this.limit) {
+      return false;
+    }
     this.names += bytes;
     this.peak = Math.max(this.peak, this.retained);
     return true;
   }
+
   onNamePressure(release: () => void): () => void {
-    if (this.releaseOptionalNames) throw new Error('Optional name scope already active.');
+    if (this.releaseOptionalNames) {
+      throw new Error('Optional name scope already active.');
+    }
     this.releaseOptionalNames = release;
     return () => {
-      if (this.releaseOptionalNames === release) this.releaseOptionalNames = undefined;
+      if (this.releaseOptionalNames === release) {
+        this.releaseOptionalNames = undefined;
+      }
     };
   }
+
   release(bytes: number): void {
     this.names -= bytes;
-    if (this.names < 0) throw new Error('Invalid budget release.');
+    if (this.names < 0) {
+      throw new Error('Invalid budget release.');
+    }
   }
+
   holdRecord(bytes: number): () => void {
     const charge = decodedRecordCharge(bytes);
-    if (this.records + charge > this.limit)
+    if (this.records + charge > this.limit) {
       throw new Error('Active decoded-record working budget exceeded.');
+    }
     this.records += charge;
     this.peak = Math.max(this.peak, this.retained);
     let held = true;
@@ -83,9 +103,11 @@ export class WorkingBudget {
       }
     };
   }
+
   get peakRetained(): number {
     return this.peak;
   }
+
   get retained(): number {
     return this.names + this.records;
   }
@@ -94,8 +116,12 @@ export function compareName(a: string, b: string): number {
   return Buffer.compare(Buffer.from(a), Buffer.from(b));
 }
 export function nativeAliasKey(name: string, platform = process.platform): string {
-  if (platform === 'darwin') return name.normalize('NFD').toUpperCase();
-  if (platform === 'win32') return name.toUpperCase();
+  if (platform === 'darwin') {
+    return name.normalize('NFD').toUpperCase();
+  }
+  if (platform === 'win32') {
+    return name.toUpperCase();
+  }
   return name;
 }
 export function parentPath(path: string): string {
@@ -118,24 +144,32 @@ interface Frame {
   charge: number;
   directoryCharge: number;
 }
+
 export class TreeState {
   private readonly frames: Frame[] = [];
   private started = false;
   private ended = false;
+
   constructor(
     readonly budget: WorkingBudget,
     readonly maxEntries = 100000,
   ) {
-    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1)
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
       throw new Error('Invalid directory entry allowance.');
+    }
   }
+
   get path(): string {
-    if (!this.frames.length) throw new Error('No open directory.');
+    if (!this.frames.length) {
+      throw new Error('No open directory.');
+    }
     return this.frames[this.frames.length - 1].path;
   }
+
   get depth(): number {
     return this.frames.length;
   }
+
   get emptyDirectory(): boolean {
     return (
       this.frames.length > 0 &&
@@ -143,26 +177,33 @@ export class TreeState {
       this.frames[this.frames.length - 1].phase === 'files'
     );
   }
+
   get leaf(): boolean {
     return this.frames.length > 0 && this.frames[this.frames.length - 1].children === 0;
   }
+
   get complete(): boolean {
     return this.started && this.ended && !this.frames.length;
   }
+
   private child(name: string, directory: boolean): Frame {
     componentSchema.parse(name);
     // V8 slices can retain a whole long path for each short basename. Own the bytes.
     name = Buffer.from(name).toString('utf8');
     const parent = this.frames[this.frames.length - 1];
-    if (!parent) throw new Error('Missing parent directory.');
-    if (parent.children === this.maxEntries)
+    if (!parent) {
+      throw new Error('Missing parent directory.');
+    }
+    if (parent.children === this.maxEntries) {
       throw directoryBreadthError(parent.path, this.maxEntries, 'tree validation');
+    }
     if (directory) {
       if (
         parent.files.has(name) ||
         (parent.lastDirectory !== null && compareName(parent.lastDirectory, name) >= 0)
-      )
+      ) {
         throw new Error('Duplicate/colliding/unordered directory.');
+      }
       const charge = 64 + 4 * Buffer.byteLength(name);
       this.budget.retain(charge);
       this.budget.release(parent.directoryCharge);
@@ -174,8 +215,9 @@ export class TreeState {
       if (
         parent.phase !== 'files' ||
         (parent.lastFile !== null && compareName(parent.lastFile, name) >= 0)
-      )
+      ) {
         throw new Error('Duplicate/unordered file.');
+      }
       const charge = 64 + 4 * Buffer.byteLength(name);
       this.budget.retain(charge);
       parent.charge += charge;
@@ -185,14 +227,21 @@ export class TreeState {
     parent.children++;
     return parent;
   }
+
   open(path: string): void {
     pathSchema.parse(path);
-    if (this.ended || this.frames.length === 100) throw new Error('Invalid tree depth/root.');
+    if (this.ended || this.frames.length === 100) {
+      throw new Error('Invalid tree depth/root.');
+    }
     if (!this.started) {
-      if (path !== '') throw new Error('Missing empty root.');
+      if (path !== '') {
+        throw new Error('Missing empty root.');
+      }
       this.started = true;
     } else {
-      if (!path || parentPath(path) !== this.path) throw new Error('Invalid directory hierarchy.');
+      if (!path || parentPath(path) !== this.path) {
+        throw new Error('Invalid directory hierarchy.');
+      }
       this.child(baseName(path), true);
     }
     const charge = 128 + 4 * Buffer.byteLength(path);
@@ -208,34 +257,51 @@ export class TreeState {
       directoryCharge: 0,
     });
   }
+
   file(path: string): void {
     filePathSchema.parse(path);
-    if (parentPath(path) !== this.path) throw new Error('File outside current directory.');
+    if (parentPath(path) !== this.path) {
+      throw new Error('File outside current directory.');
+    }
     this.child(baseName(path), false);
   }
+
   /** A no-follow protected child participates in order/breadth without opening its subtree. */
   protectedChild(name: string, directory: boolean): void {
     this.child(name, directory);
   }
+
   endFiles(): void {
-    if (!this.frames.length) throw new Error('Missing directory.');
+    if (!this.frames.length) {
+      throw new Error('Missing directory.');
+    }
     this.frames[this.frames.length - 1].phase = 'directories';
   }
+
   close(path: string): void {
-    if (path !== this.path) throw new Error('Unbalanced directory close.');
+    if (path !== this.path) {
+      throw new Error('Unbalanced directory close.');
+    }
     const frame = this.frames.pop()!;
     this.budget.release(frame.charge);
-    if (!this.frames.length) this.ended = true;
+    if (!this.frames.length) {
+      this.ended = true;
+    }
   }
+
   dispose(): void {
-    while (this.frames.length) this.budget.release(this.frames.pop()!.charge);
+    while (this.frames.length) {
+      this.budget.release(this.frames.pop()!.charge);
+    }
   }
 }
 export function newCounts(): Counts {
   return [0, 0, 0, 0, 0];
 }
 export function countInto(target: Counts, source: Counts): void {
-  for (let i = 0; i < 5; i++) target[i] = add(target[i], source[i]);
+  for (let i = 0; i < 5; i++) {
+    target[i] = add(target[i], source[i]);
+  }
 }
 export function normalizeMode(buildTool: string, path: string, mode: number): number {
   const launcher =
@@ -252,30 +318,36 @@ export function isWorkspaceScaffolding(model: ResolvedModel, path: string): bool
   return model.tuple[2] === 'gradle' && isWorkspaceCachePath(path) && workspaceRoot(path) === null;
 }
 export function recognizedRoot(model: ResolvedModel, path: string): string | null {
-  if (model.tuple[2] === 'maven') return path.startsWith('repository/') ? parentPath(path) : null;
+  if (model.tuple[2] === 'maven') {
+    return path.startsWith('repository/') ? parentPath(path) : null;
+  }
   const root = workspaceRoot(path);
-  if (root === null && isWorkspaceCachePath(path))
+  if (root === null && isWorkspaceCachePath(path)) {
     throw new Error('Unsupported workspace-surface contribution. Path: ' + path);
+  }
   return root;
 }
 export function validateUnit(model: ResolvedModel, unit: Unit): void {
   unitSchema.parse(unit);
   const [kind, root] = unit;
   if (model.tuple[2] === 'maven') {
-    if (kind !== 'maven-directory' || (root !== 'repository' && !root.startsWith('repository/')))
+    if (kind !== 'maven-directory' || (root !== 'repository' && !root.startsWith('repository/'))) {
       throw new Error('Unrecognized Maven unit.');
+    }
   } else if (
     workspaceRoot(root) !== root ||
     (workspaceKind(root) !== kind &&
       !(workspaceKind(root) === 'kotlin-accessor-directories' && kind === 'kotlin-accessor-jars'))
-  )
+  ) {
     throw new Error('Unrecognized workspace unit.');
+  }
 }
 export interface UnitSummary {
   counts: Counts;
   semantic: string;
   comparison: string;
 }
+
 /** Incremental facts and a constant set of classifier markers, never unit members. */
 export class UnitProjection {
   readonly counts = newCounts();
@@ -284,6 +356,7 @@ export class UnitProjection {
   private sealed?: UnitSummary;
   private readonly markers: UnitMarkers;
   private owner: string | null = null;
+
   constructor(
     readonly model: ResolvedModel,
     readonly unit: Unit,
@@ -297,25 +370,40 @@ export class UnitProjection {
     this.semantic.update(['unit', ...unit]);
     this.comparison.update(['unit', kind]);
     this.markers = new UnitMarkers(unit);
-    if (scope === 'subtree') this.directory(root, 'open');
+    if (scope === 'subtree') {
+      this.directory(root, 'open');
+    }
   }
+
   private relative(path: string): string {
     const root = this.unit[1];
-    if (path === root) return '';
-    if (!path.startsWith(root + '/')) throw new Error('Unit member outside root.');
+    if (path === root) {
+      return '';
+    }
+    if (!path.startsWith(root + '/')) {
+      throw new Error('Unit member outside root.');
+    }
     return path.slice(root.length + 1);
   }
+
   directory(path: string, phase: 'open' | 'close'): void {
-    if (this.sealed) throw new Error('Fact after unit close.');
-    if (this.unit[2] === 'direct') throw new Error('Child directory inside direct unit.');
+    if (this.sealed) {
+      throw new Error('Fact after unit close.');
+    }
+    if (this.unit[2] === 'direct') {
+      throw new Error('Child directory inside direct unit.');
+    }
     this.relative(path);
     this.semantic.update(['directory', path, phase]);
-    if (!this.usage) this.comparison.update(['directory', this.relative(path), phase]);
+    if (!this.usage) {
+      this.comparison.update(['directory', this.relative(path), phase]);
+    }
     if (phase === 'open') {
       this.counts[1] = add(this.counts[1]);
       this.markers.directory(path);
     }
   }
+
   file(
     path: string,
     partition: string,
@@ -324,8 +412,9 @@ export class UnitProjection {
     time: number,
     sha: string,
   ): void {
-    if (this.sealed || (this.unit[2] === 'direct' && parentPath(path) !== this.unit[1]))
+    if (this.sealed || (this.unit[2] === 'direct' && parentPath(path) !== this.unit[1])) {
       throw new Error('Invalid unit file boundary.');
+    }
     this.markers.file(path);
     this.ownership(partition);
     if (this.usage) {
@@ -342,16 +431,23 @@ export class UnitProjection {
       this.counts[4] = add(this.counts[4], size);
     }
   }
+
   ownership(partition: string): void {
     if (this.unit[0] !== 'maven-directory') {
-      if (this.owner !== null && this.owner !== partition)
+      if (this.owner !== null && this.owner !== partition) {
         throw new Error('Split workspace ownership.');
+      }
       this.owner = partition;
     }
   }
+
   finish(): UnitSummary {
-    if (this.sealed) return this.sealed;
-    if (this.unit[2] === 'subtree') this.directory(this.unit[1], 'close');
+    if (this.sealed) {
+      return this.sealed;
+    }
+    if (this.unit[2] === 'subtree') {
+      this.directory(this.unit[1], 'close');
+    }
     this.markers.finish();
     this.semantic.update(['unit-end', this.unit[0], this.unit[1]]);
     return (this.sealed = {
@@ -368,9 +464,13 @@ export function compareMembership(a: readonly Value[], b: readonly Value[]): num
   for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
     const ca = i === pa.length - 1 && a[1] === 'file' ? 0 : 1,
       cb = i === pb.length - 1 && b[1] === 'file' ? 0 : 1;
-    if (ca !== cb) return ca - cb;
+    if (ca !== cb) {
+      return ca - cb;
+    }
     const cmp = compareName(pa[i], pb[i]);
-    if (cmp) return cmp;
+    if (cmp) {
+      return cmp;
+    }
   }
   return pa.length - pb.length;
 }

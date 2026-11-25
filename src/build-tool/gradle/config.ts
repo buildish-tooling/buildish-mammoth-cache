@@ -128,8 +128,12 @@ function determineWrapperSelectionMode(
   if (processAllWrapperFiles && explicitWrapperPropertiesFileCount > 0) {
     throw new Error('process-all-wrapper-files cannot be combined with wrapper-properties-files.');
   }
-  if (explicitWrapperPropertiesFileCount > 0) return 'explicit';
-  if (processAllWrapperFiles) return 'all';
+  if (explicitWrapperPropertiesFileCount > 0) {
+    return 'explicit';
+  }
+  if (processAllWrapperFiles) {
+    return 'all';
+  }
   return 'default';
 }
 
@@ -165,7 +169,9 @@ function normalizeGradleUserHome(input: string, env: NodeJS.ProcessEnv | undefin
     env?.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle'),
   );
   const trimmed = input.trim();
-  if (trimmed.length === 0) return supportedDefault;
+  if (trimmed.length === 0) {
+    return supportedDefault;
+  }
   if (path.resolve(trimmed) !== path.resolve(supportedDefault)) {
     throw new Error(
       'Non-default gradle-user-home values are not supported in v1. Use the default GRADLE_USER_HOME location.',

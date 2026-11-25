@@ -59,7 +59,9 @@ describe('project-state documentation', () => {
     for (const pagePath of pagePaths) {
       const page = await readFile(pagePath, 'utf8');
       for (const match of page.matchAll(/\[([^\]]+)\]\(([^)]+)\)/gu)) {
-        if (!match[2]!.startsWith('development/')) continue;
+        if (!match[2]!.startsWith('development/')) {
+          continue;
+        }
         expect(match[1], `${pagePath} has a generically labelled development link`).toMatch(
           /development|unreleased/iu,
         );
@@ -93,6 +95,8 @@ function readFrontMatterDescription(document: string): string {
     .find((line) => line.startsWith('description:'))
     ?.slice('description:'.length)
     .trim();
-  if (!description) throw new Error('Document is missing a front-matter description.');
+  if (!description) {
+    throw new Error('Document is missing a front-matter description.');
+  }
   return description;
 }

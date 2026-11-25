@@ -29,7 +29,9 @@ import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot
 import { byteSource } from './protocol-fixtures';
 const results: Awaited<ReturnType<typeof rawMerge>>[] = [];
 afterEach(async () => {
-  for (const result of results.splice(0)) await result.dispose();
+  for (const result of results.splice(0)) {
+    await result.dispose();
+  }
   vi.restoreAllMocks();
   await cleanupCompleteFixtures();
 });
@@ -43,8 +45,9 @@ async function facts(result: Awaited<ReturnType<typeof rawMerge>>, partition = '
   const rows: Value[] = [];
   for await (const r of result.partitions
     .find((p) => p.partition === partition)!
-    .facts.rows(signal()))
+    .facts.rows(signal())) {
     rows.push(r);
+  }
   return rows.map((r) => tuple(r));
 }
 const root = 'caches/transforms-4/' + 'a'.repeat(32);
@@ -184,8 +187,11 @@ it('validates but ignores aggregate and usage from snapshot-only discovery produ
   });
   expect((await facts(result)).map((r) => r[1])).toEqual(['data/a']);
   const activity: Value[] = [];
-  for (const projection of result.activity)
-    for await (const r of projection.spool.rows(signal())) activity.push(r);
+  for (const projection of result.activity) {
+    for await (const r of projection.spool.rows(signal())) {
+      activity.push(r);
+    }
+  }
   expect(activity.some((r) => tuple(r)[1] === 'used')).toBe(false);
   expect(result.readers[0].work.bodyBytes).toBeGreaterThan(result.stage.work.bodyBytes - 1);
   await result.dispose();
@@ -201,7 +207,9 @@ it('preserves optional absence but never drops an admitted optional archive fail
     this: MetadataSnapshot,
     ...args
   ) {
-    if (this === baseline) verified++;
+    if (this === baseline) {
+      verified++;
+    }
     await verify.apply(this, args);
   });
   const options = {
@@ -246,10 +254,11 @@ it('retains nested all-empty selected workspace subtrees alongside required root
       ordinaryPolicy: 'strict',
     }),
     part = result.partitions[0];
-  for (const dir of ['a-empty', 'a-empty/deeper', 'b-empty'])
+  for (const dir of ['a-empty', 'a-empty/deeper', 'b-empty']) {
     expect(
       (await f.store.root.stat(part.nativeRoot + '/' + root + '/transformed/' + dir))?.[2],
     ).toBe('directory');
+  }
   await result.dispose();
   expect(f.budget.retained).toBe(0);
 });
@@ -282,7 +291,9 @@ it('rejects an admitted optional writer omitting its selected snapshot instead o
     this: MetadataSnapshot,
     ...args
   ) {
-    if (this === baseline) baselineCalls++;
+    if (this === baseline) {
+      baselineCalls++;
+    }
     await verify.apply(this, args);
   });
   await expect(
@@ -319,7 +330,9 @@ it('cancels a pending prepared-baseline verification and validates activity limi
     if (this === baseline) {
       entered();
       await new Promise<never>(() => {});
-    } else await verify.apply(this, args);
+    } else {
+      await verify.apply(this, args);
+    }
   });
   const pending = mergeWorkerArchives(f.store, [], {
     budget: f.budget,

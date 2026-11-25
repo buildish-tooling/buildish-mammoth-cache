@@ -60,6 +60,7 @@ export function gradleSeedSchema(invocation: string) {
   ]);
 }
 export type GradleSeedDescriptor = z.infer<ReturnType<typeof gradleSeedSchema>>;
+
 export function gradleLayerCandidate(
   model: ResolvedModel,
   options: Pick<LocalOptions, 'role' | 'access' | 'context'>,
@@ -87,16 +88,18 @@ export function checkGradleSeed(
   if (
     !gradleLayerCandidate(store.codec.options.model, store.codec.options, 'none') ||
     descriptor[4] !== key
-  )
+  ) {
     throw new Error('Gradle seed owner/generation mismatch.');
+  }
   const ids = [descriptor[5], descriptor[6]];
   if (
     store.codec.options.model.partitions.find((p) => p[0] === ids[0])?.[3] !== 'aggregate' ||
     store.codec.options.model.partitions.find((p) => p[0] === ids[1])?.[3] !== 'single-writer' ||
     new Set(ids).size !== 2 ||
     ids.some((id) => !store.codec.options.model.partitions.some((p) => p[0] === id && p[6] === 1))
-  )
+  ) {
     throw new Error('Gradle seed partition mismatch.');
+  }
 }
 export async function validateGradleSeedOwner(
   store: OwnedStore,
@@ -109,10 +112,11 @@ export async function validateGradleSeedOwner(
     !sameObject(actual, descriptor[3]) ||
     actual[6] !== descriptor[3][6] ||
     actual[3] !== store.root.binding[3]
-  )
+  ) {
     throw new Error(
       'Gradle seed owner missing or changed; retained at ' + gradleSeedPath(store, descriptor),
     );
+  }
 }
 export async function retireGradleSeed(
   store: OwnedStore,
@@ -120,16 +124,20 @@ export async function retireGradleSeed(
   options: NativeOperationOptions,
 ): Promise<void> {
   const actual = await store.root.stat(descriptor[2]);
-  if (!actual) return;
+  if (!actual) {
+    return;
+  }
   if (
     !sameObject(actual, descriptor[3]) ||
     actual[6] !== descriptor[3][6] ||
     actual[3] !== store.root.binding[3]
-  )
+  ) {
     throw new Error('Gradle seed owner changed; retained at ' + gradleSeedPath(store, descriptor));
+  }
   await retireOwnedDirectory(store, descriptor[2], actual, options.budget, 'seed-member-retired');
 }
 type Selection = { input: IndexedMetadataInput; path: string; native: NativeIdentity };
+
 /** Check every layout/cohort before assigning any source or moving any byte. */
 async function select(
   store: OwnedStore,
@@ -138,9 +146,13 @@ async function select(
   const model = store.codec.options.model,
     context = restored.context,
     generation = restored.generation;
-  if (!context || !generation || !restored.key) return undefined;
+  if (!context || !generation || !restored.key) {
+    return undefined;
+  }
   const eligible = model.partitions.filter((p) => p[6] === 1);
-  if (eligible.length !== 2) return undefined;
+  if (eligible.length !== 2) {
+    return undefined;
+  }
   const artifact = eligible.find(
     (p) => p[3] === 'aggregate' && p[1].length === 1 && p[1][0] === ARTIFACTS + '/**',
   );
@@ -150,13 +162,16 @@ async function select(
       p[1].length === 1 &&
       (p[1][0] === 'caches/modules-2/metadata-*/**' || p[1][0] === METADATA + '/**'),
   );
-  if (!artifact || !metadata) return undefined;
+  if (!artifact || !metadata) {
+    return undefined;
+  }
   for (const partition of [artifact, metadata]) {
     if (
       restored.entries.find((e) => e[1] === partition[0])?.[2] !== 'available' ||
       context.source(partition[0])?.upstream.kind !== 'native-metadata'
-    )
+    ) {
       return undefined;
+    }
   }
   const selected: Selection[] = [];
   for (const [partition, path] of [
@@ -167,8 +182,9 @@ async function select(
       partition[5] !== 'default' ||
       partition[2].length !== model.tuple[3].length ||
       !partition[2].every((g, i) => g === model.tuple[3][i])
-    )
+    ) {
       return undefined;
+    }
     const entry = restored.entries.find((e) => e[1] === partition[0]),
       input = context.source(partition[0]);
     const original = generation[8].find((e) => e[1] === partition[0]);
@@ -177,8 +193,9 @@ async function select(
       !input ||
       input.upstream.kind !== 'native-metadata' ||
       original?.[0] !== 'object'
-    )
+    ) {
       return undefined;
+    }
     input.assertBound(store);
     equal(input.upstream.source.reference, original[2], 'exact seed object');
     const directories = new IndexDirectories(context.scratch, input.index);
@@ -190,16 +207,23 @@ async function select(
         ['caches/modules-2', path.split('/')[2]],
       ] as const) {
         const node = await directories.directory(parent);
-        if (!node || node[6] !== 0 || nodeIsIntact(node)) return undefined;
+        if (!node || node[6] !== 0 || nodeIsIntact(node)) {
+          return undefined;
+        }
         let count = 0;
         for await (const edge of indexedEntries(context.scratch, node)) {
-          if (++count !== 1 || edge[0] !== name || edge[1] !== 'directory') return undefined;
+          if (++count !== 1 || edge[0] !== name || edge[1] !== 'directory') {
+            return undefined;
+          }
         }
-        if (count !== 1) return undefined;
+        if (count !== 1) {
+          return undefined;
+        }
       }
       const node = await directories.directory(path);
-      if (!node || node[6] !== 0 || nodeMask(node) !== partitionBit(model, partition[0]))
+      if (!node || node[6] !== 0 || nodeMask(node) !== partitionBit(model, partition[0])) {
         return undefined;
+      }
       selected.push({ input, path, native: [...(node[3] as NativeIdentity)] });
     } finally {
       directories.close();
@@ -214,7 +238,9 @@ export async function installGradleSeed(
   options: NativeOperationOptions,
 ): Promise<GradleSeedDescriptor | undefined> {
   const selected = await select(store, restored);
-  if (!selected) return undefined;
+  if (!selected) {
+    return undefined;
+  }
   const root = store.prefix + 'seed/' + randomUUID();
   let descriptor: GradleSeedDescriptor | undefined;
   const phases: InstallParentPhase[] = [],
@@ -234,12 +260,14 @@ export async function installGradleSeed(
       GRADLE_LAYER_VERSION,
     ];
     await store.makeParents(root + '/caches/modules-2/pending');
-    for (let i = 0; i < selected.length; i++)
+    for (let i = 0; i < selected.length; i++) {
       await store.makeParents(root + '/control/source-' + i + '/pending');
+    }
     await store.makeParents(root + '/control/target/pending');
     const targetFacts = new Map<string, NativeIdentity>();
-    for (const path of [root, root + '/caches', root + '/caches/modules-2'])
+    for (const path of [root, root + '/caches', root + '/caches/modules-2']) {
       targetFacts.set(path, (await store.root.stat(path))!);
+    }
     const target = new InstallParentPhase(
       store,
       root,
@@ -252,8 +280,9 @@ export async function installGradleSeed(
       selected.map((s) => s.input.partition),
       async (inputs) => {
         for (const [i, selection] of selected.entries()) {
-          if (inputs[i] !== selection.input)
+          if (inputs[i] !== selection.input) {
             throw new Error('Seed receipt changed during routing.');
+          }
           const { input, path, native } = selection,
             directory = new IndexDirectories(input.context.scratch, input.index);
           indexes.push(directory);
@@ -274,15 +303,17 @@ export async function installGradleSeed(
           await source.parents(from);
           await target.parents(to);
           const before = await source.stat(from);
-          if (!before || !sameNative(before, native, true) || (await target.stat(to)))
+          if (!before || !sameNative(before, native, true) || (await target.stat(to))) {
             throw new Error('Seed rename endpoints changed.');
+          }
           options.signal?.throwIfAborted();
           await rename(store.root.resolve(from), store.root.resolve(to));
           store.root.work.renames++;
           await store.fail('seed-rename-before-stat');
           const after = await target.stat(to);
-          if (!after || !sameRename(before, after))
+          if (!after || !sameRename(before, after)) {
             throw new Error('Seed rename identity changed.');
+          }
           await source.changed(from);
           await target.changed(to);
           await source.barrier();
@@ -296,7 +327,9 @@ export async function installGradleSeed(
     await validateGradleSeedOwner(store, descriptor);
     return descriptor;
   } catch (error) {
-    for (const phase of phases) phase.release();
+    for (const phase of phases) {
+      phase.release();
+    }
     if (descriptor) {
       try {
         await retireGradleSeed(store, descriptor, options);
@@ -316,7 +349,11 @@ export async function installGradleSeed(
     }
     throw error;
   } finally {
-    for (const phase of phases) phase.release();
-    for (const directory of indexes) directory.close();
+    for (const phase of phases) {
+      phase.release();
+    }
+    for (const directory of indexes) {
+      directory.close();
+    }
   }
 }

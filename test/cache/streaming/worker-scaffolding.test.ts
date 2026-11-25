@@ -27,7 +27,9 @@ import { MetadataPublicationSource } from '../../../src/cache/streaming/metadata
 const fixtures: Awaited<ReturnType<typeof observationFixture>>[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const f of fixtures.splice(0)) await f.close();
+  for (const f of fixtures.splice(0)) {
+    await f.close();
+  }
 });
 async function fixture(width = 1) {
   const hard = ['.mammoth/**'],
@@ -51,7 +53,9 @@ async function fixture(width = 1) {
     ]);
   fixtures.push(f);
   await f.files('', { 'd/a': 'body' });
-  for (let n = 0; n < width; n++) await f.files('', { ['init' + n + '/keep.txt']: 'protected' });
+  for (let n = 0; n < width; n++) {
+    await f.files('', { ['init' + n + '/keep.txt']: 'protected' });
+  }
   return f;
 }
 it.each([1, 8])(
@@ -68,14 +72,21 @@ it.each([1, 8])(
       expect(f.store.root.work.nativeListings).toBe(before.nativeListings);
       const paths: string[] = [];
       for await (const event of source.events(new AbortController().signal)) {
-        if ('path' in event) paths.push(event.path);
-        if (event.type === 'file') for await (const body of event.bytes) void body;
+        if ('path' in event) {
+          paths.push(event.path);
+        }
+        if (event.type === 'file') {
+          for await (const body of event.bytes) {
+            void body;
+          }
+        }
       }
       expect(paths.some((p) => p.startsWith('init'))).toBe(false);
       expect(paths).toContain('d/a');
       expect(capture.work.listings).toBe(width + 2);
-      for (let n = 0; n < width; n++)
+      for (let n = 0; n < width; n++) {
         expect(await f.store.root.stat('init' + n + '/keep.txt')).not.toBeNull();
+      }
     } finally {
       await source.dispose();
     }
@@ -96,8 +107,14 @@ it.each(['unowned', 'owned-empty'] as const)(
       paths: string[] = [];
     try {
       for await (const event of source.events(new AbortController().signal)) {
-        if ('path' in event) paths.push(event.path);
-        if (event.type === 'file') for await (const body of event.bytes) void body;
+        if ('path' in event) {
+          paths.push(event.path);
+        }
+        if (event.type === 'file') {
+          for await (const body of event.bytes) {
+            void body;
+          }
+        }
       }
     } finally {
       await source.dispose();
@@ -140,8 +157,14 @@ it('preserves the workspace namespace after actual GC removes its last supported
     source = await WorkerSources.create(f.store, { survivors: result.owner }, f.budget);
   try {
     for await (const event of source.events(new AbortController().signal)) {
-      if ('path' in event) expect(event.path).not.toBe(unit);
-      if (event.type === 'file') for await (const body of event.bytes) void body;
+      if ('path' in event) {
+        expect(event.path).not.toBe(unit);
+      }
+      if (event.type === 'file') {
+        for await (const body of event.bytes) {
+          void body;
+        }
+      }
     }
     expect(await f.store.root.stat('caches/transforms-4')).not.toBeNull();
   } finally {
@@ -153,8 +176,9 @@ it('preserves the workspace namespace after actual GC removes its last supported
 it('keeps unknown workspace surfaces opaque with bounded warnings during the original walk', async () => {
   const f = await fixture(),
     warnings: string[] = [];
-  for (let n = 0; n < 16; n++)
+  for (let n = 0; n < 16; n++) {
     await f.files('', { ['caches/transforms-4/not-a-unit-' + n + '/value']: 'unknown' });
+  }
   const capture = await captureFixtureObservations(f.store, {
     budget: f.budget,
     onWarning: (m) => warnings.push(m),
@@ -164,8 +188,14 @@ it('keeps unknown workspace surfaces opaque with bounded warnings during the ori
     source = await WorkerSources.create(f.store, { survivors: result.owner }, f.budget);
   try {
     for await (const event of source.events(new AbortController().signal)) {
-      if ('path' in event) expect(event.path).not.toContain('not-a-unit');
-      if (event.type === 'file') for await (const body of event.bytes) void body;
+      if ('path' in event) {
+        expect(event.path).not.toContain('not-a-unit');
+      }
+      if (event.type === 'file') {
+        for await (const body of event.bytes) {
+          void body;
+        }
+      }
     }
     expect(capture.work.listings).toBe(21);
   } finally {

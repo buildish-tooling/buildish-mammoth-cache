@@ -33,24 +33,30 @@ export class WorkerSpool {
   private disposed = false;
   private writing = false;
   private failed = false;
+
   private constructor(private readonly scratch: InstallScratch) {}
+
   static async create(store: OwnedStore, budget: WorkingBudget): Promise<WorkerSpool> {
     return new WorkerSpool(await InstallScratch.create(store, budget));
   }
+
   get work() {
     return this.scratch.work;
   }
+
   tryAppend(value: Value, signal: AbortSignal): boolean {
     signal.throwIfAborted();
-    if (this.sealed !== null || this.disposed || this.writing || this.failed)
+    if (this.sealed !== null || this.disposed || this.writing || this.failed) {
       throw new Error('Worker spool is unavailable.');
+    }
     try {
       if (
         this.scratch.tryAppend(value, undefined, (bytes) =>
           this.digest.encoded(bytes.subarray(0, -1)),
         ) === null
-      )
+      ) {
         return false;
+      }
       this.count++;
       return true;
     } catch (error) {
@@ -58,11 +64,18 @@ export class WorkerSpool {
       throw error;
     }
   }
+
   async append(value: Value, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    if (this.sealed !== null || this.disposed) throw new Error('Worker spool is sealed/disposed.');
-    if (this.writing || this.failed) throw new Error('Worker spool is busy/failed.');
-    if (this.tryAppend(value, signal)) return;
+    if (this.sealed !== null || this.disposed) {
+      throw new Error('Worker spool is sealed/disposed.');
+    }
+    if (this.writing || this.failed) {
+      throw new Error('Worker spool is busy/failed.');
+    }
+    if (this.tryAppend(value, signal)) {
+      return;
+    }
     this.writing = true;
     try {
       await this.scratch.append(value, undefined, (bytes) =>
@@ -80,14 +93,17 @@ export class WorkerSpool {
 
   seal(signal: AbortSignal): void {
     signal.throwIfAborted();
-    if (this.disposed || this.sealed !== null || this.writing || this.failed)
+    if (this.disposed || this.sealed !== null || this.writing || this.failed) {
       throw new Error('Worker spool is unavailable.');
+    }
     this.sealed = this.digest.digest();
   }
+
   async *batches(signal: AbortSignal): AsyncGenerator<readonly Value[]> {
     signal.throwIfAborted();
-    if (this.disposed || this.sealed === null || this.failed)
+    if (this.disposed || this.sealed === null || this.failed) {
       throw new Error('Unsealed worker spool.');
+    }
     this.readers++;
     const digest = new Digest('worker-spool');
     let count = 0;
@@ -112,28 +128,35 @@ export class WorkerSpool {
       }
       signal.throwIfAborted();
       await this.scratch.assertStable();
-      if (count !== this.count || digest.digest() !== this.sealed)
+      if (count !== this.count || digest.digest() !== this.sealed) {
         throw new Error('Changed worker spool.');
+      }
     } finally {
       this.readers--;
-      if (!this.readers) this.scratch.releaseReadCache();
+      if (!this.readers) {
+        this.scratch.releaseReadCache();
+      }
     }
   }
+
   async *rows(signal: AbortSignal, onClose?: () => void): AsyncGenerator<Value> {
     try {
-      for await (const batch of this.batches(signal))
+      for await (const batch of this.batches(signal)) {
         for (const row of batch) {
           signal.throwIfAborted();
           yield row;
         }
+      }
     } finally {
       onClose?.();
     }
   }
+
   async appendBatch(values: readonly Value[], signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    if (this.sealed !== null || this.disposed || this.writing || this.failed)
+    if (this.sealed !== null || this.disposed || this.writing || this.failed) {
       throw new Error('Worker spool is unavailable.');
+    }
     this.writing = true;
     try {
       await this.scratch.appendBatch(values, (bytes) => {
@@ -149,9 +172,14 @@ export class WorkerSpool {
       this.writing = false;
     }
   }
+
   async dispose(): Promise<void> {
-    if (this.disposed) return;
-    if (this.readers || this.writing) throw new Error('Cannot dispose active worker spool.');
+    if (this.disposed) {
+      return;
+    }
+    if (this.readers || this.writing) {
+      throw new Error('Cannot dispose active worker spool.');
+    }
     await this.scratch.close();
     this.disposed = true;
   }
@@ -159,17 +187,21 @@ export class WorkerSpool {
 const memberSchema = z.tuple([z.literal('member'), z.enum(['file', 'unit']), pathSchema]);
 export class DiskMembership implements MembershipSpool {
   private readonly readers = new Set<AsyncGenerator<Value>>();
+
   private constructor(
     private readonly store: OwnedStore,
     private readonly budget: WorkingBudget,
     private readonly spool: WorkerSpool,
   ) {}
+
   static async create(store: OwnedStore, budget: WorkingBudget): Promise<DiskMembership> {
     return new DiskMembership(store, budget, await WorkerSpool.create(store, budget));
   }
+
   async append(member: Membership, signal: AbortSignal): Promise<void> {
     await this.spool.append(memberSchema.parse(member), signal);
   }
+
   async seal(signal: AbortSignal): Promise<() => AsyncIterable<Value>> {
     this.spool.seal(signal);
     return () => {
@@ -178,6 +210,7 @@ export class DiskMembership implements MembershipSpool {
       return reader;
     };
   }
+
   async fork(channel: number, signal: AbortSignal): Promise<MembershipSpool> {
     signal.throwIfAborted();
     uintSchema.parse(channel);
@@ -188,6 +221,7 @@ export class DiskMembership implements MembershipSpool {
     }
     return fork;
   }
+
   async dispose(): Promise<void> {
     // The rows read only owned local storage. Settle these readers before closing it.
     try {
@@ -196,7 +230,9 @@ export class DiskMembership implements MembershipSpool {
           [...this.readers].map((reader) => reader.return(undefined)),
         );
         const failed = results.find((result) => result.status === 'rejected');
-        if (failed?.status === 'rejected') throw failed.reason;
+        if (failed?.status === 'rejected') {
+          throw failed.reason;
+        }
       }
     } finally {
       this.readers.clear();

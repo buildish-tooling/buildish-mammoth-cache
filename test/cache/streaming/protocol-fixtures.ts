@@ -39,7 +39,9 @@ export const familyId =
 export const context = ['github', 'example/repo', 'ci', '42', 'A', 1, 'rev-1', 'maven'] as const;
 export function workerTrace(example: 'W0' | 'W1'): Value[][] {
   let section = vectors.split('## ' + example + ':')[1].split('\n## ')[0];
-  if (example === 'W1') section = section.split('### Complete application trace')[1];
+  if (example === 'W1') {
+    section = section.split('### Complete application trace')[1];
+  }
   return section
     .match(/```text\n([\s\S]*?)\n```/)![1]
     .split('\n')
@@ -50,10 +52,14 @@ export function workerTrace(example: 'W0' | 'W1'): Value[][] {
 export class FixtureMembership implements MembershipSpool {
   readonly rows: Membership[] = [];
   disposed = false;
+
   async append(row: Membership): Promise<void> {
-    if (this.rows.length === 1000) throw new Error('Fixture bound');
+    if (this.rows.length === 1000) {
+      throw new Error('Fixture bound');
+    }
     this.rows.push(row);
   }
+
   async seal(): Promise<() => AsyncIterable<Value>> {
     const rows = this.rows;
     return () =>
@@ -61,9 +67,11 @@ export class FixtureMembership implements MembershipSpool {
         yield* rows;
       })();
   }
+
   async fork(): Promise<MembershipSpool> {
     return new FixtureMembership();
   }
+
   async dispose(): Promise<void> {
     this.disposed = true;
   }
@@ -71,7 +79,9 @@ export class FixtureMembership implements MembershipSpool {
 export function byteSource(bytes: Buffer, chunk = 16384): Readable {
   return Readable.from(
     (async function* () {
-      for (let n = 0; n < bytes.length; n += chunk) yield bytes.subarray(n, n + chunk);
+      for (let n = 0; n < bytes.length; n += chunk) {
+        yield bytes.subarray(n, n + chunk);
+      }
     })(),
     { objectMode: false, highWaterMark: chunk },
   );
@@ -90,12 +100,17 @@ export function traceArchive(trace: Value[][]): Buffer {
         (type === 'directory' && path ? '/' : '');
       const pax: Buffer[] = [],
         needsPath = Buffer.byteLength(name) > 100 || Buffer.byteLength(name) !== name.length;
-      if (needsPath) pax.push(paxRecord('path', name));
-      if (time % 1000)
+      if (needsPath) {
+        pax.push(paxRecord('path', name));
+      }
+      if (time % 1000) {
         pax.push(
           paxRecord('mtime', Math.floor(time / 1000) + '.' + String(time % 1000).padStart(3, '0')),
         );
-      if (pax.length) members.push(tarMember('PaxHeader', Buffer.concat(pax), { type: 'x' }));
+      }
+      if (pax.length) {
+        members.push(tarMember('PaxHeader', Buffer.concat(pax), { type: 'x' }));
+      }
       members.push(
         tarMember(
           needsPath ? 'PaxFile' : name,
