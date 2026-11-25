@@ -327,7 +327,6 @@ export class InstallAdmission {
             }
             let oldNative: NativeIdentity | null = null;
             if (op[5] !== null) {
-              let oldKind: 'file' | 'directory';
               const binding = frozen.metadata.parse(op[5], 'current');
               const part = store.codec.options.model.partitions.findIndex(
                 (v) => v[0] === binding[3],
@@ -335,7 +334,7 @@ export class InstallAdmission {
               if (part < 0 || (p >= 0 && p !== part))
                 throw new Error('Mixed metadata preimage partition.');
               const node = await frozen.metadata.reader(op[5]).rootNode(op[5], op[2], null);
-              oldKind = node[1] as 'file' | 'directory';
+              const oldKind = node[1] as 'file' | 'directory';
               oldNative = node[3] as NativeIdentity;
               if (op[3] === null) result.kind = oldKind;
             }

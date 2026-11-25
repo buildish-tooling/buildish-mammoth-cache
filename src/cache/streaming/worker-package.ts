@@ -180,14 +180,13 @@ export class FrozenWorkerArchive {
   }
   open(): Readable {
     // Q length/hash validation is compressed-byte integrity, not another TAR pass.
-    const self = this;
     return Readable.from(
-      (async function* () {
+      async function* (this: FrozenWorkerArchive) {
         const signal = new AbortController().signal;
-        await self.assertStable(signal);
-        yield* self.store.read(self.reference, 'worker-archive');
-        await self.assertStable(signal);
-      })(),
+        await this.assertStable(signal);
+        yield* this.store.read(this.reference, 'worker-archive');
+        await this.assertStable(signal);
+      }.call(this),
       {
         objectMode: false,
         highWaterMark: 65536,

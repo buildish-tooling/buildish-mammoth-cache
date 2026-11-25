@@ -226,13 +226,12 @@ export class DownloadedWorkerArchive {
   open(): Readable {
     if (this.lifecycle.disposed || this.lifecycle.streams.size)
       throw new Error('Downloaded worker archive is retired/already reading.');
-    const self = this;
     const stream = Readable.from(
-      (async function* () {
-        await self.assertStable();
-        yield* self.store.read(self.reference, 'worker-archive');
-        await self.assertStable();
-      })(),
+      async function* (this: DownloadedWorkerArchive) {
+        await this.assertStable();
+        yield* this.store.read(this.reference, 'worker-archive');
+        await this.assertStable();
+      }.call(this),
       { objectMode: false, highWaterMark: 65536 },
     );
     this.lifecycle.streams.add(stream);

@@ -26,7 +26,6 @@ import {
 } from '../../../src/delta/backend';
 const [mode, root, sink, point] = process.argv.slice(2),
   f = await installFixture('maven', { root });
-let opened;
 if (mode === 'start') {
   await prepareStreaming({
     root,
@@ -60,7 +59,7 @@ if (mode === 'start') {
   });
   await f.files('', { 'data/created': 'original', 'state/created': 'snapshot' });
 }
-opened = await OpenedInvocation.current(root, f.budget);
+const opened = await OpenedInvocation.current(root, f.budget);
 if (!opened) throw new Error('missing owner');
 const backend: WorkflowArtifactBackend = {
   capabilities: {

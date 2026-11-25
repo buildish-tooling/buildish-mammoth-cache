@@ -47,12 +47,12 @@ export class WorkerFrontier {
         ...options,
         consumeFile: async (file, s) => {
           this.work.files++;
-          const self = this;
+          const work = this.work;
           const counted = {
             ...file,
             body: (async function* () {
               for await (const b of file.body) {
-                self.work.bodyBytes = add(self.work.bodyBytes, b.length);
+                work.bodyBytes = add(work.bodyBytes, b.length);
                 yield b;
               }
             })(),
