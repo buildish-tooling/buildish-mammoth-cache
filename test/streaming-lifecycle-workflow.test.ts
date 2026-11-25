@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { cacheMetadataDirectory } from '../src/cache/metadata-paths';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -279,14 +280,17 @@ it('requires the intended producer identity and generation before running the fi
 
 it('observes the invocation bound to this job and rejects unsuccessful automatic post', async () => {
   await mkdir('build', { recursive: true });
-  const home = await mkdtemp(path.resolve('build/it-observer-'));
+  const root = await mkdtemp(path.resolve('build/it-observer-'));
+  const home = path.join(root, 'home');
+  await mkdir(home);
+  const control = cacheMetadataDirectory(home);
   try {
     const invocation = 'a'.repeat(64);
     const directory = '.mammoth/v1/' + invocation;
-    const parent = path.join(home, directory);
+    const parent = path.join(control, directory.slice('.mammoth/'.length));
     await mkdir(parent, { recursive: true });
     const put = (relative: string, value: unknown) =>
-      writeFile(path.join(home, relative), JSON.stringify(value));
+      writeFile(path.join(control, relative.slice('.mammoth/'.length)), JSON.stringify(value));
     const repo = 'example/repo';
     const workflow = 'CI';
     const job = 'pull_request_worker';
@@ -346,7 +350,7 @@ it('observes the invocation bound to this job and rejects unsuccessful automatic
     ]);
     expect(run().status).toBe(1);
   } finally {
-    await rm(home, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -425,9 +429,10 @@ it('rejects cold, wrong-generation and writable-copy substitutes for the hosted 
   const root = await mkdtemp(path.resolve('build/it-layer-proof-'));
   try {
     const home = path.join(root, 'home');
+    await mkdir(home);
     const seed = path.join(
-      home,
-      '.mammoth/v1',
+      cacheMetadataDirectory(home),
+      'v1',
       'a'.repeat(64),
       'seed',
       'b'.repeat(8) + '-bbbb-bbbb-bbbb-' + 'b'.repeat(12),

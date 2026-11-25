@@ -21,6 +21,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { entrypointBundles, entrypointJob } from '../support/streaming-entrypoint';
 import { inspectGradleDaemons } from '../../src/build-tool/gradle/process-inspection';
+import { cacheMetadataDirectory } from '../../src/cache/metadata-paths';
 const gradle = process.env.MAMMOTH_TEST_ENTRYPOINT_GRADLE_HOME,
   maven = process.env.MAMMOTH_TEST_ENTRYPOINT_MAVEN_HOME,
   required = process.env.MAMMOTH_REQUIRE_ENTRYPOINT_NATIVE === '1',
@@ -96,11 +97,14 @@ it.skipIf(!configured).each(['gradle', 'maven'] as const)(
       expect(await readFile(j.home + '/data/native-build', 'utf8')).toBe(tool);
       expect((await j.trace()).some(([name]) => name === 'cache-save')).toBe(true);
       expect((await j.trace()).some(([name]) => name === 'wrapper-provision')).toBe(false);
-      const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
-        state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
-      expect(state[14]).toBe('published');
+      const control = cacheMetadataDirectory(j.home),
+        locator = JSON.parse(await readFile(path.join(control, 'v1/current.json'), 'utf8')),
+        state = JSON.parse(
+          await readFile(path.join(control, locator[3].slice('.mammoth/'.length)), 'utf8'),
+        );
+      expect(state[7][1]).toBe('published');
       if (tool === 'gradle') {
-        expect(state[13]).not.toBeNull();
+        expect(state[6]).not.toBeNull();
         expect(await inspectGradleDaemons()).toMatchObject({ remaining: false, uncertain: false });
       }
       process.stdout.write(

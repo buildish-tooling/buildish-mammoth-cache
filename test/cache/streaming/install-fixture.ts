@@ -16,6 +16,7 @@
 
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { cacheMetadataDirectory } from '../../../src/cache/metadata-paths';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
 import { resolveModel, invocationId, type ResolvedModel } from '../../../src/cache/streaming/model';
@@ -118,6 +119,9 @@ export async function installFixture(
     codec = new LocalCodec(options),
     store = await OwnedStore.bind(root, codec, configuration.fail),
     budget = new WorkingBudget();
+  if (!store.root.externalMetadataBinding) {
+    await store.root.createMetadataDirectory();
+  }
   async function files(base: string, entries: Record<string, string | null>) {
     for (const [logical, body] of Object.entries(entries)) {
       const native = store.root.resolve(base ? base + '/' + logical : logical);
@@ -163,6 +167,7 @@ export async function installFixture(
     bindings,
     close: async () => {
       await closeFixtureInstallPlans(store);
+      await rm(cacheMetadataDirectory(store.root.path), { recursive: true, force: true });
       await rm(root, { recursive: true, force: true });
     },
   };

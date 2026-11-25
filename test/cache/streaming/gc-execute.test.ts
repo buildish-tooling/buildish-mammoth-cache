@@ -318,7 +318,7 @@ it.each([4, 16])(
       program = await GcProgram.create(index),
       expected = program.final;
     await program.close();
-    expect(f.store.root.work.metadataRowsRead - beforeReplay).toBe(14 + 9 * units);
+    expect(f.store.root.work.metadataRowsRead - beforeReplay).toBe(13 + 9 * units);
     const read = vi.spyOn(f.store.root, 'read'),
       open = vi.spyOn(f.store.root, 'openRead'),
       scratch = vi.spyOn(InstallScratch, 'create'),

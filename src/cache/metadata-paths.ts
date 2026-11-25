@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 export const CACHE_METADATA_DIRECTORY = '.mammoth';
@@ -37,13 +38,9 @@ export function cacheInvocationSnapshotPrefix(invocation: string): string {
   return `${cacheInvocationPrefix(invocation)}snapshots/`;
 }
 
-export function cacheMetadataDirectory({
-  managedRoot,
-}: {
-  managedRoot: string;
-  buildTool: 'gradle' | 'maven' | undefined;
-}): string {
-  return path.join(managedRoot, CACHE_METADATA_DIRECTORY);
+export function cacheMetadataDirectory(managedRoot: string): string {
+  const id = createHash('sha256').update(managedRoot).digest('hex');
+  return path.join(path.dirname(managedRoot), `${CACHE_METADATA_DIRECTORY}.${id}`);
 }
 
 const reservedComponent = new RegExp(

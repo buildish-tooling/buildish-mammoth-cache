@@ -381,7 +381,7 @@ it.each([
           deleted: 0,
         });
         expect(info[0]).toContain('capture summary (complete)');
-        expect(info.join('\n')).toContain('pruned=2 directories (descendant counts unknown)');
+        expect(info.join('\n')).toContain('pruned=1 directories (descendant counts unknown)');
         expect(info.join('\n')).not.toContain('pruned/hidden');
         expect(logs(out!).lines).toContain('mixed partition ownership');
       } else {

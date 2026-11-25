@@ -99,7 +99,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       });
     };
     if (!config.cacheEnabled) {
-      await reconcileDisabledRoot(root, options, tool);
+      await reconcileDisabledRoot(root, options);
       host.saveState(
         STREAMING_INVOCATION_STATE,
         encodeInvocationAnchor(disabledInvocationAnchor(context, root, ci.tempDirectory)),

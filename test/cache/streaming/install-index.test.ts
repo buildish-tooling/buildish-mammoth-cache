@@ -122,7 +122,7 @@ it('captures complete mixed ownership without hashing current bodies', async () 
     const rootLease = await indexedNode(scratch, offset),
       root = rootLease.node;
     expect(root[5]).toBe('2');
-    expect(root[6]).toBe(2); // unowned and metadata namespace
+    expect(root[6]).toBe(1); // unowned entry
     rootLease.release();
   } finally {
     await scratch.close();

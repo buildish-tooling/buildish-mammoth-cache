@@ -16,6 +16,7 @@
 
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { open, realpath } from 'node:fs/promises';
 import process from 'node:process';
 import path from 'node:path';
@@ -73,11 +74,23 @@ export async function producerEvidence(tool, job, attempt) {
   return record;
 }
 
+export function controlDirectory(root) {
+  const id = createHash('sha256').update(root).digest('hex');
+  return path.join(path.dirname(root), '.mammoth.' + id);
+}
+
 export async function completion(home, expected, prepare, inspectBase = false, identity) {
   const root = await realpath(home);
+  const control = controlDirectory(root);
+  function controlPath(relative) {
+    assert(relative.startsWith('.mammoth/'));
+    const suffix = relative.slice('.mammoth/'.length);
+    const file = path.resolve(control, suffix);
+    assert.equal(path.relative(control, file).split(path.sep).join('/'), suffix);
+    return file;
+  }
   async function read(relative, bound) {
-    const file = path.resolve(root, relative);
-    assert.equal(path.relative(root, file).split(path.sep).join('/'), relative);
+    const file = controlPath(relative);
     assert.equal(await realpath(file), file, 'Expected an invocation-owned record');
     return readBounded(file, bound);
   }
@@ -132,7 +145,7 @@ export async function completion(home, expected, prepare, inspectBase = false, i
       assert.deepEqual(seed.slice(0, 2), ['gradle-layer', 1]);
       assert.equal(seed[4], handoff[8]?.[0], 'Layer seed differs from selected generation');
       assert(seed[2].startsWith(owned + 'seed/'));
-      await assert.rejects(realpath(path.join(root, seed[2])), { code: 'ENOENT' });
+      await assert.rejects(realpath(controlPath(seed[2])), { code: 'ENOENT' });
     }
     return { outcome: expected, receipt: { id, name } };
   }

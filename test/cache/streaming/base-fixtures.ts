@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
@@ -31,8 +31,10 @@ export async function cleanupBaseFixtures() {
   }
 }
 export async function baseFixture(model?: ResolvedModel) {
-  const root = await mkdtemp(path.resolve('build/native-base-'));
-  roots.push(root);
+  const directory = await mkdtemp(path.resolve('build/native-base-'));
+  const root = path.join(directory, 'home');
+  roots.push(directory);
+  await mkdir(root);
   model ??= resolveModel(
     [
       'model',
@@ -50,5 +52,6 @@ export async function baseFixture(model?: ResolvedModel) {
     root,
     new LocalCodec({ ...options, model, invocation: invocationId(options.context, nonce) }),
   );
+  await store.root.createMetadataDirectory();
   return { root, store, model, budget: new WorkingBudget() };
 }

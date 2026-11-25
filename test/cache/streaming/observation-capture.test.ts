@@ -146,8 +146,8 @@ it('reports actual omitted Kotlin DSL members while admitting recognized scripts
     expect(text).toContain(
       'observed-excluded=5 files/0 directories/0 other entries, housekeeping=1 files, unsupported-layout=4 files',
     );
-    expect(text).toContain('Unattributed: observed-excluded=2 files/2 directories/0 other entries');
-    expect(text).toContain('pruned=2 directories (descendant counts unknown)');
+    expect(text).toContain('Unattributed: observed-excluded=2 files/1 directories/0 other entries');
+    expect(text).toContain('pruned=1 directories (descendant counts unknown)');
     expect(text).not.toContain('nested');
   } finally {
     summaries.dispose();
@@ -354,7 +354,7 @@ it('captures growing shared Maven coordinates with linear work and stable policy
     );
     counts.push(records);
     expect(out.work.listings).toBe(3 + count);
-    expect(out.work.entries).toBe(4 + 3 * count);
+    expect(out.work.entries).toBe(3 + 3 * count);
     await f.finish();
     expect(f.budget.retained).toBe(0);
     const after = f.store.codec.schemas.documents.bindings.parse(

@@ -16,11 +16,11 @@
 
 import { CACHE_METADATA_DIRECTORY, cacheMetadataDirectory } from '../metadata-paths';
 import { constants, type BigIntStats } from 'node:fs';
-import { lstat, open, realpath, rename, type FileHandle } from 'node:fs/promises';
-import path from 'node:path';
+import { lstat, mkdir, open, realpath, rename, type FileHandle } from 'node:fs/promises';
+import nodePath from 'node:path';
 import type { z } from 'zod';
 import type { nativeIdentitySchema } from './local-schema';
-import { relativePathSchema, type Context } from './schema';
+import { relativePathSchema } from './schema';
 import { add } from './encoding';
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#native-identity-and-evidence
@@ -185,6 +185,8 @@ function nativeRelative(relative: string): string {
   return relative;
 }
 export class NativeRoot {
+  private metadataIdentity: NativeIdentity | null = null;
+
   private constructor(
     readonly path: string,
     readonly binding: NativeIdentity,
@@ -192,32 +194,82 @@ export class NativeRoot {
     private readonly metadataDirectory: string,
   ) {}
 
-  static async bind(
-    root: string,
-    work = nativeWork(),
-    buildTool?: Context[7],
-  ): Promise<NativeRoot> {
+  static async bind(root: string, work = nativeWork()): Promise<NativeRoot> {
     const canonical = await realpath(root),
       stat = nativeIdentity(await lstat(canonical, { bigint: true }));
     work.stats++;
     if (stat[2] !== 'directory') {
       throw new Error('Managed root is not a directory.');
     }
-    return new NativeRoot(
-      canonical,
-      stat,
-      work,
-      cacheMetadataDirectory({ managedRoot: canonical, buildTool }),
-    );
+    if (nodePath.dirname(canonical) === canonical) {
+      throw new Error('Mammoth requires a managed home below the filesystem root.');
+    }
+    const native = new NativeRoot(canonical, stat, work, cacheMetadataDirectory(canonical));
+    native.metadataIdentity = await native.readMetadataIdentity();
+    return native;
+  }
+
+  get externalMetadataBinding(): [string, NativeIdentity] | null {
+    return this.metadataIdentity ? [this.metadataDirectory, this.metadataIdentity] : null;
+  }
+
+  private async readMetadataIdentity(): Promise<NativeIdentity | null> {
+    let raw: BigIntStats;
+    try {
+      this.work.stats++;
+      raw = await lstat(this.metadataDirectory, { bigint: true });
+    } catch (error) {
+      if (missing(error)) {
+        return null;
+      }
+      throw error;
+    }
+    const identity = nativeIdentity(raw);
+    const uid = process.getuid?.();
+    if (
+      identity[2] !== 'directory' ||
+      (uid !== undefined && (Number(raw.uid) !== uid || (raw.mode & 0o022n) !== 0n))
+    ) {
+      throw new Error('Unsafe external Mammoth control directory.');
+    }
+    this.checkMetadataDevice(identity);
+    return identity;
+  }
+
+  private checkMetadataDevice(identity: NativeIdentity): void {
+    if (identity[3] !== this.binding[3]) {
+      throw new Error('Cross-filesystem Mammoth control or staging.');
+    }
+  }
+
+  async createMetadataDirectory(): Promise<void> {
+    if (this.metadataIdentity) {
+      throw new Error('External Mammoth control directory is already bound.');
+    }
+    await mkdir(this.metadataDirectory, { mode: 0o700 });
+    this.metadataIdentity = await this.readMetadataIdentity();
+    if (!this.metadataIdentity) {
+      throw new Error('External Mammoth control directory disappeared.');
+    }
+  }
+
+  private checkMetadataPath(relative: string, identity: NativeIdentity): void {
+    if (relative === CACHE_METADATA_DIRECTORY) {
+      if (!this.metadataIdentity || !sameObject(this.metadataIdentity, identity)) {
+        throw new Error('External Mammoth control directory changed.');
+      }
+    } else if (relative.startsWith(CACHE_METADATA_DIRECTORY + '/')) {
+      this.checkMetadataDevice(identity);
+    }
   }
 
   resolve(relative: string): string {
     nativeRelative(relative);
     const parts = relative.split('/');
     if (parts[0] === CACHE_METADATA_DIRECTORY) {
-      return path.join(this.metadataDirectory, ...parts.slice(1));
+      return nodePath.join(this.metadataDirectory, ...parts.slice(1));
     }
-    return path.join(this.path, ...parts);
+    return nodePath.join(this.path, ...parts);
   }
 
   async verifyRoot(): Promise<void> {
@@ -246,6 +298,7 @@ export class NativeRoot {
       current = current ? current + '/' + part : part;
       this.work.stats++;
       const stat = nativeIdentity(await lstat(this.resolve(current), { bigint: true }));
+      this.checkMetadataPath(current, stat);
       if (stat[2] !== 'directory') {
         throw new Error('Unsafe native parent.');
       }
@@ -256,7 +309,9 @@ export class NativeRoot {
     try {
       await this.parents(relative);
       this.work.stats++;
-      return nativeIdentity(await lstat(this.resolve(relative), { bigint: true }));
+      const identity = nativeIdentity(await lstat(this.resolve(relative), { bigint: true }));
+      this.checkMetadataPath(relative, identity);
+      return identity;
     } catch (error) {
       if (missing(error)) {
         return null;
@@ -343,4 +398,28 @@ export class NativeRoot {
     }
     return after;
   }
+}
+
+/** A missing managed home must not hide an earlier external owner. */
+export async function assertNoDetachedMetadata(root: string): Promise<void> {
+  const absolute = nodePath.resolve(root);
+  let parent: string;
+  try {
+    parent = await realpath(nodePath.dirname(absolute));
+  } catch (error) {
+    if (missing(error)) {
+      return;
+    }
+    throw error;
+  }
+  const managedRoot = nodePath.join(parent, nodePath.basename(absolute));
+  try {
+    await lstat(cacheMetadataDirectory(managedRoot));
+  } catch (error) {
+    if (missing(error)) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error('External Mammoth control directory exists for a missing managed home.');
 }

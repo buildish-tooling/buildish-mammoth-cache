@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { cacheMetadataDirectory } from '../../../src/cache/metadata-paths';
 import { readFile, readdir, writeFile, mkdir, rename } from 'node:fs/promises';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -227,7 +228,11 @@ it.each(['seed-rename-before-stat', 'prepare-between-seed-and-live'])(
     ).rejects.toThrow('between routes');
     expect(await f.store.root.stat(ARTIFACT)).toBeNull();
     expect(await f.store.root.stat(SUPPORT)).toBeNull();
-    expect(await readdir(f.root + '/' + f.store.prefix + 'seed')).toEqual([]);
+    expect(
+      await readdir(
+        cacheMetadataDirectory(f.root) + '/' + f.store.prefix.slice('.mammoth/'.length) + 'seed',
+      ),
+    ).toEqual([]);
     expect(f.inspect).toHaveBeenCalledTimes(1);
   },
 );
@@ -370,8 +375,15 @@ it('does not adopt or retire a replacement installed after the original seed sta
         if (point !== 'seed-before-owner-seal') {
           return;
         }
-        const [id] = await readdir(f.root + '/' + f.store.prefix + 'seed');
-        root = f.root + '/' + f.store.prefix + 'seed/' + id;
+        const [id] = await readdir(
+          cacheMetadataDirectory(f.root) + '/' + f.store.prefix.slice('.mammoth/'.length) + 'seed',
+        );
+        root =
+          cacheMetadataDirectory(f.root) +
+          '/' +
+          f.store.prefix.slice('.mammoth/'.length) +
+          'seed/' +
+          id;
         await rename(root, root + '.original');
         await mkdir(root);
         await writeFile(root + '/caller-data', 'preserve replacement');

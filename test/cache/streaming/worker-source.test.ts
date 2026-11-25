@@ -235,7 +235,7 @@ it('seals independent disk membership forks, verifies replay integrity and clean
   await f.finish();
   expect(f.budget.retained).toBe(0);
   // All operation-local directories were retired; no file-per-member residue.
-  const planning = path.join(f.root, f.store.prefix, 'planning');
+  const planning = f.store.root.resolve(f.store.prefix + 'planning');
   expect(await readdir(planning)).toEqual([]);
   expect(await readFile(path.join(f.root, 'd/a'), 'utf8')).toBe('abc');
 });
@@ -472,7 +472,7 @@ it('reuses canonical scratch bytes for spool digests and rejects altered replay'
   } finally {
     update.mockRestore();
   }
-  const planning = path.join(f.root, f.store.prefix, 'planning'),
+  const planning = f.store.root.resolve(f.store.prefix + 'planning'),
     [dir] = await readdir(planning),
     file = path.join(planning, dir, 'scratch.ndjson');
   await writeFile(file, (await readFile(file, 'utf8')).replace('"b"', '"z"'));

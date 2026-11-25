@@ -499,6 +499,10 @@ summary and finalize log report the exact key only after a successful publicatio
   value, or the runner default when the environment variable is unset.
 - Put required user-home `gradle.properties` and init scripts in the selected home,
   or supply their configuration explicitly. Keep them outside enabled partitions.
+- Use a fresh dedicated home per invocation on persistent runners. Mammoth keeps
+  local state and staging in a sibling `.mammoth.<id>` directory. The parent must
+  be writable by the runner and the home and sibling must share a filesystem.
+  Keep the sibling through post.
 
 ### `setup-java`
 
@@ -521,6 +525,10 @@ summary and finalize log report the exact key only after a successful publicatio
   To use a settings file in the dedicated home, pass its path with `-s`.
 - The managed area must start empty. Keep the selected home exclusive through
   prepare, build and post. See [dedicated-home examples](../troubleshooting/#restore-admission-failures).
+- Use a fresh dedicated home per invocation on persistent runners. Mammoth keeps
+  local state and staging in a sibling `.mammoth.<id>` directory. The parent must
+  be writable by the runner and the home and sibling must share a filesystem.
+  Keep the sibling through post.
 
 ---
 

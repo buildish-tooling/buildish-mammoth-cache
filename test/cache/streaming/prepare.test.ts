@@ -17,8 +17,12 @@
 import { chmod, link, mkdir, rm, symlink, writeFile, readFile } from 'node:fs/promises';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
+import type { BigIntStats } from 'node:fs';
+import * as fs from 'node:fs/promises';
+import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { installFixture } from './install-fixture';
+import { cacheMetadataDirectory } from '../../../src/cache/metadata-paths';
 import {
   prepareStreaming,
   type StreamingPrepareRequest,
@@ -29,6 +33,10 @@ import {
   type ResolvedModel,
 } from '../../../src/cache/streaming/model';
 import { OpenedInvocation, decodeInvocationAnchor } from '../../../src/cache/streaming/invocation';
+import {
+  postStreamingReadOnly,
+  reconcileDisabledRoot,
+} from '../../../src/cache/streaming/passive-lifecycle';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 import { metadataFixture, type MetadataFixture } from './base-publication-fixtures';
 import type { BaseCacheBackend } from '../../../src/cache/backend';
@@ -55,6 +63,12 @@ import { assertEmptyManagedArea } from '../../../src/cache/streaming/prepare-adm
 import { gradleResolver } from './quiescence-fixture';
 import { fixtureCi } from '../../support/ci-fixture';
 import * as workerMerge from '../../../src/cache/streaming/worker-merge';
+
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof fs>();
+  return { ...actual, lstat: vi.fn(actual.lstat) };
+});
+
 const metadataFixtures: MetadataFixture[] = [];
 const fixtures: Awaited<ReturnType<typeof installFixture>>[] = [];
 afterEach(async () => {
@@ -71,7 +85,7 @@ afterEach(async () => {
   await cleanupSourceFixtures();
 });
 async function fixture(overrides: Partial<StreamingPrepareRequest> = {}, model?: ResolvedModel) {
-  const f = await installFixture('maven', { model });
+  const f = await installFixture(model?.tuple[2] ?? 'maven', { model });
   fixtures.push(f);
   let saved = '';
   const backend: BaseCacheBackend = {
@@ -443,20 +457,138 @@ it('validates a late worker seal before clearing/installing any live base or sna
   expect(service.list).toHaveBeenCalledTimes(1);
   expect(service.download).toHaveBeenCalledTimes(1);
 });
-it('blocks incompatible prior destructive state before provisioning or backend construction', async () => {
-  const f = await fixture(),
-    cache = vi.fn(f.request.cacheBackend);
-  await f.files('', { '.mammoth/restore-move-v1.json': 'legacy pending' });
-  await expect(prepareStreaming({ ...f.request, cacheBackend: cache })).rejects.toThrow(
-    'legacy destructive intent',
+function externalControlFixture(tool: 'gradle' | 'maven' = 'gradle') {
+  const hard = ['.mammoth/**'];
+  const model = resolveModel(
+    ['model', 1, tool, hard, [['data', ['data/**'], hard, 'aggregate', null, 'default', 0]]],
+    'external-control-',
+    1,
+  );
+  return fixture(
+    {
+      lifecycle: gradleResolver({ inspect: async () => ({ remaining: false, uncertain: false }) }),
+    },
+    model,
+  );
+}
+
+it.each(['gradle', 'maven'] as const)(
+  'reopens and reuses sibling %s control through ordinary post',
+  async (tool) => {
+    const f = await externalControlFixture(tool);
+    const request = { ...f.request, policy: { ...f.request.policy, access: 'read-only' as const } };
+    const first = await prepareStreaming(request);
+    const control = first.store.root.externalMetadataBinding![0];
+    expect(path.dirname(control)).toBe(path.dirname(first.store.root.path));
+    expect(path.basename(control)).toMatch(/^\.mammoth\.[a-f0-9]{64}$/u);
+    await expect(fs.lstat(path.join(f.root, '.mammoth'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const anchor = decodeInvocationAnchor(f.saved());
+    expect(anchor[1]).toBe(2);
+    const post = { budget: f.budget, assertCurrent: (): undefined => {} };
+    await expect(postStreamingReadOnly(first.anchor, post)).resolves.toEqual({
+      outcome: 'read-only',
+    });
+    const second = await prepareStreaming({ ...request, nonce: 'b'.repeat(32) });
+    expect(second.store.root.externalMetadataBinding?.[0]).toBe(control);
+    await expect(postStreamingReadOnly(second.anchor, post)).resolves.toEqual({
+      outcome: 'read-only',
+    });
+    const moved = control + '-replaced';
+    await fs.rename(control, moved);
+    try {
+      await mkdir(control, { mode: 0o700 });
+      await expect(OpenedInvocation.open(second.anchor, f.budget)).rejects.toThrow(
+        'control binding changed',
+      );
+    } finally {
+      await fs.rmdir(control);
+      await fs.rename(moved, control);
+    }
+    const oldHome = f.root + '-replaced';
+    await fs.rename(f.root, oldHome);
+    try {
+      await mkdir(f.root);
+      await expect(prepareStreaming(f.request)).rejects.toThrow('Previous root binding changed');
+    } finally {
+      await fs.rmdir(f.root);
+      await fs.rename(oldHome, f.root);
+    }
+  },
+);
+
+it('detects pending external work even without a locator or selected owner', async () => {
+  const f = await externalControlFixture();
+  const control = cacheMetadataDirectory(f.store.root.path);
+  const pending = path.join(control, 'v1', 'f'.repeat(64), 'relocation');
+  await mkdir(pending, { recursive: true, mode: 0o700 });
+  await writeFile(path.join(pending, 'intent.json'), 'retained');
+  await expect(prepareStreaming(f.request)).rejects.toThrow('Pending root-local relocation');
+  await expect(reconcileDisabledRoot(f.root, f.request)).rejects.toThrow(
+    'Pending root-local relocation',
   );
   expect(f.provision).not.toHaveBeenCalled();
-  expect(cache).not.toHaveBeenCalled();
-  expect(f.hooks).not.toHaveBeenCalled();
-  expect(await readFile(f.store.root.resolve('.mammoth/restore-move-v1.json'), 'utf8')).toBe(
-    'legacy pending',
-  );
+  expect(f.backend.restoreCache).not.toHaveBeenCalled();
+  expect(await readFile(path.join(pending, 'intent.json'), 'utf8')).toBe('retained');
+  const oldHome = f.root + '-missing';
+  await fs.rename(f.root, oldHome);
+  try {
+    await expect(prepareStreaming(f.request)).rejects.toThrow(
+      'directory exists for a missing managed home',
+    );
+    await expect(reconcileDisabledRoot(f.root, f.request)).rejects.toThrow(
+      'directory exists for a missing managed home',
+    );
+    await expect(fs.lstat(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await fs.rename(oldHome, f.root);
+  }
 });
+
+it.runIf(process.platform !== 'win32')(
+  'rejects unsafe external control directories before cache work',
+  async () => {
+    const f = await externalControlFixture();
+    const control = cacheMetadataDirectory(f.store.root.path);
+    await fs.rmdir(control);
+    await symlink(f.root, control, 'dir');
+    await expect(prepareStreaming(f.request)).rejects.toThrow('Unsupported native object');
+    await fs.unlink(control);
+    await mkdir(control);
+    await chmod(control, 0o777);
+    await expect(prepareStreaming(f.request)).rejects.toThrow(
+      'Unsafe external Mammoth control directory',
+    );
+    expect(f.provision).not.toHaveBeenCalled();
+    expect(f.backend.restoreCache).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['control', 'install staging'])(
+  'rejects external %s on another device before cache work',
+  async (kind) => {
+    const f = await externalControlFixture();
+    const control = cacheMetadataDirectory(f.store.root.path);
+    const foreign =
+      kind === 'control'
+        ? control
+        : path.join(control, 'v1', f.store.codec.options.invocation, 'install');
+    const { lstat: stat } = await vi.importActual<typeof fs>('node:fs/promises');
+    const lstat = vi.spyOn(fs, 'lstat').mockImplementation(async (file, options) => {
+      const actual = await stat(file, options);
+      if (file === foreign && typeof actual.dev === 'bigint') {
+        (actual as BigIntStats).dev += 1n;
+      }
+      return actual;
+    });
+    try {
+      await expect(prepareStreaming(f.request)).rejects.toThrow('Cross-filesystem Mammoth control');
+      expect(f.provision).not.toHaveBeenCalled();
+      expect(f.backend.restoreCache).not.toHaveBeenCalled();
+    } finally {
+      lstat.mockRestore();
+    }
+  },
+);
 it('restores read-only without discovering dependent artifacts', async () => {
   const f = await fixture(),
     artifacts = vi.fn(async () => memoryArtifacts().api);

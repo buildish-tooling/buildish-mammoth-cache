@@ -231,18 +231,16 @@ it('worker capture uses the original nondefault allowance and upload failure rem
   expect(await f.post()).toEqual({ outcome: 'abandoned' });
 });
 
-it('disabled prepare without a new owner cannot ignore legacy destructive intent', async () => {
+it('disabled prepare without a new owner cannot ignore a pending sibling intent', async () => {
   const f = await composedFixture();
   fixtures.push(f);
   await f.store.makeParents(
     '.mammoth/v1/' + f.store.codec.options.invocation + '/files/placeholder',
   );
-  const { mkdir } = await import('node:fs/promises');
-  await mkdir(f.root + '/.mammoth', { recursive: true });
-  await writeFile(f.root + '/.mammoth/restore-move-v1.json', '{}');
+  await writeFile(f.store.root.resolve(f.store.prefix + 'install-intent.json'), '{}');
   await expect(
     reconcileDisabledRoot(f.root, { budget: f.budget, assertCurrent: (): undefined => {} }),
-  ).rejects.toThrow('legacy');
+  ).rejects.toThrow('Pending root-local destructive intent');
 });
 
 it('propagates local confirmed-package cleanup failures instead of warning and abandoning them', async () => {

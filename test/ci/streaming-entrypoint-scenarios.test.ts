@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+import { cacheMetadataDirectory } from '../../src/cache/metadata-paths';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { entrypointBundles, entrypointJob } from '../support/streaming-entrypoint';
 let root: string;
@@ -166,24 +167,34 @@ it.each(['maven', 'gradle'] as const)(
     await j.clearTrace();
     await writeFile(j.job + '/summary', '');
     await j.run('post');
-    const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
-      state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
+    const locator = JSON.parse(
+        await readFile(cacheMetadataDirectory(j.home) + '/v1/current.json', 'utf8'),
+      ),
+      state = JSON.parse(
+        await readFile(
+          cacheMetadataDirectory(j.home) + locator[3].slice('.mammoth'.length),
+          'utf8',
+        ),
+      );
     expect(state[4]).toBe('prepare-failed');
     expect(await readFile(j.job + '/summary', 'utf8')).toBe('');
     expect((await j.trace()).filter(([name]) => name !== 'native-work')).toEqual([]);
   },
 );
 it.each(['maven', 'gradle'] as const)(
-  'actual %s enabled/disabled main rejects unfinished legacy intent before provisioning',
+  'actual %s enabled/disabled main rejects unfinished sibling intent before provisioning',
   async (tool) => {
     for (const enabled of ['true', 'false']) {
       const j = await entrypointJob(root, tool, 'legacy-' + enabled, {
         ...inputs,
         'cache-enabled': enabled,
       });
-      await j.write('.mammoth/restore-move-v1.json', 'preserve');
-      await expect(j.run('main')).rejects.toThrow('legacy destructive intent');
-      expect(await readFile(j.home + '/.mammoth/restore-move-v1.json', 'utf8')).toBe('preserve');
+      const owner = path.join(cacheMetadataDirectory(j.home), 'v1', 'a'.repeat(64));
+      await mkdir(owner, { recursive: true, mode: 0o700 });
+      const pending = path.join(owner, 'install-intent.json');
+      await writeFile(pending, 'preserve');
+      await expect(j.run('main')).rejects.toThrow('Pending root-local destructive intent');
+      expect(await readFile(pending, 'utf8')).toBe('preserve');
       expect((await j.trace()).filter(([name]) => name !== 'native-work')).toEqual([]);
     }
   },
@@ -203,8 +214,15 @@ it.each(['maven', 'gradle'] as const)(
     ).rejects.toThrow('fresh dedicated root');
     await expect(readFile(old.home + '/data/body')).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await next.trace()).filter(([name]) => name !== 'native-work')).toEqual([]);
-    const locator = JSON.parse(await readFile(old.home + '/.mammoth/v1/current.json', 'utf8')),
-      state = JSON.parse(await readFile(old.home + '/' + locator[3], 'utf8'));
+    const locator = JSON.parse(
+        await readFile(cacheMetadataDirectory(old.home) + '/v1/current.json', 'utf8'),
+      ),
+      state = JSON.parse(
+        await readFile(
+          cacheMetadataDirectory(old.home) + locator[3].slice('.mammoth'.length),
+          'utf8',
+        ),
+      );
     expect(state[7]).toBeNull();
   },
   30000,
@@ -245,8 +263,15 @@ it.each(['maven', 'gradle'] as const)(
     expect(post.stdout.match(/::warning::Cache save skipped/g)).toHaveLength(1);
     expect(await readFile(j.home + '/data/a', 'utf8')).toBe('preserve');
     expect((await j.trace()).filter(([name]) => name === 'cache-save')).toEqual([]);
-    const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
-      state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
+    const locator = JSON.parse(
+        await readFile(cacheMetadataDirectory(j.home) + '/v1/current.json', 'utf8'),
+      ),
+      state = JSON.parse(
+        await readFile(
+          cacheMetadataDirectory(j.home) + locator[3].slice('.mammoth'.length),
+          'utf8',
+        ),
+      );
     expect(state[4]).toBe('completed');
     expect(state[7][1]).toBe('feature-unavailable');
     expect(state).toHaveLength(8);
@@ -329,8 +354,15 @@ it.each(['maven', 'gradle'] as const)(
     ).toHaveLength(1);
     expect((await j.trace()).filter(([name]) => name === 'cache-save')).toEqual([]);
     expect(await readFile(j.home + '/data/a', 'utf8')).toBe('preserve');
-    const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
-      state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
+    const locator = JSON.parse(
+        await readFile(cacheMetadataDirectory(j.home) + '/v1/current.json', 'utf8'),
+      ),
+      state = JSON.parse(
+        await readFile(
+          cacheMetadataDirectory(j.home) + locator[3].slice('.mammoth'.length),
+          'utf8',
+        ),
+      );
     expect(state[7][1]).toBe('abandoned');
     expect(state).toHaveLength(8);
     expect(state[4]).toBe('completed');
@@ -356,11 +388,18 @@ it.each(['maven', 'gradle'] as const)(
           ['artifact-get', 'artifact-list', 'artifact-download'].includes(name),
         ),
       ).toEqual([]);
-      const locator = JSON.parse(await readFile(j.home + '/.mammoth/v1/current.json', 'utf8')),
-        state = JSON.parse(await readFile(j.home + '/' + locator[3], 'utf8'));
+      const locator = JSON.parse(
+          await readFile(cacheMetadataDirectory(j.home) + '/v1/current.json', 'utf8'),
+        ),
+        state = JSON.parse(
+          await readFile(
+            cacheMetadataDirectory(j.home) + locator[3].slice('.mammoth'.length),
+            'utf8',
+          ),
+        );
       expect(state[7][1]).toBe('abandoned');
       expect(state[7].slice(2)).toEqual([null, null, null]);
-      const files = await readdir(j.home + '/.mammoth/v1/' + state[2] + '/archives');
+      const files = await readdir(cacheMetadataDirectory(j.home) + '/v1/' + state[2] + '/archives');
       expect(files.length).toBeGreaterThan(0);
       expect(await readFile(j.job + '/summary', 'utf8')).toContain('Outcome: abandoned.');
       await j.run('post');

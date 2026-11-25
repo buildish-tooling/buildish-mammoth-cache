@@ -35,7 +35,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { cacheHome, producerEvidence } from '../actions/it-observe/evidence.mjs';
+import { cacheHome, controlDirectory, producerEvidence } from '../actions/it-observe/evidence.mjs';
 import { assertDependency } from './it-cache-dependencies.mjs';
 
 const [operation, tool, worker] = process.argv.slice(2);
@@ -106,10 +106,10 @@ if (operation === 'empty') {
   assert.equal(await realpath(seed), seed);
   assert(
     path
-      .relative(await realpath(root), seed)
+      .relative(controlDirectory(await realpath(root)), seed)
       .split(path.sep)
       .join('/')
-      .match(/^\.mammoth\/v1\/[a-f0-9]{64}\/seed\/[a-f0-9-]{36}\/caches$/u),
+      .match(/^v1\/[a-f0-9]{64}\/seed\/[a-f0-9-]{36}\/caches$/u),
   );
   await assertDependency(tool, path.dirname(seed), 'standalone');
   for await (const member of glob(

@@ -157,7 +157,7 @@ it.each([
     const directories = 3 + units * 2, // root, repository, group, and two directories per coordinate
       filesPerPartition = units * width + 1,
       files = filesPerPartition * partitions.length,
-      projectedChildren = directories - 1 + files + units + 1; // includes keep.lock and .mammoth
+      projectedChildren = directories - 1 + files + units; // includes keep.lock
     const realFold = MetadataPublicationSource.survivors;
     const fold = vi
       .spyOn(MetadataPublicationSource, 'survivors')

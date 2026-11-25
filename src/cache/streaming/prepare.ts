@@ -29,8 +29,9 @@ import {
   type ResolvedModel,
 } from './model';
 import { contextSchema, type Context } from './schema';
-import { NativeRoot, missing, type Failpoint } from './native';
+import { NativeRoot, assertNoDetachedMetadata, missing, type Failpoint } from './native';
 import { OwnedStore, completedPreviousOwner } from './owned-store';
+import { CACHE_METADATA_LOCATOR } from '../metadata-paths';
 import { invocationAnchor, encodeInvocationAnchor, type InvocationAnchor } from './invocation';
 import type { LifecycleOptions } from './lifecycle-options';
 import { uint, type Value } from './encoding';
@@ -172,9 +173,10 @@ export async function prepareStreaming(
       throw error;
     }
     signal.throwIfAborted();
+    await assertNoDetachedMetadata(request.root);
     await mkdir(request.root, { recursive: true });
   }
-  const root = await NativeRoot.bind(request.root, undefined, request.context[7]);
+  const root = await NativeRoot.bind(request.root);
   await completedPreviousOwner(root);
   assertCurrent();
   const codec = new LocalCodec({
@@ -184,9 +186,10 @@ export async function prepareStreaming(
       role: request.policy.role,
       access: request.policy.access,
     }),
-    store = await OwnedStore.bind(root.path, codec, request.fail),
-    docs = lifecycleDocuments(codec.options),
-    anchor = invocationAnchor(store.root, request.context, request.nonce);
+    store = await OwnedStore.bind(root, codec, request.fail),
+    docs = lifecycleDocuments(codec.options);
+  await store.makeParents(CACHE_METADATA_LOCATOR);
+  const anchor = invocationAnchor(store.root, request.context, request.nonce);
   request.saveAnchor(encodeInvocationAnchor(anchor));
   if (await store.root.stat(store.prefix.slice(0, -1))) {
     throw new Error(

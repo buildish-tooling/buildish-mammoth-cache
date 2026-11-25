@@ -30,7 +30,9 @@ afterEach(async () => {
 async function fixture() {
   const directory = await mkdtemp(path.resolve('build/native-walk-'));
   roots.push(directory);
-  return { directory, root: await NativeRoot.bind(directory), budget: new WorkingBudget() };
+  const home = path.join(directory, 'home');
+  await mkdir(home);
+  return { directory: home, root: await NativeRoot.bind(home), budget: new WorkingBudget() };
 }
 async function collect(events: AsyncIterable<WalkEvent>) {
   const result: string[] = [];
@@ -88,8 +90,9 @@ it('lists files first and closes each directory around its complete sorted subtr
 });
 it('projects an owned staging root onto logical paths without exposing metadata names', async () => {
   const f = await fixture();
-  await mkdir(path.join(f.directory, '.mammoth/stage/sub'), { recursive: true });
-  await writeFile(path.join(f.directory, '.mammoth/stage/sub/file'), 'body');
+  await f.root.createMetadataDirectory();
+  await mkdir(f.root.resolve('.mammoth/stage/sub'), { recursive: true });
+  await writeFile(f.root.resolve('.mammoth/stage/sub/file'), 'body');
   const events = [];
   for await (const event of walkNative(f.root, '.mammoth/stage', {
     budget: f.budget,
@@ -249,7 +252,7 @@ it('does aggregate linear filesystem work across shared ancestors and retains on
     expect(work.listings).toBe(width + 2);
     expect(work.entries).toBe(1 + width * 5);
     expect(work.stats).toBe(3 * (width + 2) + 2 * width * 4);
-    expect(f.root.work.stats).toBe(work.stats + 3); // bind + root guards
+    expect(f.root.work.stats).toBe(work.stats + 4); // managed and sibling binding plus root guards
     expect(f.budget.retained).toBe(0);
     peaks.push(work.peakNames);
   }

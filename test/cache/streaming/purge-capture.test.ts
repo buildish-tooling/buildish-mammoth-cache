@@ -290,7 +290,7 @@ it('preserves hardlinked candidates and ordinary excluded siblings', async () =>
   });
   const text = info.mock.calls.flat().join('\n');
   expect(text).toContain('purged=0 files (shared claims credited once), missing=0, unsupported=1');
-  expect(text).toContain('Unattributed: observed-excluded=3 files/1 directories');
+  expect(text).toContain('Unattributed: observed-excluded=3 files/0 directories');
   expect(out.purge).toMatchObject({ deleted: 0, unsupported: 1 });
   expect(await f.store.root.stat('data/runtime.lock')).not.toBeNull();
   expect(await f.store.root.stat('data/keep.lock')).not.toBeNull();

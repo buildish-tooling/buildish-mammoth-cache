@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { Writable } from 'node:stream';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
@@ -46,8 +46,10 @@ export async function completeFixture(
   policy: 'default' | 'choose-worker-entry' | 'choose-worker-directory' = 'default',
   snapshots = false,
 ) {
-  const root = await mkdtemp(path.resolve('build/worker-complete-'));
-  roots.push(root);
+  const directory = await mkdtemp(path.resolve('build/worker-complete-'));
+  const root = path.join(directory, 'home');
+  roots.push(directory);
+  await mkdir(root);
   const hard = ['.mammoth/**'];
   const includes =
     tool === 'maven'

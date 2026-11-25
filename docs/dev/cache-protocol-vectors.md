@@ -350,10 +350,10 @@ including LF; it is a raw SHA-256, not a new framed protocol digest.
 ### enabled
 
 ```text
-["streaming-lifecycle",1,"/cache",["native",1,"directory","1","3","0",16877,"-1","0","1",null],["github","example/repo","ci","42","A",1,"rev-1","maven"],"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+["streaming-lifecycle",2,"/cache",["native",1,"directory","1","3","0",16877,"-1","0","1",null],["github","example/repo","ci","42","A",1,"rev-1","maven"],"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",["/.mammoth.4f7cfe6fcd4203100d7e7c34b9355ddd31efcffc1d874babf3a55372c970f069",["native",1,"directory","1","4","0",16832,"-1","0","1",null]]]
 ```
 
-Raw SHA-256: `71b4a91ebd2bc25b9402db6a20261c0836733763a5f5c3bd2e57bbe0e155fd47`.
+Raw SHA-256: `7a5db12842dc6c3b6b268c8c808157f9f730bdf03c350e9f1ee5f345d240ab6c`.
 
 ### disabled
 

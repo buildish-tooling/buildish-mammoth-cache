@@ -81,7 +81,7 @@ the target; header/context bytes cannot form an empty prefix batch.
 ## CI invocation anchor and cold reopening
 
 ```text
-["streaming-lifecycle",1,absoluteRoot,rootN,context,nonce]
+["streaming-lifecycle",2,absoluteRoot,rootN,context,nonce,[absoluteControlRoot,controlN]]
 ["current",1,invocationId,".mammoth/v1/"+invocationId+"/state.json"]
 ["bindings",2,invocationId,context,nonce,[absoluteRoot,rootN],modelRef,familyProjection,policy]
 ["local-state",2,invocationId,revision,status,bindingsRef,handoffRef|null,terminal|null]
@@ -97,7 +97,14 @@ checks root/context/nonce/bindings and exact handoff/generation, then claims
 post-active BEFORE awaited capture. Only genuine `OpenedInvocation` can claim.
 Pending/failed main and interrupted post reject reentry. Completed diagnostics
 read bounded controls only and do not stat/read/admit retired activity or snapshots.
-Old destructive markers are conservatively refused, never executed or adopted.
+
+Gradle and Maven use a sibling `.mammoth.<id>` directory on all platforms. The
+`id` is the SHA-256 of the canonical managed home path. Owned records retain
+their logical `.mammoth/` paths. Prepare checks the sibling for unfinished
+ownership and verifies that it shares the managed root's device using native
+binding data. Post verifies the control identity separately. Persistent runners
+use a fresh dedicated home for each invocation. Prepare and post use the same
+action version and the current control layout.
 
 ## Invocation bindings and operational capture
 

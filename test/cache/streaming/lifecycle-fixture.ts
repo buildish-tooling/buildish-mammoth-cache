@@ -51,7 +51,7 @@ export async function prepareLifecycle(
     hooks?: () => Promise<void>;
   } = {},
 ) {
-  const root = config.root ?? (await directory('root')),
+  const root = config.root ?? path.join(await directory('root'), 'home'),
     budget = config.budget ?? new WorkingBudget(),
     hard = ['.mammoth/**'],
     model =

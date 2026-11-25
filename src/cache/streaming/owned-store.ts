@@ -169,13 +169,14 @@ export class OwnedStore {
     this.prefix = codec.schemas.prefix;
   }
 
+  /** Use a bound root to preserve the control location selected by prepare or post. */
   static async bind(
-    root: string,
+    root: string | NativeRoot,
     codec: LocalCodec,
     fail: Failpoint = noFailpoint,
   ): Promise<OwnedStore> {
     return new OwnedStore(
-      await NativeRoot.bind(root, undefined, codec.options.context[7]),
+      typeof root === 'string' ? await NativeRoot.bind(root) : root,
       codec,
       fail,
     );
@@ -196,7 +197,11 @@ export class OwnedStore {
         }
         continue;
       }
-      await mkdir(this.root.resolve(current));
+      if (current === CACHE_METADATA_DIRECTORY) {
+        await this.root.createMetadataDirectory();
+      } else {
+        await mkdir(this.root.resolve(current));
+      }
       this.root.work.directoryCreations++;
     }
   }
@@ -724,7 +729,7 @@ export class OwnedStore {
   }
 
   async assertNoIntents(): Promise<void> {
-    await checkRootIntents(this.root);
+    await assertNoRootIntents(this.root);
   }
 
   async retireAdmittedMetadata(reference: Reference): Promise<void> {
@@ -800,20 +805,6 @@ export class OwnedStore {
 
 /** Disabled/no-owner admission uses the same conservative refusal checks. */
 export async function assertNoRootIntents(root: NativeRoot) {
-  await checkRootIntents(root);
-}
-async function checkRootIntents(root: NativeRoot) {
-  for (const name of [
-    'restore-move-v1.json',
-    'groovy-apply-v1/intent.json',
-    'workspace-apply-v2/intent.json',
-    'workspace-apply-v3/intent.json',
-    'cutoff-state-v2/current.json',
-  ]) {
-    if (await root.stat(CACHE_METADATA_DIRECTORY + '/' + name)) {
-      throw new Error('Incompatible legacy destructive intent/lifecycle.');
-    }
-  }
   if (!(await root.stat(CACHE_METADATA_VERSION_DIRECTORY))) {
     return;
   }

@@ -97,10 +97,8 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
       expect(afterDeletion).toBeDefined();
       const difference = (a: Record<string, number>, b: Record<string, number>) =>
         Object.fromEntries(Object.keys(a).map((key) => [key, a[key] - b[key]]));
-      const managed = (p: unknown) =>
-        String(p).startsWith(f.root + '/') &&
-        String(p) !== f.root + '/.mammoth' &&
-        !String(p).startsWith(f.root + '/.mammoth/');
+      const managed = (p: unknown) => String(p).startsWith(f.root + '/');
+      const control = f.store.root.resolve('.mammoth');
       const calls = native.mock.calls.map(([p]) => String(p));
       const opened = listings.mock.calls.map(([p]) => String(p));
       const work = difference(
@@ -184,7 +182,8 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
         results[results.length - 1].selection = {
           stats: selectionCalls.length,
           rootStats: selectionCalls.filter((p) => p === f.root).length,
-          metadataStats: selectionCalls.filter((p) => p.startsWith(f.root + '/.mammoth')).length,
+          metadataStats: selectionCalls.filter((p) => p === control || p.startsWith(control + '/'))
+            .length,
           work: difference(
             f.store.root.work as unknown as Record<string, number>,
             selectionBefore as unknown as Record<string, number>,

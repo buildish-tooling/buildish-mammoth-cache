@@ -17,7 +17,7 @@
 import { mkdtemp, mkdir, writeFile, readFile, rename, rm, symlink, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { isCacheMetadataPath } from '../../../src/cache/metadata-paths';
+import { cacheMetadataDirectory, isCacheMetadataPath } from '../../../src/cache/metadata-paths';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import {
   NativeRoot,
@@ -37,8 +37,10 @@ afterEach(async () => {
   }
 });
 async function fixture(fail?: Failpoint) {
-  const root = await mkdtemp(path.resolve('build/owned-store-'));
-  roots.push(root);
+  const directory = await mkdtemp(path.resolve('build/owned-store-'));
+  const root = path.join(directory, 'home');
+  roots.push(directory);
+  await mkdir(root);
   const f = localFixtures(),
     store = await OwnedStore.bind(root, f.codec, fail);
   const bindings = structuredClone(f.bindings);
@@ -55,7 +57,7 @@ async function collect(source: AsyncIterable<Uint8Array>): Promise<Buffer> {
 it('reserves metadata path components independently of exact local path spelling', async () => {
   const { store } = await fixture();
   expect(store.root.resolve('.mammoth/v1/current.json')).toBe(
-    path.join(store.root.path, '.mammoth', 'v1', 'current.json'),
+    path.join(cacheMetadataDirectory(store.root.path), 'v1', 'current.json'),
   );
   for (const reserved of ['.mammoth', 'nested/.MAMMOTH./file', '.mammoth /file']) {
     expect(isCacheMetadataPath(reserved)).toBe(true);
@@ -199,37 +201,6 @@ it('prevents retirement of referenced Q bytes and permits replaced root-state do
   expect(await f.store.readDocument(q, 'bindings')).toEqual(updated);
 });
 
-it('rejects known legacy destructive intents without executing or deleting them', async () => {
-  const f = await fixture();
-  await mkdir(path.join(f.root, '.mammoth'));
-  const legacy = path.join(f.root, '.mammoth/restore-move-v1.json');
-  await writeFile(legacy, 'legacy');
-  await expect(f.store.initialize(f.bindings)).rejects.toThrow('legacy');
-  expect(await readFile(legacy, 'utf8')).toBe('legacy');
-});
-
-it('rejects completed and unfinished legacy journals without parsing or modifying a file catalogue', async () => {
-  const f = await fixture(),
-    id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    base = path.join(f.root, '.mammoth/cutoff-state-v2');
-  await mkdir(base, { recursive: true });
-  await writeFile(
-    path.join(base, 'current.json'),
-    JSON.stringify({ schemaVersion: 1, journal: 'journal-' + id + '.json' }) + '\n',
-  );
-  const journal = path.join(base, 'journal-' + id + '.json');
-  await writeFile(
-    journal,
-    JSON.stringify({ schemaVersion: 6, invocation: id, phase: 'deleting', model: {} }) + '\n',
-  );
-  await expect(f.store.assertNoIntents()).rejects.toThrow('Incompatible legacy');
-  await writeFile(
-    journal,
-    JSON.stringify({ schemaVersion: 6, invocation: id, phase: 'completed', model: {} }) + '\n',
-  );
-  await expect(f.store.assertNoIntents()).rejects.toThrow('Incompatible legacy');
-  expect(await readFile(journal, 'utf8')).toContain('completed');
-});
 it('cancels an owned stream and closes/discards its unpublished candidate', async () => {
   const f = await fixture(),
     controller = new AbortController();

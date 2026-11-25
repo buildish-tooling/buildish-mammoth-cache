@@ -75,6 +75,7 @@ export async function metadataFixture(model?: ResolvedModel) {
       access: 'writable',
     }),
   );
+  await store.root.createMetadataDirectory();
   const objects = new Map<string, string>();
   let sequence = 0;
   async function files(base: string, entries: Record<string, string | null>) {

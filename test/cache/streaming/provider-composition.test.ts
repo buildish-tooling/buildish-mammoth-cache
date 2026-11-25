@@ -834,7 +834,7 @@ it.each(['model-policy', 'handoff-family'] as const)(
     const bindings = structuredClone(opened.bindings),
       state = structuredClone(opened.state);
     const reference = kind === 'model-policy' ? bindings[6] : state[6]!;
-    const rows: Value[][] = (await readFile(f.home + '/' + reference[2], 'utf8'))
+    const rows: Value[][] = (await readFile(ready.store.root.resolve(reference[2]), 'utf8'))
       .trimEnd()
       .split('\n')
       .map((line) => JSON.parse(line));
@@ -850,17 +850,20 @@ it.each(['model-policy', 'handoff-family'] as const)(
     }
     rows.at(-1)![2] = digest.digest();
     const bytes = Buffer.concat(rows.map((row) => encodeRecord(row)));
-    await writeFile(f.home + '/' + reference[2], bytes);
+    await writeFile(ready.store.root.resolve(reference[2]), bytes);
     const next = ['ref', reference[1], reference[2], bytes.length, rawSha(bytes)];
     if (kind === 'model-policy') {
       bindings[6] = next as (typeof bindings)[6];
       const encoded = encodeRecord(bindings);
-      await writeFile(f.home + '/' + state[5][2], encoded);
+      await writeFile(ready.store.root.resolve(state[5][2]), encoded);
       state[5] = ['ref', 'bindings', state[5][2], encoded.length, rawSha(encoded)];
     } else {
       state[6] = next as (typeof state)[6];
     }
-    await writeFile(f.home + '/' + ready.store.prefix + 'state.json', encodeRecord(state));
+    await writeFile(
+      ready.store.root.resolve(ready.store.prefix + 'state.json'),
+      encodeRecord(state),
+    );
     const capture = vi.spyOn(observationCapture, 'captureObservations');
     await expect(runStreamingPost({ ...f.post, lifecycle: f.deps.lifecycle })).rejects.toThrow(
       /model identity|stream header/,
@@ -1033,7 +1036,7 @@ it.each(['report', 'output', 'environment'] as const)(
     }
     const opened = await OpenedInvocation.open(anchor, worker.budget);
     if (failure === 'report') {
-      expect(await readdir(worker.home + '/' + opened.store.prefix + 'seed')).toEqual([]);
+      expect(await readdir(opened.store.root.resolve(opened.store.prefix + 'seed'))).toEqual([]);
       expect(seed).toBe('');
       expect(inspect).toHaveBeenCalledTimes(1);
     } else {
