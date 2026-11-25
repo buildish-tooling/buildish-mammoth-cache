@@ -15,12 +15,25 @@
  */
 
 import js from '@eslint/js';
+import stylistic from '@stylistic/eslint-plugin';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import regexpPlugin from 'eslint-plugin-regexp';
+import { defineConfig } from 'eslint/config';
+import gts from 'gts';
 import tsEslintPlugin from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
 
-export default [
+const gtsFiles = ['src/**/*.ts', 'test/**/*.ts'];
+const classDeclaration = {
+  selector:
+    ':matches(ClassDeclaration, ExportNamedDeclaration[declaration.type="ClassDeclaration"], ExportDefaultDeclaration[declaration.type="ClassDeclaration"])',
+};
+const topLevelTypeDeclaration = {
+  selector:
+    'Program > :matches(TSTypeAliasDeclaration, TSInterfaceDeclaration, [declaration.type="TSTypeAliasDeclaration"], [declaration.type="TSInterfaceDeclaration"])',
+};
+
+export default defineConfig([
   {
     ignores: [
       '.agents/**',
@@ -49,9 +62,46 @@ export default [
     },
   },
   {
+    files: gtsFiles,
+    extends: [gts],
+    plugins: { '@stylistic': stylistic },
+    languageOptions: {
+      parserOptions: {
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      // The standalone Prettier check also covers files outside the ESLint scope.
+      'prettier/prettier': 'off',
+      '@stylistic/lines-between-class-members': [
+        'error',
+        {
+          enforce: [
+            { blankLine: 'always', prev: 'method', next: '*' },
+            { blankLine: 'always', prev: '*', next: 'method' },
+          ],
+        },
+      ],
+      '@stylistic/padding-line-between-statements': [
+        'error',
+        { blankLine: 'always', prev: classDeclaration, next: classDeclaration },
+        { blankLine: 'always', prev: topLevelTypeDeclaration, next: '*' },
+      ],
+    },
+  },
+  {
     files: ['**/*.ts'],
+    ignores: gtsFiles,
     languageOptions: {
       parser: tsParser,
+    },
+    plugins: {
+      '@typescript-eslint': tsEslintPlugin,
+    },
+  },
+  {
+    files: ['**/*.ts'],
+    languageOptions: {
       parserOptions: {
         ecmaVersion: 2022,
         sourceType: 'module',
@@ -60,9 +110,6 @@ export default [
         console: 'readonly',
         process: 'readonly',
       },
-    },
-    plugins: {
-      '@typescript-eslint': tsEslintPlugin,
     },
     rules: {
       'no-console': 'off',
@@ -95,4 +142,8 @@ export default [
     },
   },
   eslintConfigPrettier,
-];
+  {
+    files: gtsFiles,
+    rules: { curly: ['error', 'all'] },
+  },
+]);
