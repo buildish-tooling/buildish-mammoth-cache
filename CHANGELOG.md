@@ -18,6 +18,9 @@ limitations under the License.
 
 ## Unreleased
 
+- Let Gradle select among the metadata layouts in the read-only dependency seed, removing the
+  exact Gradle 9.6.1 requirement.
+
 - Switch Gradle and Maven to partition v2 and generation v3, with an appended
   nullable generation slot reserved for future sweeps. Local handoffs use v4;
   worker TAR remains v2. Upgrade cooperating jobs together; older families start cold.

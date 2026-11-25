@@ -52,7 +52,6 @@ import {
   installGradleSeed,
   retireGradleSeed,
   gradleLayerCandidate,
-  GRADLE_LAYER_VERSION,
   type GradleSeedDescriptor,
 } from './gradle-layer';
 import { retireInstallStaging } from './owned-retirement';
@@ -84,12 +83,12 @@ export interface StreamingPrepareRequest extends LifecycleOptions {
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   readonly artifactBackend?: () => Promise<WorkflowArtifactBackend>;
   readonly provision: () => Promise<void>;
-  readonly gradleLayerVersion?: () => string | undefined;
+  readonly hasGradleWrapper?: () => boolean;
   readonly existingGradleLayer?: string;
   readonly installHooks: (
     store: OwnedStore,
     lifecycle: BuildToolLifecycle,
-    layerVersion?: string,
+    layered?: boolean,
   ) => Promise<void>;
   readonly now?: () => number;
   readonly fail?: Failpoint;
@@ -276,7 +275,7 @@ export async function prepareStreaming(
     );
     if (
       gradleLayerCandidate(request.model, store.codec.options, request.policy.restoreCleanup) &&
-      request.gradleLayerVersion?.() === GRADLE_LAYER_VERSION
+      request.hasGradleWrapper?.()
     ) {
       seed = await installGradleSeed(store, restored, options);
     }
@@ -417,7 +416,7 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
-    await request.installHooks(store, lifecycle, seed ? GRADLE_LAYER_VERSION : undefined);
+    await request.installHooks(store, lifecycle, seed !== undefined);
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
     bindings = docs.bindings.parse(bindings);

@@ -30,7 +30,7 @@ inputs:
     required: false
     default: 'true'
   dependency-cache-layer:
-    description: Enables qualified Gradle 9.6.1 wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value; every seed consumer must use a selected qualified wrapper.
+    description: Enables eligible Gradle wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value.
     required: false
   export-layer-environment:
     description: Exports the activated Gradle dependency seed as GRADLE_RO_DEP_CACHE for later steps. False emits only the seed-path output; the workflow configures every consumer.

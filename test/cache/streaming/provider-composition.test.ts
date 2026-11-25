@@ -898,7 +898,10 @@ function layerAdapter(f: Awaited<ReturnType<typeof fixture>>) {
         relativeExcludeGlobs: [],
       },
     ],
-    provision: async () => ({ ...(await f.provision()), dependencyLayerVersion: '9.6.1' }),
+    provision: async () => ({
+      ...(await f.provision()),
+      items: [{ label: 'gradle-wrapper.properties', version: '9.9.2', wasDownloaded: false }],
+    }),
   };
 }
 const layerInputs = {

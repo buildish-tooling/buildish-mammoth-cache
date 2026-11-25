@@ -173,14 +173,9 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       artifactBackend: d.artifactBackend,
       provision,
       existingGradleLayer: host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE'),
-      gradleLayerVersion: () => provisioning?.dependencyLayerVersion,
-      installHooks: async (store, lifecycle, layerVersion) => {
-        await lifecycle.prepareCapture(
-          store,
-          ci,
-          () => adapter.installBuildHooks(ci),
-          layerVersion,
-        );
+      hasGradleWrapper: () => !!provisioning?.items.length,
+      installHooks: async (store, lifecycle, layered) => {
+        await lifecycle.prepareCapture(store, ci, () => adapter.installBuildHooks(ci), layered);
       },
     });
     layerPreparation = result;

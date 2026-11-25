@@ -188,16 +188,11 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
           gcAgeMs: 14 * 86400000,
           ordinaryOrder: role === 'distributed-aggregator' ? ['worker', 'writer'] : [],
         },
-        gradleLayerVersion: () => '9.6.1',
+        hasGradleWrapper: () => true,
         lifecycle,
         artifactBackend: async () => artifacts.api,
-        installHooks: (store, selected, layerVersion) =>
-          selected.prepareCapture(
-            store,
-            { tempDirectory: f.directory },
-            async () => {},
-            layerVersion,
-          ),
+        installHooks: (store, selected, layered) =>
+          selected.prepareCapture(store, { tempDirectory: f.directory }, async () => {}, layered),
         ...extra,
       });
     }

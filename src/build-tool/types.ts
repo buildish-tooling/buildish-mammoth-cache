@@ -60,8 +60,6 @@ export interface BuildToolProvisionItem {
  * Result of the build-tool provisioning step executed during the bootstrap phase.
  */
 export interface BuildToolProvisioning {
-  /** Exact positively verified wrapper distribution supported by dependency layering. */
-  readonly dependencyLayerVersion?: string;
   /** Ordered list of items provisioned by the adapter. Empty when nothing was provisioned. */
   readonly items: readonly BuildToolProvisionItem[];
   /** Non-fatal warnings encountered during provisioning. */

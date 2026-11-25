@@ -112,15 +112,14 @@ provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
 
 `gradleSeedDescriptor` is data bound to the exact selected generation and the two
-available source partitions. Only qualified writable Gradle 9.6.1 distributed
-workers with `restore-cleanup-mode: none` and no selected snapshot ownership can
-activate it. Supported roots are `caches/modules-2/files-2.1` and
-`caches/modules-2/metadata-2.107`; unsupported, excluded, incomplete or missing
-cohorts use the complete ordinary restore before any source is detached.
+available source partitions. Only writable distributed Gradle workers with a selected wrapper,
+`restore-cleanup-mode: none` and no selected snapshot ownership can activate it. The source roots
+supply `caches/modules-2/files-2.1` and one or more `caches/modules-2/metadata-*` directories.
+Unsupported, excluded, incomplete or missing cohorts use ordinary restore before detaching any source.
 
 ```text
 ["gradle-layer",1,ownedSeedRoot,rootNative,exactGenerationKey,
- artifactPartitionId,metadataPartitionId,"9.6.1"]
+ artifactPartitionId,metadataPartitionId,null]
 ```
 
 The owned root is `.mammoth/v1/<invocation>/seed/<uuid>`; Gradle receives its
@@ -131,10 +130,9 @@ freezes. Guarded whole-root moves preserve source provenance and do not read
 artifact bodies or rebuild their indexes. A failed private route retires only its
 owned seed; the normal live install does not consume its routed receipts again.
 
-Layered workers install operational registration before advertising any path.
-Their actual consumer version guard runs after registration and before dependency
-resolution, so an incompatible consumer remains available to ordinary stop and
-absence checks. Fresh worker post validates the owner, settles registered Gradle
+The final descriptor slot is reserved. Earlier handoffs stored the wrapper version there.
+Layered workers install operational registration before advertising any path. Gradle selects
+metadata from the staged formats. Fresh worker post validates the owner, settles registered Gradle
 consumers, then captures the writable head and retires the seed before completion.
 A failure that cannot establish absence retains and reports the owned seed. Output-only
 mode uses the same owner, registration, quiescence and retirement. Prepare emits

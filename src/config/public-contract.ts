@@ -128,7 +128,7 @@ export const PUBLIC_ACTION_INPUTS = [
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description:
-      'Enables qualified Gradle 9.6.1 wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value; every seed consumer must use a selected qualified wrapper.',
+      'Enables eligible Gradle wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value.',
   },
   {
     name: 'export-layer-environment',

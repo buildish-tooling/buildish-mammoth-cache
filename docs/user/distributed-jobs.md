@@ -436,17 +436,15 @@ writable installation. This is an opt-in configuration of the existing Action, w
 - run: ./gradlew build
 ```
 
-The initial supported consumer is a selected wrapper positively resolved to Gradle **9.6.1**.
-Every Gradle process consuming the advertised seed must use that selected qualified version.
-Do not override the wrapper distribution or launch another Gradle installation after prepare.
-The operational registration hook diagnoses an actual version mismatch and allows post to settle
-that registered consumer. Normal jobs retain their existing registration behavior.
+Use a selected Gradle wrapper that supports the read-only dependency cache. Mammoth restores
+`modules-2/files-2.1` and the restored `modules-2/metadata-*` directories into the seed. Gradle
+chooses its own metadata format and writes misses to the writable cache. The seed output reports
+that the layer is available. Offline builds still need usable metadata and artifacts for their dependencies.
 
-Activation requires a coherent restored `modules-2/files-2.1` and `modules-2/metadata-2.107` cohort,
-default dependency layouts, writable worker mode, `restore-cleanup-mode: none`, and no selected single-writer
-partition owned by that worker. Missing/partial cohorts, unsupported or unknown wrapper versions,
-custom dependency layouts, read-only jobs, and other roles use the complete ordinary installation
-before any seed roots are detached. Layer eligibility does not infer support for future versions.
+Activation requires both restored dependency partitions in the supported layouts, writable worker
+mode, `restore-cleanup-mode: none`, and no selected single-writer partition owned by that worker.
+Missing partitions, unsupported layouts, jobs without a selected wrapper, read-only jobs, and other
+roles use the complete ordinary installation before any seed roots are detached.
 
 The default exports `GRADLE_RO_DEP_CACHE` for subsequent steps and emits the same absolute path as
 `steps.mammoth.outputs.gradle-ro-dep-cache`. With `export-layer-environment: false`, set that

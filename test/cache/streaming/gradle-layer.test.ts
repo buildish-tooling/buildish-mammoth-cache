@@ -26,7 +26,7 @@ import {
   readGradleActionInputs,
 } from '../../../src/build-tool/gradle/config';
 import { fixtureCi } from '../../support/ci-fixture';
-import { gradleSeedPath } from '../../../src/cache/streaming/gradle-layer';
+import { gradleSeedPath, gradleSeedSchema } from '../../../src/cache/streaming/gradle-layer';
 import { OpenedInvocation } from '../../../src/cache/streaming/invocation';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 import { postStreamingWorker } from '../../../src/cache/streaming/worker-post';
@@ -71,7 +71,7 @@ function model(overrides: Parameters<typeof createCachePartitions>[0] = []) {
 }
 async function fixture(
   overrides: Parameters<typeof model>[0] = [],
-  metadata = METADATA,
+  metadata = [METADATA],
   width = 1,
 ) {
   const f = await metadataFixture(model(overrides));
@@ -84,9 +84,9 @@ async function fixture(
       ),
     },
     'dependency-metadata': {
-      [metadata]: 'inherited metadata',
+      ...Object.fromEntries(metadata.map((path) => [path, 'inherited metadata'])),
       ...Object.fromEntries(
-        Array.from({ length: width - 1 }, (_, i) => [metadata + '.' + i, 'metadata']),
+        Array.from({ length: width - 1 }, (_, i) => [metadata[0] + '.' + i, 'metadata']),
       ),
     },
     'module-support': { [SUPPORT]: 'writable support' },
@@ -96,10 +96,10 @@ async function fixture(
   const prepare = (extra: Parameters<typeof f.prepare>[0] = {}) =>
     f.prepare({
       policy: { ...f.request.policy, role: 'distributed-worker' },
-      gradleLayerVersion: () => '9.6.1',
+      hasGradleWrapper: () => true,
       lifecycle,
-      installHooks: (store, selected, version) =>
-        selected.prepareCapture(store, { tempDirectory: f.directory }, async () => {}, version),
+      installHooks: (store, selected, layered) =>
+        selected.prepareCapture(store, { tempDirectory: f.directory }, async () => {}, layered),
       ...extra,
     });
   return { ...f, seeded, inspect, lifecycle, prepare };
@@ -111,6 +111,11 @@ it('routes original artifact and metadata receipts into an owned coherent seed a
   expect(ready.gradleSeed).not.toBeNull();
   const seed = ready.gradleSeed!,
     path = gradleSeedPath(ready.store, seed);
+  expect(seed[7]).toBeNull();
+  expect(
+    gradleSeedSchema(ready.store.codec.options.invocation).safeParse([...seed.slice(0, 7), '9.6.1'])
+      .success,
+  ).toBe(true);
   expect(await readFile(path + '/modules-2/files-2.1/g/a/1/hash/a.jar', 'utf8')).toBe(
     'INHERITED-ARTIFACT',
   );
@@ -150,19 +155,36 @@ it('routes original artifact and metadata receipts into an owned coherent seed a
   expect(bytes.includes(Buffer.from(seed[2]))).toBe(false);
 });
 
-it.each([
-  'unknown-version',
-  'unsupported-version',
-  'writer',
-  'partial',
-  'opt-out',
-  'layout',
-] as const)(
+it('moves multiple restored metadata formats together without selecting one for Gradle', async () => {
+  const older = METADATA.replace('2.107', '2.106');
+  const f = await fixture([], [METADATA, older]);
+  const ready = await f.prepare();
+  expect(ready.gradleSeed).not.toBeNull();
+  const seed = gradleSeedPath(ready.store, ready.gradleSeed!);
+  for (const path of [METADATA, older]) {
+    expect(await readFile(seed + '/' + path.slice('caches/'.length), 'utf8')).toBe(
+      'inherited metadata',
+    );
+    await expect(readFile(f.root + '/' + path)).rejects.toThrow();
+  }
+});
+
+it.each(['no-wrapper', 'writer', 'partial', 'opt-out', 'layout'] as const)(
   'keeps a complete ordinary writable restore for %s before detaching any seed source',
   async (kind) => {
     const f = await fixture(
-      kind === 'opt-out' ? [{ id: 'dependency-artifacts', readOnlyLayer: false }] : [],
-      kind === 'layout' ? METADATA.replace('2.107', '2.106') : METADATA,
+      kind === 'opt-out'
+        ? [{ id: 'dependency-artifacts', readOnlyLayer: false }]
+        : kind === 'layout'
+          ? [
+              {
+                id: 'dependency-metadata',
+                includes: ['caches/custom-metadata/**'],
+                writer: 'writer',
+              },
+            ]
+          : [],
+      kind === 'layout' ? ['caches/custom-metadata/descriptors.bin'] : [METADATA],
     );
     if (kind === 'partial') {
       const entry = f.seeded.entries.find((e) => e[1] === 'dependency-metadata')!;
@@ -172,11 +194,7 @@ it.each([
       f.objects.delete(entry[2][2]);
     }
     const ready = await f.prepare({
-      ...(kind === 'unknown-version'
-        ? { gradleLayerVersion: undefined }
-        : kind === 'unsupported-version'
-          ? { gradleLayerVersion: () => '9.7.0' }
-          : {}),
+      ...(kind === 'no-wrapper' ? { hasGradleWrapper: () => false } : {}),
       ...(kind === 'writer'
         ? {
             context: [
@@ -254,7 +272,7 @@ it('keeps shared-directory seed moves constant and post capture outside the seed
             purgeableGlobs: ['**/*.scratch'],
           },
         ],
-        METADATA,
+        [METADATA],
         width,
       ),
       ready = await f.prepare(),

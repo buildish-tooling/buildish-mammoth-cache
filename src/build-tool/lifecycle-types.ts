@@ -28,7 +28,7 @@ export interface BuildToolLifecycle {
     store: OwnedStore,
     context: Pick<CiJobContext, 'tempDirectory'>,
     ordinaryHooks: () => Promise<void>,
-    layerVersion?: string,
+    layered?: boolean,
   ): Promise<void>;
   quiesce(input: ConsumerWindowInput): Promise<Reference | undefined>;
   removeKnownHooks(root: string): Promise<readonly string[]>;

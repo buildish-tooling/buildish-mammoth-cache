@@ -36,10 +36,9 @@ import type { IndexedMetadataInput } from './metadata-install-context';
 import type { OwnedStore } from './owned-store';
 import type { NativeOperationOptions } from './native-operation';
 
-import { GRADLE_LAYER_VERSION } from './profiles';
-export { GRADLE_LAYER_VERSION } from './profiles';
-const ARTIFACTS = 'caches/modules-2/files-2.1';
-const METADATA = 'caches/modules-2/metadata-2.107';
+const MODULES = 'caches/modules-2';
+const ARTIFACTS = MODULES + '/files-2.1';
+const METADATA = /^metadata-[^/]+$/u;
 export function gradleSeedSchema(invocation: string) {
   const prefix = '.mammoth/v1/' + invocation + '/seed/';
   return z.tuple([
@@ -56,7 +55,8 @@ export function gradleSeedSchema(invocation: string) {
     keySchema,
     z.string().min(1),
     z.string().min(1),
-    z.literal(GRADLE_LAYER_VERSION),
+    // Accept the legacy handoff value. New handoffs leave this slot unset.
+    z.literal('9.6.1').nullable(),
   ]);
 }
 export type GradleSeedDescriptor = z.infer<ReturnType<typeof gradleSeedSchema>>;
@@ -160,23 +160,18 @@ async function select(
     (p) =>
       p[3] === 'single-writer' &&
       p[1].length === 1 &&
-      (p[1][0] === 'caches/modules-2/metadata-*/**' || p[1][0] === METADATA + '/**'),
+      (p[1][0] === MODULES + '/metadata-*/**' ||
+        (p[1][0].startsWith(MODULES + '/') &&
+          p[1][0].endsWith('/**') &&
+          METADATA.test(p[1][0].slice(MODULES.length + 1, -3)))),
   );
   if (!artifact || !metadata) {
     return undefined;
   }
-  for (const partition of [artifact, metadata]) {
-    if (
-      restored.entries.find((e) => e[1] === partition[0])?.[2] !== 'available' ||
-      context.source(partition[0])?.upstream.kind !== 'native-metadata'
-    ) {
-      return undefined;
-    }
-  }
   const selected: Selection[] = [];
   for (const [partition, path] of [
+    [metadata, MODULES],
     [artifact, ARTIFACTS],
-    [metadata, METADATA],
   ] as const) {
     if (
       partition[5] !== 'default' ||
@@ -200,11 +195,10 @@ async function select(
     equal(input.upstream.source.reference, original[2], 'exact seed object');
     const directories = new IndexDirectories(context.scratch, input.index);
     try {
-      // Bound the physical cohort to one supported root. Do not descend into dependency contents.
+      // Check only the partition boundaries. Gradle chooses which metadata format to consume.
       for (const [parent, name] of [
         ['', 'caches'],
         ['caches', 'modules-2'],
-        ['caches/modules-2', path.split('/')[2]],
       ] as const) {
         const node = await directories.directory(parent);
         if (!node || node[6] !== 0 || nodeIsIntact(node)) {
@@ -220,7 +214,24 @@ async function select(
           return undefined;
         }
       }
-      const node = await directories.directory(path);
+      const modules = await directories.directory(MODULES);
+      if (!modules || modules[6] !== 0 || nodeIsIntact(modules)) {
+        return undefined;
+      }
+      let count = 0;
+      for await (const edge of indexedEntries(context.scratch, modules)) {
+        if (
+          edge[1] !== 'directory' ||
+          (path === MODULES ? !METADATA.test(edge[0]) : edge[0] !== 'files-2.1')
+        ) {
+          return undefined;
+        }
+        count++;
+      }
+      if (!count || (path === ARTIFACTS && count !== 1)) {
+        return undefined;
+      }
+      const node = path === MODULES ? modules : await directories.directory(path);
       if (!node || node[6] !== 0 || nodeMask(node) !== partitionBit(model, partition[0])) {
         return undefined;
       }
@@ -255,17 +266,17 @@ export async function installGradleSeed(
       root,
       (await store.root.stat(root))!,
       restored.key!,
-      selected[0].input.partition,
       selected[1].input.partition,
-      GRADLE_LAYER_VERSION,
+      selected[0].input.partition,
+      null,
     ];
-    await store.makeParents(root + '/caches/modules-2/pending');
+    await store.makeParents(root + '/caches/pending');
     for (let i = 0; i < selected.length; i++) {
       await store.makeParents(root + '/control/source-' + i + '/pending');
     }
     await store.makeParents(root + '/control/target/pending');
     const targetFacts = new Map<string, NativeIdentity>();
-    for (const path of [root, root + '/caches', root + '/caches/modules-2']) {
+    for (const path of [root, root + '/caches']) {
       targetFacts.set(path, (await store.root.stat(path))!);
     }
     const target = new InstallParentPhase(
@@ -313,6 +324,9 @@ export async function installGradleSeed(
           const after = await target.stat(to);
           if (!after || !sameRename(before, after)) {
             throw new Error('Seed rename identity changed.');
+          }
+          if (path === MODULES) {
+            targetFacts.set(to, after);
           }
           await source.changed(from);
           await target.changed(to);

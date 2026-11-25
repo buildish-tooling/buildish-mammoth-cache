@@ -25,7 +25,6 @@ import type {
 import { installGradleBuildResultCapture } from './build-results';
 import { INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME } from './build-result-capture-scripts';
 import { provisionWrapperJars, type WrapperProvisionOptions } from './wrapper/download';
-import { GRADLE_LAYER_VERSION } from '../../cache/streaming/profiles';
 import { validateTargetWrapperProperties } from './wrapper/static-validation';
 
 /**
@@ -222,10 +221,6 @@ export class GradleBuildToolAdapter implements BuildToolAdapter {
     const reusedCount = provisionedWrappers.length - downloadedCount;
 
     return {
-      ...(provisionedWrappers.length > 0 &&
-      provisionedWrappers.every((w) => w.distributionVersion === GRADLE_LAYER_VERSION)
-        ? { dependencyLayerVersion: GRADLE_LAYER_VERSION }
-        : {}),
       items: provisionedWrappers.map((wrapper) => ({
         label: wrapper.relativePath,
         version: wrapper.wrapperSourceVersion,

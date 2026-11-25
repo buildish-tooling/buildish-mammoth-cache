@@ -296,6 +296,6 @@ Dependency metadata is cached separately as complete `dependency-metadata` snaps
 `caches/modules-*/**/gc.properties` are omitted.
 
 The optional [dependency layer](../../user/distributed-jobs/#gradle-dependency-layer) supports
-positively resolved Gradle 9.6.1 wrappers and the `files-2.1`/`metadata-2.107` cohort only. Other
-metadata versions remain captured by ordinary snapshots. Top-level JAR and resource stores stay
-in the writable `module-support` partition.
+the `files-2.1` artifact directory and restored `metadata-*` directories under `modules-2`.
+Gradle selects the metadata layout it understands. Top-level JAR and resource stores stay in
+the writable `module-support` partition.
