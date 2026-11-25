@@ -33,7 +33,7 @@ and which parts cause corruption or non-determinism is the foundation of this ac
 | `native/`        | Platform-specific native binaries (regenerated on demand)  | No               |
 | `notifications/` | Internal notification state                                | No               |
 
-## Dependency store: `caches/modules-*/`
+## Dependency store: `caches/modules-2/`
 
 **`files-2.1/`** — Content-addressable storage for external JAR and POM files. The path encodes
 the artifact coordinates and checksum of the file:
@@ -55,7 +55,7 @@ Gradle documents relative paths for both stores. Preserve the `caches/modules-<v
 use compatible cache formats, and omit `*.lock` and `gc.properties` when copying; see
 [Copying and reusing the cache](https://docs.gradle.org/current/userguide/dependency_caching.html#sec:copying_and_reusing_the_cache).
 
-Mammoth caches artifact files in `modules` and resolution metadata in the separate,
+Mammoth caches artifact files in `dependency-artifacts` and resolution metadata in the separate,
 enabled-by-default `dependency-metadata` partition. In standalone mode, the current job owns
 metadata publication. Distributed mode accepts one complete snapshot from the partition's
 configured `writer`; other jobs' local updates are omitted. If the writer contributes no snapshot,
@@ -262,7 +262,7 @@ the entire configuration cache as local-only data.
 
 | Pattern                                | Role                                     |
 | -------------------------------------- | ---------------------------------------- |
-| `caches/modules-*/files-2.1/**`        | Immutable external artifacts             |
+| `caches/modules-2/files-2.1/**`        | Immutable external artifacts             |
 | `caches/jars-*/**`                     | Cached plugin JARs                       |
 | `caches/build-cache-1/**`              | Task output snapshots                    |
 | `wrapper/dists/**`                     | Downloaded Gradle distributions          |
@@ -292,5 +292,10 @@ transport above.
 | `native/**`                             | Platform-specific; regenerated on demand |
 
 Dependency metadata is cached separately as complete `dependency-metadata` snapshots under
-`caches/modules-*/metadata-*/**`. It is relocatable with compatible Gradle cache formats; locks and
+`caches/modules-2/metadata-*/**`. It is relocatable with compatible Gradle cache formats; locks and
 `caches/modules-*/**/gc.properties` are omitted.
+
+The optional [dependency layer](../../user/distributed-jobs/#gradle-dependency-layer) supports
+positively resolved Gradle 9.6.1 wrappers and the `files-2.1`/`metadata-2.107` cohort only. Other
+metadata versions remain captured by ordinary snapshots. Top-level JAR and resource stores stay
+in the writable `module-support` partition.

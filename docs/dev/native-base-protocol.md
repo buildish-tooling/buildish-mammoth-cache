@@ -35,16 +35,28 @@ control bytes; it makes no assertion about native payload contents.
 ## Model, family and key identities
 
 ```text
-["model",1,buildTool,hardExcludes,partitions]
-partition = [id,includes,ordinaryExcludes,publication,writer,conflict,purgeableGlobs?]
+["model",1,buildTool,hardExcludes,partitions,familyPolicy?]
+partition = [id,includes,ordinaryExcludes,publication,writer,conflict,readOnlyLayer,purgeableGlobs?]
 ```
+
+`familyPolicy` is canonically omitted for ordinary GC. Gradle's explicit
+`dependency-cache-layer` opt-in appends `"retain-dependencies"`. This shared policy
+changes the model and family identities with identical partition definitions;
+partition seed eligibility alone never enables it. All cooperating jobs use the
+same policy, including standalone/default-ref publishers and workers that fall
+back to ordinary restore. It is independent of role, ref and actual layer activation.
+The frozen model stream header is `["model-header",buildTool,hardExcludes,familyPolicy?]`.
+Fresh post reconstructs the model from that exact modelRef and validates the model,
+family projection and handoff before capture, GC or publication; current Action
+inputs do not replace the persisted policy.
 
 `buildTool` is `gradle` or `maven`; glob lists are ordered unique nonempty strings,
 except excludes may be empty. Include lists are nonempty. `publication` is
 `aggregate` or `single-writer`; writer is a job name or `null`, and is permitted
 only for single-writer. Conflict is `default`, `choose-worker-entry` or
 `choose-worker-directory`, restricted to supported build-tool unit kinds.
-Ordinary excludes include resolved hard excludes. `purgeableGlobs` is an optional,
+`readOnlyLayer` is the resolved seed-eligibility boolean encoded canonically as
+`0` or `1`; it does not activate layering or publisher retention. Ordinary excludes include resolved hard excludes. `purgeableGlobs` is an optional,
 nonempty ordered unique list of managed-root-relative file globs; omit the field
 canonically when the resolved list is empty. This optional configuration field is
 bound by the existing model hash and modelRef, not a separate policy document or
@@ -62,7 +74,7 @@ the path/unit classifier requires a new compatibility tag below.
 ```text
 modelId = H("model", model)
 familyProjection = ["family",1,cacheKeyPrefix,cacheSchemaVersion,modelId,
-                    "worker-tar-v2","native-metadata-v2","generation-v2","local-v2",
+                    "worker-tar-v2","native-metadata-v2","generation-v3","local-v2",
                     "path-policy-v1","unit-policy-v1","glob-policy-v1"]
 familySha = H("family", familyProjection)
 familyId = "mammoth-s1-" + buildTool + "-" + familySha
@@ -127,12 +139,19 @@ Availability and exact-reference checks finish before live installation.
 ## Generation record
 
 ```text
-["generation",2,"generation-v2",familyId,modelId,lineageId,writerId,
- decisionSha,entries,groups,partitionDecisionSha,recordKey]
+["generation",3,"generation-v3",familyId,modelId,lineageId,writerId,
+ decisionSha,entries,groups,partitionDecisionSha,recordKey,lastDependencyGcSweepAt]
 entry = ["object",partitionId,objectRef] | ["empty",partitionId]
 partitionDecisionSha = H("partition-decisions",
- ["partition-decisions",2,familyId,modelId,lineageId,writerId,decisionSha,entries,groups])
+ ["partition-decisions",3,familyId,modelId,lineageId,writerId,decisionSha,entries,groups,
+  lastDependencyGcSweepAt])
 ```
+
+`lastDependencyGcSweepAt` reserves a nullable nonnegative safe-integer epoch
+timestamp in milliseconds. Current writers always emit `null`; changing the slot
+changes the partition decision and immutable generation key. The generation-v3
+profile changes both Gradle and Maven discovery families; old generation-v2
+records remain in their prior families. Cooperating jobs must upgrade together.
 
 Entries follow model order exactly. Groups are complete disjoint model partitions,
 ordered canonically; Maven direct coordinates spanning partitions must stay in one

@@ -203,3 +203,91 @@ it.each(['gradle', 'maven'] as const)(
     });
   },
 );
+
+it.each([true, false])(
+  'honors file layer policy %s and direct overrides with real Action metadata defaults',
+  async (fileValue) => {
+    const descriptor = parseYaml(await readFile('actions/github/gradle/action.yml', 'utf8')) as {
+      inputs: Record<string, { default?: string | number | boolean }>;
+    };
+    await withConfigFile(
+      'cache.yml',
+      `dependency-cache-layer: ${fileValue}\n`,
+      async (workspace) => {
+        for (const explicit of [undefined, 'false', 'true']) {
+          const direct = readActionInputs('gradle', {
+            getInput: (name) =>
+              name === 'config-file'
+                ? 'cache.yml'
+                : name === 'dependency-cache-layer' && explicit !== undefined
+                  ? explicit
+                  : String(descriptor.inputs[name]?.default ?? ''),
+          });
+          const resolved = await resolveActionInputsFromConfigFile('gradle', direct, { workspace });
+          const config = normalizeSharedActionConfig(resolved, {
+            phase: 'prepare',
+            ciContext: fixtureCi(workspace),
+          });
+          expect(config.dependencyCacheLayer).toBe(
+            explicit === undefined ? fileValue : explicit === 'true',
+          );
+        }
+        const maven = readActionInputs('maven', {
+          getInput: (name) => (name === 'config-file' ? 'cache.yml' : ''),
+        });
+        await expect(
+          resolveActionInputsFromConfigFile('maven', maven, { workspace }),
+        ).rejects.toThrow(/unsupported key.*dependency-cache-layer/);
+      },
+    );
+  },
+);
+
+it('defaults the family layer policy off and validates explicit Action values', () => {
+  const raw = readActionInputs('gradle', { getInput: () => '' });
+  const options = { phase: 'prepare' as const, ciContext: fixtureCi('/cache') };
+  expect(normalizeSharedActionConfig(raw, options).dependencyCacheLayer).toBe(false);
+  expect(
+    normalizeSharedActionConfig({ ...raw, dependencyCacheLayer: 'true' }, options)
+      .dependencyCacheLayer,
+  ).toBe(true);
+  expect(() =>
+    normalizeSharedActionConfig({ ...raw, dependencyCacheLayer: 'yes' }, options),
+  ).toThrow('dependency-cache-layer');
+});
+
+it.each(['gradle'] as const)(
+  'resolves %s layer environment export defaults and explicit file/direct values',
+  async (tool) => {
+    const descriptor = parseYaml(await readFile(`actions/github/${tool}/action.yml`, 'utf8')) as {
+      inputs: Record<string, { default?: string | boolean }>;
+    };
+    const options = { phase: 'prepare' as const, ciContext: fixtureCi('/cache') };
+    const absent = readActionInputs(tool, { getInput: () => '' });
+    expect(normalizeSharedActionConfig(absent, options).exportLayerEnvironment).toBe(true);
+    for (const fileValue of [false, true])
+      await withConfigFile(
+        'cache.yml',
+        `export-layer-environment: ${fileValue}\n`,
+        async (workspace) => {
+          for (const direct of [undefined, 'true', 'false']) {
+            const raw = readActionInputs(tool, {
+              getInput: (name) =>
+                name === 'config-file'
+                  ? 'cache.yml'
+                  : name === 'export-layer-environment' && direct !== undefined
+                    ? direct
+                    : String(descriptor.inputs[name]?.default ?? ''),
+            });
+            const resolved = await resolveActionInputsFromConfigFile(tool, raw, { workspace });
+            expect(normalizeSharedActionConfig(resolved, options).exportLayerEnvironment).toBe(
+              direct === undefined ? fileValue : direct === 'true',
+            );
+          }
+        },
+      );
+    expect(() =>
+      normalizeSharedActionConfig({ ...absent, exportLayerEnvironment: 'yes' }, options),
+    ).toThrow('export-layer-environment');
+  },
+);

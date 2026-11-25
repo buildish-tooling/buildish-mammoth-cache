@@ -25,6 +25,7 @@ import type {
 import { installGradleBuildResultCapture } from './build-results';
 import { INIT_SCRIPT_FILE_NAME, SERVICE_PLUGIN_FILE_NAME } from './build-result-capture-scripts';
 import { provisionWrapperJars, type WrapperProvisionOptions } from './wrapper/download';
+import { GRADLE_LAYER_VERSION } from '../../cache/streaming/profiles';
 import { validateTargetWrapperProperties } from './wrapper/static-validation';
 
 /**
@@ -52,31 +53,33 @@ const GRADLE_HARD_CACHE_EXCLUDE_GLOBS: readonly string[] = [
  */
 const GRADLE_BUILT_IN_CACHE_PARTITION_PRESETS: readonly BuiltInCachePartitionPreset[] = [
   {
-    id: 'modules',
-    purgeableGlobs: [
-      'caches/modules-2/modules-2.lock',
-      'caches/jars-9/jars-9.lock',
-      'caches/jars-9/*/*.lock',
-    ],
-    displayName: 'Dependency modules',
-    description:
-      'Downloaded dependency artifacts, plugin jars, and shared resource stores reused across builds.',
+    id: 'dependency-artifacts',
+    purgeableGlobs: ['caches/modules-2/modules-2.lock'],
+    readOnlyLayer: true,
+    displayName: 'Dependency artifacts',
+    description: 'Downloaded dependency artifacts in Gradle’s supported read-only cache layout.',
     defaultEnabled: true,
-    relativeIncludeGlobs: [
-      'caches/modules-*/files-*/**',
-      'caches/jars-*/**',
-      'caches/resources-*/**',
-    ],
-    relativeExcludeGlobs: ['caches/modules-*/metadata-*/**'],
+    relativeIncludeGlobs: ['caches/modules-2/files-2.1/**'],
+    relativeExcludeGlobs: [],
+  },
+  {
+    id: 'module-support',
+    purgeableGlobs: ['caches/jars-9/jars-9.lock', 'caches/jars-9/*/*.lock'],
+    displayName: 'Module support caches',
+    description: 'Plugin jars and shared top-level resource stores.',
+    defaultEnabled: true,
+    relativeIncludeGlobs: ['caches/jars-*/**', 'caches/resources-*/**'],
+    relativeExcludeGlobs: [],
   },
   {
     id: 'dependency-metadata',
     purgeableGlobs: ['caches/modules-2/modules-2.lock'],
+    readOnlyLayer: true,
     displayName: 'Dependency metadata',
     description: 'Complete dependency-resolution metadata snapshots from a single writer.',
     defaultEnabled: true,
     publication: 'single-writer',
-    relativeIncludeGlobs: ['caches/modules-*/metadata-*/**'],
+    relativeIncludeGlobs: ['caches/modules-2/metadata-*/**'],
     relativeExcludeGlobs: [],
   },
   {
@@ -219,6 +222,10 @@ export class GradleBuildToolAdapter implements BuildToolAdapter {
     const reusedCount = provisionedWrappers.length - downloadedCount;
 
     return {
+      ...(provisionedWrappers.length > 0 &&
+      provisionedWrappers.every((w) => w.distributionVersion === GRADLE_LAYER_VERSION)
+        ? { dependencyLayerVersion: GRADLE_LAYER_VERSION }
+        : {}),
       items: provisionedWrappers.map((wrapper) => ({
         label: wrapper.relativePath,
         version: wrapper.wrapperSourceVersion,

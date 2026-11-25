@@ -15,3 +15,9 @@
  */
 
 export const STREAMING_INVOCATION_STATE = 'buildish-mammoth-cache-streaming-invocation';
+
+/** Conservative marker written before any layer path/environment publication is attempted. */
+export const STREAMING_LAYER_ADVERTISEMENT_STATE = 'buildish-mammoth-cache-layer-advertisement';
+
+/** Terminal activation witness, written after output/environment and the last lifetime assertion. */
+export const STREAMING_LAYER_ACTIVATED_STATE = 'buildish-mammoth-cache-layer-activated';

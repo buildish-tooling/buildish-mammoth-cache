@@ -55,8 +55,8 @@ export async function metadataFixture(model?: ResolvedModel) {
       'maven',
       hard,
       [
-        ['data', ['data/**', 'repository/**'], hard, 'aggregate', null, 'default'],
-        ['state', ['state/**'], hard, 'single-writer', 'A', 'default'],
+        ['data', ['data/**', 'repository/**'], hard, 'aggregate', null, 'default', 0],
+        ['state', ['state/**'], hard, 'single-writer', 'A', 'default', 0],
       ],
     ],
     'metadata-restore-',

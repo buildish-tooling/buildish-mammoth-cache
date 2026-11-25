@@ -15,7 +15,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -131,7 +131,8 @@ it.each([
           result: (
             name.includes('pull_request')
               ? pr
-              : name.endsWith('standalone_cross_platform')
+              : name.endsWith('standalone_cross_platform') ||
+                  (tool === 'gradle' && ['layer_seed', 'layered_workers'].includes(name))
                 ? native
                 : writable
           )
@@ -348,7 +349,7 @@ it('observes the invocation bound to this job and rejects unsuccessful automatic
 it('observes the exact restored generation from a completed read-only Gradle restore', async () => {
   const hard = ['.mammoth/**'];
   const model = resolveModel(
-    ['model', 1, 'gradle', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default']]],
+    ['model', 1, 'gradle', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default', 0]]],
     'observer-',
     1,
   );
@@ -384,5 +385,107 @@ it('observes the exact restored generation from a completed read-only Gradle res
     expect(await readFile(summary, 'utf8')).toContain(generation[11]);
   } finally {
     await f.close();
+  }
+});
+
+it('qualifies warm writable Gradle layers on every native main-branch runner after an exact seed producer', async () => {
+  const jobs = await workflow('gradle');
+  const producer = jobs.layer_seed!,
+    workers = jobs.layered_workers!;
+  expect(producer.if).toContain('inputs.run-cross-platform');
+  expect(workers.if).toContain('inputs.run-cross-platform');
+  expect(workers.needs).toEqual(['layer_seed']);
+  const detail = parse(await readFile('.github/workflows/it-reusable-gradle.yml', 'utf8')).jobs
+    .layered_workers;
+  expect(detail.strategy.matrix.worker.map((row: { os: string }) => row.os)).toEqual([
+    'ubuntu-26.04',
+    'windows-2025',
+    'macos-15',
+  ]);
+  const prepare = workers.steps.find((step) => step.id === 'prepare')!;
+  expect(prepare.with!['job-mode']).toBe('distributed-worker');
+  expect(prepare.with!['read-only']).toBe(false);
+  expect(prepare.with!['dependency-cache-layer']).toBe(true);
+  const check = workers.steps.findIndex((step) => step.run?.includes('fixture.mjs layer gradle'));
+  const build = workers.steps.findIndex((step) => step.run?.includes('./gradlew --offline'));
+  expect(check).toBeGreaterThan(workers.steps.indexOf(prepare));
+  expect(build).toBeGreaterThan(check);
+  for (const step of workers.steps.filter((step) => step.run?.includes('--offline'))) {
+    expect(step.run).toContain('resolveLayeredStandalone');
+  }
+});
+
+it('rejects cold, wrong-generation and writable-copy substitutes for the hosted layer proof', async () => {
+  const root = await mkdtemp(path.resolve('build/it-layer-proof-'));
+  try {
+    const home = path.join(root, 'home');
+    const seed = path.join(
+      home,
+      '.mammoth/v1',
+      'a'.repeat(64),
+      'seed',
+      'b'.repeat(8) + '-bbbb-bbbb-bbbb-' + 'b'.repeat(12),
+      'caches',
+    );
+    const jar =
+      'modules-2/files-2.1/org.apache.commons/commons-lang3/3.20.0/hash/commons-lang3-3.20.0.jar';
+    await mkdir(path.dirname(path.join(seed, jar)), { recursive: true });
+    await writeFile(path.join(seed, jar), 'inherited dependency');
+    const old = new Date(Date.now() - 30 * 86400000);
+    await utimes(path.join(seed, jar), old, old);
+    const key = 'mammoth-g-' + 'c'.repeat(64) + '-d-' + 'd'.repeat(64);
+    const evidence = path.join(root, 'mammoth-it-evidence');
+    await mkdir(evidence);
+    await writeFile(
+      path.join(evidence, 'evidence.json'),
+      JSON.stringify({
+        version: 1,
+        execution: {
+          repository: 'example/repo',
+          revision: 'e'.repeat(40),
+          run: '123',
+          attempt: 1,
+          tool: 'gradle',
+          job: 'layer-seed',
+        },
+        outcome: 'published',
+        key,
+      }),
+    );
+    const prepare = {
+      'job-mode': 'distributed-worker',
+      'read-only': 'false',
+      'base-cache-restore-status': 'current-lineage-hit',
+      'restored-cache-key': key,
+      'gradle-ro-dep-cache': seed,
+    };
+    const run = () =>
+      spawnSync(process.execPath, ['.github/scripts/it-cache-fixture.mjs', 'layer', 'gradle'], {
+        env: {
+          ...process.env,
+          RUNNER_TEMP: root,
+          GRADLE_USER_HOME: home,
+          GRADLE_RO_DEP_CACHE: seed,
+          GITHUB_REPOSITORY: 'example/repo',
+          GITHUB_SHA: 'e'.repeat(40),
+          GITHUB_RUN_ID: '123',
+          IT_PRODUCER_ATTEMPT: '1',
+          IT_PREPARE: JSON.stringify(prepare),
+        },
+        encoding: 'utf8',
+      });
+    const valid = run();
+    expect(valid.status, valid.stderr).toBe(0);
+    prepare['gradle-ro-dep-cache'] = '';
+    expect(run().stderr).toContain('Cold/fallback');
+    prepare['gradle-ro-dep-cache'] = seed;
+    prepare['restored-cache-key'] = key + 'wrong';
+    expect(run().stderr).toContain('wrong layer generation');
+    prepare['restored-cache-key'] = key;
+    await mkdir(path.dirname(path.join(home, 'caches', jar)), { recursive: true });
+    await writeFile(path.join(home, 'caches', jar), 'unexpected writable copy');
+    expect(run().stderr).toContain('leaked into writable head');
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -105,9 +105,9 @@ it('keeps an unavailable connected Maven group cold while an independent availab
         'maven',
         hard,
         [
-          ['a', ['repository/**/a'], hard, 'aggregate', null, 'default'],
-          ['b', ['repository/**/b'], hard, 'aggregate', null, 'default'],
-          ['c', ['repository/**/c'], hard, 'aggregate', null, 'default'],
+          ['a', ['repository/**/a'], hard, 'aggregate', null, 'default', 0],
+          ['b', ['repository/**/b'], hard, 'aggregate', null, 'default', 0],
+          ['c', ['repository/**/c'], hard, 'aggregate', null, 'default', 0],
         ],
       ],
       'cold-incoming-',

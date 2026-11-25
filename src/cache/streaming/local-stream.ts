@@ -22,7 +22,7 @@ import { RecordDecoder, encodeRecord, equal, Digest, add, type Value } from './e
 import type { LocalCodec } from './local-schema';
 import { shaSchema, uintSchema } from './schema';
 import { ownedReferenceSchema } from './local-schema';
-import { resolveModel, type ResolvedModel } from './model';
+import { frozenModelHeader, resolveModel, type ResolvedModel } from './model';
 import { tuple } from './encoding';
 import { decodedRecordCharge, type WorkingBudget } from './tree-state';
 import { HandoffGrammar } from './lifecycle-handoff';
@@ -99,7 +99,7 @@ export class LocalStreamGrammar {
       const model = this.options.codec.options.model,
         expected =
           this.count === 0
-            ? ['model-header', model.tuple[2], model.tuple[3]]
+            ? frozenModelHeader(model)
             : this.count <= model.partitions.length
               ? ['partition', ...model.partitions[this.count - 1]]
               : null;
@@ -222,7 +222,8 @@ export async function readModelStream(
     accept(value) {
       const row = tuple(value);
       if (!head) {
-        head = tuple(value, 'model-header', 3);
+        head = tuple(value, 'model-header');
+        if (head.length !== 3 && head.length !== 4) throw new Error('Invalid frozen model header.');
       } else {
         if (partitions.length === 64 || row[0] !== 'partition')
           throw new Error('Invalid bootstrap model row.');
@@ -233,7 +234,7 @@ export async function readModelStream(
     finish() {
       if (!head) throw new Error('Missing model header.');
       model = resolveModel(
-        ['model', 1, head[1], head[2], partitions],
+        ['model', 1, head[1], head[2], partitions, ...head.slice(3)],
         identity.prefix,
         identity.version,
       );

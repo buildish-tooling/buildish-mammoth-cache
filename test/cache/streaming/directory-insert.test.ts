@@ -68,6 +68,7 @@ it.each([16, 256])(
           'aggregate',
           null,
           'default',
+          0,
         ]),
       ],
       'dirs-',
@@ -104,7 +105,13 @@ it.each([16, 256])(
 it('moves file-only included structural roots without a fabricated owner probe', async () => {
   const hard = ['.mammoth/**'];
   const model = resolveModel(
-    ['model', 1, 'maven', hard, [['data', ['data/**/*.bin'], hard, 'aggregate', null, 'default']]],
+    [
+      'model',
+      1,
+      'maven',
+      hard,
+      [['data', ['data/**/*.bin'], hard, 'aggregate', null, 'default', 0]],
+    ],
     'files-',
     1,
   );

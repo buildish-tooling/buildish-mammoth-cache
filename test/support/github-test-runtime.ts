@@ -24,6 +24,8 @@ import type { CompositeHost } from '../../src/host/types';
 
 export interface TestRuntimeHostOptions {
   readonly inputs?: Readonly<Record<string, string>>;
+  readonly environment?: Record<string, string | undefined>;
+  readonly exportEnvironmentVariable?: (name: string, value: string) => void;
   readonly getInput?: (
     name: string,
     options?: { required?: boolean; trimWhitespace?: boolean },
@@ -37,7 +39,15 @@ export interface TestRuntimeHostOptions {
 }
 
 export function createTestRuntimeHost(options: TestRuntimeHostOptions = {}): CompositeHost {
+  const environment = options.environment ?? { ...process.env };
   return {
+    getEnvironmentVariable(name) {
+      return environment[name];
+    },
+    exportEnvironmentVariable(name, value) {
+      options.exportEnvironmentVariable?.(name, value);
+      environment[name] = value;
+    },
     getInput(name, inputOptions) {
       if (options.getInput) {
         return options.getInput(name, inputOptions);

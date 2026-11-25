@@ -57,6 +57,7 @@ async function fixture(
         options.snapshot ? 'single-writer' : 'aggregate',
         options.snapshot ? 'A' : null,
         'default',
+        0,
       ]),
     ],
     'metadata-install-',

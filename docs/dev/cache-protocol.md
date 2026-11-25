@@ -599,7 +599,7 @@ archive pass. The winner policies above need neither.
 ## Native base and generation contract
 
 The [metadata-only native-base contract](../native-base-protocol/) defines the
-active `native-metadata-v2`, `generation-v2` and `local-v2` family cut. SDK objects
+active `native-metadata-v2`, `generation-v3` and `local-v2` family cut. SDK objects
 contain only the bounded identity descriptor and literal native payload. Original
 metadata discovery feeds one active hierarchy and local metadata summary; no base
 body hashes, archived file lists or main/post per-file replay recipes survive.

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { ExclusiveWindow } from './quiescence';
+import { retireGradleSeed, gradleSeedPath, validateGradleSeedOwner } from './gradle-layer';
 import { timed } from '../../util/timing';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
 import type { LifecycleOptions } from './lifecycle-options';
@@ -47,6 +49,17 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     attempt = await PostAttempt.open(opened, request),
     store = attempt.store;
   let captured: ObservationIndex | undefined, owner: GcSurvivorOwner | undefined;
+  const seed = attempt.handoff.header[12];
+  let seedSettled = false,
+    settledConsumers = false;
+  const finish = async (terminal: Parameters<PostAttempt['finish']>[0]) => {
+    if (seed && !seedSettled) {
+      attempt.assert();
+      await retireGradleSeed(store, seed, request);
+      seedSettled = true;
+    }
+    await attempt.finish(terminal);
+  };
   let failure: unknown,
     answer: { outcome: 'abandoned' } | { outcome: 'worker-uploaded'; name: string } | undefined;
   try {
@@ -65,6 +78,22 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
           ? { outcome: 'abandoned' }
           : { outcome: 'worker-uploaded', name: terminal[4]! };
     } else {
+      if (seed) {
+        await validateGradleSeedOwner(store, seed);
+        const gate = await ExclusiveWindow.establish(store, request.budget, {
+          ...request,
+          layeredWorker: attempt.handoff,
+        });
+        if (gate.status !== 'ready')
+          throw new Error(
+            'Gradle layer consumers could not settle; seed retained at ' +
+              gradleSeedPath(store, seed) +
+              ': ' +
+              gate.message,
+          );
+        attempt.attachWindow(gate.window);
+        settledConsumers = true;
+      }
       const options = { ...request, signal: attempt.signal, attempt };
       await request.removeHooks?.();
       await attempt.guard();
@@ -92,7 +121,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         );
         await captured.dispose();
         captured = undefined;
-        await attempt.finish(['outcome', 'abandoned', null, null, null]);
+        await finish(['outcome', 'abandoned', null, null, null]);
         answer = { outcome: 'abandoned' };
       } else {
         owner = await timed(options, 'GC', () => GcSurvivorOwner.execute(captured!, options));
@@ -132,7 +161,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
           );
           await owner.dispose();
           owner = undefined;
-          await attempt.finish([
+          await finish([
             'outcome',
             'worker-uploaded',
             null,
@@ -143,13 +172,35 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         } else {
           await owner.dispose();
           owner = undefined;
-          await attempt.finish(['outcome', 'abandoned', null, null, null]);
+          await finish(['outcome', 'abandoned', null, null, null]);
           answer = { outcome: 'abandoned' };
         }
       }
     }
   } catch (error) {
     failure = error;
+  }
+  if (failure !== undefined && seed && !seedSettled) {
+    if (settledConsumers) {
+      try {
+        attempt.assert();
+        await retireGradleSeed(store, seed, request);
+        seedSettled = true;
+      } catch (cleanup) {
+        failure = new AggregateError(
+          [failure, cleanup],
+          'Gradle seed retained at ' + gradleSeedPath(store, seed),
+        );
+      }
+    }
+    if (!seedSettled) {
+      const message = 'Gradle seed retained at ' + gradleSeedPath(store, seed);
+      try {
+        request.onWarning?.(message);
+      } catch (report) {
+        failure = new AggregateError([failure, report], message);
+      }
+    }
   }
   try {
     await timed(request, 'cleanup and retirement', () =>
@@ -160,4 +211,60 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
   }
   if (failure !== undefined) throw failure;
   return answer!;
+}
+
+/** Failed main may have exposed a live seed to later steps. Owning post settles it without capture or upload. */
+export async function postFailedPrepareGradleLayer(
+  input: LifecycleOptions & {
+    readonly anchor: InvocationAnchor;
+    readonly advertisedInvocation: string;
+    readonly removeHooks: () => Promise<void>;
+    readonly onWarning: (message: string) => void;
+  },
+): Promise<void> {
+  const opened = await OpenedInvocation.open(input.anchor, input.budget, input.cleanupSignal);
+  if (opened.store.codec.options.invocation !== input.advertisedInvocation)
+    throw new Error('Failed-prepare layer advertisement differs from the owning invocation.');
+  const attempt = await PostAttempt.open(opened, input);
+  const store = attempt.store,
+    seed = attempt.handoff.header[12];
+  try {
+    if (
+      !seed ||
+      store.codec.options.role !== 'distributed-worker' ||
+      store.codec.options.access !== 'writable'
+    )
+      throw new Error('Failed-prepare layer cleanup requires the frozen writable worker seed.');
+    if (attempt.state[4] === 'completed') {
+      if (attempt.state[7]?.[1] !== 'abandoned')
+        throw new Error('Unexpected failed-prepare layer completion.');
+      return;
+    }
+    await validateGradleSeedOwner(store, seed);
+    const gate = await ExclusiveWindow.establish(store, input.budget, {
+      ...input,
+      layeredWorker: attempt.handoff,
+    });
+    if (gate.status !== 'ready')
+      throw new Error('Failed-prepare Gradle consumers could not settle: ' + gate.message);
+    attempt.attachWindow(gate.window);
+    await input.removeHooks();
+    await attempt.guard();
+    await retireGradleSeed(store, seed, input);
+    await attempt.finish(['outcome', 'abandoned', null, null, null]);
+  } catch (error) {
+    if (seed) {
+      const message = 'Failed-prepare Gradle seed retained at ' + gradleSeedPath(store, seed);
+      const errors = [error];
+      try {
+        input.onWarning(message);
+      } catch (report) {
+        errors.push(report);
+      }
+      throw new AggregateError(errors, message, { cause: error });
+    }
+    throw error;
+  } finally {
+    attempt.close();
+  }
 }

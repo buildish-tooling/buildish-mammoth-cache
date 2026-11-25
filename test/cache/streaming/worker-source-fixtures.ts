@@ -52,6 +52,7 @@ export async function sourceFixture(
               snapshot ? 'single-writer' : 'aggregate',
               snapshot ? 'A' : null,
               'default',
+              0,
             ],
           ],
         ],

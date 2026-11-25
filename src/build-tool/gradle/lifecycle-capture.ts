@@ -22,10 +22,11 @@ import type { CiJobContext } from '../../ci/types';
 export async function installGradleLifecycleCapture(
   store: OwnedStore,
   context: Pick<CiJobContext, 'tempDirectory'>,
+  layerVersion?: string,
 ): Promise<void> {
   if (
     store.codec.options.model.tuple[2] !== 'gradle' ||
-    store.codec.options.role === 'distributed-worker' ||
+    (store.codec.options.role === 'distributed-worker' && layerVersion === undefined) ||
     store.codec.options.access !== 'writable'
   )
     throw new Error('Operational capture requires writable Gradle base role.');
@@ -33,6 +34,7 @@ export async function installGradleLifecycleCapture(
   await store.makeParents(directory + '/placeholder');
   await installGradleBuildResultCapture(store.root.path, context, {
     invocation: store.codec.options.invocation,
+    ...(layerVersion ? { requiredGradleVersion: layerVersion } : {}),
     directory: store.root.resolve(directory),
   });
 }

@@ -159,7 +159,7 @@ async function capture(
   options.summaries?.assert(model);
   const worker = codec.options.role === 'distributed-worker';
   if (worker && options.purgeWindow) throw new Error('Worker capture cannot purge.');
-  const configured = model.partitions.some((p) => p[6]?.length),
+  const configured = model.partitions.some((p) => p[7]?.length),
     purge = {
       status: !configured
         ? ('not-configured' as const)
@@ -389,6 +389,7 @@ async function capture(
               : 'none';
         const decision: Decision =
           p[3] === 'aggregate' &&
+          !(model.dependencyCacheLayer && !worker && p[6] === 1) &&
           act === 'none' &&
           gcCutoff !== null &&
           BigInt(e.identity[8]) < gcCutoff

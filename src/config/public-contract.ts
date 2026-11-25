@@ -24,6 +24,8 @@ export type RawActionInputProperty =
   | 'configFile'
   | 'baseDirectory'
   | 'cacheEnabled'
+  | 'dependencyCacheLayer'
+  | 'exportLayerEnvironment'
   | 'readOnly'
   | 'jobMode'
   | 'dependentJobs'
@@ -81,6 +83,7 @@ export type ConfigFileActionInputContract = Extract<
 
 /** One canonical prepare output declaration shared by both action variants. */
 export interface PublicActionOutputContract {
+  readonly tools?: readonly ActionBuildTool[];
   readonly name: string;
   readonly description: string;
 }
@@ -116,6 +119,26 @@ export const PUBLIC_ACTION_INPUTS = [
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description: 'Enables cache orchestration. Accepted values: true or false.',
+  },
+  {
+    name: 'dependency-cache-layer',
+    property: 'dependencyCacheLayer',
+    tools: GRADLE,
+    runtimeDefault: 'false',
+    configFile: 'allowed',
+    configFileValueKind: 'boolean',
+    description:
+      'Enables qualified Gradle 9.6.1 wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value; every seed consumer must use a selected qualified wrapper.',
+  },
+  {
+    name: 'export-layer-environment',
+    property: 'exportLayerEnvironment',
+    tools: GRADLE,
+    runtimeDefault: 'true',
+    configFile: 'allowed',
+    configFileValueKind: 'boolean',
+    description:
+      'Exports the activated Gradle dependency seed as GRADLE_RO_DEP_CACHE for later steps. False emits only the seed-path output; the workflow configures every consumer.',
   },
   {
     name: 'read-only',
@@ -335,6 +358,12 @@ export const PUBLIC_ACTION_INPUTS = [
 
 export const PUBLIC_ACTION_OUTPUTS = [
   {
+    name: 'gradle-ro-dep-cache',
+    tools: GRADLE,
+    description:
+      'Invocation-owned Gradle read-only dependency cache path, or empty when layered restore is inactive.',
+  },
+  {
     name: 'cache-family-key',
     description: 'Stable compatibility family shared by structurally compatible generations.',
   },
@@ -456,4 +485,12 @@ export function renderPublicActionContractReference(): string {
 
 function capitalize(value: ActionBuildTool): string {
   return value === 'gradle' ? 'Gradle' : 'Maven';
+}
+
+/** Outputs exposed by one build-tool Action. */
+export function getPublicActionOutputs(
+  buildTool: ActionBuildTool,
+): readonly PublicActionOutputContract[] {
+  const outputs: readonly PublicActionOutputContract[] = PUBLIC_ACTION_OUTPUTS;
+  return outputs.filter((output) => !output.tools || output.tools.includes(buildTool));
 }

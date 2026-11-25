@@ -71,6 +71,7 @@ permissions:
 env:
   ACTION_DIRECTORY: .
   FIXTURE_SOURCE_DIRECTORY: test/fixtures/integration/gradle-project
+  LAYER_CACHE_PARTITIONS: '[{"id":"dependency-metadata","writer":"layer-seed"}]'
   IT_CACHE_PARTITIONS: >-
     [{"id":"dependency-metadata","writer":"aggregator"},{"id":"it-portability","includes":["it-portability/**"],"publication":"aggregate"}]
 
@@ -909,6 +910,169 @@ jobs:
       - name: Assert dependency resolution and portable task cache hit
         run: node .github/scripts/it-cache-fixture.mjs gradle-log gradle build/integration-fixtures/changed-reader/verify.log
 
+  layer_seed:
+    name: Linux Gradle protected dependency seed
+    if: inputs.run-writable-scenarios && inputs.run-cross-platform
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    outputs:
+      attempt: ${{ steps.observer.outputs.attempt }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-gradle-layer-seed
+        run: printf 'GRADLE_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up integration test environment
+        uses: $/.github/actions/it-setup
+
+      - name: Expose GnuPG on Windows PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
+
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh layer-seed
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty gradle
+
+      - name: Register lifecycle assertion after Mammoth post
+        id: observer
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: gradle
+          job: layer-seed
+          stage: seed
+
+      - name: Prepare Mammoth Cache for Gradle
+        id: prepare
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
+        with:
+          base-directory: build/integration-fixtures/layer-seed
+          job-mode: standalone
+          read-only: false
+          dependency-cache-layer: true
+          cache-partitions: ${{ env.LAYER_CACHE_PARTITIONS }}
+          cache-key-prefix: it-gradle-layer-${{ github.run_id }}-a${{ github.run_attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: layer-seed
+
+      - name: Resolve the dependency for the seed
+        working-directory: build/integration-fixtures/layer-seed
+        run: ./gradlew --info --no-daemon --console=plain resolveStandalone
+
+      - name: Age the inherited dependency beyond ordinary GC
+        run: node .github/scripts/it-cache-fixture.mjs age-layer gradle
+
+  layered_workers:
+    name: Warm writable Gradle layer (${{ matrix.worker.os }})
+    if: inputs.run-writable-scenarios && inputs.run-cross-platform
+    needs: [layer_seed]
+    runs-on: ${{ matrix.worker.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        worker:
+          - id: layer_linux
+            os: ubuntu-26.04
+          - id: layer_windows
+            os: windows-2025
+          - id: layer_macos
+            os: macos-15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set isolated cache root
+        env:
+          IT_CACHE_HOME: ${{ runner.temp }}/mammoth-gradle-${{ matrix.worker.id }}
+        run: printf 'GRADLE_USER_HOME=%s\n' "$IT_CACHE_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up integration test environment
+        uses: $/.github/actions/it-setup
+
+      - name: Expose GnuPG on Windows PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/expose-gpg-windows.ps1
+
+      - name: Stage fresh fixture
+        run: bash .github/scripts/stage-fixture.sh ${{ matrix.worker.id }}
+
+      - name: Require an empty tool home before prepare
+        run: node .github/scripts/it-cache-fixture.mjs empty gradle
+
+      - name: Register lifecycle assertion after Mammoth post
+        id: observer
+        uses: ./.github/actions/it-observe # zizmor: ignore[self-repository] trusted writes are gated by the caller
+        with:
+          tool: gradle
+          job: ${{ matrix.worker.id }}
+          stage: layer-worker
+
+      - name: Prepare Mammoth Cache for Gradle
+        id: prepare
+        uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
+        with:
+          base-directory: build/integration-fixtures/${{ matrix.worker.id }}
+          job-mode: distributed-worker
+          read-only: false
+          dependency-cache-layer: true
+          cache-partitions: ${{ env.LAYER_CACHE_PARTITIONS }}
+          cache-key-prefix: it-gradle-layer-${{ github.run_id }}-a${{ needs.layer_seed.outputs.attempt }}-
+          github-event-name: ${{ inputs.caller-event-name }}
+          github-ref-name: ${{ inputs.caller-resolved-ref-name }}
+          github-default-branch: ${{ inputs.caller-default-branch }}
+          github-job-name: ${{ matrix.worker.id }}
+
+      - name: Download the exact seed producer receipt
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mammoth-it-gradle-layer-seed-a${{ needs.layer_seed.outputs.attempt }}
+          path: ${{ runner.temp }}/mammoth-it-evidence
+
+      - name: Require a warm writable nonwriter and an advertised seed before Gradle
+        env:
+          IT_PREPARE: ${{ toJSON(steps.prepare.outputs) }}
+          IT_PRODUCER_ATTEMPT: ${{ needs.layer_seed.outputs.attempt }}
+        run: node .github/scripts/it-cache-fixture.mjs layer gradle
+
+      - name: Resolve exclusively from the seed offline (POSIX)
+        if: runner.os != 'Windows'
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        run: ./gradlew --offline --info --no-daemon --console=plain resolveLayeredStandalone
+
+      - name: Resolve exclusively from the seed offline (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/integration-fixtures/${{ matrix.worker.id }}
+        run: |
+          & ./gradlew.bat --offline --info --no-daemon --console=plain resolveLayeredStandalone
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Require the old dependency to remain only in the immutable seed
+        env:
+          IT_PREPARE: ${{ toJSON(steps.prepare.outputs) }}
+          IT_PRODUCER_ATTEMPT: ${{ needs.layer_seed.outputs.attempt }}
+        run: node .github/scripts/it-cache-fixture.mjs layer gradle
+
   required_lifecycle:
     name: Require selected lifecycle scenarios
     if: always()
@@ -920,6 +1084,8 @@ jobs:
       - workers
       - aggregator
       - standalone_cross_platform
+      - layer_seed
+      - layered_workers
       - warm
       - change
       - changed_reader

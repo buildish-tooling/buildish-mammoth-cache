@@ -35,6 +35,12 @@ export function createGitHubHost(): CompositeHost {
     saveState(name, value) {
       core.saveState(name, value);
     },
+    getEnvironmentVariable(name) {
+      return process.env[name];
+    },
+    exportEnvironmentVariable(name, value) {
+      core.exportVariable(name, value);
+    },
     setOutput(name, value) {
       core.setOutput(name, value);
     },

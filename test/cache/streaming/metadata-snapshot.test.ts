@@ -35,7 +35,13 @@ afterEach(async () => {
 async function fixture() {
   const hard = ['.mammoth/**'];
   const model = resolveModel(
-    ['model', 1, 'maven', hard, [['state', ['state/**'], hard, 'single-writer', 'A', 'default']]],
+    [
+      'model',
+      1,
+      'maven',
+      hard,
+      [['state', ['state/**'], hard, 'single-writer', 'A', 'default', 0]],
+    ],
     'snapshot-',
     1,
   );

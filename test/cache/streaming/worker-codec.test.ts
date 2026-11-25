@@ -79,8 +79,8 @@ async function write(options: WorkerWriter, events: AsyncIterable<WorkerEvent>) 
 const guard = async () => {};
 describe('independent literal worker vectors', () => {
   for (const [name, sha] of [
-    ['W0', '41242a473a615380debd674ca50e46067f08bfe2cb96ca22f02493223da2dd11'],
-    ['W1', '939cb143de9965250cc4ad3f7f9170c418a969fd541239928e5f9cc91c780cbc'],
+    ['W0', '13063138dacc3f472efdf4011d4ca6318746c4b6389620b00338032bf3674422'],
+    ['W1', '1ea9434a00347f8d8bf1f0128a9bfa0e9d9ffb9d3383e583379213135056ac73'],
   ] as const) {
     it(
       'reads ' + name + ' literal headers/controls and independently derives all seals',
@@ -185,7 +185,7 @@ function simple() {
       1,
       'gradle',
       ['.mammoth/**'],
-      [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default']],
+      [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]],
     ],
     'simple-',
     1,
@@ -290,7 +290,7 @@ it('aligns input-local snapshot IDs through model order', () => {
       ['.mammoth/**'],
       [
         ...modelVector[4],
-        ['other', ['other/**'], ['.mammoth/**'], 'single-writer', 'A', 'default'],
+        ['other', ['other/**'], ['.mammoth/**'], 'single-writer', 'A', 'default', 0],
       ],
     ],
     'vectors-',
@@ -445,7 +445,7 @@ it('does not let a complete workspace split ownership across partitions', async 
       'gradle',
       ['.mammoth/**'],
       [
-        ['one', [workspace + '/metadata.bin'], ['.mammoth/**'], 'aggregate', null, 'default'],
+        ['one', [workspace + '/metadata.bin'], ['.mammoth/**'], 'aggregate', null, 'default', 0],
         [
           'two',
           [workspace + '/results.bin', workspace + '/transformed/**'],
@@ -453,6 +453,7 @@ it('does not let a complete workspace split ownership across partitions', async 
           'aggregate',
           null,
           'default',
+          0,
         ],
       ],
     ],
@@ -565,8 +566,17 @@ it('binds meaningful empty-directory owners as well as workspace file owners', a
           'aggregate',
           null,
           'default',
+          0,
         ],
-        ['outputs', [workspace + '/transformed/**'], ['.mammoth/**'], 'aggregate', null, 'default'],
+        [
+          'outputs',
+          [workspace + '/transformed/**'],
+          ['.mammoth/**'],
+          'aggregate',
+          null,
+          'default',
+          0,
+        ],
       ],
     ],
     '',
@@ -754,7 +764,7 @@ it.each([true, false])(
         'maven',
         ['.mammoth/**'],
         [
-          ['data', ['repository/**/*.jar'], ['.mammoth/**'], 'aggregate', null, 'default'],
+          ['data', ['repository/**/*.jar'], ['.mammoth/**'], 'aggregate', null, 'default', 0],
           [
             'metadata',
             ['repository/**/_remote.repositories'],
@@ -762,6 +772,7 @@ it.each([true, false])(
             'single-writer',
             'A',
             'default',
+            0,
           ],
         ],
       ],
@@ -884,7 +895,7 @@ it('rejects snapshot upsert overlapping an aggregate usage-only Maven unit', asy
       'maven',
       ['.mammoth/**'],
       [
-        ['data', ['repository/**/*.jar'], ['.mammoth/**'], 'aggregate', null, 'default'],
+        ['data', ['repository/**/*.jar'], ['.mammoth/**'], 'aggregate', null, 'default', 0],
         [
           'metadata',
           ['repository/**/_remote.repositories'],
@@ -892,6 +903,7 @@ it('rejects snapshot upsert overlapping an aggregate usage-only Maven unit', asy
           'single-writer',
           'A',
           'default',
+          0,
         ],
       ],
     ],

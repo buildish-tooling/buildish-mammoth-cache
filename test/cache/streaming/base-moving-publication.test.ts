@@ -45,8 +45,8 @@ it('splits shared parent geometry by owner while leaving excluded bookkeeping at
         'maven',
         hard,
         [
-          ['a', ['shared/**/a'], hard, 'aggregate', null, 'default'],
-          ['b', ['shared/**/b'], hard, 'aggregate', null, 'default'],
+          ['a', ['shared/**/a'], hard, 'aggregate', null, 'default', 0],
+          ['b', ['shared/**/b'], hard, 'aggregate', null, 'default', 0],
         ],
       ],
       'mixed-publication-',
@@ -107,7 +107,13 @@ it('publishes a meaningful empty subtree as native payload rather than a declare
 it('keeps a protected Gradle workspace split complete in the payload while its excluded lock stays live', async () => {
   const hard = ['.mammoth/**', '**/*.lock'],
     model = resolveModel(
-      ['model', 1, 'gradle', hard, [['data', ['caches/**'], hard, 'aggregate', null, 'default']]],
+      [
+        'model',
+        1,
+        'gradle',
+        hard,
+        [['data', ['caches/**'], hard, 'aggregate', null, 'default', 0]],
+      ],
       'workspace-publication-',
       1,
     );

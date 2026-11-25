@@ -108,7 +108,7 @@ export class PartitionSummaries {
         config,
         directories: 0,
         files: 0,
-        purge: config[6]?.length ? 'skipped' : 'not applicable',
+        purge: config[7]?.length ? 'skipped' : 'not applicable',
         deleted: 0,
         missing: 0,
         unsupported: 0,
@@ -134,7 +134,7 @@ export class PartitionSummaries {
     this.assert(this.model);
     this.capturing = true;
     for (const c of this.cells.values())
-      c.purge = c.config[6]?.length ? (enabled ? 'executed' : 'skipped') : 'not applicable';
+      c.purge = c.config[7]?.length ? (enabled ? 'executed' : 'skipped') : 'not applicable';
   }
   purge(id: string, outcome: Outcome) {
     if (this.analytics) this.cell(id)[outcome]++;
@@ -285,8 +285,8 @@ export class PartitionSummaries {
           JSON.stringify({
             id,
             includes: p[1],
-            excludes: [...new Set([...p[2], ...(p[6] ?? [])])],
-            purgeableGlobs: p[6] ?? [],
+            excludes: [...new Set([...p[2], ...(p[7] ?? [])])],
+            purgeableGlobs: p[7] ?? [],
             publication: p[3],
             writer: p[4],
             conflict: p[5],

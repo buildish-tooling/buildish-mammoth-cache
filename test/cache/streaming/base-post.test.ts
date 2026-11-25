@@ -123,6 +123,7 @@ it.each([
             'aggregate',
             null,
             'default',
+            0,
           ]),
         ],
         'survivor-work-',
@@ -287,7 +288,7 @@ it('keeps a local source return failure hard, retains stage paths and prevents f
 it('checks fresh Gradle quiescence before hook removal, observation or backend construction', async () => {
   const hard = ['.mammoth/**'],
     model = resolveModel(
-      ['model', 1, 'gradle', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default']]],
+      ['model', 1, 'gradle', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default', 0]]],
       'post-gradle-',
       1,
     ),

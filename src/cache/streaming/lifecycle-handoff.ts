@@ -21,6 +21,7 @@ import {
   type LocalCodec,
   type Policy,
 } from './local-schema';
+import { gradleSeedSchema, checkGradleSeed } from './gradle-layer';
 import { nameSchema, positiveSchema, uintSchema } from './schema';
 import { objectRefSchema, keySchema } from './native-records';
 import { pinnedPartitionMetadataSchema, decodePinnedPartitionMetadata } from './partition-metadata';
@@ -60,7 +61,7 @@ export function handoffSchemas(codec: LocalCodec) {
   const header = z
     .tuple([
       z.literal('handoff'),
-      z.literal(3),
+      z.literal(4),
       nameSchema,
       nameSchema.nullable(),
       nameSchema.nullable(),
@@ -71,6 +72,7 @@ export function handoffSchemas(codec: LocalCodec) {
       ref('activity'),
       uintSchema,
       uintSchema.max(16),
+      gradleSeedSchema(invocation).nullable(),
     ])
     .refine((row) => row[2] !== row[3]);
   const entry = z
@@ -151,6 +153,7 @@ export class LifecycleHandoff {
   #closed = false;
   private constructor(
     readonly header: HandoffHeader,
+    private readonly store: OwnedStore,
     readonly entries: readonly HandoffEntry[],
     private readonly release: () => void,
   ) {
@@ -184,11 +187,14 @@ export class LifecycleHandoff {
       }
       if (!header || entries.length !== store.codec.options.model.partitions.length)
         throw new Error('Incomplete handoff.');
-      return new LifecycleHandoff(header, entries, () => options.budget.release(charge));
+      return new LifecycleHandoff(header, store, entries, () => options.budget.release(charge));
     } catch (error) {
       options.budget.release(charge);
       throw error;
     }
+  }
+  assertBound(store: OwnedStore): void {
+    if (this.#closed || store !== this.store) throw new Error('Unbound/closed lifecycle handoff.');
   }
   checkGeneration(store: OwnedStore, generation: MetadataGeneration | null, policy: Policy): void {
     if (this.#closed) throw new Error('Closed handoff.');
@@ -209,6 +215,13 @@ export function checkHandoffGeneration(
   generation: MetadataGeneration | null,
   policy: Policy,
 ): void {
+  if (header[12]) {
+    checkGradleSeed(store, header[12], generation?.[11] ?? null);
+    if (policy[4] !== 'none') throw new Error('Layered handoff requires ordinary restore cleanup.');
+    for (const id of [header[12][5], header[12][6]])
+      if (entries.find((e) => e[1] === id)?.[2] !== 'available')
+        throw new Error('Incomplete seed handoff.');
+  }
   if ((generation === null) !== (header[8] === null))
     throw new Error('Handoff generation mismatch.');
   if (generation) {

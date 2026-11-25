@@ -45,6 +45,7 @@ it.each(['clean', 'excluded', 'mixed-aggregate', 'mixed-snapshot'] as const)(
           'aggregate',
           null,
           'default',
+          0,
         ],
       ];
     if (mixed)
@@ -55,6 +56,7 @@ it.each(['clean', 'excluded', 'mixed-aggregate', 'mixed-snapshot'] as const)(
         kind === 'mixed-snapshot' ? 'single-writer' : 'aggregate',
         kind === 'mixed-snapshot' ? 'B' : null,
         'default',
+        0,
       ]);
     const model = resolveModel(['model', 1, 'maven', hard, parts], 'maven-native-', 1),
       f = await metadataFixture(model);

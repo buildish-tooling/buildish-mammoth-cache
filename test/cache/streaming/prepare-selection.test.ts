@@ -31,7 +31,7 @@ function fixture() {
     rows: Value[] = [
       [
         'handoff',
-        3,
+        4,
         'refs/heads/main',
         null,
         null,
@@ -42,6 +42,7 @@ function fixture() {
         f.q('activity'),
         42,
         0,
+        null,
       ],
       ...f.options.model.partitions.map((p) => ['partition', p[0], 'miss', null, null] as Value),
     ];

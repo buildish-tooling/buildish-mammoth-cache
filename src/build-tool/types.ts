@@ -27,6 +27,8 @@ import type { PartitionPublication, PartitionConflictHandling } from '../config/
 export interface BuiltInCachePartitionPreset {
   /** Disposable regular-file globs; [] disables preset purging. Relative to the cache root. */
   readonly purgeableGlobs?: readonly string[];
+  /** Whether this partition is eligible for a read-only dependency seed. */
+  readonly readOnlyLayer?: boolean;
   readonly conflictHandling?: PartitionConflictHandling;
   readonly publication?: PartitionPublication;
   readonly id: string;
@@ -58,6 +60,8 @@ export interface BuildToolProvisionItem {
  * Result of the build-tool provisioning step executed during the bootstrap phase.
  */
 export interface BuildToolProvisioning {
+  /** Exact positively verified wrapper distribution supported by dependency layering. */
+  readonly dependencyLayerVersion?: string;
   /** Ordered list of items provisioned by the adapter. Empty when nothing was provisioned. */
   readonly items: readonly BuildToolProvisionItem[];
   /** Non-fatal warnings encountered during provisioning. */

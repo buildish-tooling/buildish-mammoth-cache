@@ -32,8 +32,8 @@ const model = resolveModel(
       'maven',
       hard,
       [
-        ['data', ['data/**'], hard, 'aggregate', null, 'default'],
-        ['state', ['state/**'], hard, 'single-writer', null, 'default'],
+        ['data', ['data/**'], hard, 'aggregate', null, 'default', 0],
+        ['state', ['state/**'], hard, 'single-writer', null, 'default', 0],
       ],
     ],
     'process-v2-',

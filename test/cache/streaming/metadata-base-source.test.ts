@@ -47,6 +47,7 @@ async function fixture(units = 2, tool: 'maven' | 'gradle' = 'maven') {
           'aggregate',
           null,
           'default',
+          0,
         ],
       ],
     ],

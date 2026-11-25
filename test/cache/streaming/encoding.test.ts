@@ -162,7 +162,7 @@ it.each(['.MAMMOTH/state', 'a/.mammoth/x', '.mammoth./x', 'a/.Mammoth /x'])(
         1,
         'maven',
         ['.mammoth/**'],
-        [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default']],
+        [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]],
       ],
       '',
       1,

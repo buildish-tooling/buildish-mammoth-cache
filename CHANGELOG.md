@@ -18,9 +18,18 @@ limitations under the License.
 
 ## Unreleased
 
-- Switch Gradle and Maven to the v2 native partition, generation, local handoff
-  and worker TAR profiles. Upgrade cooperating workflow jobs together. Older
-  cache families start cold.
+- Switch Gradle and Maven to partition v2 and generation v3, with an appended
+  nullable generation slot reserved for future sweeps. Local handoffs use v4;
+  worker TAR remains v2. Upgrade cooperating jobs together; older families start cold.
+- Split Gradle dependency artifacts (`modules-2/files-2.1`) from writable JAR and
+  resource support. Keep all `modules-2/metadata-*` snapshots under their existing
+  designated writer. Retired `modules` overrides require explicit migration.
+- Add opt-in Gradle dependency layers for qualified 9.6.1 wrapper workers. Owned
+  seeds stay outside writable capture and retire after registered consumers stop.
+  Publishers retain eligible partitions; sweeps and Maven layering are deferred.
+  Add a seed-path output and optional environment export, with ordinary fallback
+  for unsupported or incomplete cohorts. Main-branch CI qualifies warm writable
+  workers on Linux, Windows and macOS.
 - Publish changed native partition objects before the immutable generation.
   Reuse exact refs for unaffected partitions, including when only lineage
   metadata changes. Base change detection uses filesystem metadata and can

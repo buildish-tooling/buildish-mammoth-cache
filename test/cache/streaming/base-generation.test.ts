@@ -21,6 +21,10 @@ import {
   MetadataBaseRestore,
   readMetadataGeneration,
 } from '../../../src/cache/streaming/metadata-base-restore';
+import { resolveModel, lineageId } from '../../../src/cache/streaming/model';
+import { H } from '../../../src/cache/streaming/encoding';
+import { STREAMING_PROFILES } from '../../../src/cache/streaming/profiles';
+import { mkdir } from 'node:fs/promises';
 import { encodeRecord } from '../../../src/cache/streaming/encoding';
 const fixtures: MetadataFixture[] = [];
 afterEach(async () => {
@@ -30,8 +34,8 @@ afterEach(async () => {
     await f.close();
   }
 });
-async function fixture() {
-  const f = await metadataFixture();
+async function fixture(model?: Parameters<typeof metadataFixture>[0]) {
+  const f = await metadataFixture(model);
   fixtures.push(f);
   return f;
 }
@@ -192,3 +196,80 @@ it('surfaces an incoming backend failure instead of treating a failed extraction
   expect(f.restore).toHaveBeenCalledTimes(1);
   expect(await readdir(f.store.root.resolve(f.store.prefix + 'base'))).toEqual([]);
 });
+
+it.each(['gradle', 'maven'] as const)(
+  'isolates %s old and new generation discovery with both records present',
+  async (tool) => {
+    const hard = ['.mammoth/**'];
+    const tuple = [
+      'model',
+      1,
+      tool,
+      hard,
+      [['data', ['data/**'], hard, 'aggregate', null, 'default', 0]],
+    ];
+    const model = resolveModel(tuple, 'metadata-restore-', 1),
+      f = await fixture(model);
+    const seeded = await f.seed({});
+    const legacyTuple = [
+      'model',
+      1,
+      tool,
+      hard,
+      [['data', ['data/**'], hard, 'aggregate', null, 'default']],
+    ];
+    const legacyModel = H('model', legacyTuple),
+      legacyFamily =
+        'mammoth-s1-' +
+        tool +
+        '-' +
+        H('family', [
+          'family',
+          1,
+          'metadata-restore-',
+          1,
+          legacyModel,
+          ...Object.values({ ...STREAMING_PROFILES, generation: 'generation-v2' }),
+        ]);
+    const old = [...seeded.generation.slice(0, 12)];
+    old[1] = 2;
+    old[2] = 'generation-v2';
+    old[3] = legacyFamily;
+    old[4] = legacyModel;
+    old[10] = H('partition-decisions', ['partition-decisions', 2, ...old.slice(3, 10)]);
+    old[11] = legacyFamily + '-r-' + lineageId(currentRef) + '-g-' + old[6] + '-d-' + old[10];
+    const oldKey = String(old[11]),
+      target = seeded.target + '-legacy';
+    await mkdir(target);
+    await writeFile(target + '/record.json', encodeRecord(old));
+    f.objects.set(oldKey, target);
+    const restored = await acquire(f);
+    try {
+      expect(restored.key).toBe(seeded.generation[11]);
+      expect(f.restore.mock.calls[0][1]).toBe(model.family + '-r-' + lineageId(currentRef) + '-g-');
+      expect(oldKey.startsWith(String(f.restore.mock.calls[0][1]))).toBe(false);
+    } finally {
+      await restored.dispose();
+    }
+    f.objects.delete(seeded.generation[11]);
+    const cold = await acquire(f);
+    try {
+      expect(cold.key).toBeNull();
+    } finally {
+      await cold.dispose();
+    }
+    // The prior release's family prefix still selects its own record, not v3.
+    const oldReaderRoot = target + '-reader';
+    await mkdir(oldReaderRoot);
+    expect(
+      await f.api.restoreCache([], legacyFamily + '-r-' + lineageId(currentRef) + '-g-', [], {
+        archiveRoot: oldReaderRoot,
+      }),
+    ).toBe(oldKey);
+    expect(JSON.parse(await readFile(oldReaderRoot + '/record.json', 'utf8')).slice(0, 3)).toEqual([
+      'generation',
+      2,
+      'generation-v2',
+    ]);
+  },
+);

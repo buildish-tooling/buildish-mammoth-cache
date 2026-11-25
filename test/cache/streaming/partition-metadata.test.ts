@@ -30,7 +30,7 @@ const model = resolveModel(
     1,
     'gradle',
     ['.mammoth/**'],
-    [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default']],
+    [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]],
   ],
   'metadata-',
   1,

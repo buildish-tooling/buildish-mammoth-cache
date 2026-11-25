@@ -417,3 +417,50 @@ cache-partitions:
     dependent-jobs: worker-a, worker-b
     config-file: .github/buildish-mammoth-gradle.yml
 ```
+
+## Gradle dependency layer
+
+Set `dependency-cache-layer: true` on all cooperating Gradle jobs. A writable distributed worker
+can then consume an invocation-owned read-only dependency seed while keeping misses in its
+ordinary writable user home. Standalone and aggregator jobs publish the same retained family;
+they do not activate a seed. The designated dependency-metadata writer also uses an ordinary
+writable installation. This is an opt-in configuration of the existing Action, with no new launcher.
+
+```yaml
+- uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+  id: mammoth
+  with:
+    job-mode: distributed-worker
+    dependency-cache-layer: true
+    wrapper-properties-files: gradle/wrapper/gradle-wrapper.properties
+- run: ./gradlew build
+```
+
+The initial supported consumer is a selected wrapper positively resolved to Gradle **9.6.1**.
+Every Gradle process consuming the advertised seed must use that selected qualified version.
+Do not override the wrapper distribution or launch another Gradle installation after prepare.
+The operational registration hook diagnoses an actual version mismatch and allows post to settle
+that registered consumer. Normal jobs retain their existing registration behavior.
+
+Activation requires a coherent restored `modules-2/files-2.1` and `modules-2/metadata-2.107` cohort,
+default dependency layouts, writable worker mode, `restore-cleanup-mode: none`, and no selected single-writer
+partition owned by that worker. Missing/partial cohorts, unsupported or unknown wrapper versions,
+custom dependency layouts, read-only jobs, and other roles use the complete ordinary installation
+before any seed roots are detached. Layer eligibility does not infer support for future versions.
+
+The default exports `GRADLE_RO_DEP_CACHE` for subsequent steps and emits the same absolute path as
+`steps.mammoth.outputs.gradle-ro-dep-cache`. With `export-layer-environment: false`, set that
+variable yourself for every consumer. An existing nonempty value conflicts with eligible prepare.
+Keep all consumers inside the prepare/post lifetime; do not save the path for another job. Post
+settles registered Gradle processes, captures only writable state, then retires the owned seed.
+Once advertisement is attempted, even a failed or interrupted prepare retains the path until its
+owning post, covering later `always()` or `continue-on-error` consumers. Incomplete activation
+runs cleanup only and publishes no worker envelope. Uncertain ownership or quiescence retains
+reported diagnostic state rather than deleting a potentially live or replaced path.
+
+Inherited dependency bytes still download and extract once into the seed. They avoid writable
+capture and worker-delta upload; new dependencies use the writable head. Publishers retain marked
+aggregate dependency partitions instead of timestamp eviction in this family. This can grow backend
+storage; seed sweeps and capacity eviction are deferred. Metadata retains its complete snapshot and
+designated-writer semantics. The family and protocol transition starts cold, including ordinary
+Maven generations; Maven layering is not exposed.

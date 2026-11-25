@@ -61,13 +61,13 @@ Raw SHA-256 of that body: `617ee6cbadeae76300d1e0efddc0bb8a7e657cdfb3e5dbca4ff30
 The exact model and family projection are:
 
 ```text
-["model",1,"maven",[".mammoth/**"],[["data",["repository/**"],[".mammoth/**"],"aggregate",null,"default"],["metadata",["metadata/**"],[".mammoth/**"],"single-writer","A","default"]]]
-["family",1,"vectors-",1,"7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","worker-tar-v2","native-metadata-v2","generation-v2","local-v2","path-policy-v1","unit-policy-v1","glob-policy-v1"]
+["model",1,"maven",[".mammoth/**"],[["data",["repository/**"],[".mammoth/**"],"aggregate",null,"default",0],["metadata",["metadata/**"],[".mammoth/**"],"single-writer","A","default",0]]]
+["family",1,"vectors-",1,"e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","worker-tar-v2","native-metadata-v2","generation-v3","local-v2","path-policy-v1","unit-policy-v1","glob-policy-v1"]
 ```
 
-Model ID: `7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c`.
+Model ID: `e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c`.
 
-Family ID: `mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23`.
+Family ID: `mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127`.
 
 Context is `["github","example/repo","ci","42","A",1,"rev-1","maven"]`.
 The namespace is `vectors-`, configured cache schema is 1, and expected model/family
@@ -153,7 +153,7 @@ No wrapper bytes enter event digests. After complete, require the TAR ends and
 clean single-member gzip end, as specified by the wire contract.
 
 ```text
-["identity",["identity",1,"worker-tar-v2","gzip",["github","example/repo","ci","42","A",1,"rev-1","maven"],"7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23",["metadata"]]]
+["identity",["identity",1,"worker-tar-v2","gzip",["github","example/repo","ci","42","A",1,"rev-1","maven"],"e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127",["metadata"]]]
 ["control",1,["channel-open",0,"aggregate",null]]
 ["directory",["header",0,"","directory",0,493,0]]
 ["control",2,["dir-open",0,""]]
@@ -180,7 +180,7 @@ clean single-member gzip end, as specified by the wire contract.
 ["control",18,["dir-open",2,""]]
 ["control",19,["dir-close",2,""]]
 ["control",20,["channel-close",2,[0,1,0,0,0],"6960e472161ba0ff6c10644640b2c35bf61c5c7935bd83cd2a24d979925f5d20"]]
-["complete",["complete",1,20,2,[2,5,1,0,3],[[0,"aggregate",null,[2,3,1,0,3],"7ef7f5566a5d956bf8fe0df6209b1f89b40f4c40b70f36167907c8bd27641029"],[1,"usage",null,[0,1,0,0,0],"215cb7b9bfd211b0897b1a79f7e04ea8fd346e3b06a213c3e54e5332dd93568b"],[2,"snapshot","metadata",[0,1,0,0,0],"6960e472161ba0ff6c10644640b2c35bf61c5c7935bd83cd2a24d979925f5d20"]],"939cb143de9965250cc4ad3f7f9170c418a969fd541239928e5f9cc91c780cbc"]]
+["complete",["complete",1,20,2,[2,5,1,0,3],[[0,"aggregate",null,[2,3,1,0,3],"7ef7f5566a5d956bf8fe0df6209b1f89b40f4c40b70f36167907c8bd27641029"],[1,"usage",null,[0,1,0,0,0],"215cb7b9bfd211b0897b1a79f7e04ea8fd346e3b06a213c3e54e5332dd93568b"],[2,"snapshot","metadata",[0,1,0,0,0],"6960e472161ba0ff6c10644640b2c35bf61c5c7935bd83cd2a24d979925f5d20"]],"1ea9434a00347f8d8bf1f0128a9bfa0e9d9ffb9d3383e583379213135056ac73"]]
 ```
 
 ### Expected channel and final values
@@ -193,7 +193,7 @@ clean single-member gzip end, as specified by the wire contract.
 
 Total counts: `[2,5,1,0,3]`; last control sequence: `20`; last payload ordinal: `2`.
 
-Final worker-events SHA-256: `939cb143de9965250cc4ad3f7f9170c418a969fd541239928e5f9cc91c780cbc`.
+Final worker-events SHA-256: `1ea9434a00347f8d8bf1f0128a9bfa0e9d9ffb9d3383e583379213135056ac73`.
 
 Raw SHA-256 of canonical complete body including LF: `799eb0e4dab2f48a5e7ae12e77dd1a145eb8c7b7eb21677bab502dfa80e8d185`.
 
@@ -206,7 +206,7 @@ is not invented by the decoder; caller-side required/optional writer policy stil
 applies. The complete effective trace is:
 
 ```text
-["identity",["identity",1,"worker-tar-v2","gzip",["github","example/repo","ci","42","A",1,"rev-1","maven"],"7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23",[]]]
+["identity",["identity",1,"worker-tar-v2","gzip",["github","example/repo","ci","42","A",1,"rev-1","maven"],"e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127",[]]]
 ["control",1,["channel-open",0,"aggregate",null]]
 ["directory",["header",0,"","directory",0,493,0]]
 ["control",2,["dir-open",0,""]]
@@ -216,7 +216,7 @@ applies. The complete effective trace is:
 ["control",6,["dir-open",1,""]]
 ["control",7,["dir-close",1,""]]
 ["control",8,["channel-close",1,[0,1,0,0,0],"215cb7b9bfd211b0897b1a79f7e04ea8fd346e3b06a213c3e54e5332dd93568b"]]
-["complete",["complete",1,8,0,[0,2,0,0,0],[[0,"aggregate",null,[0,1,0,0,0],"677790bf6b15798f7e27668a6b97714c330fef67c01d1f8cc20141f6c379fe0f"],[1,"usage",null,[0,1,0,0,0],"215cb7b9bfd211b0897b1a79f7e04ea8fd346e3b06a213c3e54e5332dd93568b"]],"41242a473a615380debd674ca50e46067f08bfe2cb96ca22f02493223da2dd11"]]
+["complete",["complete",1,8,0,[0,2,0,0,0],[[0,"aggregate",null,[0,1,0,0,0],"677790bf6b15798f7e27668a6b97714c330fef67c01d1f8cc20141f6c379fe0f"],[1,"usage",null,[0,1,0,0,0],"215cb7b9bfd211b0897b1a79f7e04ea8fd346e3b06a213c3e54e5332dd93568b"]],"13063138dacc3f472efdf4011d4ca6318746c4b6389620b00338032bf3674422"]]
 ```
 
 | Channel       | Counts        | Event SHA-256                                                      |
@@ -226,7 +226,7 @@ applies. The complete effective trace is:
 
 Total counts: `[0,2,0,0,0]`; last control sequence: `8`; last payload ordinal: `0`.
 
-Final worker-events SHA-256: `41242a473a615380debd674ca50e46067f08bfe2cb96ca22f02493223da2dd11`.
+Final worker-events SHA-256: `13063138dacc3f472efdf4011d4ca6318746c4b6389620b00338032bf3674422`.
 
 Raw SHA-256 of canonical complete body including LF: `2427c933f487dd58d3136cba40ee69b6d4da90ee6b157680effccafa57693fa0`.
 
@@ -322,7 +322,7 @@ an owner from a hash. SHA-256/U64BE framing independently gives:
 ```text
 producerSha = 7bc0bf858d916f802423c244043963037a23be107d90ccbebeeed37f091cebb5
 decisionSha = fdf7860d24ea9a9c72d24be05abf152c1a5c23db8e4a88dbb24bf23fd7031692
-name = mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23-w7bc0bf858d916f802423c244043963037a23be107d90ccbebeeed37f091cebb5-a1-dfdf7860d24ea9a9c72d24be05abf152c1a5c23db8e4a88dbb24bf23fd7031692.tar.gz
+name = mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127-w7bc0bf858d916f802423c244043963037a23be107d90ccbebeeed37f091cebb5-a1-dfdf7860d24ea9a9c72d24be05abf152c1a5c23db8e4a88dbb24bf23fd7031692.tar.gz
 ```
 
 Changing runAttempt changes its decimal name segment, not producerSha. A different
@@ -335,10 +335,10 @@ Compressed package/download/read SHA and strict full worker validation remain se
 Canonical model (no LF in the framed model digest):
 
 ```text
-["model",1,"maven",[".mammoth/**"],[["data",["data/**"],[".mammoth/**"],"aggregate",null,"default",["data/*.tmp"]]]]
+["model",1,"maven",[".mammoth/**"],[["data",["data/**"],[".mammoth/**"],"aggregate",null,"default",0,["data/*.tmp"]]]]
 ```
 
-Model ID: `bd2038f6837e6be40ec90eab8a8b0f7ba8e509cbfb98b0aded28621d79716475`. The final nonempty purge list is part of the existing model
+Model ID: `1af7f00459531ee214786c73d330bf6155a771fa44297d239853b8e46259b85f`. The final nonempty purge list is part of the existing model
 identity; omission represents no purging. Preserve-only exclusions remain distinct,
 even when the upload exclusion union would be identical. No separate policy Q exists.
 
@@ -406,27 +406,28 @@ insert and its full source evidence are mandatory, as specified in the
 ## M2: metadata-only base and local pin
 
 These vectors describe the active incompatible metadata reader/writer/handoff cut.
-Worker TAR grammar is v2; its profile changes the family and all family-derived identities. Model/prefix/schema are
+Worker TAR grammar remains v2; generation-v3 and explicit partition seed eligibility
+change the family and all family-derived identities. Model/prefix/schema are
 the existing Maven model vector, `vectors-`, and 1.
 
 Family:
 
 ```text
-mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23
+mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127
 ```
 
 Exact descriptor (canonical UTF-8 JSON plus one LF), followed by its object-ref:
 
 ```text
-["base-object",2,"native-metadata-v2",["mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]]
-["object-ref",["mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-w-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p-data-d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",400,"b82ff776dddf1417efaa2f9211e66e39dc74f10105c22624badff5d0a8ce5efd"]
+["base-object",2,"native-metadata-v2",["mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]]
+["object-ref",["mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-w-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p-data-d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",400,"0980b8fd4a18254ce27f8c87938c0dc73d34c68f1721f01d0818f19ffafaf0bf"]
 ```
 
 The descriptor has 400 bytes. Its SHA binds this control document only, with no
-payload membership/content assertions. Exact generation-v2 record:
+payload membership/content assertions. Exact generation-v3 record (the final reserved sweep timestamp is unset):
 
 ```text
-["generation",2,"generation-v2","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",[["object","data",["object-ref",["mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-w-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p-data-d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",400,"b82ff776dddf1417efaa2f9211e66e39dc74f10105c22624badff5d0a8ce5efd"]],["empty","metadata"]],[["data"],["metadata"]],"b7085ae5a5e580a9d473e0e4d946860081edd13abc7635e8ec005a93f43cbe34","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-g-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-d-b7085ae5a5e580a9d473e0e4d946860081edd13abc7635e8ec005a93f43cbe34"]
+["generation",3,"generation-v3","mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",[["object","data",["object-ref",["mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-w-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p-data-d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",400,"0980b8fd4a18254ce27f8c87938c0dc73d34c68f1721f01d0818f19ffafaf0bf"]],["empty","metadata"]],[["data"],["metadata"]],"47ce1a4a69c841392f1f868a47d82df11c12877dcf176b0e6a8d37957ac39831","mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-g-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-d-47ce1a4a69c841392f1f868a47d82df11c12877dcf176b0e6a8d37957ac39831",null]
 ```
 
 For the local Unix summary, frame the profile, then the directory and file rows
@@ -444,7 +445,7 @@ The pin binds invocation `a` repeated 64 times and the exact admitted materializ
 object before overlays. It has no file list:
 
 ```text
-["pinned-partition-metadata",2,"local-v2","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","data",["object-ref",["mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-w-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p-data-d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",400,"b82ff776dddf1417efaa2f9211e66e39dc74f10105c22624badff5d0a8ce5efd"],["native-metadata-summary",1,"unix-mode-0777","native-mtime-ns","files-first-utf8-dfs"],["partition-metadata",1,"5c3a86e03c9862757616c819182b753a8c2fd95b13edfc0fe78949820f22f94b",1,1,3]]
+["pinned-partition-metadata",2,"local-v2","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","data",["object-ref",["mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","data","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127-r-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-w-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p-data-d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",400,"0980b8fd4a18254ce27f8c87938c0dc73d34c68f1721f01d0818f19ffafaf0bf"],["native-metadata-summary",1,"unix-mode-0777","native-mtime-ns","files-first-utf8-dfs"],["partition-metadata",1,"5c3a86e03c9862757616c819182b753a8c2fd95b13edfc0fe78949820f22f94b",1,1,3]]
 ```
 
 ## H2: minimal successful-main handoff
@@ -455,19 +456,19 @@ Native/index/GC authority is freshly admitted and is never encoded here. Exact
 handoff framing plus its Q (each record is canonical JSON plus LF):
 
 ```text
-["local-stream",1,"handoff","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23",null]
-["handoff",3,"refs/heads/main",null,null,7,"enabled",null,null,["ref","activity",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/activity",369,"0fe4a82f6364415aa590427fcc3eff49059dc05e148dd6eab8c07d82a886760b"],1234,0]
+["local-stream",1,"handoff","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127",null]
+["handoff",4,"refs/heads/main",null,null,7,"enabled",null,null,["ref","activity",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/activity",369,"c3ebf73de55c4ff5f83619ccb82e1a151e3ac577820871ce486462b9d0ae7a03"],1234,0,null]
 ["partition","data","miss",null,null]
 ["partition","metadata","miss",null,null]
-["local-end",3,"f8cfc3da1791bb2c3e355414229971e1570dd0bda45151db4d9d19ba8d0380fc"]
-["ref","handoff",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/handoff",670,"c0cd0b7891c6f5a4c17eaa456d5caf9248749d358a95bf175f6a1be444f342d7"]
+["local-end",3,"12b4b923324f3dd853d36876b204e47f7347b75c3c5bb47ec8b9cbb2859a94a3"]
+["ref","handoff",".mammoth/v1/7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299/files/handoff",675,"6c456b1e8e6fbb3d6f6b12a1dcd133b9256a44ef42175867439efd978702100d"]
 ```
 
 The activity Q names this exact empty activity stream:
 
 ```text
-["local-stream",1,"activity","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c","mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23",null]
+["local-stream",1,"activity","7ca0244a1b6d0e46ff8e799981e395ab96b10b620463b3b6071874ec46472299","e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c","mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127",null]
 ["dir-open",""]
 ["dir-close",""]
-["local-end",2,"e6a0dadd3d5a3f1e0d9126e7652361ef8f15eef24f188e05223f1f36fdadee49"]
+["local-end",2,"c30c12fd6a873cacc46a0d7d0953a2cb35c043653cfded9620290fe80f0dc0f9"]
 ```

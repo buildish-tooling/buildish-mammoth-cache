@@ -61,7 +61,7 @@ it('derives generation bytes/key using an independent single-frame oracle', () =
   const g = createGeneration(m, h, h, h, entries, groups);
   const sha = independentlyHash('partition-decisions', [
     'partition-decisions',
-    2,
+    3,
     m.family,
     m.id,
     h,
@@ -69,14 +69,15 @@ it('derives generation bytes/key using an independent single-frame oracle', () =
     h,
     entries,
     groups,
+    null,
   ]);
   const key = m.family + '-r-' + h + '-g-' + h + '-d-' + sha;
   expect(encodeRecord(g)).toEqual(
     Buffer.from(
       JSON.stringify([
         'generation',
-        2,
-        'generation-v2',
+        3,
+        'generation-v3',
         m.family,
         m.id,
         h,
@@ -86,6 +87,7 @@ it('derives generation bytes/key using an independent single-frame oracle', () =
         groups,
         sha,
         key,
+        null,
       ]) + '\n',
     ),
   );
@@ -161,6 +163,7 @@ it('checks transitive model-bounded groups and partial availability', () => {
         'aggregate',
         null,
         'default',
+        0,
       ]),
     ],
     'groups-',
@@ -180,7 +183,7 @@ it('checks transitive model-bounded groups and partial availability', () => {
   expect(() => groups.check([['b', 'a', 'c'], ['d']])).toThrow('order');
   expect(() => groups.check([['a', 'b', 'c'], ['c']])).toThrow('duplicate');
 });
-it('keeps the documented 64 maximum-width partition fixture at 65,383 bytes', () => {
+it('keeps the documented 64 maximum-width partition fixture at 65,388 bytes', () => {
   const ids = Array.from({ length: 64 }, (_, i) => String(i).padStart(2, '0') + 'a'.repeat(62));
   const m = resolveModel(
     [
@@ -188,7 +191,7 @@ it('keeps the documented 64 maximum-width partition fixture at 65,383 bytes', ()
       1,
       'gradle',
       ['.mammoth/**'],
-      ids.map((id) => [id, [id + '/**'], ['.mammoth/**'], 'aggregate', null, 'default']),
+      ids.map((id) => [id, [id + '/**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]),
     ],
     'max-',
     1,
@@ -204,7 +207,7 @@ it('keeps the documented 64 maximum-width partition fixture at 65,383 bytes', ()
     }),
     ids.map((id) => [id]),
   );
-  expect(encodeRecord(g).length).toBe(65383);
+  expect(encodeRecord(g).length).toBe(65388);
   expect(decodeGeneration(encodeRecord(g), m)).toEqual(g);
   expect(() => decodeGeneration(Buffer.alloc(65537, 32), m)).toThrow();
 });

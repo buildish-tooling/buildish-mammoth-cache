@@ -29,7 +29,7 @@ afterEach(async () => {
 async function fixture() {
   const hard = ['.mammoth/**'],
     model = resolveModel(
-      ['model', 1, 'gradle', hard, [['data', ['**'], hard, 'single-writer', 'A', 'default']]],
+      ['model', 1, 'gradle', hard, [['data', ['**'], hard, 'single-writer', 'A', 'default', 0]]],
       'mtime-',
       1,
     ),

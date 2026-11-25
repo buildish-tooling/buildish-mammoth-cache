@@ -53,8 +53,8 @@ async function fixture(filesPerUnit: number, alias = false) {
       'gradle',
       hard,
       [
-        ['a', ['shared/a/**'], hard, 'aggregate', null, 'default'],
-        ['b', ['shared/b/**'], hard, 'aggregate', null, 'default'],
+        ['a', ['shared/a/**'], hard, 'aggregate', null, 'default', 0],
+        ['b', ['shared/b/**'], hard, 'aggregate', null, 'default', 0],
       ],
     ],
     'bounded-index-',
@@ -173,7 +173,7 @@ it('checks each staged parent once across shared depth and partition count', asy
         1,
         'gradle',
         hard,
-        ids.map((id) => [id, ['shared/**/file-' + id], hard, 'aggregate', null, 'default']),
+        ids.map((id) => [id, ['shared/**/file-' + id], hard, 'aggregate', null, 'default', 0]),
       ],
       'shared-boundaries-',
       1,
@@ -270,7 +270,7 @@ it('stops boundary-only restore work below intact roots and preserves the exact 
 async function gradleRestore() {
   const hard = ['.mammoth/**', '**/*.lock'];
   const model = resolveModel(
-    ['model', 1, 'gradle', hard, [['data', ['caches/**'], hard, 'aggregate', null, 'default']]],
+    ['model', 1, 'gradle', hard, [['data', ['caches/**'], hard, 'aggregate', null, 'default', 0]]],
     'trusted-base-',
     1,
   );
@@ -363,7 +363,7 @@ it('enforces consumer breadth when a writable restore needs a reuse summary', as
 it('keeps the accessor workspace kind when an intact directory has an uppercase JAR extra', async () => {
   const hard = ['.mammoth/**', '**/*.lock'];
   const model = resolveModel(
-    ['model', 1, 'gradle', hard, [['data', ['caches/**'], hard, 'aggregate', null, 'default']]],
+    ['model', 1, 'gradle', hard, [['data', ['caches/**'], hard, 'aggregate', null, 'default', 0]]],
     'workspace-boundary-',
     1,
   );

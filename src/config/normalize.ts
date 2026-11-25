@@ -52,6 +52,14 @@ export function normalizeSharedActionConfig(
     phase: options.phase,
     baseDirectory: normalizeRelativePath(rawInputs.baseDirectory || '.', 'base-directory'),
     cacheEnabled: parseBooleanInput(rawInputs.cacheEnabled || 'true', 'cache-enabled'),
+    dependencyCacheLayer: parseBooleanInput(
+      rawInputs.dependencyCacheLayer || 'false',
+      'dependency-cache-layer',
+    ),
+    exportLayerEnvironment: parseBooleanInput(
+      rawInputs.exportLayerEnvironment || 'true',
+      'export-layer-environment',
+    ),
     readOnly: resolveReadOnlyInput(rawInputs, rawInputs.readOnly, options.ciContext),
     jobMode,
     dependentJobs,

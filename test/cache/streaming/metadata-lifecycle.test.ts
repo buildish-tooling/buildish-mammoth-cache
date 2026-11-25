@@ -124,7 +124,7 @@ async function prepare(
     model =
       config.model ??
       resolveModel(
-        ['model', 1, 'maven', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default']]],
+        ['model', 1, 'maven', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default', 0]]],
         'metadata-lifecycle-',
         1,
       ),
@@ -258,8 +258,8 @@ function snapshotModel(writer: string | null = 'A') {
       'maven',
       hard,
       [
-        ['data', ['data/**'], hard, 'aggregate', null, 'default'],
-        ['state', ['state/**'], hard, 'single-writer', writer, 'default'],
+        ['data', ['data/**'], hard, 'aggregate', null, 'default', 0],
+        ['state', ['state/**'], hard, 'single-writer', writer, 'default', 0],
       ],
     ],
     'snapshot-lifecycle-',
@@ -565,7 +565,7 @@ it('writes one lineage-only bounded record using exact prior groups with no payl
         1,
         'maven',
         hard,
-        [['data', ['repository/**'], hard, 'aggregate', null, 'default']],
+        [['data', ['repository/**'], hard, 'aggregate', null, 'default', 0]],
       ],
       'lineage-v2-',
       1,
@@ -637,7 +637,7 @@ it('keeps original activity and actual pre-freeze purge outcomes without a base 
       1,
       'maven',
       hard,
-      [['data', ['data/**'], hard, 'aggregate', null, 'default', ['data/purge/**']]],
+      [['data', ['data/**'], hard, 'aggregate', null, 'default', 0, ['data/purge/**']]],
     ],
     'purge-v2-',
     1,
@@ -841,8 +841,8 @@ it('preserves unchanged Gradle objects through a real worker overlay and fresh w
       'gradle',
       hard,
       [
-        ['data', ['data/**'], hard, 'aggregate', null, 'default'],
-        ['stable', ['stable/**'], hard, 'aggregate', null, 'default'],
+        ['data', ['data/**'], hard, 'aggregate', null, 'default', 0],
+        ['stable', ['stable/**'], hard, 'aggregate', null, 'default', 0],
       ],
     ],
     'gradle-overlay-reuse-',
@@ -884,4 +884,114 @@ it('preserves unchanged Gradle objects through a real worker overlay and fresh w
   expect(await readFile(consumer.store.root.resolve('stable/source'), 'utf8')).toBe('stable');
   expect((await post(consumer, sdk.api)).outcome).toBe('no-change');
   expect(sdk.saves).toHaveBeenCalledTimes(publishedCount + 2);
+});
+
+function dependencyLayerModel(enabled: boolean) {
+  const hard = ['.mammoth/**'];
+  return resolveModel(
+    [
+      'model',
+      1,
+      'gradle',
+      hard,
+      [
+        ['dependencies', ['dependencies/**'], hard, 'aggregate', null, 'default', 1],
+        ['other', ['other/**'], hard, 'aggregate', null, 'default', 0],
+      ],
+      ...(enabled ? ['retain-dependencies'] : []),
+    ],
+    'dependency-layer-',
+    1,
+  );
+}
+
+it.each([
+  { role: 'standalone' as const, enabled: true },
+  { role: 'distributed-aggregator' as const, enabled: true },
+  { role: 'standalone' as const, enabled: false },
+  { role: 'distributed-aggregator' as const, enabled: false },
+])(
+  'uses frozen publisher retention for $role with layer policy $enabled and zero worker activations',
+  async ({ role, enabled }) => {
+    const sdk = await backend(),
+      model = dependencyLayerModel(enabled);
+    const initial = await prepare(sdk.api, 'd0'.repeat(16), { model });
+    await buildFiles(initial, {
+      'dependencies/shared/old-a.jar': 'inherited-a',
+      'dependencies/shared/old-b.jar': 'inherited-b',
+      'other/shared/old.jar': 'unrelated',
+    });
+    const seed = await post(initial, sdk.api);
+    expect(seed.outcome).toBe('published');
+    const currentRef = role === 'standalone' ? 'refs/heads/main' : 'refs/heads/feature';
+    const publisher = await prepare(sdk.api, 'd1'.repeat(16), {
+      model,
+      role,
+      currentRef,
+      defaultRef: 'refs/heads/main',
+      artifacts: memoryArtifacts().api,
+      gcAgeMs: 14 * 86400000,
+      now: () => Date.now() + 10000,
+    });
+    expect(publisher.restoredKey).toBe(seed.key);
+    expect(publisher.workerCount).toBe(0);
+    expect(publisher.restoreStatus).toBe(
+      role === 'standalone' ? 'current-lineage-hit' : 'fallback-lineage-hit',
+    );
+    // This old local contribution was never in the inherited seed.
+    await buildFiles(publisher, { 'dependencies/shared/new-old.jar': 'contribution' });
+    const reopened = await OpenedInvocation.open(publisher.anchor, publisher.budget);
+    expect(reopened.store).not.toBe(publisher.store);
+    expect(reopened.store.codec.options.model.dependencyCacheLayer).toBe(enabled);
+    const publication = await post(publisher, sdk.api);
+    expect(publication.outcome).toBe('published');
+    for (const name of ['old-a.jar', 'old-b.jar', 'new-old.jar']) {
+      const stat = await publisher.store.root.stat('dependencies/shared/' + name);
+      expect(stat !== null, name).toBe(enabled);
+    }
+    expect(await publisher.store.root.stat('other/shared/old.jar')).toBeNull();
+    const reader = await prepare(sdk.api, 'd2'.repeat(16), { model, currentRef });
+    expect(reader.restoredKey).toBe(publication.key);
+    expect((await reader.store.root.stat('dependencies/shared/old-a.jar')) !== null).toBe(enabled);
+    await assertNoCatalogue(publisher, true);
+  },
+);
+
+it('keeps protected worker-head GC ordinary while the shared family isolates ordinary-GC generations', async () => {
+  const sdk = await backend(),
+    ordinary = dependencyLayerModel(false),
+    protectedModel = dependencyLayerModel(true);
+  expect(ordinary.partitions).toEqual(protectedModel.partitions);
+  expect(ordinary.family).not.toBe(protectedModel.family);
+  const ordinarySeed = await prepare(sdk.api, 'e0'.repeat(16), { model: ordinary });
+  await buildFiles(ordinarySeed, { 'dependencies/shared/old.jar': 'ordinary' });
+  await post(ordinarySeed, sdk.api);
+  const isolated = await prepare(sdk.api, 'e1'.repeat(16), {
+    model: protectedModel,
+    role: 'distributed-worker',
+    currentRef: 'refs/heads/feature',
+    defaultRef: 'refs/heads/main',
+  });
+  expect(isolated.restoreStatus).toBe('miss');
+  expect(await isolated.store.root.stat('dependencies/shared/old.jar')).toBeNull();
+  const initial = await prepare(sdk.api, 'e2'.repeat(16), { model: protectedModel });
+  await buildFiles(initial, { 'dependencies/shared/old.jar': 'protected' });
+  const seed = await post(initial, sdk.api);
+  const worker = await prepare(sdk.api, 'e3'.repeat(16), {
+    model: protectedModel,
+    role: 'distributed-worker',
+    gcAgeMs: 14 * 86400000,
+    now: () => Date.now() + 10000,
+  });
+  expect(worker.restoredKey).toBe(seed.key);
+  const artifacts = memoryArtifacts();
+  const result = await postStreamingWorker({
+    anchor: worker.anchor,
+    budget: worker.budget,
+    artifactBackend: async () => artifacts.api,
+    assertCurrent: (): undefined => {},
+  });
+  expect(result.outcome).toBe('worker-uploaded');
+  expect(await worker.store.root.stat('dependencies/shared/old.jar')).toBeNull();
+  await assertNoCatalogue(worker, true);
 });

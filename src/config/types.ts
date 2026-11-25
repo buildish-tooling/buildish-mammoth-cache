@@ -94,6 +94,8 @@ export type PartitionConflictHandling =
 export interface ConfiguredCachePartitionInput {
   /** Disposable regular-file globs; [] disables preset purging. Relative to the cache root. */
   readonly purgeableGlobs?: readonly string[];
+  /** Whether this partition is eligible for a read-only dependency seed. */
+  readonly readOnlyLayer?: boolean;
   /** Omission inherits the preset; default keeps existing conflict behavior. */
   readonly conflictHandling?: PartitionConflictHandling;
   /** Stable machine-readable partition identifier. */
@@ -123,6 +125,9 @@ export interface RawSharedActionInputs {
   readonly baseDirectory: string;
   /** Raw `cache-enabled` input. Empty string later defaults to `'true'`. */
   readonly cacheEnabled: string;
+  /** Gradle-only opt-in; absent on the Maven public input surface. */
+  readonly dependencyCacheLayer?: string;
+  readonly exportLayerEnvironment?: string;
   /**
    * Raw `read-only` input.
    *
@@ -211,6 +216,9 @@ export interface NormalizedActionConfig {
   readonly baseDirectory: string;
   /** Whether cache restore/save logic is enabled. Defaults to `true`. */
   readonly cacheEnabled: boolean;
+  /** Shared publisher retention family policy; Gradle-only public opt-in. */
+  readonly dependencyCacheLayer: boolean;
+  readonly exportLayerEnvironment: boolean;
   /**
    * Whether writes such as cache save are forbidden.
    *

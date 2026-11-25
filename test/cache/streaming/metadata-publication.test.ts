@@ -48,8 +48,8 @@ async function fixture(files = 2) {
         'maven',
         hard,
         [
-          ['data', ['data/**', 'cache/**'], hard, 'aggregate', null, 'default'],
-          ['state', ['state/**'], hard, 'single-writer', 'A', 'default'],
+          ['data', ['data/**', 'cache/**'], hard, 'aggregate', null, 'default', 0],
+          ['state', ['state/**'], hard, 'single-writer', 'A', 'default', 0],
         ],
       ],
       'metadata-publish-',
@@ -406,8 +406,8 @@ it('folds candidate coordinate groups across selected physical sources, excludin
         'maven',
         hard,
         [
-          ['data', ['repository/**/data'], hard, 'aggregate', null, 'default'],
-          ['state', ['repository/**/state'], hard, 'single-writer', 'A', 'default'],
+          ['data', ['repository/**/data'], hard, 'aggregate', null, 'default', 0],
+          ['state', ['repository/**/state'], hard, 'single-writer', 'A', 'default', 0],
         ],
       ],
       'metadata-groups-',

@@ -57,6 +57,10 @@ if (workflow === 'ci') {
   ])
     selected.set(job, writable);
   selected.set('standalone_cross_platform', native);
+  if (workflow === 'gradle') {
+    selected.set('layer_seed', native);
+    selected.set('layered_workers', native);
+  }
   selected.set('pull_request_worker', pr);
   selected.set('pull_request_read_only', pr);
 }

@@ -77,6 +77,11 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
     }
     seenIds.add(id);
     if (
+      partition['read-only-layer'] !== undefined &&
+      typeof partition['read-only-layer'] !== 'boolean'
+    )
+      throw new Error(`Partition '${id}' read-only-layer must be a boolean.`);
+    if (
       partition.publication !== undefined &&
       partition.publication !== 'aggregate' &&
       partition.publication !== 'single-writer'
@@ -96,6 +101,9 @@ export function parseCachePartitionsInput(input: string): readonly ConfiguredCac
       throw new Error(`Invalid conflict-handling policy for partition '${id}'.`);
     return {
       id,
+      ...(partition['read-only-layer'] === undefined
+        ? {}
+        : { readOnlyLayer: partition['read-only-layer'] }),
       ...(partition.purgeableGlobs === undefined
         ? {}
         : {

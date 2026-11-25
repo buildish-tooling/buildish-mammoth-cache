@@ -87,6 +87,7 @@ it('cold reopens a multi-row model larger than the CI state bound without provid
           'aggregate',
           null,
           'default',
+          0,
         ]),
       ],
       'large-',

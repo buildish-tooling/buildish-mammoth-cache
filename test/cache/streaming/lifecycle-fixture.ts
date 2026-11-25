@@ -55,7 +55,7 @@ export async function prepareLifecycle(
     model =
       config.model ??
       resolveModel(
-        ['model', 1, 'maven', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default']]],
+        ['model', 1, 'maven', hard, [['data', ['data/**'], hard, 'aggregate', null, 'default', 0]]],
         'metadata-lifecycle-',
         1,
       ),

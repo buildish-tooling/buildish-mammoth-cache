@@ -81,9 +81,10 @@ function model(purge: string[] = []) {
           'aggregate',
           null,
           'default',
+          0,
           ...(purge.length ? [purge] : []),
         ],
-        ['other', ['other/**'], ['.mammoth/**', '**/*.lock'], 'aggregate', null, 'default'],
+        ['other', ['other/**'], ['.mammoth/**', '**/*.lock'], 'aggregate', null, 'default', 0],
       ],
     ],
     'purge-',
@@ -124,9 +125,10 @@ it('deduplicates matching claims, excludes purgeable payloads and refuses opaque
           'aggregate',
           null,
           'default',
+          0,
           ['data/*.tmp', 'shared/*.tmp'],
         ],
-        ['other', ['other/**'], ['.mammoth/**'], 'aggregate', null, 'default', ['shared/*.tmp']],
+        ['other', ['other/**'], ['.mammoth/**'], 'aggregate', null, 'default', 0, ['shared/*.tmp']],
       ],
     ],
     'purge-',
@@ -150,6 +152,7 @@ it('deduplicates matching claims, excludes purgeable payloads and refuses opaque
               'aggregate',
               null,
               'default',
+              0,
               [rule],
             ],
           ],
@@ -224,12 +227,12 @@ it('matches the independently calculated P0 frozen purge model vector', () => {
     1,
     'maven',
     ['.mammoth/**'],
-    [['data', ['data/**'], ['.mammoth/**'], 'aggregate', null, 'default', ['data/*.tmp']]],
+    [['data', ['data/**'], ['.mammoth/**'], 'aggregate', null, 'default', 0, ['data/*.tmp']]],
   ];
   expect(resolveModel(value, 'purge-', 1).id).toBe(
-    'bd2038f6837e6be40ec90eab8a8b0f7ba8e509cbfb98b0aded28621d79716475',
+    '1af7f00459531ee214786c73d330bf6155a771fa44297d239853b8e46259b85f',
   );
   expect(readFileSync('docs/dev/cache-protocol-vectors.md', 'utf8')).toContain(
-    'bd2038f6837e6be40ec90eab8a8b0f7ba8e509cbfb98b0aded28621d79716475',
+    '1af7f00459531ee214786c73d330bf6155a771fa44297d239853b8e46259b85f',
   );
 });

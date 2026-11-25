@@ -24,6 +24,8 @@ import type {
 
 export interface CacheModelDefinition {
   readonly buildToolId: 'gradle' | 'maven';
+  /** Family-wide retention policy, independent of partition seed eligibility. */
+  readonly dependencyCacheLayer?: boolean;
   readonly hardCacheExcludeGlobs: readonly string[];
   readonly partitions: readonly CachePartitionDefinition[];
 }
@@ -31,6 +33,8 @@ export interface CacheModelDefinition {
 export interface CachePartitionDefinition {
   /** Resolved deletion rules, distinct from preserve-only exclusions. */
   readonly purgeableGlobs?: readonly string[];
+  /** Whether this partition is eligible for a read-only dependency seed. */
+  readonly readOnlyLayer?: boolean;
   /** Effective default is omitted to preserve existing compatibility identities. */
   readonly conflictHandling?: Exclude<PartitionConflictHandling, 'default'>;
   /** Defaults to aggregation when absent. Single-writer partitions travel as complete snapshots. */
@@ -65,6 +69,13 @@ export function createCachePartitions(
   hardCacheExcludeGlobs: readonly string[] = [],
 ): readonly CachePartitionDefinition[] {
   const builtInPresetIds = new Set(builtInPresets.map((preset) => preset.id));
+  if (
+    builtInPresetIds.has('dependency-artifacts') &&
+    configuredPartitions.some((p) => p.id === 'modules')
+  )
+    throw new Error(
+      "Gradle partition 'modules' was retired. Configure 'dependency-artifacts' and 'module-support' instead; disable both to exclude the former modules coverage.",
+    );
   const configuredById = new Map(
     configuredPartitions.map((partition) => [partition.id, partition]),
   );
@@ -91,6 +102,7 @@ export function createCachePartitions(
         override?.writer,
         override?.conflictHandling ?? preset.conflictHandling,
         override?.purgeableGlobs ?? preset.purgeableGlobs,
+        override?.readOnlyLayer ?? preset.readOnlyLayer,
       ),
     ];
   });
@@ -117,6 +129,7 @@ export function createCachePartitions(
         partition.writer,
         partition.conflictHandling,
         partition.purgeableGlobs,
+        partition.readOnlyLayer,
       ),
     ];
   });
@@ -135,6 +148,7 @@ function createPartition(
   writer?: string,
   conflictHandling?: PartitionConflictHandling,
   purgeableGlobs: readonly string[] = [],
+  readOnlyLayer = false,
 ): CachePartitionDefinition {
   if (writer && publication !== 'single-writer')
     throw new Error(`Partition '${id}' writer requires single-writer publication.`);
@@ -147,6 +161,7 @@ function createPartition(
 
   return {
     id,
+    readOnlyLayer,
     publication,
     ...(writer ? { writer } : {}),
     ...(conflictHandling && conflictHandling !== 'default' ? { conflictHandling } : {}),

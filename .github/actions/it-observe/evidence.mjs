@@ -122,6 +122,18 @@ export async function completion(home, expected, prepare, inspectBase = false, i
     assert(Number.isSafeInteger(id) && id > 0 && typeof name === 'string' && name.length > 0);
     if (identity)
       assert.match(name, new RegExp('-a' + identity.attempt + '-d[a-f0-9]{64}\\.tar\\.gz$', 'u'));
+    if (inspectBase) {
+      const [, handoff] = (await record(state[6], 'handoff'))
+        .split('\n', 2)
+        .map((line) => JSON.parse(line));
+      assert.deepEqual(handoff.slice(0, 2), ['handoff', 4]);
+      const seed = handoff[12];
+      assert.equal(seed?.length, 8);
+      assert.deepEqual(seed.slice(0, 2), ['gradle-layer', 1]);
+      assert.equal(seed[4], handoff[8]?.[0], 'Layer seed differs from selected generation');
+      assert(seed[2].startsWith(owned + 'seed/'));
+      await assert.rejects(realpath(path.join(root, seed[2])), { code: 'ENOENT' });
+    }
     return { outcome: expected, receipt: { id, name } };
   }
   if (expected === 'published' || expected === 'no-change') {
@@ -136,7 +148,7 @@ export async function completion(home, expected, prepare, inspectBase = false, i
     .map((line) => JSON.parse(line));
   assert.equal(frame.length, 7);
   assert.deepEqual(frame.slice(0, 4), ['local-stream', 1, 'handoff', locator[2]]);
-  assert.deepEqual(handoff.slice(0, 2), ['handoff', 3]);
+  assert.deepEqual(handoff.slice(0, 2), ['handoff', 4]);
   const restored = handoff[8]?.[0];
   assert(typeof restored === 'string' && restored.length > 0 && restored.length <= 512);
   if (prepare) {
@@ -145,8 +157,9 @@ export async function completion(home, expected, prepare, inspectBase = false, i
   }
   if (expected === 'no-change') assert.equal(key, restored);
   const generation = JSON.parse(await record(handoff[8][1], 'generation'));
-  assert.equal(generation.length, 12);
-  assert.deepEqual(generation.slice(0, 3), ['generation', 2, 'generation-v2']);
+  assert.equal(generation.length, 13);
+  assert.equal(generation[12], null);
+  assert.deepEqual(generation.slice(0, 3), ['generation', 3, 'generation-v3']);
   assert.equal(generation[11], restored);
   assert(Array.isArray(generation[8]) && generation[8].length <= 64);
   if (expected === 'published') {

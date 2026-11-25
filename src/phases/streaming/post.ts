@@ -27,10 +27,17 @@ import { WorkingBudget } from '../../cache/streaming/tree-state';
 import { LifecycleHandoff } from '../../cache/streaming/lifecycle-handoff';
 import { type LifecycleOptions } from '../../cache/streaming/lifecycle-options';
 import { postStreamingBase } from '../../cache/streaming/base-post';
-import { postStreamingWorker } from '../../cache/streaming/worker-post';
+import {
+  postStreamingWorker,
+  postFailedPrepareGradleLayer,
+} from '../../cache/streaming/worker-post';
 import { postStreamingReadOnly } from '../../cache/streaming/passive-lifecycle';
 import { PartitionSummaries } from '../../cache/streaming/partition-summaries';
-import { STREAMING_INVOCATION_STATE } from './state';
+import {
+  STREAMING_INVOCATION_STATE,
+  STREAMING_LAYER_ADVERTISEMENT_STATE,
+  STREAMING_LAYER_ACTIVATED_STATE,
+} from './state';
 import type { HostReporter, HostStateStore, ReportSink } from '../../host/types';
 import type { BaseCacheBackend } from '../../cache/backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
@@ -71,7 +78,27 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
       if (raw) {
         const anchor = decodeInvocationAnchor(raw);
         if (anchor[0] === 'streaming-lifecycle') {
-          for (const warning of await d.removeHooks(anchor[2], anchor[4][7])) host.warning(warning);
+          const advertisedInvocation = host.getState(STREAMING_LAYER_ADVERTISEMENT_STATE);
+          if (advertisedInvocation) {
+            await postFailedPrepareGradleLayer({
+              ...d,
+              signal: d.cleanupSignal,
+              budget: d.budget ?? new WorkingBudget(),
+              anchor,
+              advertisedInvocation,
+              assertCurrent: () => {
+                assertCleanup(d);
+                return undefined;
+              },
+              removeHooks: async () => {
+                for (const warning of await d.removeHooks(anchor[2], anchor[4][7]))
+                  host.warning(warning);
+              },
+              onWarning: (message) => host.warning(message),
+            });
+          } else
+            for (const warning of await d.removeHooks(anchor[2], anchor[4][7]))
+              host.warning(warning);
         } else {
           for (const warning of await d.removeHooks(anchor[3], anchor[2][7])) host.warning(warning);
         }
@@ -96,10 +123,41 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
   }
   const opened = await OpenedInvocation.open(anchor, budget, d.cleanupSignal);
   const facts = await LifecycleHandoff.read(opened.store, opened.state[6]!, {
-      ...options,
-      maxDirectoryEntries: opened.bindings[8][9],
-    }),
-    summaries = new PartitionSummaries(opened.store.codec.options.model, budget, d.analytics);
+    ...options,
+    signal: d.cleanupSignal,
+    maxDirectoryEntries: opened.bindings[8][9],
+  });
+  // Build-ready precedes host advertisement. Absence of terminal activation is cleanup-only,
+  // including abrupt interruptions that could not save the generic prepare-failed flag.
+  if (
+    facts.header[12] &&
+    host.getState(STREAMING_LAYER_ACTIVATED_STATE) !== opened.store.codec.options.invocation
+  ) {
+    facts.close();
+    await postFailedPrepareGradleLayer({
+      ...d,
+      signal: d.cleanupSignal,
+      budget,
+      anchor,
+      advertisedInvocation:
+        host.getState(STREAMING_LAYER_ADVERTISEMENT_STATE) || opened.store.codec.options.invocation,
+      assertCurrent: () => {
+        assertCleanup(d);
+        return undefined;
+      },
+      removeHooks: async () => {
+        for (const warning of await d.removeHooks(
+          opened.store.root.path,
+          opened.store.codec.options.context[7],
+        ))
+          host.warning(warning);
+      },
+      onWarning: (message) => host.warning(message),
+    });
+    host.info('Incomplete Gradle layer activation settled without cache capture or publication.');
+    return { outcome: 'skipped' as const };
+  }
+  const summaries = new PartitionSummaries(opened.store.codec.options.model, budget, d.analytics);
   const onCaptureInfo = (message: string) => host.info(message);
   const warnings: string[] = [];
   const onWarning = (message: string) => {

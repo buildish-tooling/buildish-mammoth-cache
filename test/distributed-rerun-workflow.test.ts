@@ -31,6 +31,13 @@ it.each(['gradle', 'maven'])(
       for (const step of job.steps) {
         if (!step.with?.['job-mode']?.startsWith('distributed-')) continue;
         const prefix = step.with['cache-key-prefix']!;
+        if (tool === 'gradle' && name === 'layered_workers') {
+          // Each warm-layer qualification owns a fresh producer, including on reruns.
+          expect(prefix).toBe(
+            'it-gradle-layer-${{ github.run_id }}-a${{ needs.layer_seed.outputs.attempt }}-',
+          );
+          continue;
+        }
         expect(prefix).toContain('${{ github.run_id }}');
         expect(prefix).not.toContain('github.run_attempt');
         prefixes.set(name, prefix);

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { GRADLE_LAYER_VERSION } from '../../cache/streaming/profiles';
+
 /**
  * Generates the Gradle init script and service plugin used for per-invocation build reporting.
  *
@@ -84,12 +86,15 @@ export function toGroovySingleQuotedString(value: string): string {
 export interface GradleOperationalCapture {
   readonly invocation: string;
   readonly directory: string;
+  readonly requiredGradleVersion?: string;
 }
 function operationalRegistration(options?: GradleOperationalCapture): string {
   if (!options) return '';
   if (!/^[a-f0-9]{64}$/.test(options.invocation))
     throw new Error('Invalid operational invocation.');
   validateCaptureRootPath(options.directory);
+  if (options.requiredGradleVersion && options.requiredGradleVersion !== GRADLE_LAYER_VERSION)
+    throw new Error('Unsupported layer registration version.');
   const directory = toGroovySingleQuotedString(options.directory),
     id = toGroovySingleQuotedString(options.invocation);
   // Protocol: docs/dev/cache-lifecycle-protocol.md#gradle-installation-registration.
@@ -174,8 +179,10 @@ try {
     } catch (java.nio.file.FileAlreadyExistsException known) { recorded = true }
     catch (Exception ignored) { }
     if (!recorded) throw new org.gradle.api.GradleException("Mammoth operational registration failed without completed failure evidence", failure)
+    ${options.requiredGradleVersion ? `throw new org.gradle.api.GradleException("Mammoth dependency layer registration failed", failure)` : ''}
     logger.warn("Mammoth operational registration failed; relocating cache save will be skipped", failure)
 }
+${options.requiredGradleVersion ? `if (GradleVersion.current().version != "${GRADLE_LAYER_VERSION}") throw new org.gradle.api.GradleException("Mammoth dependency layer requires the qualified Gradle ${GRADLE_LAYER_VERSION} wrapper")` : ''}
 `;
 }
 

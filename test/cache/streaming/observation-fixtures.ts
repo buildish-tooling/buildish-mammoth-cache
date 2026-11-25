@@ -81,7 +81,7 @@ export async function initializeObservationFixture(
     rows([
       [
         'handoff',
-        3,
+        4,
         'refs/heads/main',
         null,
         null,
@@ -92,6 +92,7 @@ export async function initializeObservationFixture(
         imported,
         cutoff,
         0,
+        null,
       ],
       ...f.model.partitions.map((p) => ['partition', p[0], 'miss', null, null]),
     ]),

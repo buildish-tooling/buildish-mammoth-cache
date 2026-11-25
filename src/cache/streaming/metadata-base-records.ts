@@ -89,8 +89,8 @@ export function decodeMetadataDescriptor(
 }
 const metadataGenerationSchema = z.tuple([
   z.literal('generation'),
-  z.literal(2),
-  z.literal('generation-v2'),
+  z.literal(3),
+  z.literal('generation-v3'),
   familySchema,
   shaSchema,
   shaSchema,
@@ -100,14 +100,15 @@ const metadataGenerationSchema = z.tuple([
   groupsSchema,
   shaSchema,
   keySchema,
+  z.number().int().nonnegative().safe().nullable(),
 ]);
 export type MetadataGeneration = z.infer<typeof metadataGenerationSchema>;
 export function metadataPartitionDecision(
-  g: Pick<MetadataGeneration, 3 | 4 | 5 | 6 | 7 | 8 | 9>,
+  g: Pick<MetadataGeneration, 3 | 4 | 5 | 6 | 7 | 8 | 9 | 12>,
 ): string {
   return H('partition-decisions', [
     'partition-decisions',
-    2,
+    3,
     g[3],
     g[4],
     g[5],
@@ -115,6 +116,7 @@ export function metadataPartitionDecision(
     g[7],
     g[8],
     g[9],
+    g[12],
   ]);
 }
 function validate(value: Value, model: ResolvedModel): MetadataGeneration {
@@ -142,8 +144,8 @@ export function createMetadataGeneration(
 ): MetadataGeneration {
   const g: MetadataGeneration = [
     'generation',
-    2,
-    'generation-v2',
+    3,
+    'generation-v3',
     model.family,
     model.id,
     lineage,
@@ -153,6 +155,7 @@ export function createMetadataGeneration(
     groups,
     '0'.repeat(64),
     'pending',
+    null,
   ];
   g[10] = metadataPartitionDecision(g);
   g[11] = recordKey(g[3], g[5], g[6], g[10]);

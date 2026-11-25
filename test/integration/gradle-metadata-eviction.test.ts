@@ -60,7 +60,7 @@ test.skipIf(!executable)(
       const { backend: cache } = await nativeCacheBackend();
       const inputs = {
         'cache-partitions': JSON.stringify([
-          { id: 'modules', includes: ['caches/modules-*/files-*/**'] },
+          { id: 'dependency-artifacts', includes: ['caches/modules-2/files-2.1/**'] },
           {
             id: 'dependency-metadata',
             includes: ['caches/modules-*/metadata-*/**'],

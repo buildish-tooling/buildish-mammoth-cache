@@ -181,6 +181,8 @@ export class MetadataInstallContext {
   readonly nonce = randomBytes(16).toString('hex');
   private active = true;
   private taken = false;
+  private seedRoutes: ReadonlySet<string> | undefined;
+  private seedRouting = false;
   private current: number | null = null;
   private readonly sources = new Map<string, IndexedMetadataInput>();
   private readonly readers = new Map<string, MetadataMemberReader>();
@@ -209,11 +211,43 @@ export class MetadataInstallContext {
   take(): readonly IndexedMetadataInput[] {
     this.assert(this.store);
     if (this.taken) throw new Error('Metadata indexes already consumed.');
+    if (this.seedRouting) throw new Error('Seed routing has not completed.');
     this.taken = true;
     const cold = new Set(this.coldGroups.flat());
     return [...this.sources.values()].filter(
-      (input) => !cold.has(input.partition) || input.upstream.kind === 'declared-empty',
+      (input) =>
+        !this.seedRoutes?.has(input.partition) &&
+        (!cold.has(input.partition) || input.upstream.kind === 'declared-empty'),
     );
+  }
+  /** Assign each original input once, before either destination can consume it. */
+  async routeSeed(
+    partitions: readonly string[],
+    install: (inputs: readonly IndexedMetadataInput[]) => Promise<void>,
+  ): Promise<void> {
+    this.assert(this.store);
+    if (
+      this.taken ||
+      this.seedRoutes ||
+      !partitions.length ||
+      new Set(partitions).size !== partitions.length
+    )
+      throw new Error('Metadata destinations already bound or invalid.');
+    const selected = partitions.map((id) => {
+      const input = this.sources.get(id);
+      if (
+        !input ||
+        input.upstream.kind !== 'native-metadata' ||
+        this.coldGroups.some((g) => g.includes(id))
+      )
+        throw new Error('Seed requires complete original base receipts.');
+      input.assertBound(this.store);
+      return input;
+    });
+    this.seedRoutes = new Set(partitions);
+    this.seedRouting = true;
+    await install(Object.freeze(selected));
+    this.seedRouting = false;
   }
   bindCurrent(root: number): void {
     this.assert(this.store);

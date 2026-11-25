@@ -29,6 +29,12 @@ inputs:
     description: 'Enables cache orchestration. Accepted values: true or false.'
     required: false
     default: 'true'
+  dependency-cache-layer:
+    description: Enables qualified Gradle 9.6.1 wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value; every seed consumer must use a selected qualified wrapper.
+    required: false
+  export-layer-environment:
+    description: Exports the activated Gradle dependency seed as GRADLE_RO_DEP_CACHE for later steps. False emits only the seed-path output; the workflow configures every consumer.
+    required: false
   read-only:
     description: Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor.
     required: false
@@ -109,6 +115,8 @@ inputs:
     required: false
     default: 'false'
 outputs:
+  gradle-ro-dep-cache:
+    description: Invocation-owned Gradle read-only dependency cache path, or empty when layered restore is inactive.
   cache-family-key:
     description: Stable compatibility family shared by structurally compatible generations.
   cache-lineage-prefix:

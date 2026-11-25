@@ -81,9 +81,10 @@ describe('resolveActionInputsFromConfigFile', () => {
           '  - worker_a',
           '  - worker_b',
           'cache-partitions:',
-          '  - id: modules',
+          '  - id: dependency-artifacts',
+          '    read-only-layer: false',
           '    includes:',
-          '      - caches/modules-*/files-*/**',
+          '      - caches/modules-2/files-2.1/**',
           '    excludes:',
           '      - caches/modules-*/metadata-*/**',
           '',
@@ -122,8 +123,9 @@ describe('resolveActionInputsFromConfigFile', () => {
           dependentJobs: ['aggregator'],
           cachePartitions: [
             {
-              id: 'modules',
-              includes: ['caches/modules-*/files-*/**'],
+              id: 'dependency-artifacts',
+              readOnlyLayer: false,
+              includes: ['caches/modules-2/files-2.1/**'],
               excludes: ['caches/modules-*/metadata-*/**'],
             },
           ],
@@ -284,8 +286,9 @@ describe('normalizeActionConfig', () => {
         createInputProvider({
           'cache-partitions': JSON.stringify([
             {
-              id: 'modules',
-              includes: ['caches/modules-*/files-*/**'],
+              id: 'dependency-artifacts',
+              'read-only-layer': true,
+              includes: ['caches/modules-2/files-2.1/**'],
               excludes: ['caches/modules-*/metadata-*/**'],
             },
             {
@@ -306,8 +309,9 @@ describe('normalizeActionConfig', () => {
 
     expect(config.cachePartitions).toEqual([
       {
-        id: 'modules',
-        includes: ['caches/modules-*/files-*/**'],
+        id: 'dependency-artifacts',
+        readOnlyLayer: true,
+        includes: ['caches/modules-2/files-2.1/**'],
         excludes: ['caches/modules-*/metadata-*/**'],
       },
       {
@@ -358,7 +362,7 @@ describe('normalizeActionConfig', () => {
           createInputProvider({
             'cache-partitions': JSON.stringify([
               {
-                id: 'modules',
+                id: 'dependency-artifacts',
                 includes: ['caches/modules-*/files-*'],
               },
             ]),
@@ -380,7 +384,7 @@ describe('normalizeActionConfig', () => {
           createInputProvider({
             'cache-partitions': JSON.stringify([
               {
-                id: 'modules',
+                id: 'dependency-artifacts',
                 includes: ['../outside/**'],
               },
             ]),
@@ -400,8 +404,8 @@ describe('normalizeActionConfig', () => {
           createInputProvider({
             'cache-partitions': JSON.stringify([
               {
-                id: 'modules',
-                includes: ['caches/modules-*/files-*/**'],
+                id: 'dependency-artifacts',
+                includes: ['caches/modules-2/files-2.1/**'],
                 excludes: ['!caches/foo/**'],
               },
             ]),

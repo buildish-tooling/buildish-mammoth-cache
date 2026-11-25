@@ -96,7 +96,8 @@ describe('createCachePartitions', () => {
     );
 
     expect(partitions.map((partition) => partition.id)).toEqual([
-      'modules',
+      'dependency-artifacts',
+      'module-support',
       'dependency-metadata',
       'transforms-metadata',
       'kotlin-dsl',
@@ -113,9 +114,9 @@ describe('createCachePartitions', () => {
       ),
     ).toBe(true);
     expect(
-      partitions.find((partition) => partition.id === 'modules')?.relativeExcludeGlobs,
-    ).toContain('caches/modules-*/metadata-*/**');
-    expect(partitions[0]?.relativeIncludeGlobs).toContain('caches/modules-*/files-*/**');
+      partitions.find((partition) => partition.id === 'module-support')?.relativeIncludeGlobs,
+    ).toEqual(['caches/jars-*/**', 'caches/resources-*/**']);
+    expect(partitions[0]?.relativeIncludeGlobs).toContain('caches/modules-2/files-2.1/**');
   });
 
   it('keeps wrapper distribution documentation and sources named configuration-cache', () => {
@@ -144,8 +145,8 @@ describe('createCachePartitions', () => {
     const partitions = createCachePartitions(
       [
         {
-          id: 'modules',
-          includes: ['caches/modules-*/files-*/**'],
+          id: 'dependency-artifacts',
+          includes: ['caches/modules-2/files-2.1/**'],
           excludes: [],
         },
         {
@@ -169,7 +170,8 @@ describe('createCachePartitions', () => {
     );
 
     expect(partitions.map((partition) => partition.id)).toEqual([
-      'modules',
+      'dependency-artifacts',
+      'module-support',
       'dependency-metadata',
       'transforms-metadata',
       'groovy-dsl',
@@ -177,8 +179,8 @@ describe('createCachePartitions', () => {
       'wrapper-dists',
       'custom-generated-jars',
     ]);
-    expect(partitions[0]?.relativeIncludeGlobs).toEqual(['caches/modules-*/files-*/**']);
-    expect(partitions[6]?.relativeIncludeGlobs).toEqual(['caches/*/generated-gradle-jars/**']);
+    expect(partitions[0]?.relativeIncludeGlobs).toEqual(['caches/modules-2/files-2.1/**']);
+    expect(partitions.at(-1)?.relativeIncludeGlobs).toEqual(['caches/*/generated-gradle-jars/**']);
   });
 
   it('rejects empty custom partitions', () => {
@@ -210,10 +212,10 @@ it('resolves actual Gradle purge defaults through the adapter and honors disable
   const model = resolve(),
     hash = 'a'.repeat(32);
   for (const [path, owners] of [
-    ['caches/modules-2/modules-2.lock', ['modules', 'dependency-metadata']],
-    ['caches/jars-9/jars-9.lock', ['modules']],
-    [`caches/jars-9/${hash}/source.jar.lock.lock`, ['modules']],
-    [`caches/jars-9/${hash}/source.jar.lock`, ['modules']],
+    ['caches/modules-2/modules-2.lock', ['dependency-artifacts', 'dependency-metadata']],
+    ['caches/jars-9/jars-9.lock', ['module-support']],
+    [`caches/jars-9/${hash}/source.jar.lock.lock`, ['module-support']],
+    [`caches/jars-9/${hash}/source.jar.lock`, ['module-support']],
     [`caches/9.2.1/transforms/${hash}/${hash}.lock`, ['transforms-metadata']],
     [`caches/9.2.1/kotlin-dsl/scripts/${hash}/${hash}.lock`, ['kotlin-dsl']],
     [`caches/9.2.1/kotlin-dsl/accessors/${hash}/${hash}.lock`, ['kotlin-dsl']],
@@ -232,14 +234,179 @@ it('resolves actual Gradle purge defaults through the adapter and honors disable
   ] as const)
     expect(model.purge(path), path).toEqual(owners);
   expect(
-    resolve([{ id: 'modules', purgeableGlobs: [] }]).purge('caches/modules-2/modules-2.lock'),
+    resolve([{ id: 'dependency-artifacts', purgeableGlobs: [] }]).purge(
+      'caches/modules-2/modules-2.lock',
+    ),
   ).toEqual(['dependency-metadata']);
   expect(
-    resolve([{ id: 'modules', includes: [] }]).purge('caches/modules-2/modules-2.lock'),
+    resolve([{ id: 'dependency-artifacts', includes: [] }]).purge(
+      'caches/modules-2/modules-2.lock',
+    ),
   ).toEqual(['dependency-metadata']);
   expect(
     resolve([{ id: 'build-cache', purgeableGlobs: [] }]).purge(
       'caches/build-cache-1/build-cache-1.lock',
     ),
   ).toEqual([]);
+});
+
+it('preserves disjoint Gradle module coverage and single-writer metadata authority', () => {
+  const hard = gradleAdapter.getHardCacheExcludeGlobs();
+  const partitions = createCachePartitions(
+    [{ id: 'dependency-metadata', writer: 'metadata-writer', excludes: [] }],
+    gradleAdapter.getBuiltInPartitionPresets(),
+    hard,
+  );
+  const model = resolveCacheModel(
+    { buildToolId: 'gradle', hardCacheExcludeGlobs: hard, partitions },
+    'layer-',
+    1,
+  );
+  for (const [path, id, eligible] of [
+    ['caches/modules-2/files-2.1/g/a/1/hash/a.jar', 'dependency-artifacts', 1],
+    ['caches/jars-9/hash/plugin.jar', 'module-support', 0],
+    ['caches/resources-2/hash/resource', 'module-support', 0],
+    ['caches/modules-2/metadata-2.107/descriptors.bin', 'dependency-metadata', 1],
+  ] as const) {
+    expect(model.owner(path)[0], path).toBe(id);
+    expect(model.owner(path)[6], path).toBe(eligible);
+  }
+  for (const id of ['dependency-metadata']) {
+    expect(partitions.find((p) => p.id === id)).toMatchObject({
+      publication: 'single-writer',
+      writer: 'metadata-writer',
+    });
+  }
+  for (const path of [
+    'caches/modules-2/resources-2/uncaptured',
+    'caches/modules-3/files-9/g/a.jar',
+    'caches/modules-2/files-3/g/a.jar',
+    'caches/modules-3/metadata-9/descriptors.bin',
+  ])
+    expect(() => model.owner(path)).toThrow('Unowned');
+  expect(() => model.owner('caches/modules-2/metadata-2.107/gc.properties')).toThrow('excluded');
+});
+
+it('rejects retired Gradle overrides and allows disabling both artifact replacements', () => {
+  const presets = gradleAdapter.getBuiltInPartitionPresets(),
+    hard = gradleAdapter.getHardCacheExcludeGlobs();
+  expect(() => createCachePartitions([{ id: 'modules', includes: [] }], presets, hard)).toThrow(
+    /dependency-artifacts.*module-support/,
+  );
+  const partitions = createCachePartitions(
+    [
+      { id: 'dependency-artifacts', includes: [] },
+      { id: 'module-support', includes: [] },
+      { id: 'dependency-metadata', includes: [] },
+    ],
+    presets,
+    hard,
+  );
+  expect(partitions.some((p) => p.id.startsWith('dependency-metadata'))).toBe(false);
+  const model = resolveCacheModel(
+    { buildToolId: 'gradle', hardCacheExcludeGlobs: hard, partitions },
+    'layer-',
+    1,
+  );
+  for (const path of [
+    'caches/modules-2/files-2.1/a.jar',
+    'caches/modules-3/files-9/a.jar',
+    'caches/jars-9/a.jar',
+    'caches/resources-2/a',
+  ])
+    expect(() => model.owner(path), path).toThrow('Unowned');
+});
+
+it('preserves explicit custom metadata coverage and its configured writer', () => {
+  const partitions = createCachePartitions(
+    [{ id: 'dependency-metadata', includes: ['caches/modules-*/metadata-*/**'], writer: 'writer' }],
+    gradleAdapter.getBuiltInPartitionPresets(),
+    gradleAdapter.getHardCacheExcludeGlobs(),
+  );
+  expect(partitions.find((p) => p.id === 'dependency-metadata')?.relativeIncludeGlobs).toEqual([
+    'caches/modules-*/metadata-*/**',
+  ]);
+  expect(partitions.find((p) => p.id === 'dependency-metadata')?.writer).toBe('writer');
+});
+
+it('inherits seed eligibility, honors false overrides and isolates custom selections canonically', () => {
+  const presets = gradleAdapter.getBuiltInPartitionPresets(),
+    hard = gradleAdapter.getHardCacheExcludeGlobs();
+  const resolve = (readOnlyLayer: boolean) =>
+    resolveCacheModel(
+      {
+        buildToolId: 'gradle',
+        hardCacheExcludeGlobs: hard,
+        partitions: createCachePartitions(
+          [
+            { id: 'dependency-artifacts', readOnlyLayer },
+            { id: 'extra', includes: ['extra/**'] },
+            { id: 'custom-layer', includes: ['custom/**'], readOnlyLayer: true },
+          ],
+          presets,
+          hard,
+        ),
+      },
+      'layer-',
+      1,
+    );
+  const enabled = resolve(true),
+    disabled = resolve(false);
+  expect(enabled.owner('caches/modules-2/files-2.1/a.jar')[6]).toBe(1);
+  expect(disabled.owner('caches/modules-2/files-2.1/a.jar')[6]).toBe(0);
+  expect(enabled.owner('extra/a')[6]).toBe(0);
+  expect(enabled.owner('custom/a')[6]).toBe(1);
+  expect(enabled.family).not.toBe(disabled.family);
+  expect(
+    resolveCacheModel(
+      {
+        buildToolId: 'maven',
+        hardCacheExcludeGlobs: hard,
+        partitions: createCachePartitions([{ id: 'extra', includes: ['extra/**'] }], [], hard),
+      },
+      'layer-',
+      1,
+    ).partitions[0][6],
+  ).toBe(0);
+});
+
+it.each([{ excludes: [] }, { excludes: ['caches/jars-9/ignored.jar'] }])(
+  'keeps artifact ownership disjoint when module-support exclusions are overridden with $excludes',
+  ({ excludes }) => {
+    const hard = gradleAdapter.getHardCacheExcludeGlobs();
+    const partitions = createCachePartitions(
+      [{ id: 'module-support', excludes }],
+      gradleAdapter.getBuiltInPartitionPresets(),
+      hard,
+    );
+    const model = resolveCacheModel(
+      { buildToolId: 'gradle', hardCacheExcludeGlobs: hard, partitions },
+      'layer-',
+      1,
+    );
+    expect(model.owner('caches/modules-2/files-2.1/g/a/1/hash/a.jar')[0]).toBe(
+      'dependency-artifacts',
+    );
+    expect(() => model.owner('caches/modules-3/files-9/g/a.jar')).toThrow('Unowned');
+    expect(model.owner('caches/jars-9/kept.jar')[0]).toBe('module-support');
+    if (excludes.length) expect(() => model.owner(excludes[0])).toThrow('Unowned');
+  },
+);
+
+it('allows explicit module-support include remapping after disabling dependency-artifacts', () => {
+  const hard = gradleAdapter.getHardCacheExcludeGlobs();
+  const partitions = createCachePartitions(
+    [
+      { id: 'dependency-artifacts', includes: [] },
+      { id: 'module-support', includes: ['caches/modules-2/files-2.1/**'], excludes: [] },
+    ],
+    gradleAdapter.getBuiltInPartitionPresets(),
+    hard,
+  );
+  const model = resolveCacheModel(
+    { buildToolId: 'gradle', hardCacheExcludeGlobs: hard, partitions },
+    'layer-',
+    1,
+  );
+  expect(model.owner('caches/modules-2/files-2.1/g/a/1/hash/a.jar')[0]).toBe('module-support');
 });

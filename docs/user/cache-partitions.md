@@ -32,21 +32,31 @@ A and the record while reusing existing B/C objects. Changed partitions are uplo
 
 The Gradle action resolves `GRADLE_USER_HOME` into these ordered partitions:
 
-| Partition             | Contents                                                  | Default |
-| --------------------- | --------------------------------------------------------- | ------- |
-| `modules`             | Dependency artifacts, JARs, and resource stores           | enabled |
-| `dependency-metadata` | Complete dependency-resolution metadata snapshots         | enabled |
-| `transforms-metadata` | Complete artifact-transform workspaces                    | enabled |
-| `kotlin-dsl`          | Compiled Kotlin DSL scripts and generated Gradle API JARs | enabled |
-| `groovy-dsl`          | Complete compiled Groovy DSL workspaces                   | enabled |
-| `build-cache`         | The local Gradle build cache                              | enabled |
-| `wrapper-dists`       | Wrapper-downloaded Gradle distributions                   | enabled |
+| Partition              | Contents                                                  | Default |
+| ---------------------- | --------------------------------------------------------- | ------- |
+| `dependency-artifacts` | External artifacts in `caches/modules-2/files-2.1/**`     | enabled |
+| `module-support`       | Top-level `caches/jars-*/**` and `caches/resources-*/**`  | enabled |
+| `dependency-metadata`  | Complete dependency-resolution metadata snapshots         | enabled |
+| `transforms-metadata`  | Complete artifact-transform workspaces                    | enabled |
+| `kotlin-dsl`           | Compiled Kotlin DSL scripts and generated Gradle API JARs | enabled |
+| `groovy-dsl`           | Complete compiled Groovy DSL workspaces                   | enabled |
+| `build-cache`          | The local Gradle build cache                              | enabled |
+| `wrapper-dists`        | Wrapper-downloaded Gradle distributions                   | enabled |
 
 See [Gradle cache internals](../../architecture/gradle-cache-internals/) for details on what each
 partition covers and why certain directories are excluded.
 
-The built-in `modules` partition covers dependency artifacts. `dependency-metadata` separately
-covers `caches/modules-*/metadata-*/**` with single-writer publication.
+The built-in `dependency-artifacts` partition covers the exact `modules-2/files-2.1` store.
+`dependency-metadata` separately covers every `caches/modules-2/metadata-*/**` version with
+single-writer publication. Other `modules-*` and `files-*` roots require explicit custom includes.
+Both dependency partitions default to `read-only-layer: true`; this marks eligibility and does
+not activate a layer. The Gradle-only `dependency-cache-layer` input opts into that behavior.
+`module-support` remains writable.
+
+The retired `modules` preset is rejected with a migration diagnostic. Replace writer or other
+overrides with the appropriate new partition IDs. To disable its former artifact and support
+coverage, set `includes: []` on both `dependency-artifacts` and `module-support`. This layout and
+the partition protocol change start a new cache family; old generations are not migrated.
 `transforms-metadata` covers derived transform workspaces, not dependency resolution.
 
 The transform partition defaults to `choose-worker-directory` and captures complete
@@ -55,7 +65,7 @@ units, including `metadata.bin`, `results.bin`, outputs and empty directories.
 Unknown/incomplete layouts and mandatory-excluded outputs are skipped with bounded
 warnings; partial user ownership fails. Nested output `gc.properties` files are retained.
 Its selection, replacement and GC semantics match the DSL complete-workspace rules below.
-Set `enabled: false` on `transforms-metadata` to disable it or
+Set `includes: []` on `transforms-metadata` to disable it or
 `conflict-handling: default` to reject differing same-key workspace views.
 
 Direct capture includes outputs of non-build-cacheable transforms. These may contain
@@ -77,7 +87,7 @@ Changed members select the whole workspace for upload; any observed usage protec
 the whole workspace from GC. GC removes a workspace only when every member is old
 and unprotected. Base publication archives native files and directories in changed partitions.
 Unaffected partition objects are reused.
-Set `enabled: false` on `groovy-dsl` to disable it, or set `conflict-handling: default`
+Set `includes: []` on `groovy-dsl` to disable it, or set `conflict-handling: default`
 to reject conflicting complete workspace views. Single-writer publication is unsupported.
 
 The `kotlin-dsl` partition uses the same whole-workspace transport for recognized
@@ -145,6 +155,9 @@ are frozen for retry; changing current defaults cannot change an existing attemp
   the preset. This permits a writer-only override.
 - Built-in overrides with `includes: []` disable that built-in.
 - Custom partitions with `includes: []` are rejected.
+- `read-only-layer` is a boolean, defaulting to false for custom partitions. It participates in
+  family identity. Only the built-in dependency artifact and metadata layouts qualify for the
+  initial Gradle layer; custom remapping falls back to ordinary writable installation.
 - If the same file matches more than one active partition, ownership validation fails instead of guessing an owner.
 
 Hard safety excludes are always applied to every active partition and cannot be removed:
@@ -236,9 +249,9 @@ Examples:
 ```json
 [
   {
-    "id": "modules",
-    "includes": ["caches/modules-*/files-*/**", "caches/jars-*/**"],
-    "excludes": ["caches/modules-*/metadata-*/**"]
+    "id": "dependency-artifacts",
+    "includes": ["caches/modules-2/files-2.1/**"],
+    "read-only-layer": false
   },
   {
     "id": "kotlin-dsl",
@@ -252,7 +265,7 @@ Examples:
 ]
 ```
 
-This example: overrides `modules`, disables `kotlin-dsl`, and adds a custom partition. The
+This example: overrides `dependency-artifacts`, disables `kotlin-dsl`, and adds a custom partition. The
 model identity changes, so it uses a different cache family than the default layout.
 
 ## Timestamp garbage collection
@@ -322,3 +335,8 @@ after the SDK settles. Native placement and transfer use same-filesystem moves.
 Allow space for extraction, independent snapshots, archives and temporary metadata.
 See the [base cache design](../../architecture/base-cache/) and
 [troubleshooting](../troubleshooting/#interrupted-cache-operations).
+
+In the opt-in dependency-layer family, publishers retain aggregate partitions marked
+`read-only-layer: true` instead of applying timestamp GC, even when a particular worker cannot
+activate a seed. Single-writer metadata keeps its designated-writer snapshot semantics. There is
+no seed sweep or capacity eviction in this release; backend retention still applies.

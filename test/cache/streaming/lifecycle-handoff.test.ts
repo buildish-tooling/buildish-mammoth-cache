@@ -54,8 +54,8 @@ async function fixture() {
       'maven',
       hard,
       [
-        ['data', ['data/**'], hard, 'aggregate', null, 'default'],
-        ['state', ['state/**'], hard, 'single-writer', 'A', 'default'],
+        ['data', ['data/**'], hard, 'aggregate', null, 'default', 0],
+        ['state', ['state/**'], hard, 'single-writer', 'A', 'default', 0],
       ],
     ],
     'handoff-',
@@ -74,7 +74,7 @@ async function fixture() {
   );
   const header: HandoffHeader = [
     'handoff',
-    3,
+    4,
     'refs/heads/main',
     null,
     null,
@@ -85,6 +85,7 @@ async function fixture() {
     f.store.codec.schemas.ref('activity').parse(activity),
     1234,
     0,
+    null,
   ];
   const entries: HandoffEntry[] = model.partitions.map((p) => [
     'partition',

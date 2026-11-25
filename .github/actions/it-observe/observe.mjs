@@ -51,6 +51,7 @@ async function observe({ tool, job, stage, producerAttempt }) {
   const expected = {
     seed: 'published',
     worker: 'worker-uploaded',
+    'layer-worker': 'worker-uploaded',
     aggregator: identity.attempt === 1 ? 'published' : ['published', 'no-change'],
     warm: 'no-change',
     change: 'published',
@@ -63,7 +64,7 @@ async function observe({ tool, job, stage, producerAttempt }) {
     home,
     expected,
     undefined,
-    ['change', 'reader', 'changed'].includes(stage),
+    ['change', 'reader', 'changed', 'layer-worker'].includes(stage),
     identity,
   );
   if (['worker', 'aggregator', 'warm', 'change'].includes(stage)) {

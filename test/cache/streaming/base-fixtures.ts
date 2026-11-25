@@ -37,7 +37,7 @@ export async function baseFixture(model?: ResolvedModel) {
       1,
       'gradle',
       ['.mammoth/**'],
-      [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default']],
+      [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]],
     ],
     'base-',
     1,

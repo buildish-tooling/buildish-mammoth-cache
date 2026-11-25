@@ -15,7 +15,7 @@
  */
 
 import { gradleResolver } from './quiescence-fixture';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, utimes, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { build } from 'esbuild';
@@ -23,6 +23,12 @@ import {
   runStreamingPrepare,
   STREAMING_INVOCATION_STATE,
 } from '../../../src/phases/streaming/prepare';
+import {
+  STREAMING_LAYER_ADVERTISEMENT_STATE,
+  STREAMING_LAYER_ACTIVATED_STATE,
+} from '../../../src/phases/streaming/state';
+import { Digest, encodeRecord, rawSha, type Value } from '../../../src/cache/streaming/encoding';
+import * as observationCapture from '../../../src/cache/streaming/observation-capture';
 import * as basePost from '../../../src/cache/streaming/base-post';
 import {
   runStreamingPost,
@@ -733,5 +739,426 @@ it.each(['failure', 'cancel', 'analytics-disabled'] as const)(
     expect(f.warning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('data: ' + member));
     expect(await readFile(f.home + '/' + member, 'utf8')).toBe('local only');
     expect(await readFile(f.home + '/data/runtime.lock', 'utf8')).toBe('retained worker lock');
+  },
+);
+
+it.each([true, false])(
+  'fresh provider post keeps prepared family policy %s despite changed current inputs',
+  async (enabled) => {
+    const inputs = { 'dependency-cache-layer': String(enabled) };
+    const f = await fixture('gradle', inputs);
+    const presets = f.deps.buildToolAdapterFactory().getBuiltInPartitionPresets();
+    const adapter = {
+      ...f.deps.buildToolAdapterFactory(),
+      getBuiltInPartitionPresets: () => presets.map((p) => ({ ...p, readOnlyLayer: true })),
+    };
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10000);
+    const ready = await runStreamingPrepare({ ...f.deps, buildToolAdapterFactory: () => adapter });
+    clock.mockRestore();
+    if (!('anchor' in ready)) throw new Error('fixture');
+    await mkdir(f.home + '/data', { recursive: true });
+    await writeFile(f.home + '/data/old.jar', 'old');
+    await utimes(f.home + '/data/old.jar', 1.234, 1.234);
+    inputs['dependency-cache-layer'] = String(!enabled);
+    const changed = normalizeSharedActionConfig(readGradleActionInputs(f.host), {
+      phase: 'finalize',
+      ciContext: f.ci,
+      env: {},
+    });
+    expect(changed.dependencyCacheLayer).toBe(!enabled);
+    const reopened = await OpenedInvocation.open(ready.anchor, f.budget);
+    expect(reopened.store.codec.options.model.dependencyCacheLayer).toBe(enabled);
+    const result = await runStreamingPost({ ...f.post, lifecycle: f.deps.lifecycle });
+    expect(result.outcome).toBe('published');
+    expect((await ready.store.root.stat('data/old.jar')) !== null).toBe(enabled);
+  },
+);
+
+it.each(['model-policy', 'handoff-family'] as const)(
+  'rejects inconsistent persisted %s before fresh-post capture or publication',
+  async (kind) => {
+    const f = await fixture('gradle', { 'dependency-cache-layer': 'true' });
+    const ready = await runStreamingPrepare(f.deps);
+    if (!('anchor' in ready)) throw new Error('fixture');
+    const opened = await OpenedInvocation.open(ready.anchor, f.budget);
+    const bindings = structuredClone(opened.bindings),
+      state = structuredClone(opened.state);
+    const reference = kind === 'model-policy' ? bindings[6] : state[6]!;
+    const rows: Value[][] = (await readFile(f.home + '/' + reference[2], 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    if (kind === 'model-policy') {
+      expect(rows[1][3]).toBe('retain-dependencies');
+      rows[1].pop();
+    } else rows[0][5] = 'mammoth-s1-gradle-' + '0'.repeat(64);
+    const digest = new Digest('local-' + reference[1]);
+    for (const row of rows.slice(0, -1)) digest.update(row);
+    rows.at(-1)![2] = digest.digest();
+    const bytes = Buffer.concat(rows.map((row) => encodeRecord(row)));
+    await writeFile(f.home + '/' + reference[2], bytes);
+    const next = ['ref', reference[1], reference[2], bytes.length, rawSha(bytes)];
+    if (kind === 'model-policy') {
+      bindings[6] = next as (typeof bindings)[6];
+      const encoded = encodeRecord(bindings);
+      await writeFile(f.home + '/' + state[5][2], encoded);
+      state[5] = ['ref', 'bindings', state[5][2], encoded.length, rawSha(encoded)];
+    } else state[6] = next as (typeof state)[6];
+    await writeFile(f.home + '/' + ready.store.prefix + 'state.json', encodeRecord(state));
+    const capture = vi.spyOn(observationCapture, 'captureObservations');
+    await expect(runStreamingPost({ ...f.post, lifecycle: f.deps.lifecycle })).rejects.toThrow(
+      /model identity|stream header/,
+    );
+    expect(capture).not.toHaveBeenCalled();
+    expect(f.backend).not.toHaveBeenCalled();
+    expect(f.removeHooks).not.toHaveBeenCalled();
+    expect(f.sdk.calls.filter((call) => call.kind === 'save')).toHaveLength(0);
+  },
+);
+
+const layerArtifact = 'caches/modules-2/files-2.1/g/a/1/hash/a.jar';
+const layerMetadata = 'caches/modules-2/metadata-2.107/descriptors.bin';
+function layerAdapter(f: Awaited<ReturnType<typeof fixture>>) {
+  return {
+    ...f.deps.buildToolAdapterFactory(),
+    getBuiltInPartitionPresets: () => [
+      {
+        id: 'data',
+        displayName: 'Artifacts',
+        description: '',
+        defaultEnabled: true,
+        readOnlyLayer: true,
+        relativeIncludeGlobs: ['caches/modules-2/files-2.1/**'],
+        relativeExcludeGlobs: [],
+      },
+      {
+        id: 'metadata',
+        displayName: 'Metadata',
+        description: '',
+        defaultEnabled: true,
+        readOnlyLayer: true,
+        publication: 'single-writer' as const,
+        relativeIncludeGlobs: ['caches/modules-2/metadata-*/**'],
+        relativeExcludeGlobs: [],
+      },
+    ],
+    provision: async () => ({ ...(await f.provision()), dependencyLayerVersion: '9.6.1' }),
+  };
+}
+const layerInputs = {
+  'dependency-cache-layer': 'true',
+  'cache-partitions': JSON.stringify([{ id: 'metadata', writer: 'writer' }]),
+};
+async function warmLayerProvider(extra: Record<string, string> = {}) {
+  const producer = await fixture('gradle', layerInputs);
+  await runStreamingPrepare({
+    ...producer.deps,
+    buildToolAdapterFactory: () => layerAdapter(producer),
+  });
+  for (const member of [layerArtifact, layerMetadata]) {
+    await mkdir(path.dirname(producer.home + '/' + member), { recursive: true });
+    await writeFile(producer.home + '/' + member, 'seed');
+  }
+  expect(
+    (await runStreamingPost({ ...producer.post, lifecycle: producer.deps.lifecycle })).outcome,
+  ).toBe('published');
+  const worker = await fixture('gradle', {
+    ...layerInputs,
+    'job-mode': 'distributed-worker',
+    ...extra,
+  });
+  const inspect = vi.fn(async () => ({ remaining: false, uncertain: false }));
+  const dependencies = {
+    ...worker.deps,
+    cacheBackend: async () => producer.sdk.backend,
+    buildToolAdapterFactory: () => layerAdapter(worker),
+    lifecycle: gradleResolver({ inspect }),
+  };
+  return { producer, worker, dependencies, inspect };
+}
+
+it.each([true, false])(
+  'publishes a warm seed last and honors export-layer-environment=%s',
+  async (exportEnvironment) => {
+    const { worker, dependencies, inspect } = await warmLayerProvider({
+      'export-layer-environment': String(exportEnvironment),
+    });
+    const output = vi.spyOn(worker.host, 'setOutput'),
+      environment = vi.spyOn(worker.host, 'exportEnvironmentVariable');
+    const result = await runStreamingPrepare(dependencies);
+    if (!('gradleSeed' in result) || !result.gradleSeed) throw new Error('No warm seed');
+    expect(worker.state.get(STREAMING_LAYER_ACTIVATED_STATE)).toBe(
+      result.store.codec.options.invocation,
+    );
+    const seed = String(worker.outputs.get('gradle-ro-dep-cache'));
+    expect(await readFile(seed + '/modules-2/files-2.1/g/a/1/hash/a.jar', 'utf8')).toBe('seed');
+    expect(worker.info.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      output.mock.invocationCallOrder.at(-1)!,
+    );
+    if (exportEnvironment) {
+      expect(environment).toHaveBeenCalledExactlyOnceWith('GRADLE_RO_DEP_CACHE', seed);
+      expect(worker.host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE')).toBe(seed);
+    } else expect(environment).not.toHaveBeenCalled();
+    expect(
+      (await runStreamingPost({ ...worker.post, lifecycle: dependencies.lifecycle })).outcome,
+    ).toBe('worker-uploaded');
+    expect(inspect).toHaveBeenCalledTimes(2);
+    await expect(readFile(seed + '/modules-2/metadata-2.107/descriptors.bin')).rejects.toThrow(
+      /ENOENT/,
+    );
+  },
+);
+
+it.each([true, false])(
+  'rejects an existing Gradle layer before provisioning or backend access with environment export %s',
+  async (exportEnvironment) => {
+    const f = await fixture('gradle', {
+      ...layerInputs,
+      'job-mode': 'distributed-worker',
+      'export-layer-environment': String(exportEnvironment),
+    });
+    f.host.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', '/caller/cache');
+    await expect(
+      runStreamingPrepare({ ...f.deps, buildToolAdapterFactory: () => layerAdapter(f) }),
+    ).rejects.toThrow(/already set.*disable dependency-cache-layer/);
+    expect(f.provision).not.toHaveBeenCalled();
+    expect(f.sdk.calls).toHaveLength(0);
+    expect(f.artifacts.list).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['report', 'output', 'environment'] as const)(
+  'settles a private or advertised seed when final %s fails',
+  async (failure) => {
+    const { worker, dependencies, inspect } = await warmLayerProvider();
+    let seed = '';
+    const output = worker.host.setOutput.bind(worker.host);
+    vi.spyOn(worker.host, 'setOutput').mockImplementation((name, value) => {
+      output(name, value);
+      if (name === 'gradle-ro-dep-cache' && value) {
+        seed = String(value);
+        if (failure === 'output') throw new Error('output failure');
+      }
+    });
+    if (failure === 'environment') {
+      const publish = worker.host.exportEnvironmentVariable.bind(worker.host);
+      vi.spyOn(worker.host, 'exportEnvironmentVariable').mockImplementation((name, value) => {
+        publish(name, value);
+        throw new Error('environment failure');
+      });
+    }
+    const request =
+      failure === 'report'
+        ? {
+            ...dependencies,
+            reportSink: async () => ({
+              ...worker.sink,
+              publishSummary: async () => {
+                throw new Error('report failure');
+              },
+            }),
+          }
+        : dependencies;
+    await expect(runStreamingPrepare(request)).rejects.toThrow(failure + ' failure');
+    expect(worker.state.has(STREAMING_LAYER_ACTIVATED_STATE)).toBe(false);
+    const raw = worker.state.get(STREAMING_INVOCATION_STATE)!;
+    const anchor = decodeInvocationAnchor(raw);
+    if (anchor[0] !== 'streaming-lifecycle') throw new Error('anchor');
+    const opened = await OpenedInvocation.open(anchor, worker.budget);
+    if (failure === 'report') {
+      expect(await readdir(worker.home + '/' + opened.store.prefix + 'seed')).toEqual([]);
+      expect(seed).toBe('');
+      expect(inspect).toHaveBeenCalledTimes(1);
+    } else {
+      // A later always()/continue-on-error step can still consume the successful output.
+      expect(seed).not.toBe('');
+      expect(await readFile(seed + '/modules-2/metadata-2.107/descriptors.bin', 'utf8')).toBe(
+        'seed',
+      );
+      expect(await readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME, 'utf8')).toContain(
+        'gradle-installation',
+      );
+      expect(inspect).toHaveBeenCalledTimes(1);
+      const capture = vi.spyOn(observationCapture, 'captureObservations');
+      worker.removeHooks.mockImplementation(async () => {
+        await cleanupGradleBuildResultCapture(worker.home);
+        return [];
+      });
+      expect(
+        (await runStreamingPost({ ...worker.post, lifecycle: dependencies.lifecycle })).outcome,
+      ).toBe('skipped');
+      expect(inspect).toHaveBeenCalledTimes(2);
+      expect(capture).not.toHaveBeenCalled();
+      expect(worker.artifacts.upload).not.toHaveBeenCalled();
+      expect(worker.backend).not.toHaveBeenCalled();
+      await expect(readFile(seed + '/modules-2/metadata-2.107/descriptors.bin')).rejects.toThrow(
+        /ENOENT/,
+      );
+      await expect(readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME)).rejects.toThrow(
+        /ENOENT/,
+      );
+      expect((await OpenedInvocation.open(anchor, worker.budget)).state[7]?.[1]).toBe('abandoned');
+    }
+  },
+);
+
+it.each(['output', 'environment'] as const)(
+  'keeps the seed live for later consumers after successful %s publication followed by cancellation',
+  async (point) => {
+    const { worker, dependencies, inspect } = await warmLayerProvider();
+    const controller = new AbortController(),
+      output = worker.host.setOutput.bind(worker.host);
+    const publish = worker.host.exportEnvironmentVariable.bind(worker.host);
+    const environment = vi
+      .spyOn(worker.host, 'exportEnvironmentVariable')
+      .mockImplementation((name, value) => {
+        publish(name, value);
+        if (point === 'environment') controller.abort(new Error('activation cancelled'));
+      });
+    vi.spyOn(worker.host, 'setOutput').mockImplementation((name, value) => {
+      output(name, value);
+      if (name === 'gradle-ro-dep-cache' && value && point === 'output')
+        controller.abort(new Error('activation cancelled'));
+    });
+    await expect(
+      runStreamingPrepare({ ...dependencies, signal: controller.signal }),
+    ).rejects.toThrow('activation cancelled');
+    if (point === 'output') expect(environment).not.toHaveBeenCalled();
+    else expect(environment).toHaveBeenCalledOnce();
+    expect(inspect).toHaveBeenCalledTimes(1);
+    const seed = String(worker.outputs.get('gradle-ro-dep-cache'));
+    if (point === 'environment')
+      expect(worker.host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE')).toBe(seed);
+    expect(await readFile(seed + '/modules-2/metadata-2.107/descriptors.bin', 'utf8')).toBe('seed');
+    expect(await readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME, 'utf8')).toContain(
+      'gradle-installation',
+    );
+    const capture = vi.spyOn(observationCapture, 'captureObservations');
+    worker.removeHooks.mockImplementation(async () => {
+      await cleanupGradleBuildResultCapture(worker.home);
+      return [];
+    });
+    expect(
+      (
+        await runStreamingPost({
+          ...worker.post,
+          signal: controller.signal,
+          lifecycle: dependencies.lifecycle,
+        })
+      ).outcome,
+    ).toBe('skipped');
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(capture).not.toHaveBeenCalled();
+    expect(worker.artifacts.upload).not.toHaveBeenCalled();
+    expect(worker.backend).not.toHaveBeenCalled();
+    await expect(readFile(seed + '/modules-2/metadata-2.107/descriptors.bin')).rejects.toThrow(
+      /ENOENT/,
+    );
+    await expect(readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME)).rejects.toThrow(
+      /ENOENT/,
+    );
+  },
+);
+
+it('retains the advertised seed and operational hooks if failed-prepare post cannot settle consumers', async () => {
+  const { worker, dependencies, inspect } = await warmLayerProvider();
+  const publish = worker.host.exportEnvironmentVariable.bind(worker.host);
+  vi.spyOn(worker.host, 'exportEnvironmentVariable').mockImplementation((name, value) => {
+    publish(name, value);
+    throw new Error('environment failed');
+  });
+  await expect(runStreamingPrepare(dependencies)).rejects.toThrow('environment failed');
+  const seed = String(worker.outputs.get('gradle-ro-dep-cache'));
+  inspect.mockResolvedValue({ remaining: false, uncertain: true });
+  const capture = vi.spyOn(observationCapture, 'captureObservations');
+  await expect(
+    runStreamingPost({ ...worker.post, lifecycle: dependencies.lifecycle }),
+  ).rejects.toThrow('Failed-prepare Gradle seed retained at ' + seed);
+  expect(capture).not.toHaveBeenCalled();
+  expect(worker.removeHooks).not.toHaveBeenCalled();
+  expect(worker.artifacts.upload).not.toHaveBeenCalled();
+  expect(worker.backend).not.toHaveBeenCalled();
+  expect(await readFile(seed + '/modules-2/metadata-2.107/descriptors.bin', 'utf8')).toBe('seed');
+  expect(await readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME, 'utf8')).toContain(
+    'gradle-installation',
+  );
+  expect(worker.warning.mock.calls.flat().join(' ')).toContain(seed);
+});
+
+it.each(['advertisement-only', 'no-markers', 'foreign-terminal', 'aborted-work'] as const)(
+  'uses cleanup-only post for interrupted seed activation with %s and no prepare-failed flag',
+  async (interruption) => {
+    const { worker, dependencies, inspect } = await warmLayerProvider();
+    const ready = await runStreamingPrepare(dependencies);
+    if (!('gradleSeed' in ready) || !ready.gradleSeed) throw new Error('No warm seed');
+    expect(worker.state.get(STREAMING_LAYER_ADVERTISEMENT_STATE)).toBe(
+      ready.store.codec.options.invocation,
+    );
+    expect(worker.state.get(STREAMING_LAYER_ACTIVATED_STATE)).toBe(
+      ready.store.codec.options.invocation,
+    );
+    // Recreate the durable state at interruption: build-ready and its frozen handoff exist,
+    // but completion of activation was never witnessed. Generic exception handling did not run.
+    worker.state.delete(JOB_PREPARE_FAILED_STATE);
+    worker.state.delete(STREAMING_LAYER_ACTIVATED_STATE);
+    const seed = String(worker.outputs.get('gradle-ro-dep-cache'));
+    if (interruption === 'no-markers') {
+      worker.state.delete(STREAMING_LAYER_ADVERTISEMENT_STATE);
+      worker.outputs.delete('gradle-ro-dep-cache');
+      worker.host.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', '');
+    }
+    if (interruption === 'foreign-terminal')
+      worker.state.set(STREAMING_LAYER_ACTIVATED_STATE, '0'.repeat(64));
+    expect(await readFile(seed + '/modules-2/metadata-2.107/descriptors.bin', 'utf8')).toBe('seed');
+    expect(await readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME, 'utf8')).toContain(
+      'gradle-installation',
+    );
+    const capture = vi.spyOn(observationCapture, 'captureObservations');
+    worker.removeHooks.mockImplementation(async () => {
+      await cleanupGradleBuildResultCapture(worker.home);
+      return [];
+    });
+    const abort = new AbortController();
+    if (interruption === 'aborted-work') abort.abort(new Error('work already cancelled'));
+    expect(
+      (
+        await runStreamingPost({
+          ...worker.post,
+          signal: abort.signal,
+          lifecycle: dependencies.lifecycle,
+        })
+      ).outcome,
+    ).toBe('skipped');
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(capture).not.toHaveBeenCalled();
+    expect(worker.artifacts.upload).not.toHaveBeenCalled();
+    expect(worker.backend).not.toHaveBeenCalled();
+    expect(worker.loadReport).not.toHaveBeenCalled();
+    expect((await OpenedInvocation.open(ready.anchor, worker.budget)).state[7]?.[1]).toBe(
+      'abandoned',
+    );
+    await expect(readFile(seed + '/modules-2/metadata-2.107/descriptors.bin')).rejects.toThrow(
+      /ENOENT/,
+    );
+    await expect(readFile(worker.home + '/init.d/' + INIT_SCRIPT_FILE_NAME)).rejects.toThrow(
+      /ENOENT/,
+    );
+  },
+);
+
+it.each(['gradle', 'maven'] as const)(
+  'preserves cancelled-work semantics for ordinary %s post',
+  async (tool) => {
+    const f = await fixture(tool);
+    await runStreamingPrepare(f.deps);
+    const abort = new AbortController();
+    abort.abort(new Error('normal work cancelled'));
+    const capture = vi.spyOn(observationCapture, 'captureObservations');
+    await expect(
+      runStreamingPost({ ...f.post, lifecycle: f.deps.lifecycle, signal: abort.signal }),
+    ).rejects.toThrow('normal work cancelled');
+    expect(capture).not.toHaveBeenCalled();
+    expect(f.backend).not.toHaveBeenCalled();
+    expect(f.removeHooks).not.toHaveBeenCalled();
   },
 );

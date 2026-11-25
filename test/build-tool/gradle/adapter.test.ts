@@ -29,6 +29,8 @@ function createTestGradleConfig(gradleUserHome: string): NormalizedGradleConfig 
     phase: 'prepare',
     baseDirectory: '.',
     cacheEnabled: true,
+    dependencyCacheLayer: false,
+    exportLayerEnvironment: true,
     readOnly: false,
     jobMode: 'standalone',
     dependentJobs: [],
@@ -71,7 +73,8 @@ describe('GradleBuildToolAdapter', () => {
     const ids = adapter.getBuiltInPartitionPresets().map((p) => p.id);
 
     expect(ids).toEqual([
-      'modules',
+      'dependency-artifacts',
+      'module-support',
       'dependency-metadata',
       'transforms-metadata',
       'kotlin-dsl',

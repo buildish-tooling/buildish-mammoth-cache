@@ -30,6 +30,12 @@ export interface HostOutputSink {
   setOutput(name: string, value: unknown): void;
 }
 
+/** Job-local environment transport for subsequent build steps. */
+export interface HostEnvironment {
+  getEnvironmentVariable(name: string): string | undefined;
+  exportEnvironmentVariable(name: string, value: string): void;
+}
+
 /** Host capability for non-fatal diagnostics. */
 export interface HostReporter {
   info(message: string): void;
@@ -45,6 +51,7 @@ export interface HostFailureReporter {
 export type CompositeHost = HostInputSource &
   HostStateStore &
   HostOutputSink &
+  HostEnvironment &
   HostReporter &
   HostFailureReporter;
 

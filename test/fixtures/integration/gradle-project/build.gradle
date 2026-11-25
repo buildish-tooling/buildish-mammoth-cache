@@ -47,6 +47,18 @@ def registerResolver = { taskName, configurationName ->
 }
 
 registerResolver('resolveStandalone', 'standalone')
+
+tasks.register('resolveLayeredStandalone') {
+  doLast {
+    def seed = System.getenv('GRADLE_RO_DEP_CACHE')
+    assert seed : 'Missing read-only dependency seed'
+    def store = new File(seed, 'modules-2/files-2.1').canonicalFile.toPath()
+    def artifact = configurations.standalone.singleFile.canonicalFile
+    assert artifact.toPath().startsWith(store) : "Resolved outside seed: ${artifact}"
+    assert artifact.bytes.length > 0 : 'Empty seed artifact'
+    println("resolved seed artifact: ${artifact}")
+  }
+}
 registerResolver('resolveWorkerA', 'workerA')
 registerResolver('resolveWorkerB', 'workerB')
 

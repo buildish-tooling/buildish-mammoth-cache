@@ -29,13 +29,13 @@ export const modelVector = [
   'maven',
   ['.mammoth/**'],
   [
-    ['data', ['repository/**'], ['.mammoth/**'], 'aggregate', null, 'default'],
-    ['metadata', ['metadata/**'], ['.mammoth/**'], 'single-writer', 'A', 'default'],
+    ['data', ['repository/**'], ['.mammoth/**'], 'aggregate', null, 'default', 0],
+    ['metadata', ['metadata/**'], ['.mammoth/**'], 'single-writer', 'A', 'default', 0],
   ],
 ] as const;
-export const modelId = '7d96641b72b11e9e4e8f8b58eb1bdcd2faf03331b0b0c670233fe933209e4c2c';
+export const modelId = 'e8aa85638c5a93c13d1acface8b2384e353f71f7a724115f0d143780b665f04c';
 export const familyId =
-  'mammoth-s1-maven-9dfec1b369fa3239aeb77c1672b26cb13165d0fd68790f473923f57626155c23';
+  'mammoth-s1-maven-8b490ffd777d80d346abb010da1a4d8f6e8be8998efd56fa33a1fbda176c4127';
 export const context = ['github', 'example/repo', 'ci', '42', 'A', 1, 'rev-1', 'maven'] as const;
 export function workerTrace(example: 'W0' | 'W1'): Value[][] {
   let section = vectors.split('## ' + example + ':')[1].split('\n## ')[0];

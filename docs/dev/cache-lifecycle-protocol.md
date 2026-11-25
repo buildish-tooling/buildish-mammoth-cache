@@ -104,12 +104,50 @@ Old destructive markers are conservatively refused, never executed or adopted.
 ```text
 policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|null,
           ordinaryPolicy,maxDirectoryEntries,ordinaryJobOrder]
-["handoff",3,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+["handoff",4,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef]|null,
- actualActivityRef,originalBuildCutoff,selectedWorkerCount]
+ actualActivityRef,originalBuildCutoff,selectedWorkerCount,gradleSeedDescriptor|null]
 ["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
 provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
+
+`gradleSeedDescriptor` is data bound to the exact selected generation and the two
+available source partitions. Only qualified writable Gradle 9.6.1 distributed
+workers with `restore-cleanup-mode: none` and no selected snapshot ownership can
+activate it. Supported roots are `caches/modules-2/files-2.1` and
+`caches/modules-2/metadata-2.107`; unsupported, excluded, incomplete or missing
+cohorts use the complete ordinary restore before any source is detached.
+
+```text
+["gradle-layer",1,ownedSeedRoot,rootNative,exactGenerationKey,
+ artifactPartitionId,metadataPartitionId,"9.6.1"]
+```
+
+The owned root is `.mammoth/v1/<invocation>/seed/<uuid>`; Gradle receives its
+`caches` child as the native `GRADLE_RO_DEP_CACHE` path. The reserved `.mammoth`
+namespace is opaque to every ordinary capture/purge pattern. Original indexed
+source receipts receive exactly one destination before the normal install plan
+freezes. Guarded whole-root moves preserve source provenance and do not read
+artifact bodies or rebuild their indexes. A failed private route retires only its
+owned seed; the normal live install does not consume its routed receipts again.
+
+Layered workers install operational registration before advertising any path.
+Their actual consumer version guard runs after registration and before dependency
+resolution, so an incompatible consumer remains available to ordinary stop and
+absence checks. Fresh worker post validates the owner, settles registered Gradle
+consumers, then captures the writable head and retires the seed before completion.
+A failure that cannot establish absence retains and reports the owned seed. Output-only
+mode uses the same owner, registration, quiescence and retirement. Prepare emits
+the path and optional environment only after successful handoff, hooks and
+reporting. Once either host write is attempted, a failed prepare retains the seed
+and operational hooks for subsequent always()/continue-on-error consumers. Its
+owning failed-prepare post validates the frozen handoff, settles consumers, then
+retires the seed and hooks without capture or publication. An invocation-bound terminal
+activation marker is written only after output, optional environment export and the
+last synchronous lifetime assertion. A seed-bearing handoff without that exact
+marker takes the same cleanup-only post, even if interruption left only the
+advertisement marker or neither host marker and no generic prepare-failed flag. Private failures before
+advertisement can retire immediately.
 
 The header is followed by exactly one ordered row per model partition. All bounded
 controls are O(P), with P at most 64 and worker count at most 16. The exact generation
@@ -241,6 +279,15 @@ Semantic units, Maven marker-last deletion, protected siblings and required Grad
 workspace markers retain their established policy. Actual deletion remains direct,
 selected-target and selected-parent checked, with no intent/progress/retry format.
 A failure retains actual partial effects and grants no completion/survivor owner.
+
+A publisher in the frozen `retain-dependencies` family marks every file in a
+seed-eligible aggregate partition for retention at observation. This applies to
+standalone and distributed-aggregator post, including zero worker activations and
+new local or worker contributions. Eligibility alone in an ordinary family does
+not suppress timestamp eviction. Worker post still applies ordinary GC to its
+writable head. Purge rules, unrelated aggregate partitions and authoritative
+single-writer snapshots keep their existing decisions. Retention needs no per-file
+seed provenance index and adds no payload walk or body read.
 
 ### Shared GC parent projections
 

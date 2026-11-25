@@ -25,8 +25,8 @@ export function mixedDirectoryModel() {
       'gradle',
       hard,
       [
-        ['data', ['data/**'], [...hard, '**/other'], 'aggregate', null, 'default'],
-        ['other', ['data/**/other'], hard, 'aggregate', null, 'default'],
+        ['data', ['data/**'], [...hard, '**/other'], 'aggregate', null, 'default', 0],
+        ['other', ['data/**/other'], hard, 'aggregate', null, 'default', 0],
       ],
     ],
     'mixed-',

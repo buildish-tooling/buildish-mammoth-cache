@@ -58,13 +58,13 @@ export function createGradleLifecycle(
         );
       if (result.uncertain) throw unavailable();
     },
-    async prepareCapture(store, context, ordinaryHooks) {
+    async prepareCapture(store, context, ordinaryHooks, layerVersion) {
       if (
         store.codec.options.access === 'writable' &&
-        store.codec.options.role !== 'distributed-worker'
+        (store.codec.options.role !== 'distributed-worker' || layerVersion !== undefined)
       ) {
         const { installGradleLifecycleCapture } = await import('./lifecycle-capture');
-        await installGradleLifecycleCapture(store, context);
+        await installGradleLifecycleCapture(store, context, layerVersion);
       } else await ordinaryHooks();
     },
     async quiesce(input) {

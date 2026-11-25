@@ -21,7 +21,13 @@ import { mkdir, lstat } from 'node:fs/promises';
 import { lineagePrefix } from './native-records';
 import { LocalCodec, policySchema } from './local-schema';
 import type { Role, Access } from './local-schema';
-import { ownsLocalSnapshot, invocationId, lineageId, type ResolvedModel } from './model';
+import {
+  frozenModelHeader,
+  ownsLocalSnapshot,
+  invocationId,
+  lineageId,
+  type ResolvedModel,
+} from './model';
 import { contextSchema, type Context } from './schema';
 import { NativeRoot, missing, type Failpoint } from './native';
 import { OwnedStore, completedPreviousOwner } from './owned-store';
@@ -42,6 +48,13 @@ import { MetadataPublicationSource } from './metadata-publication-source';
 import { lifecycleDocuments } from './lifecycle-documents';
 import { checkHandoffGeneration, handoffSchemas, type HandoffHeader } from './lifecycle-handoff';
 import { metadataWorkerRequests, metadataSnapshotRequirements } from './prepare-inputs';
+import {
+  installGradleSeed,
+  retireGradleSeed,
+  gradleLayerCandidate,
+  GRADLE_LAYER_VERSION,
+  type GradleSeedDescriptor,
+} from './gradle-layer';
 import { retireInstallStaging } from './owned-retirement';
 import { settleNativeCleanup } from './native-operation';
 import { assertEmptyManagedArea } from './prepare-admission';
@@ -71,7 +84,13 @@ export interface StreamingPrepareRequest extends LifecycleOptions {
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   readonly artifactBackend?: () => Promise<WorkflowArtifactBackend>;
   readonly provision: () => Promise<void>;
-  readonly installHooks: (store: OwnedStore, lifecycle: BuildToolLifecycle) => Promise<void>;
+  readonly gradleLayerVersion?: () => string | undefined;
+  readonly existingGradleLayer?: string;
+  readonly installHooks: (
+    store: OwnedStore,
+    lifecycle: BuildToolLifecycle,
+    layerVersion?: string,
+  ) => Promise<void>;
   readonly now?: () => number;
   readonly fail?: Failpoint;
 }
@@ -89,6 +108,7 @@ export interface StreamingPrepareResult {
   readonly cutoff: number;
   readonly restoredKey: string | null;
   readonly workerCount: number;
+  readonly gradleSeed: GradleSeedDescriptor | null;
 }
 const rows = async function* (values: readonly Value[]) {
   yield* values;
@@ -106,6 +126,17 @@ export async function prepareStreaming(
     }),
     defaultRef: input.defaultRef === input.currentRef ? undefined : input.defaultRef,
   });
+  if (
+    gradleLayerCandidate(
+      request.model,
+      { ...request.policy, context: request.context },
+      request.policy.restoreCleanup,
+    ) &&
+    request.existingGradleLayer?.length
+  )
+    throw new Error(
+      'GRADLE_RO_DEP_CACHE is already set. Remove the conflicting value or disable dependency-cache-layer.',
+    );
   const signal = request.signal ?? new AbortController().signal,
     options = Object.freeze({
       ...request,
@@ -171,7 +202,7 @@ export async function prepareStreaming(
     'model',
     { ...options, partition: null },
     rows([
-      ['model-header', request.model.tuple[2], request.model.tuple[3]],
+      frozenModelHeader(request.model),
       ...request.model.partitions.map((p) => ['partition', ...p] as Value),
     ]),
     signal,
@@ -188,6 +219,7 @@ export async function prepareStreaming(
     policy,
   ]);
   await store.initialize(bindings);
+  let seed: GradleSeedDescriptor | undefined;
   let restored: MetadataBaseRestore | undefined,
     merged: WorkerMergeResult | undefined,
     accepted: AcceptedWorkerMerge | undefined;
@@ -230,6 +262,12 @@ export async function prepareStreaming(
         }),
       (r) => (unavailable ? 'unavailable' : r.key ? 'hit' : 'miss'),
     );
+    if (
+      gradleLayerCandidate(request.model, store.codec.options, request.policy.restoreCleanup) &&
+      request.gradleLayerVersion?.() === GRADLE_LAYER_VERSION
+    )
+      seed = await installGradleSeed(store, restored, options);
+    await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
     if (requests.length) {
@@ -354,14 +392,14 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
-    await request.installHooks(store, lifecycle);
+    await request.installHooks(store, lifecycle, seed ? GRADLE_LAYER_VERSION : undefined);
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
     bindings = docs.bindings.parse(bindings);
     bindings[8][7] = cutoff;
     const header: HandoffHeader = handoffSchemas(codec).header.parse([
       'handoff',
-      3,
+      4,
       request.currentRef,
       request.defaultRef ?? null,
       request.captureTempDirectory,
@@ -372,6 +410,7 @@ export async function prepareStreaming(
       activity,
       cutoff,
       downloads.length,
+      seed ?? null,
     ]);
     checkHandoffGeneration(store, header, restored.entries, restored.generation, bindings[8]);
     const handoff = await timed(options, 'handoff creation', () =>
@@ -430,6 +469,7 @@ export async function prepareStreaming(
       cutoff,
       restoredKey: key,
       workerCount: downloads.length,
+      gradleSeed: seed ?? null,
     };
   } catch (error) {
     failure = error;
@@ -453,6 +493,16 @@ export async function prepareStreaming(
     failure = error;
   }
   if (failure !== undefined) {
+    if (seed) {
+      try {
+        await retireGradleSeed(store, seed, options);
+      } catch (cleanup) {
+        failure = new AggregateError(
+          [failure, cleanup],
+          'Private Gradle seed retained at ' + store.root.resolve(seed[2]),
+        );
+      }
+    }
     try {
       const state = docs['local-state'].parse(await store.state());
       state[3]++;

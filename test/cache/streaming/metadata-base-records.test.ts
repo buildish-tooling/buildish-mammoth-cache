@@ -109,7 +109,7 @@ it('has exactly a bounded identity descriptor with reference binding, no payload
     ),
   ).toThrow('identity');
 });
-it('binds generation-v2 ordered refs/empties and groups using an independent decision oracle', () => {
+it('binds generation-v3 ordered refs/empties and groups using an independent decision oracle', () => {
   const m = model(),
     r = object().reference;
   const entries: [['object', string, ObjectRef], ['empty', string]] = [
@@ -120,7 +120,7 @@ it('binds generation-v2 ordered refs/empties and groups using an independent dec
   const g = createMetadataGeneration(m, h, 'b'.repeat(64), h, entries, groups);
   const expected = digest('partition-decisions', [
     'partition-decisions',
-    2,
+    3,
     m.family,
     m.id,
     h,
@@ -128,6 +128,7 @@ it('binds generation-v2 ordered refs/empties and groups using an independent dec
     h,
     entries,
     groups,
+    null,
   ]);
   expect(g[10]).toBe(expected);
   expect(g[11]).toBe(m.family + '-r-' + h + '-g-' + 'b'.repeat(64) + '-d-' + expected);
@@ -156,7 +157,7 @@ it('binds generation-v2 ordered refs/empties and groups using an independent dec
   ).toThrow('identity');
 });
 it.each(['partition-order', 'groups', 'decision', 'key', 'profile', 'version'])(
-  'rejects invalid v2 generation %s',
+  'rejects invalid v3 generation %s',
   (kind) => {
     const m = model(),
       g: unknown[] = createMetadataGeneration(
@@ -201,7 +202,7 @@ it('keeps a 64 maximum-width partition generation within the control bound', () 
       1,
       'gradle',
       ['.mammoth/**'],
-      ids.map((id) => [id, [id + '/**'], ['.mammoth/**'], 'aggregate', null, 'default']),
+      ids.map((id) => [id, [id + '/**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]),
     ],
     'max-',
     1,
@@ -287,3 +288,40 @@ it('rejects a genuine prior worker-profile family even when its native descripto
     ];
   expect(() => decodeMetadataDescriptor(bytes, reference, m)).toThrow();
 });
+
+it.each(['gradle', 'maven'] as const)(
+  'round trips generation-v3 and binds reserved sweep state for %s',
+  (tool) => {
+    const m = resolveModel(['model', 1, tool, ...modelVector.slice(3)], 'v3-', 1);
+    const g = createMetadataGeneration(
+      m,
+      h,
+      h,
+      h,
+      [
+        ['empty', 'data'],
+        ['empty', 'metadata'],
+      ],
+      [['data'], ['metadata']],
+    );
+    expect(g).toHaveLength(13);
+    expect(g.slice(0, 3)).toEqual(['generation', 3, 'generation-v3']);
+    expect(g[12]).toBeNull();
+    expect(decodeMetadataGeneration(encodeRecord(g), m, g[11])).toEqual(g);
+    const changed = structuredClone(g);
+    changed[12] = 1700000000000;
+    expect(() => decodeMetadataGeneration(encodeRecord(changed), m)).toThrow('decision/key');
+    changed[10] = digest('partition-decisions', [
+      'partition-decisions',
+      3,
+      ...changed.slice(3, 10),
+      changed[12],
+    ]);
+    changed[11] = m.family + '-r-' + h + '-g-' + h + '-d-' + changed[10];
+    expect(decodeMetadataGeneration(encodeRecord(changed), m)[12]).toBe(1700000000000);
+    const prior = [...g.slice(0, 12)];
+    prior[1] = 2;
+    prior[2] = 'generation-v2';
+    expect(() => decodeMetadataGeneration(encodeRecord(prior), m)).toThrow();
+  },
+);

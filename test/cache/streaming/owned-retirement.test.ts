@@ -43,7 +43,7 @@ async function complete(old: Awaited<ReturnType<typeof installFixture>>) {
     'handoff',
     { budget: old.budget, partition: null },
     (async function* (): AsyncGenerator<Value> {
-      yield ['handoff', 3, 'base-key', null, null, 1, 'disabled', null, null, activity, 0, 0];
+      yield ['handoff', 4, 'base-key', null, null, 1, 'disabled', null, null, activity, 0, 0, null];
       for (const p of old.model.partitions) yield ['partition', p[0], 'miss', null, null];
     })(),
   );

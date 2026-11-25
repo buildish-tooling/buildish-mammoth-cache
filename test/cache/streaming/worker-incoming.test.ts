@@ -281,8 +281,16 @@ it('rejects cross-channel Maven publication claims before incoming install autho
       'maven',
       hard,
       [
-        ['data', ['repository/**/*.jar'], hard, 'aggregate', null, 'default'],
-        ['origins', ['repository/**/_remote.repositories'], hard, 'single-writer', 'A', 'default'],
+        ['data', ['repository/**/*.jar'], hard, 'aggregate', null, 'default', 0],
+        [
+          'origins',
+          ['repository/**/_remote.repositories'],
+          hard,
+          'single-writer',
+          'A',
+          'default',
+          0,
+        ],
       ],
     ],
     'mixed-',

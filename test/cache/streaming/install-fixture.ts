@@ -59,7 +59,7 @@ export async function installFixture(
         configuration.partitionCount
           ? Array.from({ length: configuration.partitionCount }, (_, i) => {
               const p = 'p' + String(i).padStart(3, '0');
-              return [p, ['shared/**/' + p], hard, 'aggregate', null, 'default'];
+              return [p, ['shared/**/' + p], hard, 'aggregate', null, 'default', 0];
             })
           : [
               [
@@ -77,6 +77,7 @@ export async function installFixture(
                 'aggregate',
                 null,
                 'default',
+                0,
                 ...(configuration.purgeGlobs?.length ? [configuration.purgeGlobs] : []),
               ],
               [
@@ -94,6 +95,7 @@ export async function installFixture(
                 configuration.repositorySplit ?? 'single-writer',
                 configuration.repositorySplit === 'aggregate' ? null : 'A',
                 'default',
+                0,
               ],
             ],
       ],

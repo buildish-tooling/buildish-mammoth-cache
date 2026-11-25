@@ -531,8 +531,8 @@ it('preserves bounded differing-contribution diagnostics from the real worker me
         'maven',
         hard,
         [
-          ['data', ['repository/**'], hard, 'aggregate', null, 'choose-worker-directory'],
-          ['state', ['state/**'], hard, 'single-writer', 'A', 'default'],
+          ['data', ['repository/**'], hard, 'aggregate', null, 'choose-worker-directory', 0],
+          ['state', ['state/**'], hard, 'single-writer', 'A', 'default', 0],
         ],
       ],
       'install-fixture-',
@@ -586,8 +586,8 @@ it('restores v2 native objects with exact fallback lineage and independent selec
         'maven',
         hard,
         [
-          ['data', ['data/**'], hard, 'aggregate', null, 'default'],
-          ['state', ['state/**'], hard, 'single-writer', 'B', 'default'],
+          ['data', ['data/**'], hard, 'aggregate', null, 'default', 0],
+          ['state', ['state/**'], hard, 'single-writer', 'B', 'default', 0],
         ],
       ],
       'snapshot-prepare-',
@@ -805,7 +805,7 @@ it('uses effective partition overrides and allows settings, exclusions and scaff
       1,
       'maven',
       hard,
-      [['custom', ['settings.xml/**'], hard, 'aggregate', null, 'default']],
+      [['custom', ['settings.xml/**'], hard, 'aggregate', null, 'default', 0]],
     ],
     'custom-settings-',
     1,
@@ -823,7 +823,7 @@ it('keeps excluded symlinks and rejects managed aliases and unsafe structural an
       1,
       'maven',
       ['**/*.lock'],
-      [['custom', ['branch/managed/**'], ['**/*.lock'], 'aggregate', null, 'default']],
+      [['custom', ['branch/managed/**'], ['**/*.lock'], 'aggregate', null, 'default', 0]],
     ],
     'unsafe-admission-',
     1,
@@ -864,8 +864,9 @@ it('walks shared managed directories once with linear metadata work and no paylo
           'aggregate',
           null,
           'default',
+          0,
         ],
-        ['right', ['shared/units/*/right/**'], hard, 'aggregate', null, 'default'],
+        ['right', ['shared/units/*/right/**'], hard, 'aggregate', null, 'default', 0],
       ],
     ],
     'admission-work-',
@@ -937,7 +938,7 @@ it.each(['absent', 'running', 'uncertain', 'error', 'abort'] as const)(
         1,
         'gradle',
         ['**/*.lock'],
-        [['data', ['data/**'], ['**/*.lock'], 'aggregate', null, 'default']],
+        [['data', ['data/**'], ['**/*.lock'], 'aggregate', null, 'default', 0]],
       ],
       'gradle-admission-',
       1,
@@ -978,7 +979,7 @@ it('skips descendants of an exact-only include when it names a directory', async
   const f = await fixture();
   const hard = ['.mammoth/**'];
   const model = resolveModel(
-    ['model', 1, 'maven', hard, [['exact', ['selected'], hard, 'aggregate', null, 'default']]],
+    ['model', 1, 'maven', hard, [['exact', ['selected'], hard, 'aggregate', null, 'default', 0]]],
     'exact-admission-',
     1,
   );

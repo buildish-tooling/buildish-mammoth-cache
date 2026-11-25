@@ -143,3 +143,18 @@ describe('defaultReadOnlyForEvent', () => {
     expect(defaultReadOnlyForEvent('workflow_call')).toBe(false);
   });
 });
+
+it.each([true, false])('parses explicit read-only-layer eligibility %s', (value) => {
+  expect(
+    parseCachePartitionsInput(
+      JSON.stringify([{ id: 'custom', includes: ['data/**'], 'read-only-layer': value }]),
+    ),
+  ).toEqual([{ id: 'custom', includes: ['data/**'], readOnlyLayer: value }]);
+});
+it.each(['true', 1, null, [], {}])('rejects nonboolean read-only-layer eligibility %j', (value) => {
+  expect(() =>
+    parseCachePartitionsInput(
+      JSON.stringify([{ id: 'custom', includes: ['data/**'], 'read-only-layer': value }]),
+    ),
+  ).toThrow('must be a boolean');
+});

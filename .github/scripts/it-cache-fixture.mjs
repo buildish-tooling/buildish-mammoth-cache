@@ -25,6 +25,7 @@ import {
   glob,
   mkdir,
   readFile,
+  realpath,
   readdir,
   stat,
   utimes,
@@ -76,6 +77,55 @@ if (operation === 'empty') {
   assert.equal(prepare['dependent-delta-status'], 'not-configured');
   assert.equal(prepare['dependent-delta-artifact-count'], '0');
   assert.equal(prepare['restored-cache-key'], producer.key, 'Restored a different generation');
+} else if (operation === 'age-layer') {
+  assert.equal(tool, 'gradle');
+  let count = 0;
+  for await (const member of glob(
+    'caches/modules-2/files-2.1/org.apache.commons/commons-lang3/3.20.0/*/*.jar',
+    { cwd: root },
+  )) {
+    const old = new Date(Date.now() - 30 * 86400000);
+    await utimes(path.join(root, member), old, old);
+    count++;
+  }
+  assert(count > 0, 'Seed dependency was not resolved');
+} else if (operation === 'layer') {
+  assert.equal(tool, 'gradle');
+  const prepare = JSON.parse(process.env.IT_PREPARE);
+  const producer = await producerEvidence(tool, 'layer-seed', process.env.IT_PRODUCER_ATTEMPT);
+  assert.equal(prepare['job-mode'], 'distributed-worker');
+  assert.equal(prepare['read-only'], 'false');
+  assert.equal(prepare['base-cache-restore-status'], 'current-lineage-hit');
+  assert.equal(prepare['restored-cache-key'], producer.key, 'Selected the wrong layer generation');
+  const seed = prepare['gradle-ro-dep-cache'];
+  assert(
+    typeof seed === 'string' && path.isAbsolute(seed),
+    'Cold/fallback restore did not activate a seed',
+  );
+  assert.equal(process.env.GRADLE_RO_DEP_CACHE, seed);
+  assert.equal(await realpath(seed), seed);
+  assert(
+    path
+      .relative(await realpath(root), seed)
+      .split(path.sep)
+      .join('/')
+      .match(/^\.mammoth\/v1\/[a-f0-9]{64}\/seed\/[a-f0-9-]{36}\/caches$/u),
+  );
+  await assertDependency(tool, path.dirname(seed), 'standalone');
+  for await (const member of glob(
+    'caches/modules-2/files-2.1/org.apache.commons/commons-lang3/3.20.0/*/*.jar',
+    { cwd: root },
+  ))
+    assert.fail('Inherited dependency leaked into writable head: ' + member);
+  let aged = 0;
+  for await (const member of glob(
+    'modules-2/files-2.1/org.apache.commons/commons-lang3/3.20.0/*/*.jar',
+    { cwd: seed },
+  )) {
+    assert((await stat(path.join(seed, member))).mtimeMs < Date.now() - 14 * 86400000);
+    aged++;
+  }
+  assert(aged > 0);
 } else if (operation === 'standalone') {
   await assertDependency(tool, cacheHome(tool), 'standalone');
 } else if (operation === 'change') {

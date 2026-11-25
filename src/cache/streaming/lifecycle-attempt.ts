@@ -119,7 +119,10 @@ export class PostAttempt {
   attachWindow(window: ExclusiveWindow): void {
     this.assert();
     ExclusiveWindow.assertReceipt(window, this.store);
-    if (this.#window || this.store.codec.options.role === 'distributed-worker')
+    if (
+      this.#window ||
+      (this.store.codec.options.role === 'distributed-worker' && !this.handoff.header[12])
+    )
       throw new Error('Unexpected exclusive post window.');
     this.#window = window;
     this.#signal = AbortSignal.any([this.#signal, window.signal]);
@@ -130,7 +133,9 @@ export class PostAttempt {
       this.originalState[4] !== 'post-active' ||
       this.#captured ||
       this.store.codec.options.access !== 'writable' ||
-      (this.store.codec.options.role !== 'distributed-worker' && !this.#window)
+      ((this.store.codec.options.role !== 'distributed-worker' ||
+        this.handoff.header[12] !== null) &&
+        !this.#window)
     )
       throw new Error('Post capture has no current exclusive owner.');
     this.#captured = true;
@@ -171,6 +176,7 @@ export class PostAttempt {
     if (!this.#active) return;
     this.#active = false;
     this.#lifetime.abort(new Error('Post attempt closed.'));
+    this.#window?.close();
     this.handoff.close();
     this.release();
   }

@@ -75,6 +75,7 @@ export async function streamingIntegrationJob(options: {
   const warnings: string[] = [];
   const summaries: string[] = [];
   const runtimeHost = createTestRuntimeHost({
+    environment: env,
     inputs: {
       'read-only': 'false',
       'cache-gc-mode': 'off',

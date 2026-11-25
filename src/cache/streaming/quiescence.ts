@@ -16,6 +16,8 @@
 
 import { lstat } from 'node:fs/promises';
 import type { OwnedStore, Reference } from './owned-store';
+import { checkGradleSeed } from './gradle-layer';
+import type { LifecycleHandoff } from './lifecycle-handoff';
 import { equal } from './encoding';
 import { nativeIdentity } from './native';
 import { checkPostRootBinding } from './post-admission';
@@ -24,6 +26,7 @@ import { resolveLifecycle } from '../../build-tool/lifecycle';
 import type { LifecycleResolver } from '../../build-tool/lifecycle-types';
 
 interface WindowOptions {
+  readonly layeredWorker?: LifecycleHandoff;
   readonly signal?: AbortSignal;
   /** Caller holds the documented dedicated-root/no-consumer lifetime; this must be cheap and synchronous. */
   readonly assertCurrent: () => undefined;
@@ -77,9 +80,15 @@ export class ExclusiveWindow {
     signal.throwIfAborted();
     if (
       store.codec.options.access !== 'writable' ||
-      store.codec.options.role === 'distributed-worker'
+      (store.codec.options.role === 'distributed-worker' && !input.layeredWorker)
     )
       throw new Error('Exclusive base window requires writable base role.');
+    if (store.codec.options.role === 'distributed-worker') {
+      input.layeredWorker!.assertBound(store);
+      const seed = input.layeredWorker!.header[12];
+      if (!seed) throw new Error('Worker window requires a frozen Gradle seed owner.');
+      checkGradleSeed(store, seed, input.layeredWorker!.header[8]?.[0] ?? null);
+    }
     if (input.assertCurrent.constructor.name === 'AsyncFunction')
       throw new Error('Exclusive-window assertion must be synchronous.');
     const assert = () => {

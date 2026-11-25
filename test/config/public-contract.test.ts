@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getPublicActionInputs,
   PUBLIC_ACTION_OUTPUTS,
+  getPublicActionOutputs,
   renderPublicActionContractReference,
   type ActionBuildTool,
 } from '../../src/config/public-contract';
@@ -52,7 +53,10 @@ describe('canonical public action contract', () => {
         ]),
       );
       const expectedOutputs = Object.fromEntries(
-        PUBLIC_ACTION_OUTPUTS.map((output) => [output.name, { description: output.description }]),
+        getPublicActionOutputs(buildTool).map((output) => [
+          output.name,
+          { description: output.description },
+        ]),
       );
 
       expect(descriptor.inputs).toEqual(expectedInputs);

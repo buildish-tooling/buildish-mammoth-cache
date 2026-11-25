@@ -69,7 +69,7 @@ function fixture(purpose: LocalPurpose, model?: ReturnType<typeof resolveModel>)
       break;
     case 'handoff':
       rows = [
-        ['handoff', 3, 'key', null, null, 1, 'disabled', null, null, f.q('activity'), 0, 0],
+        ['handoff', 4, 'key', null, null, 1, 'disabled', null, null, f.q('activity'), 0, 0, null],
         ...o.model.partitions.map((p) => ['partition', p[0], 'miss', null, null] as Value),
       ];
       break;
@@ -347,7 +347,7 @@ it('allows retained incomplete workspace observations but rejects deletion witho
         1,
         'gradle',
         ['.mammoth/**'],
-        [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default']],
+        [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]],
       ],
       'observed-',
       1,
@@ -554,7 +554,7 @@ it('defers snapshot structural-directory ownership to full-subtree admission but
       1,
       'maven',
       ['.mammoth/**'],
-      [['metadata', ['cache/**/*.bin'], ['.mammoth/**'], 'single-writer', 'A', 'default']],
+      [['metadata', ['cache/**/*.bin'], ['.mammoth/**'], 'single-writer', 'A', 'default', 0]],
     ],
     'structural-',
     1,
@@ -637,8 +637,8 @@ it('allows structurally unowned directory roots and binds aggregate rather than 
       'maven',
       hard,
       [
-        ['data', ['data/**/*.bin'], hard, 'aggregate', null, 'default'],
-        ['metadata', ['metadata/**'], hard, 'single-writer', null, 'default'],
+        ['data', ['data/**/*.bin'], hard, 'aggregate', null, 'default', 0],
+        ['metadata', ['metadata/**'], hard, 'single-writer', null, 'default', 0],
       ],
     ],
     'narrow-',

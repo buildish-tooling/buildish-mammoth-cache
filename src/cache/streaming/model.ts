@@ -53,6 +53,7 @@ const partitionFields = [
   z.enum(['aggregate', 'single-writer']),
   nameSchema.nullable(),
   z.enum(['default', 'choose-worker-entry', 'choose-worker-directory']),
+  z.union([z.literal(0), z.literal(1)]),
 ] as const;
 // Canonical optional configuration: omit an empty list; a present list is nonempty.
 export const partitionDefinitionSchema = z
@@ -81,18 +82,20 @@ export function ownsLocalSnapshot(
   );
 }
 
+const modelFields = [
+  z.literal('model'),
+  z.literal(1),
+  buildToolSchema,
+  globs.min(1),
+  z.array(partitionDefinitionSchema).min(1).max(64),
+] as const;
 export const modelSchema = z
-  .tuple([
-    z.literal('model'),
-    z.literal(1),
-    buildToolSchema,
-    globs.min(1),
-    z.array(partitionDefinitionSchema).min(1).max(64),
-  ])
+  .union([z.tuple(modelFields), z.tuple([...modelFields, z.literal('retain-dependencies')])])
+  .refine((v) => v.length === 5 || v[2] === 'gradle')
   .refine((v) => unique(v[4].map((p) => p[0])))
   .refine((v) => {
     try {
-      encodeRecord(['model-header', v[2], v[3]]);
+      encodeRecord(['model-header', v[2], v[3], ...v.slice(5)]);
       return true;
     } catch {
       return false;
@@ -102,6 +105,7 @@ export const modelSchema = z
 export type ModelTuple = z.infer<typeof modelSchema>;
 export interface ResolvedModel {
   readonly tuple: ModelTuple;
+  readonly dependencyCacheLayer: boolean;
   readonly id: string;
   readonly family: string;
   readonly familyProjection: readonly ['family', 1, string, number, string, ...string[]];
@@ -126,7 +130,8 @@ function resolveModelWithProfiles(
   schemaVersion: number,
   profiles: { readonly [K in keyof typeof STREAMING_PROFILES]: string },
 ): ResolvedModel {
-  const raw = requireTuple(input as Value, 'model', 5);
+  const raw = requireTuple(input as Value, 'model');
+  if (raw.length !== 5 && raw.length !== 6) throw new Error('Invalid model shape.');
   const partitions = requireTuple(raw[4]);
   if (partitions.length < 1 || partitions.length > 64)
     throw new Error('Model partition admission exceeded.');
@@ -160,7 +165,7 @@ function resolveModelWithProfiles(
   const family = streamingFamilyId(tuple[2], H('family', familyProjection));
   const hard = createCacheGlobMatcher(tuple[3]);
   for (const p of tuple[4])
-    for (const rule of p[6] ?? []) {
+    for (const rule of p[7] ?? []) {
       let prefix = '';
       for (const segment of rule.split('/')) {
         if (segment.includes('*')) break;
@@ -173,7 +178,7 @@ function resolveModelWithProfiles(
     p,
     includes: createCacheGlobMatcher(p[1]),
     excludes: createCacheGlobMatcher(p[2]),
-    purge: createCacheGlobMatcher(p[6] ?? []),
+    purge: createCacheGlobMatcher(p[7] ?? []),
   }));
   const findOwner = (path: string, candidates: typeof parts) => {
     let owner: Partition | undefined;
@@ -211,6 +216,7 @@ function resolveModelWithProfiles(
   }
   return {
     tuple,
+    dependencyCacheLayer: tuple[5] === 'retain-dependencies',
     id,
     family,
     familyProjection,
@@ -284,10 +290,17 @@ export function resolveCacheModel(
         p.publication ?? 'aggregate',
         p.writer ?? null,
         p.conflictHandling ?? 'default',
+        p.readOnlyLayer ? 1 : 0,
         ...(p.purgeableGlobs?.length ? [p.purgeableGlobs] : []),
       ]),
+      ...(model.dependencyCacheLayer ? ['retain-dependencies'] : []),
     ],
     prefix,
     schemaVersion,
   );
+}
+
+/** Preserve the shared family policy in the frozen model reference used by fresh post. */
+export function frozenModelHeader(model: ResolvedModel): Value {
+  return ['model-header', model.tuple[2], model.tuple[3], ...model.tuple.slice(5)];
 }

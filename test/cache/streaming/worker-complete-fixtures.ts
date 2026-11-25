@@ -69,11 +69,12 @@ export async function completeFixture(
           'aggregate',
           null,
           policy,
+          0,
         ],
         ...(snapshots
           ? [
-              ['state', ['state/**'], hard, 'single-writer', null, 'default'],
-              ['other', ['other/**'], hard, 'single-writer', null, 'default'],
+              ['state', ['state/**'], hard, 'single-writer', null, 'default', 0],
+              ['other', ['other/**'], hard, 'single-writer', null, 'default', 0],
             ]
           : []),
       ],

@@ -48,7 +48,7 @@ it('never re-admits unrelated retained trees after fixed shared-parent deletions
           1,
           'maven',
           hard,
-          ids.map((id) => [id, ['**/' + id + '/**'], hard, 'aggregate', null, 'default']),
+          ids.map((id) => [id, ['**/' + id + '/**'], hard, 'aggregate', null, 'default', 0]),
         ],
         'gc-scoped-work-',
         1,

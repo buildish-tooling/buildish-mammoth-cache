@@ -37,7 +37,7 @@ async function fixture(width = 1) {
         1,
         'gradle',
         hard,
-        [['data', ['d/**', 'caches/**'], hard, 'aggregate', null, 'default']],
+        [['data', ['d/**', 'caches/**'], hard, 'aggregate', null, 'default', 0]],
       ],
       'scaffold-',
       1,

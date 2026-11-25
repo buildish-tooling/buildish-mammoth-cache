@@ -46,7 +46,7 @@ async function fixture() {
         1,
         'gradle',
         ['.mammoth/**'],
-        [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default']],
+        [['data', ['**'], ['.mammoth/**'], 'aggregate', null, 'default', 0]],
       ],
       'v2-',
       1,

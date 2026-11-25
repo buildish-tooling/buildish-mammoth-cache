@@ -22,7 +22,8 @@ import { resolveCacheModel, lineageId } from '../../cache/streaming/model';
 import { lineagePrefix } from '../../cache/streaming/native-records';
 import { contextSchema } from '../../cache/streaming/schema';
 import { WorkingBudget } from '../../cache/streaming/tree-state';
-import { prepareStreaming } from '../../cache/streaming/prepare';
+import { gradleSeedPath, retireGradleSeed } from '../../cache/streaming/gradle-layer';
+import { prepareStreaming, type StreamingPrepareResult } from '../../cache/streaming/prepare';
 import { reconcileDisabledRoot } from '../../cache/streaming/passive-lifecycle';
 import { disabledInvocationAnchor, encodeInvocationAnchor } from '../../cache/streaming/invocation';
 import {
@@ -33,16 +34,26 @@ import type { LifecycleOptions } from '../../cache/streaming/lifecycle-options';
 import type { BuildToolAdapter, BuildToolProvisioning } from '../../build-tool/types';
 import type { CiPlatformAdapter } from '../../ci';
 import type { NormalizedActionConfig } from '../../config/types';
-import type { HostStateStore, HostOutputSink, HostReporter, ReportSink } from '../../host/types';
+import type {
+  HostStateStore,
+  HostOutputSink,
+  HostReporter,
+  HostEnvironment,
+  ReportSink,
+} from '../../host/types';
 import type { BaseCacheBackend } from '../../cache/backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
-import { STREAMING_INVOCATION_STATE } from './state';
+import {
+  STREAMING_INVOCATION_STATE,
+  STREAMING_LAYER_ADVERTISEMENT_STATE,
+  STREAMING_LAYER_ACTIVATED_STATE,
+} from './state';
 export { STREAMING_INVOCATION_STATE } from './state';
 export interface StreamingPrepareDependencies extends Omit<LifecycleOptions, 'budget'> {
   readonly budget?: WorkingBudget;
   readonly providerId: string;
-  readonly runtimeHost: HostStateStore & HostOutputSink & HostReporter;
+  readonly runtimeHost: HostStateStore & HostOutputSink & HostReporter & HostEnvironment;
   readonly ciProvider: CiPlatformAdapter;
   readonly config: NormalizedActionConfig;
   readonly buildToolAdapterFactory: () => BuildToolAdapter;
@@ -58,6 +69,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
     ci = d.ciProvider.context,
     claim = await claimSingleRunPrepareExecution({ ciContext: ci, saveState: host.saveState });
   if (!claim.accepted) throw new Error(claim.message);
+  let layerPreparation: StreamingPrepareResult | undefined;
   try {
     const adapter = d.buildToolAdapterFactory(),
       config = d.config,
@@ -96,6 +108,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
         host.setOutput(key, value);
       outputs(host, config, null, null, 0, '', false);
       await prepareSummary(d, 'disabled');
+      if (tool === 'gradle') host.setOutput('gradle-ro-dep-cache', '');
       return { outcome: 'disabled' as const };
     }
     const hard = adapter.getHardCacheExcludeGlobs(),
@@ -105,7 +118,12 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
         hard,
       );
     const model = resolveCacheModel(
-      { buildToolId: tool, hardCacheExcludeGlobs: hard, partitions },
+      {
+        buildToolId: tool,
+        hardCacheExcludeGlobs: hard,
+        partitions,
+        dependencyCacheLayer: config.dependencyCacheLayer,
+      },
       config.cacheKeyPrefix,
       config.cacheSchemaVersion,
     );
@@ -144,10 +162,18 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       cacheBackend: d.cacheBackend,
       artifactBackend: d.artifactBackend,
       provision,
-      installHooks: async (store, lifecycle) => {
-        await lifecycle.prepareCapture(store, ci, () => adapter.installBuildHooks(ci));
+      existingGradleLayer: host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE'),
+      gradleLayerVersion: () => provisioning?.dependencyLayerVersion,
+      installHooks: async (store, lifecycle, layerVersion) => {
+        await lifecycle.prepareCapture(
+          store,
+          ci,
+          () => adapter.installBuildHooks(ci),
+          layerVersion,
+        );
       },
     });
+    layerPreparation = result;
     for (const warning of provisioning?.warnings ?? []) host.warning(warning);
     for (const [key, value] of Object.entries(provisioning?.additionalOutputs ?? {}))
       host.setOutput(key, value);
@@ -165,10 +191,14 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       result.restoreStatus,
     );
     await prepareSummary(d, result.restoreStatus);
+    if (tool === 'gradle' && !result.gradleSeed) host.setOutput('gradle-ro-dep-cache', '');
     return result;
-  } catch (e) {
+  } catch (error) {
+    const failure = layerPreparation?.gradleSeed
+      ? await cleanupFailedLayer(d, layerPreparation, false, error)
+      : error;
     host.saveState(JOB_PREPARE_FAILED_STATE, 'true');
-    throw e;
+    throw failure;
   }
 }
 function outputs(
@@ -216,12 +246,95 @@ async function prepareSummary(d: StreamingPrepareDependencies, outcome: string) 
   assert();
 }
 
+async function cleanupFailedLayer(
+  d: StreamingPrepareDependencies,
+  prepared: StreamingPrepareResult,
+  advertised: boolean,
+  e: unknown,
+): Promise<unknown> {
+  if (!prepared.gradleSeed) return e;
+  const { store, gradleSeed: seed } = prepared;
+  const options = {
+    ...d,
+    budget: d.budget ?? new WorkingBudget(),
+    signal: d.cleanupSignal ?? new AbortController().signal,
+  };
+  if (advertised) {
+    // Later always()/continue-on-error steps may still consume either successful host write.
+    try {
+      d.runtimeHost.warning(
+        'Prepare failed; advertised Gradle seed and hooks retained until owning post at ' +
+          gradleSeedPath(store, seed),
+      );
+    } catch (report) {
+      return new AggregateError(
+        [e, report],
+        'Advertised Gradle seed retained until owning post at ' + gradleSeedPath(store, seed),
+      );
+    }
+    return e;
+  }
+  try {
+    await retireGradleSeed(store, seed, options);
+  } catch (cleanup) {
+    const message = 'Prepare failed; Gradle seed retained at ' + gradleSeedPath(store, seed);
+    const errors = [e, cleanup];
+    try {
+      d.runtimeHost.warning(message);
+    } catch (report) {
+      errors.push(report);
+    }
+    e = new AggregateError(errors, message);
+  }
+
+  return e;
+}
+
 export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
   const d = { ...input, timing: input.timing ?? hostTiming(input.runtimeHost) };
-  return timed(
-    d,
-    'preparation',
-    () => runStreamingPrepareImpl(d),
-    (result) => ('restoreStatus' in result ? result.restoreStatus : result.outcome),
-  );
+  let prepared: Awaited<ReturnType<typeof runStreamingPrepareImpl>> | undefined,
+    advertised = false;
+  try {
+    const result = await timed(
+      d,
+      'preparation',
+      async () => {
+        prepared = await runStreamingPrepareImpl(d);
+        return prepared;
+      },
+      (result) => ('restoreStatus' in result ? result.restoreStatus : result.outcome),
+    );
+    // Host output/environment are the last operations, after all failure-prone reporting.
+    if ('gradleSeed' in result && result.gradleSeed) {
+      const path = gradleSeedPath(result.store, result.gradleSeed);
+      const assertActivation = () => {
+        d.signal?.throwIfAborted();
+        if (d.assertCurrent() !== undefined)
+          throw new Error('Layer activation lifetime assertion must be synchronous.');
+      };
+      assertActivation();
+      d.runtimeHost.saveState(
+        STREAMING_LAYER_ADVERTISEMENT_STATE,
+        result.store.codec.options.invocation,
+      );
+      advertised = true;
+      d.runtimeHost.setOutput('gradle-ro-dep-cache', path);
+      assertActivation();
+      if (d.config.exportLayerEnvironment)
+        d.runtimeHost.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', path);
+      assertActivation();
+      d.runtimeHost.saveState(
+        STREAMING_LAYER_ACTIVATED_STATE,
+        result.store.codec.options.invocation,
+      );
+    }
+    return result;
+  } catch (error) {
+    const failure =
+      prepared && 'gradleSeed' in prepared && prepared.gradleSeed
+        ? await cleanupFailedLayer(d, prepared, advertised, error)
+        : error;
+    if (prepared) d.runtimeHost.saveState(JOB_PREPARE_FAILED_STATE, 'true');
+    throw failure;
+  }
 }

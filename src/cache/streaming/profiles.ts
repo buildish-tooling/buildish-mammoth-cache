@@ -18,12 +18,15 @@
 export const STREAMING_PROFILES = {
   worker: 'worker-tar-v2',
   native: 'native-metadata-v2',
-  generation: 'generation-v2',
+  generation: 'generation-v3',
   local: 'local-v2',
   path: 'path-policy-v1',
   unit: 'unit-policy-v1',
   glob: 'glob-policy-v1',
 } as const;
+
+/** Initial qualified Gradle dependency-layer consumer; other versions use ordinary restore. */
+export const GRADLE_LAYER_VERSION = '9.6.1';
 
 /** The projection hash is computed by the canonical codec, not by this prefix helper. */
 export function streamingFamilyId(buildTool: 'gradle' | 'maven', familySha: string): string {
