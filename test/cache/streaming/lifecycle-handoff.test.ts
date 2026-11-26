@@ -127,6 +127,26 @@ it('round-trips only bounded invocation handoff data with charged lifetime and s
     await expect(f.write(values)).rejects.toThrow();
   }
 });
+it('round-trips the current handoff layout and rejects unreleased versions', async () => {
+  const f = await fixture();
+  const header = ['handoff', 5, ...f.header.slice(2), null, null, null] as const;
+  const handoff = await LifecycleHandoff.read(f.store, await f.write([header, ...f.entries]), {
+    budget: f.budget,
+  });
+  try {
+    expect(handoff.header).toEqual(header);
+    expect(handoff.workerSweepCapture).toBe(false);
+    expect(handoff.publisherSweep).toBeUndefined();
+    handoff.checkGeneration(f.store, null, policySchema.parse(f.bindings[8]));
+  } finally {
+    handoff.close();
+  }
+  for (const version of [6, 7, 8, 9]) {
+    await expect(
+      f.write([['handoff', version, ...header.slice(2)], ...f.entries]),
+    ).rejects.toThrow();
+  }
+});
 it('binds declared-empty pins to exact v2 generation and invocation, rejecting miss and foreign provenance', async () => {
   const f = await fixture(),
     profile = metadataSummaryProfile(),

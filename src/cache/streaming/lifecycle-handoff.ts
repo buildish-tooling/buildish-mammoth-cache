@@ -32,6 +32,13 @@ import { encodeRecord, equal, type Value } from './encoding';
 import type { OwnedStore, Reference } from './owned-store';
 import type { NativeOperationOptions } from './native-operation';
 import type { MetadataGeneration } from './metadata-base-records';
+import type { ResolvedModel } from './model';
+
+export type PublisherSweep = readonly [
+  mode: 'complete' | 'forced',
+  gcCutoffMs: number,
+  activity: Reference | null,
+];
 
 export function handoffSchemas(codec: LocalCodec) {
   const { invocation, model } = codec.options,
@@ -78,14 +85,18 @@ export function handoffSchemas(codec: LocalCodec) {
   const header = z
     .union([
       z.tuple([z.literal('handoff'), z.literal(4), ...headerFields]),
-      z.tuple([z.literal('handoff'), z.literal(8), ...headerFields]),
-      z.tuple([z.literal('handoff'), z.literal(6), ...headerFields, overlaySchema(invocation)]),
       z.tuple([
         z.literal('handoff'),
-        z.literal(7),
+        z.literal(5),
         ...headerFields,
-        overlaySchema(invocation),
-        z.enum(['pristine', 'other']),
+        overlaySchema(invocation).nullable(),
+        z.enum(['pristine', 'other']).nullable(),
+        z
+          .union([
+            z.literal('worker-capture'),
+            z.tuple([z.enum(['complete', 'forced']), uintSchema, ref('activity').nullable()]),
+          ])
+          .nullable(),
       ]),
     ])
     .refine((row) => row[2] !== row[3]);
@@ -140,6 +151,19 @@ export function handoffSchemas(codec: LocalCodec) {
 export type HandoffHeader = z.infer<ReturnType<typeof handoffSchemas>['header']>;
 
 export type HandoffEntry = z.infer<ReturnType<typeof handoffSchemas>['entry']>;
+
+export function hasCompleteSweepBaseline(
+  model: ResolvedModel,
+  entries: readonly HandoffEntry[],
+): boolean {
+  return (
+    entries.length === model.partitions.length &&
+    entries.every(
+      (entry, i) =>
+        model.partitions[i][3] !== 'aggregate' || entry[2] === 'available' || entry[2] === 'empty',
+    )
+  );
+}
 
 export type SnapshotDescriptor = z.infer<ReturnType<typeof handoffSchemas>['snapshot']>;
 
@@ -238,6 +262,15 @@ export class LifecycleHandoff {
     }
   }
 
+  get publisherSweep() {
+    const sweep = this.header[15];
+    return Array.isArray(sweep) ? sweep : undefined;
+  }
+
+  get workerSweepCapture(): boolean {
+    return this.header[15] === 'worker-capture';
+  }
+
   checkGeneration(
     store: OwnedStore,
     generation: MetadataGeneration | null,
@@ -266,42 +299,53 @@ export function checkHandoffGeneration(
   policy: Policy,
   lifecycle?: BuildToolLifecycle,
 ): void {
+  const { model, role, access } = store.codec.options;
+  const [, , , , , , , , , , , , seed, overlay, overlayBaseline, sweep] = header;
+  const worker = role === 'distributed-worker';
   if (
-    header[1] === 8 &&
-    (!generation ||
-      header[12] ||
-      store.codec.options.role !== 'distributed-worker' ||
-      store.codec.options.access !== 'writable')
+    sweep &&
+    (!generation || seed || overlay || access !== 'writable' || header[6] !== 'enabled')
   ) {
+    throw new Error('Invalid sweep handoff.');
+  }
+  if (sweep === 'worker-capture' && !worker) {
     throw new Error('Invalid writable sweep capture handoff.');
   }
+  if (Array.isArray(sweep)) {
+    if (
+      worker ||
+      !hasCompleteSweepBaseline(model, entries) ||
+      (sweep[0] === 'forced' && role !== 'distributed-aggregator') ||
+      (role === 'distributed-aggregator' && sweep[0] === 'complete' && policy[10].length === 0) ||
+      sweep[2]?.[2] === header[9][2]
+    ) {
+      throw new Error('Invalid publisher sweep handoff.');
+    }
+  }
   if (
-    header[13] &&
-    (header[12] ||
-      !generation ||
-      policy[4] !== 'none' ||
-      store.codec.options.access !== 'writable' ||
-      (store.codec.options.role === 'distributed-worker'
-        ? header[1] !== 6
-        : header[1] !== 7 ||
-          !publisherOverlayAllowed(
-            store.codec.options.model,
-            policy[5] === 'timestamp',
-            header[6] === 'enabled',
-          )) ||
-      !lifecycle?.overlay?.accepts(store, header[13][10], entries))
+    (!overlay && overlayBaseline) ||
+    (overlay &&
+      (seed ||
+        !generation ||
+        policy[4] !== 'none' ||
+        access !== 'writable' ||
+        (worker
+          ? overlayBaseline !== null
+          : !overlayBaseline ||
+            !publisherOverlayAllowed(model, policy[5] === 'timestamp', header[6] === 'enabled')) ||
+        !lifecycle?.overlay?.accepts(store, overlay[10], entries)))
   ) {
     throw new Error('Invalid OverlayFS handoff.');
   }
-  if (header[12]) {
+  if (seed) {
     if (!lifecycle?.dependencyLayer) {
       throw new Error('Unsupported dependency layer handoff.');
     }
-    lifecycle.dependencyLayer.check(store, header[12], generation?.[11] ?? null);
+    lifecycle.dependencyLayer.check(store, seed, generation?.[11] ?? null);
     if (policy[4] !== 'none') {
       throw new Error('Layered handoff requires ordinary restore cleanup.');
     }
-    for (const id of [header[12][5], header[12][6]]) {
+    for (const id of [seed[5], seed[6]]) {
       if (entries.find((e) => e[1] === id)?.[2] !== 'available') {
         throw new Error('Incomplete seed handoff.');
       }

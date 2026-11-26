@@ -96,6 +96,257 @@ it('unions usage, suppresses selected upserts and installs through actual V4a wi
   expect(tuple(await f.store.state())[4]).toBe('prepare-pending');
   expect(f.budget.retained).toBe(0);
 });
+
+it('reuses ordinary activity for a complete sweep when every selected usage projection qualifies', async () => {
+  const f = await completeFixture();
+  await initializeCompleteFixture(f, ['A', 'B']);
+  const a = await completeArchive(
+    f,
+    'A',
+    { 'data/upsert': 'new' },
+    ['data/read'],
+    {},
+    {
+      sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+    },
+  );
+  const b = await completeArchive(
+    f,
+    'B',
+    {},
+    ['data/read'],
+    {},
+    {
+      sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+    },
+  );
+  const merged = await merge(f.store, [a, b], {
+    budget: f.budget,
+    ordinaryOrder: ['A', 'B'],
+    ordinaryPolicy: 'strict',
+    sweep: { generationKey: 'selected', force: false },
+  });
+  const accepted = await acceptWorkerMerge(f.store, merged, f.budget);
+  try {
+    expect(accepted.sweep).toEqual({ mode: 'complete', activity: null });
+    const rows = await activity(f, accepted.activity);
+    expect(rows).toContainEqual(['used', 'read', 'data']);
+    expect(rows).toContainEqual(['upsert', 'upsert', 'data']);
+    expect(accepted.work.activityIndexDirectories).toBe(2);
+    expect(accepted.work.activityDirectoryListings).toBe(0);
+  } finally {
+    await accepted.dispose();
+  }
+});
+
+it('keeps selected upserts and snapshot-only writer usage in a forced sweep', async () => {
+  const f = await completeFixture('gradle', 'default', true);
+  const order = ['A', 'B', 'C'];
+  await initializeCompleteFixture(f, order);
+  const a = await completeArchive(
+    f,
+    'A',
+    {},
+    ['data/valid'],
+    {},
+    {
+      sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+    },
+  );
+  const b = await completeArchive(
+    f,
+    'B',
+    { 'data/overlay-upsert': 'keep' },
+    ['data/partial'],
+    {},
+    {
+      incompleteUsage: true,
+    },
+  );
+  const c = await completeArchive(
+    f,
+    'C',
+    { 'data/other-upsert': 'keep' },
+    ['data/other'],
+    {},
+    {
+      sweep: ['sweep-usage', 'different', 1, 2, ['data']],
+    },
+  );
+  const writer = await completeArchive(
+    f,
+    'writer',
+    { 'data/ignored': 'outside ordinary order' },
+    ['data/writer-read'],
+    { state: { 'state/snapshot': 'authoritative' } },
+    {
+      sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+    },
+  );
+  const merged = await merge(f.store, [a, b, c, writer], {
+    budget: f.budget,
+    ordinaryOrder: order,
+    ordinaryPolicy: 'strict',
+    snapshots: [{ partition: 'state', job: 'writer', required: false }],
+    sweep: { generationKey: 'selected', force: true },
+  });
+  const accepted = await acceptWorkerMerge(f.store, merged, f.budget);
+  try {
+    expect(accepted.sweep?.mode).toBe('forced');
+    expect(accepted.generationMismatches).toEqual(['C']);
+    expect(accepted.incompleteUsage).toBe(true);
+    const ordinary = await activity(f, accepted.activity);
+    expect(ordinary).toContainEqual(['used', 'partial', 'data']);
+    expect(ordinary).toContainEqual(['used', 'other', 'data']);
+    expect(ordinary).not.toContainEqual(['used', 'writer-read', 'data']);
+    const sweep = await activity(f, accepted.sweep!.activity!);
+    for (const name of ['valid', 'writer-read']) {
+      expect(sweep).toContainEqual(['used', name, 'data']);
+    }
+    for (const name of ['partial', 'other']) {
+      expect(sweep).not.toContainEqual(['used', name, 'data']);
+    }
+    for (const name of ['overlay-upsert', 'other-upsert']) {
+      expect(sweep).toContainEqual(['upsert', name, 'data']);
+    }
+    expect(sweep).not.toContainEqual(['upsert', 'ignored', 'data']);
+    expect(sweep).toContainEqual(['upsert', 'snapshot', 'state']);
+  } finally {
+    await accepted.dispose();
+  }
+});
+
+it('keeps matching reads from a partially restored Maven worker without granting full coverage', async () => {
+  const f = await completeFixture('maven');
+  const hard = ['.mammoth/**'];
+  f.model = resolveModel(
+    [
+      'model',
+      1,
+      'maven',
+      hard,
+      [
+        ['data', ['repository/**/*.jar'], hard, 'aggregate', null, 'default', 0],
+        ['other', ['repository/**/*.pom'], hard, 'aggregate', null, 'default', 0],
+      ],
+    ],
+    'partial-sweep-',
+    1,
+  );
+  f.store = await OwnedStore.bind(
+    f.root,
+    new LocalCodec({ ...f.store.codec.options, model: f.model }),
+  );
+  await initializeCompleteFixture(f, ['A']);
+  const base = 'repository/g/a/1';
+  const cold = 'repository/g/b/1';
+  const worker = await completeArchive(
+    f,
+    'A',
+    {},
+    [base + '/a.jar', base + '/a.pom', cold + '/b.pom'],
+    {},
+    {
+      sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+    },
+  );
+  const merged = await merge(f.store, [worker], {
+    budget: f.budget,
+    ordinaryOrder: ['A'],
+    ordinaryPolicy: 'strict',
+    sweep: { generationKey: 'selected', force: true },
+  });
+  const accepted = await acceptWorkerMerge(f.store, merged, f.budget);
+  try {
+    expect(accepted.sweep?.mode).toBe('forced');
+    expect(await activity(f, accepted.activity)).toContainEqual(['used', 'a.pom', 'other']);
+    const sweep = await activity(f, accepted.sweep!.activity!);
+    expect(sweep).toContainEqual(['used', 'a.jar', 'data']);
+    expect(sweep).toContainEqual(['unit-open', 'maven-directory', base, 'direct', 'used']);
+    expect(sweep).not.toContainEqual(['used', 'a.pom', 'other']);
+    expect(sweep).not.toContainEqual(['dir-open', cold]);
+  } finally {
+    await accepted.dispose();
+  }
+});
+
+it('keeps ordinary merge when snapshot-only usage conflicts with the sweep usage topology', async () => {
+  const f = await completeFixture('gradle', 'default', true);
+  await initializeCompleteFixture(f, ['A']);
+  const a = await completeArchive(
+    f,
+    'A',
+    { 'data/upsert': 'ordinary' },
+    ['data/x'],
+    {},
+    {
+      sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+    },
+  );
+  const writer = await completeArchive(
+    f,
+    'writer',
+    {},
+    ['data/x/child'],
+    { state: { 'state/snapshot': 'authoritative' } },
+    {
+      sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+    },
+  );
+  const merged = await merge(f.store, [a, writer], {
+    budget: f.budget,
+    ordinaryOrder: ['A'],
+    ordinaryPolicy: 'strict',
+    snapshots: [{ partition: 'state', job: 'writer', required: false }],
+    sweep: { generationKey: 'selected', force: true },
+  });
+  const accepted = await acceptWorkerMerge(f.store, merged, f.budget);
+  try {
+    expect(accepted.sweep).toBeNull();
+    expect(await activity(f, accepted.activity)).toContainEqual(['used', 'x', 'data']);
+    await installWorkerMerge(f.store, accepted, f.budget);
+    expect(await readFile(f.store.root.resolve('data/upsert'), 'utf8')).toBe('ordinary');
+    expect(accepted.snapshots.map((snapshot) => snapshot.partition)).toEqual(['state']);
+  } finally {
+    await accepted.dispose();
+  }
+});
+
+it.each([2, 8])(
+  'bounds index work for %s changed directories sharing a parent during a divergent sweep',
+  async (count) => {
+    const f = await completeFixture();
+    await initializeCompleteFixture(f, ['A', 'B']);
+    const files = Object.fromEntries(
+      Array.from({ length: count }, (_, i) => ['data/shared/d' + i + '/x', 'x']),
+    );
+    const a = await completeArchive(
+      f,
+      'A',
+      files,
+      [],
+      {},
+      {
+        sweep: ['sweep-usage', 'selected', 1, 2, ['data']],
+      },
+    );
+    const b = await completeArchive(f, 'B', {}, ['data/shared/read']);
+    const merged = await merge(f.store, [a, b], {
+      budget: f.budget,
+      ordinaryOrder: ['A', 'B'],
+      ordinaryPolicy: 'strict',
+      sweep: { generationKey: 'selected', force: true },
+    });
+    const accepted = await acceptWorkerMerge(f.store, merged, f.budget);
+    try {
+      expect(accepted.sweep?.activity).toBeTruthy();
+      expect(accepted.work.activityDirectoryListings).toBe(0);
+      expect(accepted.work.activityIndexDirectories).toBe(2 * (count + 3));
+    } finally {
+      await accepted.dispose();
+    }
+  },
+);
 it('suppresses whole workspace usage including absent winner members before complete-unit replacement', async () => {
   const f = await completeFixture(),
     root = 'caches/transforms-4/' + 'a'.repeat(32),

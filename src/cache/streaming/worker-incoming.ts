@@ -16,7 +16,7 @@
 
 import { timed, type TimingOptions } from '../../util/timing';
 import type { OwnedStore, Reference } from './owned-store';
-import type { WorkingBudget } from './tree-state';
+import { DirectoryBreadthError, TreeTopologyConflict, type WorkingBudget } from './tree-state';
 import { add, equal, tuple } from './encoding';
 import { ordinaryOrder } from './reduction';
 import { claimCompletedWorkerInputs, type WorkerMergeResult } from './worker-merge';
@@ -26,6 +26,7 @@ import { MetadataSnapshot } from './metadata-snapshot';
 import { MetadataInstallContext, type IndexedMetadataInput } from './metadata-install-context';
 import { freezeMetadataInstallPlan } from './install-plan';
 import { executeInstall } from './install-execute';
+import type { PublisherSweep } from './lifecycle-handoff';
 
 export interface AcceptedWorkerMerge {
   dispose(): Promise<void>;
@@ -33,6 +34,8 @@ export interface AcceptedWorkerMerge {
   readonly snapshots: readonly MetadataSnapshot[];
   readonly activity: Reference;
   readonly incompleteUsage: boolean;
+  readonly sweep: { readonly mode: PublisherSweep[0]; readonly activity: Reference | null } | null;
+  readonly generationMismatches: readonly string[];
   readonly work: Readonly<{
     snapshotCopyBytes: number;
     activityDirectoryListings: number;
@@ -113,6 +116,52 @@ export async function acceptWorkerMerge(
         ),
       ),
     ) as Reference;
+    let sweep: AcceptedWorkerMerge['sweep'] = null;
+    if (result.sweep) {
+      const qualifying = new Set(result.sweep.jobs);
+      const mode =
+        input.order.length > 0 && input.order.every((job) => qualifying.has(job))
+          ? 'complete'
+          : result.sweep.force
+            ? 'forced'
+            : null;
+      if (mode) {
+        const sweepActivity = result.sweep.activity;
+        const reuse =
+          result.sweep.coveredPartitions.size === 0 &&
+          sweepActivity.length === result.activity.length &&
+          sweepActivity.every((projection, i) => projection === result.activity[i]);
+        try {
+          // A different usage view needs its own union against the same admitted native index.
+          const ref = reuse
+            ? null
+            : await timed(options, 'worker sweep activity preparation', () =>
+                writeSelectedActivity(
+                  store,
+                  sweepActivity,
+                  nativeIndex!,
+                  budget,
+                  signal,
+                  input.max,
+                  activityWork,
+                  result.sweep!.coveredPartitions,
+                ),
+              );
+          if (ref) {
+            Object.freeze(ref);
+          }
+          sweep = Object.freeze({ mode, activity: ref });
+        } catch (error) {
+          // Conflicting usage in the sweep view never changes ordinary archive admission.
+          if (
+            !(error instanceof TreeTopologyConflict) &&
+            !(error instanceof DirectoryBreadthError && error.phase === 'tree validation')
+          ) {
+            throw error;
+          }
+        }
+      }
+    }
     for (const snapshot of result.inheritedSnapshots) {
       await timed(
         options,
@@ -152,6 +201,8 @@ export async function acceptWorkerMerge(
       snapshots: Object.freeze(snapshots),
       activity,
       incompleteUsage: result.summaries.some((summary) => summary.identity[1] === 2),
+      sweep,
+      generationMismatches: result.generationMismatches,
       work: Object.freeze({
         snapshotCopyBytes,
         activityDirectoryListings: activityWork.listings,

@@ -78,8 +78,9 @@ async function unchangedOverlay(attempt: PostAttempt, options: LifecycleOptions)
     generation,
     handoff: { header, entries },
   } = attempt;
+  const overlay = header[13];
   if (
-    header[1] !== 7 ||
+    !overlay ||
     header[14] !== 'pristine' ||
     header[11] ||
     !generation ||
@@ -88,8 +89,7 @@ async function unchangedOverlay(attempt: PostAttempt, options: LifecycleOptions)
   ) {
     return false;
   }
-  const overlay = header[13],
-    target = overlay[10];
+  const target = overlay[10];
   if (
     target &&
     (entries.some((entry) => entry[1] !== target && reusablePin(entry)?.[7] !== null) ||

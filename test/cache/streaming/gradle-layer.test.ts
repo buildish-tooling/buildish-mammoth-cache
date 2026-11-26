@@ -132,7 +132,7 @@ it('routes original artifact and metadata receipts into an owned coherent seed a
   const opened = await OpenedInvocation.open(ready.anchor, f.budget);
   const handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
   try {
-    expect(handoff.header[1]).toBe(4);
+    expect(handoff.header[1]).toBe(5);
     expect(handoff.header[12]).toEqual(seed);
   } finally {
     handoff.close();

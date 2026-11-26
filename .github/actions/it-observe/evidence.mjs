@@ -139,7 +139,7 @@ export async function completion(home, expected, prepare, inspectBase = false, i
       const [, handoff] = (await record(state[6], 'handoff'))
         .split('\n', 2)
         .map((line) => JSON.parse(line));
-      assert.deepEqual(handoff.slice(0, 2), ['handoff', 4]);
+      assert.deepEqual(handoff.slice(0, 2), ['handoff', 5]);
       const seed = handoff[12];
       assert.equal(seed?.length, 8);
       assert.deepEqual(seed.slice(0, 2), ['gradle-layer', 1]);
@@ -161,7 +161,7 @@ export async function completion(home, expected, prepare, inspectBase = false, i
     .map((line) => JSON.parse(line));
   assert.equal(frame.length, 7);
   assert.deepEqual(frame.slice(0, 4), ['local-stream', 1, 'handoff', locator[2]]);
-  assert.deepEqual(handoff.slice(0, 2), ['handoff', 4]);
+  assert.deepEqual(handoff.slice(0, 2), ['handoff', 5]);
   const restored = handoff[8]?.[0];
   assert(typeof restored === 'string' && restored.length > 0 && restored.length <= 512);
   if (prepare) {

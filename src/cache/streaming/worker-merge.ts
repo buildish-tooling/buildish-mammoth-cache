@@ -21,7 +21,7 @@ import { add, tuple, type Value } from './encoding';
 import type { OwnedStore } from './owned-store';
 import { ordinaryOrder, reduceOrdinary, type Candidate } from './reduction';
 import { baseName, compareName, joinPath, normalizeMode, type WorkingBudget } from './tree-state';
-import { globalChannelKey, type WorkerSummary } from './worker-state';
+import { globalChannelKey, type WorkerSummary, type WorkerSweepEvidence } from './worker-state';
 import { DiskMembership } from './worker-spool';
 import { WorkerFrontier, type FrontierItem } from './worker-frontier';
 import { WorkerStage, type StagedPartition } from './worker-stage';
@@ -51,6 +51,8 @@ export interface WorkerMergeOptions {
   readonly snapshots?: readonly WorkerSnapshotRequirement[];
   readonly maxDirectoryEntries?: number;
   readonly signal?: AbortSignal;
+  /** Omit force to compare generation keys without collecting sweep usage. */
+  readonly sweep?: { readonly generationKey: string; readonly force?: boolean };
 }
 
 export interface WorkerMergeResult {
@@ -59,6 +61,14 @@ export interface WorkerMergeResult {
   readonly summaries: readonly WorkerSummary[];
   readonly readers: readonly WorkerFrontier[];
   readonly activity: readonly ActivityProjection[];
+  readonly sweep?: {
+    readonly force: boolean;
+    readonly jobs: readonly string[];
+    readonly activity: readonly ActivityProjection[];
+    /** Only partial usage projections need a partition filter. */
+    readonly coveredPartitions: ReadonlyMap<ActivityProjection, ReadonlySet<string>>;
+  };
+  readonly generationMismatches: readonly string[];
   readonly inheritedSnapshots: readonly MetadataSnapshot[];
   readonly selectedSnapshots: readonly string[];
   readonly snapshotOrigins: readonly { partition: string; producerId: string }[];
@@ -71,6 +81,7 @@ export interface WorkerMergeCursor {
   reader: WorkerFrontier;
   head: FrontierItem | null;
   snapshots: readonly string[];
+  sweepUsage?: true | ReadonlySet<string>;
 }
 
 const control = (c: WorkerMergeCursor): readonly Value[] =>
@@ -113,7 +124,11 @@ export async function mergeWorkerArchives(
   let order: string[], stage: WorkerStage;
   const cursors: WorkerMergeCursor[] = [],
     projections: ActivityProjection[] = [],
+    activityProjections: ActivityProjection[] = [],
+    sweepProjections: ActivityProjection[] = [],
     controller = new AbortController();
+  const generationMismatches: string[] = [];
+  const coveredPartitions = new Map<ActivityProjection, ReadonlySet<string>>();
   const signal = options.signal
     ? AbortSignal.any([controller.signal, options.signal])
     : controller.signal;
@@ -134,6 +149,7 @@ export async function mergeWorkerArchives(
       ...options,
       ordinaryOrder: Object.freeze([...options.ordinaryOrder]),
       snapshots: Object.freeze((options.snapshots ?? []).map((s) => Object.freeze({ ...s }))),
+      sweep: options.sweep && Object.freeze({ ...options.sweep }),
     });
     inputs = Object.freeze(
       inputs.map((input) =>
@@ -212,6 +228,11 @@ export async function mergeWorkerArchives(
   };
   let selected: (c: WorkerMergeCursor) => boolean = () => false;
   let activity: ActivityProjection;
+  const sweep = options.sweep;
+  const aggregateCount =
+    sweep?.force === undefined
+      ? 0
+      : store.codec.options.model.partitions.filter((p) => p[3] === 'aggregate').length;
   const files = async (group: WorkerMergeCursor[], path: string) => {
     const eligible = group.filter(selected),
       partition = store.codec.options.model.owner(path),
@@ -347,7 +368,8 @@ export async function mergeWorkerArchives(
   const usage = async (c: WorkerMergeCursor) => {
     let projection: ActivityProjection | undefined;
     const stack: string[] = [];
-    if (order.includes(c.input.job)) {
+    const ordinary = order.includes(c.input.job);
+    if (ordinary || c.sweepUsage) {
       projection = await ActivityProjection.create(
         store,
         options.budget,
@@ -355,6 +377,15 @@ export async function mergeWorkerArchives(
         'used',
       );
       projections.push(projection);
+      if (ordinary) {
+        activityProjections.push(projection);
+      }
+      if (c.sweepUsage) {
+        sweepProjections.push(projection);
+        if (c.sweepUsage !== true) {
+          coveredPartitions.set(projection, c.sweepUsage);
+        }
+      }
     }
     while (control(c)[0] !== 'channel-close') {
       const r = control(c);
@@ -410,6 +441,21 @@ export async function mergeWorkerArchives(
       await advance(c);
       const identity = expectControl(c, 'identity');
       c.snapshots = identity[7] as readonly string[];
+      if (sweep && identity[1] === 3) {
+        const evidence = identity[8] as WorkerSweepEvidence;
+        if (evidence[1] !== sweep.generationKey) {
+          generationMismatches.push(input.job);
+        } else if (
+          sweep.force !== undefined &&
+          store.codec.options.context.every((value, i) => i === 4 || input.context[i] === value)
+        ) {
+          if (evidence[4].length === aggregateCount) {
+            c.sweepUsage = true;
+          } else if (evidence[4].length) {
+            c.sweepUsage = new Set(evidence[4]);
+          }
+        }
+      }
       await advance(c);
     }
     while (cursors.some((c) => c.head)) {
@@ -451,6 +497,10 @@ export async function mergeWorkerArchives(
           options.maxDirectoryEntries,
         );
         projections.push(activity);
+        activityProjections.push(activity);
+        if (sweep?.force !== undefined) {
+          sweepProjections.push(activity);
+        }
         await directory(group, '');
         activity.seal(signal);
         if (partition && !stage.hasPartition(partition)) {
@@ -496,7 +546,19 @@ export async function mergeWorkerArchives(
       partitions,
       summaries,
       readers: cursors.map((c) => c.reader),
-      activity: Object.freeze(projections),
+      activity: Object.freeze(activityProjections),
+      sweep:
+        sweep?.force === undefined
+          ? undefined
+          : Object.freeze({
+              force: sweep.force,
+              jobs: Object.freeze(
+                cursors.filter((c) => c.sweepUsage === true).map((c) => c.input.job),
+              ),
+              activity: Object.freeze(sweepProjections),
+              coveredPartitions,
+            }),
+      generationMismatches: Object.freeze(generationMismatches),
       inheritedSnapshots: Object.freeze(inheritedSnapshots),
       selectedSnapshots: Object.freeze([...selectedSnapshots]),
       snapshotOrigins: Object.freeze(

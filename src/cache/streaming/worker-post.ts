@@ -146,9 +146,9 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
       );
       captured = observation.index!;
       const capturedAt = Date.now();
-      const { header, entries } = attempt.handoff;
+      const { header, entries, workerSweepCapture } = attempt.handoff;
       const sweep: WorkerSweepEvidence | undefined =
-        header[1] === 8 && capturedAt >= header[10]
+        workerSweepCapture && capturedAt >= header[10]
           ? [
               'sweep-usage',
               header[8]![0],

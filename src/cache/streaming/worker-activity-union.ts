@@ -14,17 +14,87 @@
  * limitations under the License.
  */
 
-import { directoryBreadthError } from './tree-state';
+import { directoryBreadthError, TreeTopologyConflict } from './tree-state';
 import { WorkerNativeIndex } from './worker-native';
 import type { ActivityProjection } from './worker-activity';
 import type { OwnedStore, Reference } from './owned-store';
 import type { WorkingBudget } from './tree-state';
 import { baseName, compareName, joinPath } from './tree-state';
-import { tuple, equal, type Value } from './encoding';
+import { tuple, equal, canonical, type Value } from './encoding';
+import type { ResolvedModel } from './model';
 interface Cursor {
   reader: AsyncIterator<Value>;
   head: readonly Value[] | null;
   selected: boolean;
+}
+
+/** Narrow a matching worker's usage to partitions that worker actually restored. */
+async function* coveredUsage(
+  rows: AsyncIterable<Value>,
+  partitions: ReadonlySet<string>,
+  model: ResolvedModel,
+): AsyncGenerator<Value> {
+  const frames: { directory: Value; open: boolean; unit?: Value; unitOpen?: boolean }[] = [];
+  function* openParents(): Generator<Value> {
+    for (const frame of frames) {
+      if (!frame.open) {
+        yield frame.directory;
+        frame.open = true;
+      }
+      if (frame.unit && !frame.unitOpen) {
+        yield frame.unit;
+        frame.unitOpen = true;
+      }
+    }
+  }
+  for await (const value of rows) {
+    const row = tuple(value);
+    const frame = frames.at(-1);
+    switch (row[0]) {
+      case 'dir-open':
+        frames.push({ directory: value, open: false });
+        break;
+      case 'dir-close':
+        if (frames.length === 1) {
+          yield* openParents();
+        }
+        if (frames.pop()?.open) {
+          yield value;
+        }
+        break;
+      case 'unit-open': {
+        frame!.unit = value;
+        if (row[3] === 'subtree') {
+          // A worker can observe the workspace directory itself without visiting a member.
+          let partition: string | undefined;
+          try {
+            partition = model.owner(String(row[2]) + '/.workspace-directory-probe')[0];
+          } catch {
+            // A qualified member can still establish positive usage of the workspace.
+          }
+          if (partition && partitions.has(partition)) {
+            yield* openParents();
+          }
+        }
+        break;
+      }
+      case 'unit-close':
+        if (frame!.unitOpen) {
+          yield value;
+        }
+        frame!.unit = undefined;
+        frame!.unitOpen = false;
+        break;
+      case 'used':
+        if (partitions.has(String(row[2]))) {
+          yield* openParents();
+          yield value;
+        }
+        break;
+      default:
+        throw new Error('Unexpected sweep usage projection.');
+    }
+  }
 }
 
 // Protocol: docs/dev/cache-protocol.md#usage-validation.
@@ -38,12 +108,19 @@ export async function writeSelectedActivity(
   signal: AbortSignal,
   maxDirectoryEntries = 100000,
   work = { listings: 0, indexDirectories: 0 },
+  coveredPartitions?: ReadonlyMap<ActivityProjection, ReadonlySet<string>>,
 ): Promise<Reference> {
-  const cursors: Cursor[] = projections.map((p) => ({
-    reader: p.spool.rows(signal)[Symbol.asyncIterator](),
-    head: null,
-    selected: p.kind === 'upsert',
-  }));
+  const cursors: Cursor[] = projections.map((p) => {
+    const rows = p.spool.rows(signal),
+      partitions = coveredPartitions?.get(p);
+    return {
+      reader: (partitions ? coveredUsage(rows, partitions, store.codec.options.model) : rows)[
+        Symbol.asyncIterator
+      ](),
+      head: null,
+      selected: p.kind === 'upsert',
+    };
+  });
   interface Root {
     offset: number;
   }
@@ -225,7 +302,13 @@ export async function writeSelectedActivity(
         owners = unit ? new Set<string>() : null;
       if (unit) {
         for (const c of units) {
-          equal(c.head!.slice(1), unit.slice(1), 'activity unit declaration');
+          if (unit[4] === 'used') {
+            if (!canonical(c.head!.slice(1)).equals(canonical(unit.slice(1)))) {
+              throw new TreeTopologyConflict('Conflicting usage unit declarations.');
+            }
+          } else {
+            equal(c.head!.slice(1), unit.slice(1), 'activity unit declaration');
+          }
         }
         yield unit;
         for (const c of units) {

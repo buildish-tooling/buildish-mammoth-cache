@@ -263,6 +263,10 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
           }
         }
       },
+      onWorkerGenerationMismatch: (job) =>
+        host.warning(
+          `Worker '${job}' observed a different cache generation. Its usage does not qualify for periodic GC.`,
+        ),
       saveAnchor: (raw) => host.saveState(STREAMING_INVOCATION_STATE, raw),
       cacheBackend: d.cacheBackend,
       artifactBackend: d.artifactBackend,

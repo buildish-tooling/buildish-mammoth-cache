@@ -483,6 +483,158 @@ it('duplicate and missing prepare stop before anchor, backends, reports or defer
   expect((await runStreamingPost(f.post)).outcome).toBe('skipped');
   expect(f.backend).not.toHaveBeenCalled();
 });
+
+async function publishSweepBase(inputs: Record<string, string> = {}) {
+  const producer = await fixture('maven', inputs);
+  const ready = await runStreamingPrepare(producer.deps);
+  if (!('store' in ready)) {
+    throw new Error('Expected a normal prepare.');
+  }
+  await mkdir(producer.home + '/data');
+  await writeFile(producer.home + '/data/inherited', 'base');
+  const published = await runStreamingPost(producer.post);
+  if (published.outcome !== 'published' || !published.key) {
+    throw new Error('Expected a published generation.');
+  }
+  return { producer, key: published.key, model: ready.store.codec.options.model };
+}
+
+async function preparedSweep(f: Awaited<ReturnType<typeof fixture>>) {
+  const anchor = decodeInvocationAnchor(f.state.get(STREAMING_INVOCATION_STATE)!);
+  if (anchor[0] !== 'streaming-lifecycle') {
+    throw new Error('Expected an owning prepare invocation.');
+  }
+  const opened = await OpenedInvocation.open(anchor, f.budget);
+  const handoff = await LifecycleHandoff.read(opened.store, opened.state[6]!, { budget: f.budget });
+  try {
+    return { sweep: handoff.publisherSweep, key: handoff.header[8]?.[0], root: opened.store.root };
+  } finally {
+    handoff.close();
+  }
+}
+
+it.each([
+  { state: 'during grace', expected: undefined },
+  { state: 'at force', expected: 'forced' },
+  { state: 'bootstrap', expected: 'forced' },
+  { state: 'disabled force at bootstrap', expected: undefined },
+  { state: 'cold', expected: undefined },
+  { state: 'standalone', expected: 'complete' },
+])(
+  'freezes publisher eligibility with no dependent-jobs at $state',
+  async ({ state, expected }) => {
+    const inputs = {
+      'cache-partitions': JSON.stringify([{ id: 'empty', includes: ['empty/**'] }]),
+    };
+    const { producer, key, model } = await publishSweepBase(inputs);
+    const timestamp = 1000;
+    const selected =
+      state === 'during grace' || state === 'at force'
+        ? await setGenerationSweepAt(producer, key, model, timestamp)
+        : await restoreGeneration(producer, key, model);
+    if (state === 'cold') {
+      const entry = selected[8].find((entry) => entry[0] === 'object');
+      if (entry?.[0] !== 'object') {
+        throw new Error('Expected a cached base object.');
+      }
+      expect(producer.sdk.objects.delete(entry[2][2])).toBe(true);
+    }
+    const f = await fixture('maven', {
+      ...inputs,
+      'job-mode': state === 'standalone' ? 'standalone' : 'distributed-aggregator',
+      ...(state === 'at force' && { 'dependent-jobs': '' }),
+      ...(state === 'disabled force at bootstrap' && { 'dependency-gc-force-grace-days': 'off' }),
+    });
+    const forceAt =
+      timestamp + f.config.dependencyGcIntervalMs + (f.config.dependencyGcForceGraceMs ?? 0);
+    await runStreamingPrepare({
+      ...f.deps,
+      cacheBackend: async () => producer.sdk.backend,
+      now: () => (state === 'during grace' ? forceAt - 1 : forceAt),
+    });
+    const { sweep, key: frozenKey } = await preparedSweep(f);
+    expect(f.outputs.get('dependency-gc-due')).toBe('true');
+    expect(frozenKey).toBe(selected[11]);
+    expect(sweep?.[0]).toBe(expected);
+    if (sweep) {
+      expect(sweep[1]).toBe(0);
+      expect(sweep[2]).toBeNull();
+    }
+  },
+);
+
+it.each([
+  { workerState: 'current', mode: 'complete', differs: false },
+  { workerState: 'stale', mode: undefined, differs: false },
+  { workerState: 'mismatched', mode: 'forced', differs: true },
+  { workerState: 'missing', mode: undefined, differs: false },
+])(
+  'preserves ordinary artifact admission for a $workerState worker',
+  async ({ workerState, mode, differs }) => {
+    const { producer, key, model } = await publishSweepBase();
+    const timestamp = Date.now() - 3 * 86400000 - 60000;
+    const selected = await setGenerationSweepAt(producer, key, model, timestamp);
+    const artifacts = memoryArtifacts();
+    if (workerState !== 'missing') {
+      const worker = await fixture('maven', { 'job-mode': 'distributed-worker' });
+      await runStreamingPrepare({ ...worker.deps, cacheBackend: async () => producer.sdk.backend });
+      await writeFile(worker.home + '/data/contribution', 'ordinary');
+      expect(
+        (await runStreamingPost({ ...worker.post, artifactBackend: async () => artifacts.api }))
+          .outcome,
+      ).toBe('worker-uploaded');
+    }
+    const base = differs
+      ? await setGenerationSweepAt(producer, key, model, timestamp - 1000)
+      : selected;
+    const f = await fixture('maven', {
+      'job-mode': 'distributed-aggregator',
+      'dependent-jobs': 'A',
+    });
+    const start =
+      base[12]! +
+      f.config.dependencyGcIntervalMs +
+      (differs ? f.config.dependencyGcForceGraceMs! : 0);
+    const preparing = runStreamingPrepare({
+      ...f.deps,
+      ciProvider: {
+        ...f.deps.ciProvider,
+        context: { ...f.ci, jobName: 'parent', runAttempt: workerState === 'stale' ? 2 : 1 },
+      },
+      artifactBackend: async () => artifacts.api,
+      cacheBackend: async () => producer.sdk.backend,
+      now: () => start,
+    });
+    if (workerState === 'missing') {
+      await expect(preparing).rejects.toThrow(/no artifact/i);
+      return;
+    }
+    await preparing;
+    expect(await readFile(f.home + '/data/contribution', 'utf8')).toBe('ordinary');
+    const { sweep, key: frozenKey, root } = await preparedSweep(f);
+    expect(sweep?.[0]).toBe(mode);
+    expect(frozenKey).toBe(base[11]);
+    if (differs) {
+      expect(f.warning).toHaveBeenCalledWith(
+        expect.stringContaining("Worker 'A' observed a different cache generation"),
+      );
+      const alt = sweep?.[2];
+      expect(alt).toBeTruthy();
+      if (alt) {
+        expect(await root.stat(alt[2])).toBeTruthy();
+        expect(
+          (await runStreamingPost({ ...f.post, cacheBackend: async () => producer.sdk.backend }))
+            .outcome,
+        ).toBe('published');
+        expect(await root.stat(alt[2])).toBeNull();
+      }
+    } else {
+      expect(f.warning).not.toHaveBeenCalledWith(
+        expect.stringContaining('different cache generation'),
+      );
+    }
+  },
+);
 it('failed prepare cleans only known hooks without reading reports or publishing a required worker success', async () => {
   const f = await fixture('maven', { 'job-mode': 'distributed-worker' });
   f.hooks.mockRejectedValue(new Error('hook failure'));

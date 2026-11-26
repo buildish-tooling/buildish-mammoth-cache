@@ -27,10 +27,20 @@ import {
   type Unit,
 } from './schema';
 
+export class DirectoryBreadthError extends Error {
+  constructor(
+    path: string,
+    limit: number,
+    readonly phase: string,
+  ) {
+    super(
+      `Managed directory breadth exceeded during ${phase} at ${JSON.stringify(path || '.')} (cache-max-directory-entries=${limit}).`,
+    );
+  }
+}
+
 export function directoryBreadthError(path: string, limit: number, phase: string): Error {
-  return new Error(
-    `Managed directory breadth exceeded during ${phase} at ${JSON.stringify(path || '.')} (cache-max-directory-entries=${limit}).`,
-  );
+  return new DirectoryBreadthError(path, limit, phase);
 }
 
 export function decodedRecordCharge(bytes: number): number {
@@ -145,6 +155,8 @@ interface Frame {
   directoryCharge: number;
 }
 
+export class TreeTopologyConflict extends Error {}
+
 export class TreeState {
   private readonly frames: Frame[] = [];
   private started = false;
@@ -198,10 +210,10 @@ export class TreeState {
       throw directoryBreadthError(parent.path, this.maxEntries, 'tree validation');
     }
     if (directory) {
-      if (
-        parent.files.has(name) ||
-        (parent.lastDirectory !== null && compareName(parent.lastDirectory, name) >= 0)
-      ) {
+      if (parent.files.has(name)) {
+        throw new TreeTopologyConflict('Duplicate/colliding/unordered directory.');
+      }
+      if (parent.lastDirectory !== null && compareName(parent.lastDirectory, name) >= 0) {
         throw new Error('Duplicate/colliding/unordered directory.');
       }
       const charge = 64 + 4 * Buffer.byteLength(name);

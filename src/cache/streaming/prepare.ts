@@ -48,7 +48,13 @@ import { acceptWorkerMerge, installWorkerMerge, type AcceptedWorkerMerge } from 
 import { MetadataSnapshot } from './metadata-snapshot';
 import { MetadataPublicationSource } from './metadata-publication-source';
 import { lifecycleDocuments } from './lifecycle-documents';
-import { checkHandoffGeneration, handoffSchemas, type HandoffHeader } from './lifecycle-handoff';
+import {
+  checkHandoffGeneration,
+  handoffSchemas,
+  hasCompleteSweepBaseline,
+  type HandoffHeader,
+  type PublisherSweep,
+} from './lifecycle-handoff';
 import { metadataWorkerRequests, metadataSnapshotRequirements } from './prepare-inputs';
 import type { DependencyLayer } from './dependency-layer-descriptor';
 import { retireInstallStaging } from './owned-retirement';
@@ -84,6 +90,7 @@ export interface StreamingPrepareRequest extends LifecycleOptions, LayerInputs {
   readonly cleanupEnabled: boolean;
   readonly dependencyGc?: GcScheduleConfig;
   readonly onWorkerWarnings?: (warnings: WorkerMergeResult['warnings']) => void;
+  readonly onWorkerGenerationMismatch?: (job: string) => void;
   readonly saveAnchor: (anchor: string) => void;
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   readonly artifactBackend?: () => Promise<WorkflowArtifactBackend>;
@@ -284,6 +291,14 @@ export async function prepareStreaming(
         uint((request.now ?? Date.now)()),
       );
     const sweepCapture = dependencyGc?.due === 'true' && request.policy.access === 'writable';
+    const publisher = request.policy.role !== 'distributed-worker';
+    const qualifiedCapture =
+      sweepCapture && (request.context[7] !== 'gradle' || !request.existingDependencyLayer);
+    const publisherSweep =
+      publisher &&
+      qualifiedCapture &&
+      age !== null &&
+      hasCompleteSweepBaseline(request.model, restored.entries);
     if (!sweepCapture) {
       seed = await lifecycle.dependencyLayer?.prepare(
         store,
@@ -302,7 +317,6 @@ export async function prepareStreaming(
       request.policy.restoreCleanup === 'none'
         ? await lifecycle.overlay?.prepareTarget(store, restored, request)
         : undefined;
-    const publisher = request.policy.role !== 'distributed-worker';
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
@@ -376,6 +390,12 @@ export async function prepareStreaming(
             ordinaryOrder: request.policy.ordinaryOrder,
             ordinaryPolicy: request.policy.ordinaryPolicy,
             snapshots: metadataSnapshotRequirements(store, required, fallback),
+            sweep: restored!.key
+              ? {
+                  generationKey: restored!.key,
+                  force: publisherSweep ? dependencyGc?.force : undefined,
+                }
+              : undefined,
           },
         ),
       );
@@ -413,6 +433,9 @@ export async function prepareStreaming(
       accepted = await timed(options, 'worker acceptance', () =>
         acceptWorkerMerge(store, merged!, request.budget, signal, options.timing),
       );
+      for (const job of accepted.generationMismatches) {
+        request.onWorkerGenerationMismatch?.(job);
+      }
       merged = undefined;
       for (const snapshot of accepted.snapshots) {
         snapshots.add(snapshot);
@@ -429,6 +452,20 @@ export async function prepareStreaming(
       }
     }
     await store.fail('prepare-workers-installed');
+    let sweep: PublisherSweep | null = null;
+    if (publisherSweep) {
+      const mode =
+        request.policy.role === 'standalone'
+          ? 'complete'
+          : accepted
+            ? accepted.sweep?.mode
+            : dependencyGc?.force
+              ? 'forced'
+              : undefined;
+      if (mode) {
+        sweep = [mode, Math.max(0, start - age), accepted?.sweep?.activity ?? null];
+      }
+    }
     const activity =
       accepted?.activity ??
       (await store.writeStream(
@@ -467,10 +504,7 @@ export async function prepareStreaming(
     await request.installHooks(store, lifecycle, !!(seed || overlay));
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
-    const workerSweepCapture =
-      sweepCapture &&
-      !publisher &&
-      (request.context[7] !== 'gradle' || !request.existingDependencyLayer);
+    const workerSweepCapture = qualifiedCapture && !publisher;
     bindings = docs.bindings.parse(bindings);
     bindings[8][7] = cutoff;
     if (accepted?.incompleteUsage) {
@@ -479,7 +513,7 @@ export async function prepareStreaming(
     }
     const header: HandoffHeader = handoffSchemas(codec).header.parse([
       'handoff',
-      overlay ? (publisher ? 7 : 6) : workerSweepCapture ? 8 : 4,
+      5,
       request.currentRef,
       request.defaultRef ?? null,
       request.captureTempDirectory,
@@ -491,7 +525,9 @@ export async function prepareStreaming(
       cutoff,
       downloads.length,
       seed ?? null,
-      ...(overlay ? (publisher ? [overlay, pristine ? 'pristine' : 'other'] : [overlay]) : []),
+      overlay ?? null,
+      overlay && publisher ? (pristine ? 'pristine' : 'other') : null,
+      workerSweepCapture ? 'worker-capture' : sweep,
     ]);
     checkHandoffGeneration(
       store,

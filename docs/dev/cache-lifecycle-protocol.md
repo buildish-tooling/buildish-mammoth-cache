@@ -115,22 +115,35 @@ policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|nul
 ["handoff",4,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef]|null,
  actualActivityRef,originalBuildCutoff,selectedWorkerCount,gradleSeedDescriptor|null]
-["handoff",6,currentRef,defaultRef|null,captureTemp|null,retentionDays,
- cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef],
- actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,overlayDescriptor]
-["handoff",7,currentRef,defaultRef|null,captureTemp|null,retentionDays,
- cleanupEnabled,null,[exactGenerationKey,generationRef],
- actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,overlayDescriptor,pristine|other]
-["handoff",8,currentRef,defaultRef|null,captureTemp|null,retentionDays,
- cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef],
- actualActivityRef,originalBuildCutoff,selectedWorkerCount,null]
+["handoff",5,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+ cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef]|null,
+ actualActivityRef,originalBuildCutoff,selectedWorkerCount,gradleSeedDescriptor|null,
+ overlayDescriptor|null,publisherOverlayBaseline|null,sweep|null]
+publisherOverlayBaseline = pristine|other
+sweep = "worker-capture" | [complete|forced,sweepGcCutoffMs,alternateSweepActivityRef|null]
 ["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
 provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
 
-Handoff version 8 identifies a writable distributed worker that selected ordinary
+Mammoth 0.4.2 wrote version 4. Current prepare writes version 5 for every handoff.
+The publisher overlay baseline is present only for a publisher with an active
+overlay. The sweep field is present only for an ordinary writable capture against
+an admitted generation.
+
+The `worker-capture` value records that a distributed worker selected ordinary
 capture for a due generation. Post uses the reopened generation and partition
 availability to bind completed capture to that generation in the worker archive.
+
+A publisher's sweep tuple freezes its periodic GC decision against the selected
+generation. The publisher must have admitted every aggregate partition,
+including those recorded explicitly as empty. A null alternate activity reference
+reuses ordinary imported activity. A separate stream includes the same selected
+upserts and only qualified usage. A matching worker with partial availability
+supplies positive usage for the partitions it restored. Its archive does not
+complete the roster. A distinct sweep stream repeats the bounded union against
+the same admitted index and adds no native directory walk. Conflicting usage
+topology in that stream closes sweep eligibility while keeping the accepted
+ordinary activity. Post retires both streams when present.
 
 `gradleSeedDescriptor` is data bound to the exact selected generation and the two
 available source partitions. Only writable distributed Gradle workers with a selected wrapper,
@@ -168,7 +181,7 @@ marker takes the same cleanup-only post, even if interruption left only the
 advertisement marker or neither host marker and no generic prepare-failed flag. Private failures before
 advertisement can retire immediately.
 
-The version 6 handoff is for eligible Linux distributed workers with an active overlay.
+Eligible Linux distributed workers record an active overlay in the handoff.
 The build-tool-independent descriptor records the target relative to the managed
 home, the mounted view, placeholder and backing directory identities, and the mount
 ID and namespace. Gradle uses an empty target to mount the managed home. Its version 3 invocation
@@ -197,7 +210,7 @@ accepting all selected archives, aggregator prepare freezes timestamp GC as
 disabled if any of those identities reports incomplete usage. Restore cleanup
 and authoritative snapshot selection keep their existing policies.
 
-Version 7 adds writable standalone and aggregator overlays. The mounted lower
+Writable standalone and aggregator jobs also support overlays. The mounted lower
 contains the prepared cache after installation of accepted worker contributions.
 Publisher eligibility requires ordinary restore cleanup, disabled timestamp GC,
 and no enabled purge rules. Post verifies the frozen mount and settles consumers

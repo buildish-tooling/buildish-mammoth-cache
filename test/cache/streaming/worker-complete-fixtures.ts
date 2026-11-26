@@ -35,6 +35,7 @@ import { localFixtures, localOptions, nonce } from './local-fixtures';
 import { byteSource } from './protocol-fixtures';
 import { MetadataSnapshot } from '../../../src/cache/streaming/metadata-snapshot';
 import type { WorkerMergeInput } from '../../../src/cache/streaming/worker-merge';
+import type { WorkerWriter } from '../../../src/cache/streaming/worker-codec';
 const roots: string[] = [];
 export async function cleanupCompleteFixtures() {
   for (const root of roots.splice(0)) {
@@ -106,6 +107,7 @@ export async function completeArchive(
   aggregate: Record<string, FixtureFile> = {},
   usage: readonly string[] = [],
   snapshots: Record<string, Record<string, FixtureFile>> = {},
+  capture: Pick<WorkerWriter, 'sweep' | 'incompleteUsage'> = {},
 ): Promise<WorkerMergeInput & { bytes: Buffer }> {
   const context: Context = [...f.context];
   context[4] = job;
@@ -201,6 +203,7 @@ export async function completeArchive(
       budget: f.budget,
       membership: await DiskMembership.create(f.store, f.budget),
       snapshots: snapshotIds,
+      ...capture,
       assertStable: async () => {},
     },
     () => events(),

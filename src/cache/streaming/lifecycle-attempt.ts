@@ -185,8 +185,15 @@ export class PostAttempt {
     }
     equal(await this.store.state(), this.originalState, 'post terminal original attempt');
     if (terminal[1] !== 'skipped-not-quiescent') {
-      const activity = this.handoff.header[9];
-      if (!this.store.hasAdmittedMetadata(activity)) {
+      const streams = [this.handoff.header[9]];
+      const sweepActivity = this.handoff.publisherSweep?.[2];
+      if (sweepActivity) {
+        streams.push(sweepActivity);
+      }
+      for (const activity of streams) {
+        if (this.store.hasAdmittedMetadata(activity)) {
+          continue;
+        }
         for await (const row of this.store.rows(
           activity,
           'activity',
@@ -196,7 +203,9 @@ export class PostAttempt {
           void row;
         }
       }
-      await this.store.retireAdmittedMetadata(activity);
+      for (const activity of streams) {
+        await this.store.retireAdmittedMetadata(activity);
+      }
     }
     this.originalState[3]++;
     this.originalState[4] = 'completed';
