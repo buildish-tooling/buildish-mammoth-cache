@@ -99,12 +99,15 @@ function operationalRegistration(options?: GradleOperationalCapture): string {
     id = toGroovySingleQuotedString(options.invocation);
   // Protocol: docs/dev/cache-lifecycle-protocol.md#gradle-installation-registration.
   return `// Operational registration runs before every summary/service eligibility filter.
+// Never probe the record before writing it: the configuration cache fingerprints file checks
+// made here, so a record created by the first build would invalidate the second build's entry.
 def operationalDirectory = new File(${directory}).toPath()
 def operationalFailure = operationalDirectory.resolveSibling("registrations.failed.json")
 try {
     def row = ["gradle-installation", 1, ${id},
         gradle.gradleHomeDir.canonicalPath, GradleVersion.current().version,
         gradle.gradleUserHomeDir.canonicalPath, new File(System.getProperty("java.home")).canonicalPath]
+
     // Fixed tuple canonical encoding uses only core APIs available before the
     // summary BuildService version gate. All controls use lower-case u00xx.
     def quote = { String value ->
@@ -112,55 +115,65 @@ try {
         for (int n = 0; n < value.length(); n++) {
             int c = (int) value.charAt(n)
             if (Character.isHighSurrogate((char) c)) {
-                if (n + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(n + 1)))
+                if (n + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(n + 1))) {
                     throw new IOException("Unpaired operational path surrogate")
+                }
                 out.append((char) c).append(value.charAt(++n))
-            } else if (Character.isLowSurrogate((char) c)) throw new IOException("Unpaired operational path surrogate")
-            else if (c < 32) {
+            } else if (Character.isLowSurrogate((char) c)) {
+                throw new IOException("Unpaired operational path surrogate")
+            } else if (c < 32) {
                 out.append((char) 92).append('u')
-                for (int shift = 12; shift >= 0; shift -= 4) out.append('0123456789abcdef'.charAt((c >> shift) & 15))
+                for (int shift = 12; shift >= 0; shift -= 4) {
+                    out.append('0123456789abcdef'.charAt((c >> shift) & 15))
+                }
             } else {
-                if (c == 34 || c == 92) out.append((char) 92)
+                if (c == 34 || c == 92) {
+                    out.append((char) 92)
+                }
                 out.append((char) c)
             }
         }
         out.append((char) 34).toString()
     }
     byte[] json = ('[' + row.collect { v -> v instanceof Number ? v.toString() : quote(v.toString()) }.join(',') + ']').getBytes("UTF-8")
-    if (json.length + 1 > 65536) throw new IOException("Operational registration exceeds record bound")
+    if (json.length + 1 > 65536) {
+        throw new IOException("Operational registration exceeds record bound")
+    }
+
+    // The record name is its framed SHA-256 digest, so equal tuples share one name.
     def digest = java.security.MessageDigest.getInstance("SHA-256")
     digest.update("mammoth:gradle-installation:1".getBytes("UTF-8"))
     digest.update((byte) 0)
     digest.update(java.nio.ByteBuffer.allocate(8).putLong(json.length).array())
     digest.update(json)
     def name = digest.digest().encodeHex().toString() + ".json"
+
     java.nio.file.Files.createDirectories(operationalDirectory)
-    if (operationalDirectory.toRealPath() != operationalDirectory.toAbsolutePath().normalize())
+    if (operationalDirectory.toRealPath() != operationalDirectory.toAbsolutePath().normalize()) {
         throw new IOException("Operational registration traverses a link")
-    def target = operationalDirectory.resolve(name)
+    }
+
+    // Canonical records end with a single LF.
     byte[] bytes = java.util.Arrays.copyOf(json, json.length + 1)
     bytes[json.length] = (byte) 10
-    def check = { file ->
-        if (java.nio.file.Files.isSymbolicLink(file) || java.nio.file.Files.size(file) > 65536 ||
-            !java.util.Arrays.equals(java.nio.file.Files.readAllBytes(file), bytes))
-            throw new IOException("Operational registration collision")
-    }
-    if (java.nio.file.Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) check(target)
-    else {
-        def temp = java.nio.file.Files.createTempFile(operationalDirectory, ".registration-", ".candidate")
+
+    // Publish through an atomic rename, so a record under its name is always complete.
+    // Repeated or concurrent builds of the same installation replace it with identical bytes;
+    // the consumer validates every record's name, schema and digest.
+    def temp = java.nio.file.Files.createTempFile(operationalDirectory, ".registration-", ".candidate")
+    try {
+        def channel = java.nio.channels.FileChannel.open(temp, java.nio.file.StandardOpenOption.WRITE)
         try {
-            def channel = java.nio.channels.FileChannel.open(temp, java.nio.file.StandardOpenOption.WRITE)
-            try {
-                def buffer = java.nio.ByteBuffer.wrap(bytes)
-                while (buffer.hasRemaining()) channel.write(buffer)
-            } finally { channel.close() }
-            try {
-                java.nio.file.Files.move(temp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
-            } catch (java.nio.file.FileAlreadyExistsException concurrent) {
-                // Another identical registration may have won; compare all bytes below.
+            def buffer = java.nio.ByteBuffer.wrap(bytes)
+            while (buffer.hasRemaining()) {
+                channel.write(buffer)
             }
-            check(target)
-        } finally { java.nio.file.Files.deleteIfExists(temp) }
+        } finally {
+            channel.close()
+        }
+        java.nio.file.Files.move(temp, operationalDirectory.resolve(name), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+    } finally {
+        java.nio.file.Files.deleteIfExists(temp)
     }
 } catch (Exception failure) {
     // A single sticky failure witness prevents another successful build from hiding this failure.
@@ -169,16 +182,28 @@ try {
         byte[] json = ('["gradle-capture-failed",1,"' + ${id} + '"]').getBytes("UTF-8")
         byte[] bytes = java.util.Arrays.copyOf(json, json.length + 1)
         bytes[json.length] = (byte) 10
+
+        // CREATE_NEW keeps the first witness; an existing one already records the failure.
         def channel = java.nio.channels.FileChannel.open(operationalFailure,
             java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE)
         try {
             def buffer = java.nio.ByteBuffer.wrap(bytes)
-            while (buffer.hasRemaining()) channel.write(buffer)
-        } finally { channel.close() }
+            while (buffer.hasRemaining()) {
+                channel.write(buffer)
+            }
+        } finally {
+            channel.close()
+        }
         recorded = true
-    } catch (java.nio.file.FileAlreadyExistsException known) { recorded = true }
-    catch (Exception ignored) { }
-    if (!recorded) throw new org.gradle.api.GradleException("Mammoth operational registration failed without completed failure evidence", failure)
+    } catch (java.nio.file.FileAlreadyExistsException known) {
+        recorded = true
+    } catch (Exception ignored) {
+        // Unrecorded failure evidence fails the initialization below.
+    }
+
+    if (!recorded) {
+        throw new org.gradle.api.GradleException("Mammoth operational registration failed without completed failure evidence", failure)
+    }
     ${options.layered ? `throw new org.gradle.api.GradleException("Mammoth dependency layer registration failed", failure)` : ''}
     logger.warn("Mammoth operational registration failed; relocating cache save will be skipped", failure)
 }
@@ -245,40 +270,50 @@ if (gradle.getParent() != null) {
     return
 }
 
+// The configuring build's invocation identifier. A configuration-cache hit restores it, so the
+// recorder service replaces it with its own identifier for such builds.
 def invocId = "-" + java.util.UUID.randomUUID().toString()
 
-// Store the invocation identifier before applying the service plugin so it can read it
+// Store the invocation identifier before applying the service plugin so it can read it.
+// Its settingsEvaluated hook, which runs before the ones below, publishes the recorder service
+// as gradle.ext.buildResultsRecorder.
 gradle.ext.invocationId = invocId
 apply from: '${SERVICE_PLUGIN_FILE_NAME}'
 
 // Attach scan-published / scan-error callbacks for settings-level plugins (Develocity / GE)
 settingsEvaluated { settings ->
+    def recorder = gradle.ext.buildResultsRecorder
     def onScanReady = {
         if (settings.extensions.findByName(DEVELOCITY_EXT)) {
-            hookScanCallbacks(settings.extensions[DEVELOCITY_EXT].buildScan, invocId)
+            hookScanCallbacks(settings.extensions[DEVELOCITY_EXT].buildScan, recorder, invocId)
         } else if (settings.extensions.findByName(GE_EXT)) {
-            hookScanCallbacks(settings.extensions[GE_EXT].buildScan, invocId)
+            hookScanCallbacks(settings.extensions[GE_EXT].buildScan, recorder, invocId)
         }
     }
     settings.pluginManager.withPlugin(GE_PLUGIN, onScanReady)
     settings.pluginManager.withPlugin(DEVELOCITY_PLUGIN) {
-        if (settings.pluginManager.hasPlugin(GE_PLUGIN)) return
+        if (settings.pluginManager.hasPlugin(GE_PLUGIN)) {
+            return
+        }
         onScanReady()
     }
 }
 
 // Attach scan-published / scan-error callbacks for project-level plugins (build-scan / Develocity)
 projectsEvaluated { g ->
+    def recorder = g.ext.buildResultsRecorder
     def onScanReady = {
         if (g.rootProject.extensions.findByName(DEVELOCITY_EXT)) {
-            hookScanCallbacks(g.rootProject.extensions[DEVELOCITY_EXT].buildScan, invocId)
+            hookScanCallbacks(g.rootProject.extensions[DEVELOCITY_EXT].buildScan, recorder, invocId)
         } else if (g.rootProject.extensions.findByName(SCAN_EXT)) {
-            hookScanCallbacks(g.rootProject.extensions[SCAN_EXT], invocId)
+            hookScanCallbacks(g.rootProject.extensions[SCAN_EXT], recorder, invocId)
         }
     }
     g.rootProject.pluginManager.withPlugin(SCAN_PLUGIN, onScanReady)
     g.rootProject.pluginManager.withPlugin(DEVELOCITY_PLUGIN) {
-        if (g.rootProject.pluginManager.hasPlugin(SCAN_PLUGIN)) return
+        if (g.rootProject.pluginManager.hasPlugin(SCAN_PLUGIN)) {
+            return
+        }
         onScanReady()
     }
 }
@@ -291,18 +326,19 @@ class TestBuildResultCapture {
     }
 }
 
-// Register buildScanPublished / onError hooks on the given scan extension
-void hookScanCallbacks(scanExt, String invocId) {
+// Register buildScanPublished / onError hooks on the given scan extension. They run at execution
+// time, so they ask the recorder for the identifier of the build that is actually running.
+void hookScanCallbacks(scanExt, recorder, String invocId) {
     def writer = new ScanResultsWriter()
     scanExt.with {
         buildScanPublished { scan ->
-            writer.record("${BUILD_SCANS_SUBDIRECTORY}", invocId, [
+            writer.record("${BUILD_SCANS_SUBDIRECTORY}", recorder, invocId, [
                 buildScanUri   : scan.buildScanUri.toASCIIString(),
                 buildScanFailed: false,
             ])
         }
         onError { err ->
-            writer.record("${BUILD_SCANS_SUBDIRECTORY}", invocId, [
+            writer.record("${BUILD_SCANS_SUBDIRECTORY}", recorder, invocId, [
                 buildScanUri   : null,
                 buildScanFailed: true,
             ])
@@ -313,13 +349,22 @@ void hookScanCallbacks(scanExt, String invocId) {
 class ScanResultsWriter {
     private final logger = LoggerFactory.getLogger("buildish/mammoth-cache/gradle")
 
-    void record(String subDir, String invocId, def payload) {
+    void record(String subDir, recorder, String configuredInvocId, def payload) {
         def captureRootDir = ${captureRootLiteral}
         def captureInvocationNamespace = "${DEFAULT_CAPTURE_INVOCATION_NAMESPACE}"
 
-        if (!captureRootDir) return
+        if (!captureRootDir) {
+            return
+        }
 
         try {
+            def invocId = configuredInvocId
+            try {
+                invocId = recorder.get().invocationId()
+            } catch (Exception ex) {
+                logger.warn("buildish/mammoth-cache/gradle: Build result recorder unavailable; using the configured invocation identifier", ex)
+            }
+
             def outDir  = new File(captureRootDir, subDir)
             outDir.mkdirs()
             def outFile = new File(outDir, captureInvocationNamespace + invocId + ".json")
@@ -364,6 +409,7 @@ settingsEvaluated { settings ->
         spec.getParameters().getInvocationId().set(gradle.ext.invocationId)
     }
     gradle.services.get(BuildEventListenerRegistryInternal).onOperationCompletion(svc)
+    gradle.ext.buildResultsRecorder = svc
 }
 
 abstract class BuildResultsRecorder
@@ -376,8 +422,21 @@ abstract class BuildResultsRecorder
     }
 
     private final logger = LoggerFactory.getLogger("buildish/mammoth-cache/gradle")
-    private boolean configCacheHit = true
-    private boolean buildFailed    = false
+
+    // Each build creates its own instance, also when it reuses a configuration cache entry.
+    private final String executionInvocationId = "-" + java.util.UUID.randomUUID().toString()
+    private volatile boolean observed    = false
+    private volatile boolean configured  = false
+    private volatile boolean buildFailed = false
+
+    /**
+     * A configuration-cache hit restores the configuring build's parameters, including its
+     * invocation identifier, so such a build uses this instance's own identifier instead.
+     * An instance that has not observed any operation cannot tell and keeps the configured one.
+     */
+    String invocationId() {
+        observed && !configured ? executionInvocationId : getParameters().getInvocationId().get()
+    }
 
     @Override
     void started(BuildOperationDescriptor descriptor, OperationStartEvent start) {}
@@ -387,8 +446,9 @@ abstract class BuildResultsRecorder
 
     @Override
     void finished(BuildOperationDescriptor descriptor, OperationFinishEvent finish) {
+        observed = true
         if (descriptor.details in EvaluateSettingsBuildOperationType.Details) {
-            configCacheHit = false
+            configured = true
         }
         if (descriptor.metadata == BuildOperationCategory.RUN_WORK ||
             descriptor.metadata == BuildOperationCategory.CONFIGURE_PROJECT) {
@@ -409,15 +469,17 @@ abstract class BuildResultsRecorder
             gradleVersion        : GradleVersion.current().version,
             javaVersion          : System.getProperty("java.version") ?: "unknown",
             buildFailed          : buildFailed,
-            configCacheHit       : configCacheHit,
+            configCacheHit       : !configured,
         ]
 
-        if (!captureRootDir) return
+        if (!captureRootDir) {
+            return
+        }
 
         try {
             def resultsDir  = new File(captureRootDir, "${BUILD_RESULTS_SUBDIRECTORY}")
             resultsDir.mkdirs()
-            def resultsFile = new File(resultsDir, captureInvocationNamespace + getParameters().getInvocationId().get() + ".json")
+            def resultsFile = new File(resultsDir, captureInvocationNamespace + invocationId() + ".json")
             if (!resultsFile.exists()) {
                 logger.lifecycle("buildish/mammoth-cache/gradle: Writing build results to ${'$'}{resultsFile}")
                 resultsFile << groovy.json.JsonOutput.toJson(snapshot)

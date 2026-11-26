@@ -290,8 +290,9 @@ Each real build initialization writes an owned atomic registration document:
 Home fields are nativePath; version is a nonempty string. Register before summary
 skip/Test/parent/version/service or failure/completion filters. Included or repeated
 builds using the same tuple can share a filename equal to
-`H("gradle-installation",tuple) + ".json"`; compare the full record on an existing
-name. Registration is not performed by Mammoth's own stop commands. No summary
+`H("gradle-installation",tuple) + ".json"`; each build replaces it atomically with
+identical bytes. Do not probe the name first: Gradle's configuration cache records such
+checks, so the next build would miss its entry. Registration is not performed by Mammoth's own stop commands. No summary
 result array or version-only record substitutes for this location/runtime inventory.
 
 Registrations live in the invocation's `registrations/` directory. They are atomic,

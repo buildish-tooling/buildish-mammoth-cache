@@ -97,10 +97,34 @@ async function main(): Promise<void> {
     for (const output of [firstTestOutput, secondTestOutput]) {
       assert.match(output, /expected TestKit failures were asserted/u);
     }
+    // A configuration-cache hit restores the configuring build's state; it still must report
+    // itself, and its build scan, as a separate invocation.
+    const scanArgs = ['publishFakeBuildScan', '--configuration-cache'];
+    await runGradle(runtime, scanArgs, 'Store build scan configuration');
+    assert.match(
+      await runGradle(runtime, scanArgs, 'Reuse build scan configuration'),
+      /Reusing configuration cache/u,
+    );
     const successfulReport = await loadGradleBuildReport({
       tempDirectory: runtime.env.RUNNER_TEMP!,
     });
     assert.deepEqual(successfulReport.warnings, []);
+    for (const requestedTasks of [':tests:test', 'publishFakeBuildScan']) {
+      const builds = successfulReport.builds.filter(
+        (build) => build.requestedTasks === requestedTasks,
+      );
+      assert.deepEqual(
+        builds.map((build) => build.configCacheHit),
+        [false, true],
+      );
+      if (requestedTasks === 'publishFakeBuildScan') {
+        assert.ok(
+          builds.every(
+            (build) => build.buildScanUri === 'https://scans.gradle.com/s/fake-published-scan',
+          ),
+        );
+      }
+    }
     assert.ok(successfulReport.builds.some((build) => build.requestedTasks === ':tests:test'));
     assert.ok(
       successfulReport.builds.every((build) => build.rootProjectName === 'mammoth-cache-gradle-it'),

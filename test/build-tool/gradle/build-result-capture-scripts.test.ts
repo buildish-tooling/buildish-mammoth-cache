@@ -75,8 +75,12 @@ it('registers operational locations before summary/Test/parent/version filters w
   }
   expect(script).not.toContain('JsonGenerator');
   expect(script).not.toContain('.force(');
-  expect(script).toContain('while (buffer.hasRemaining()) channel.write(buffer)');
-  expect(script).toContain('finally { channel.close() }');
+  expect(script).toContain('while (buffer.hasRemaining()) {\n');
+  expect(script).toContain('} finally {\n            channel.close()\n        }');
+  // Probing the record before writing it would invalidate the next configuration cache entry.
+  const registration = script.slice(start, script.indexOf('} catch (Exception failure)'));
+  expect(registration).not.toMatch(/Files\.(exists|isSymbolicLink|size|readAllBytes)\(/);
+  expect(registration).toContain('StandardCopyOption.ATOMIC_MOVE');
   expect(script).toContain('gradle.gradleHomeDir.canonicalPath');
   expect(script).toContain('gradle.gradleUserHomeDir.canonicalPath');
   expect(script).toContain('System.getProperty("java.home")');

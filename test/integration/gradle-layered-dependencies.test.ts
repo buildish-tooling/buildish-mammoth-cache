@@ -239,7 +239,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
         ...extra,
       });
     }
-    async function build(home: string, task: string, seed = '', offline = false) {
+    async function build(home: string, task: string | string[], seed = '', offline = false) {
       const logs = await exec(
         executable!,
         [
@@ -247,7 +247,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
           '--max-workers=2',
           '--console=plain',
           ...(offline ? ['--offline'] : []),
-          task,
+          ...[task].flat(),
         ],
         {
           cwd: project,
@@ -257,6 +257,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
         },
       );
       expect(logs.stdout + logs.stderr).toContain('BUILD SUCCESSFUL');
+      return logs.stdout;
     }
     async function basePost(
       ready: Awaited<ReturnType<typeof prepare>>,
@@ -341,6 +342,14 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     expect(disabledProbe).not.toHaveBeenCalled();
     const seed = gradleSeedPath(worker.store, worker.dependencyLayer!);
     expect(await worker.store.root.stat(old)).toBeNull();
+    // The first builds of this installation: registering it must not invalidate the entry.
+    const configurationCache = ['help', '--configuration-cache'];
+    expect(await build(worker.store.root.path, configurationCache, seed, true)).toContain(
+      'Configuration cache entry stored',
+    );
+    expect(await build(worker.store.root.path, configurationCache, seed, true)).toContain(
+      'Configuration cache entry reused',
+    );
     const before = await digests(seed),
       priorRequests = requests.length;
     await build(worker.store.root.path, 'resolveLayeredSeed', seed, true);
