@@ -57,6 +57,7 @@ const inputs = new WeakSet<IndexedMetadataInput>();
 /** Only the active index is retained. A selector is not a disk reference or a native capability. */
 export class MetadataMemberReader {
   private readonly directories: IndexDirectories;
+  private readonly ownerMask: bigint;
 
   constructor(
     readonly context: MetadataInstallContext,
@@ -65,6 +66,7 @@ export class MetadataMemberReader {
     readonly root: number,
   ) {
     this.directories = new IndexDirectories(context.scratch, root);
+    this.ownerMask = partitionBit(context.store.codec.options.model, partition);
   }
 
   async rootNode(
@@ -83,10 +85,7 @@ export class MetadataMemberReader {
       ) {
         throw new Error('Wrong metadata member path/kind.');
       }
-      if (
-        node[6] !== 0 ||
-        nodeMask(node) !== partitionBit(this.context.store.codec.options.model, this.partition)
-      ) {
+      if (node[6] !== 0 || nodeMask(node) !== this.ownerMask) {
         throw new Error('Metadata member crosses ownership.');
       }
       const expected = await this.directories.member(path);
@@ -118,6 +117,21 @@ export class MetadataMemberReader {
     return node[1] as 'file' | 'directory';
   }
 
+  /** Expand only the admitted metadata of an aggregate subtree moved into the live home. */
+  async recordInheritedFiles(binding: Value, target: InstallScratch, signal: AbortSignal) {
+    const selector = this.context.parse(binding, 'source', this.partition);
+    await this.visit(
+      selector[4],
+      async (row) => {
+        const fact = row as readonly Value[];
+        if (fact[0] === 'file') {
+          await target.append(['inherited', fact[1], fact[2]]);
+        }
+      },
+      signal,
+    );
+  }
+
   private async visit(
     offset: number,
     accept: (row: Value, signal: AbortSignal) => Promise<void>,
@@ -130,7 +144,7 @@ export class MetadataMemberReader {
       const node = lease.node;
       if (
         node[6] !== 0 ||
-        nodeMask(node) !== partitionBit(this.context.store.codec.options.model, this.partition) ||
+        nodeMask(node) !== this.ownerMask ||
         (node[1] !== 'file' && node[1] !== 'directory')
       ) {
         throw new Error('Metadata member crosses ownership.');

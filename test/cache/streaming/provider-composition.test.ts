@@ -17,6 +17,7 @@
 import { gradleResolver } from './quiescence-fixture';
 import { mkdtemp, rm, mkdir, writeFile, readFile, utimes, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { build } from 'esbuild';
 import {
@@ -484,14 +485,24 @@ it('duplicate and missing prepare stop before anchor, backends, reports or defer
   expect(f.backend).not.toHaveBeenCalled();
 });
 
-async function publishSweepBase(inputs: Record<string, string> = {}) {
+async function publishSweepBase(
+  inputs: Record<string, string> = {},
+  files: Record<string, string> = { 'data/inherited': 'base' },
+  mtime?: Date,
+) {
   const producer = await fixture('maven', inputs);
   const ready = await runStreamingPrepare(producer.deps);
   if (!('store' in ready)) {
     throw new Error('Expected a normal prepare.');
   }
-  await mkdir(producer.home + '/data');
-  await writeFile(producer.home + '/data/inherited', 'base');
+  for (const [name, body] of Object.entries(files)) {
+    const file = path.join(producer.home, name);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, body);
+    if (mtime) {
+      await utimes(file, mtime, mtime);
+    }
+  }
   const published = await runStreamingPost(producer.post);
   if (published.outcome !== 'published' || !published.key) {
     throw new Error('Expected a published generation.');
@@ -512,6 +523,229 @@ async function preparedSweep(f: Awaited<ReturnType<typeof fixture>>) {
     handoff.close();
   }
 }
+
+it.each([2, 8])(
+  'sweeps inherited direct files and %s Maven units without an additional cache walk',
+  async (count) => {
+    const inputs = {
+      'cache-partitions': JSON.stringify([{ id: 'repository', includes: ['repository/**'] }]),
+    };
+    const aged = new Date(1000);
+    const units = Array.from({ length: count }, (_, i) => `repository/g/shared/v${i}`);
+    const files = Object.fromEntries(
+      units.flatMap((unit) => [
+        [unit + '/package.jar', 'artifact'],
+        [unit + '/_remote.repositories', 'origin'],
+      ]),
+    );
+    const { producer } = await publishSweepBase(
+      inputs,
+      {
+        ...files,
+        'data/old': 'old',
+        'data/overwritten': 'old',
+        'data/removed-then-added': 'old',
+      },
+      aged,
+    );
+    const restore = async (cacheGcMode: 'timestamp' | 'off') => {
+      const publisher = await fixture('maven', { ...inputs, 'cache-gc-mode': cacheGcMode });
+      publisher.provision.mockImplementation(async () => {
+        await mkdir(publisher.home + '/data');
+        await writeFile(publisher.home + '/data/extra', 'extra');
+        await utimes(publisher.home + '/data/extra', aged, aged);
+        return { items: [], warnings: [], additionalOutputs: {} };
+      });
+      publisher.hooks.mockImplementation(async () => {
+        const overwritten = publisher.home + '/data/overwritten';
+        const replaced = publisher.home + '/data/removed-then-added';
+        await writeFile(overwritten, 'new');
+        await utimes(overwritten, aged, aged);
+        await rm(replaced);
+        await writeFile(replaced, 'new');
+        await utimes(replaced, aged, aged);
+      });
+      const ready = await runStreamingPrepare({
+        ...publisher.deps,
+        now: () => Date.now() + 1000,
+        cacheBackend: async () => producer.sdk.backend,
+      });
+      if (!('store' in ready)) {
+        throw new Error('Expected normal prepare.');
+      }
+      return { publisher, ready };
+    };
+    const ordinary = await restore('off');
+    const due = await restore('timestamp');
+    expect(due.ready.store.root.work.nativeWalks).toBe(ordinary.ready.store.root.work.nativeWalks);
+    const capture = observationCapture.captureObservations;
+    const captureWork: { walks: number; stats: number }[] = [];
+    vi.spyOn(observationCapture, 'captureObservations').mockImplementation(
+      async (store, options) => {
+        const before = store.root.work.nativeWalks;
+        const observation = await capture(store, options);
+        captureWork.push({
+          walks: store.root.work.nativeWalks - before,
+          stats: observation.work.stats,
+        });
+        return observation;
+      },
+    );
+    const baseline = (await preparedSweep(due.publisher)).sweep?.[3];
+    if (!baseline) {
+      throw new Error('Expected a frozen sweep baseline.');
+    }
+    expect(
+      (
+        await runStreamingPost({
+          ...ordinary.publisher.post,
+          cacheBackend: async () => producer.sdk.backend,
+        })
+      ).outcome,
+    ).toBe('published');
+    const result = await runStreamingPost({
+      ...due.publisher.post,
+      cacheBackend: async () => producer.sdk.backend,
+    });
+    expect(result.outcome).toBe('published');
+    expect(captureWork[0].walks).toBe(1);
+    expect(captureWork[1]).toEqual(captureWork[0]);
+    expect(await due.ready.store.root.stat('data/old')).toBeNull();
+    for (const unit of units) {
+      expect(await due.ready.store.root.stat(unit + '/package.jar')).toBeNull();
+      expect(await due.ready.store.root.stat(unit + '/_remote.repositories')).toBeNull();
+    }
+    expect(await readFile(due.publisher.home + '/data/extra', 'utf8')).toBe('extra');
+    expect(await readFile(due.publisher.home + '/data/overwritten', 'utf8')).toBe('new');
+    expect(await readFile(due.publisher.home + '/data/removed-then-added', 'utf8')).toBe('new');
+    expect(await due.ready.store.root.stat(baseline[2])).toBeNull();
+  },
+);
+
+it('publishes a timestamp-only sweep and carries the timestamp through default-ref inheritance', async () => {
+  const { producer, key, model } = await publishSweepBase();
+  const original = await restoreGeneration(producer, key, model);
+  const publisher = await fixture('maven');
+  const sdk = producer.sdk.backend;
+  await runStreamingPrepare({ ...publisher.deps, cacheBackend: async () => sdk });
+  expect(publisher.outputs.get('dependency-gc-due')).toBe('true');
+  expect((await preparedSweep(publisher)).sweep?.[0]).toBe('complete');
+  producer.sdk.calls.length = 0;
+  const before = Date.now();
+  const result = await runStreamingPost({ ...publisher.post, cacheBackend: async () => sdk });
+  if (result.outcome !== 'published' || !result.key) {
+    throw new Error('Expected timestamp-only publication.');
+  }
+  expect(result.key).not.toBe(key);
+  expect(
+    producer.sdk.calls.filter((call) => call.kind === 'save').map((call) => call.paths),
+  ).toEqual([['record.json']]);
+  const swept = await restoreGeneration(producer, result.key, model);
+  expect(swept[8]).toEqual(original[8]);
+  expect(swept[9]).toEqual(original[9]);
+  expect(swept[12]).toBeGreaterThanOrEqual(before);
+  expect(swept[12]).toBeLessThanOrEqual(Date.now());
+
+  const fresh = await fixture('maven');
+  await runStreamingPrepare({ ...fresh.deps, cacheBackend: async () => sdk });
+  expect(fresh.outputs.get('dependency-gc-due')).toBe('false');
+  expect(await runStreamingPost({ ...fresh.post, cacheBackend: async () => sdk })).toEqual({
+    outcome: 'no-change',
+    key: swept[11],
+  });
+
+  const fallback = await fixture('maven');
+  await runStreamingPrepare({
+    ...fallback.deps,
+    cacheBackend: async () => sdk,
+    ciProvider: {
+      ...fallback.deps.ciProvider,
+      context: { ...fallback.ci, resolvedRefName: 'feature', defaultBranch: 'main' },
+    },
+  });
+  expect(fallback.outputs.get('dependency-gc-due')).toBe('false');
+  expect((await preparedSweep(fallback)).sweep).toBeUndefined();
+  const publication = await runStreamingPost({ ...fallback.post, cacheBackend: async () => sdk });
+  if (publication.outcome !== 'published' || !publication.key) {
+    throw new Error('Expected fallback-lineage publication.');
+  }
+  const inherited = await restoreGeneration(producer, publication.key, model);
+  expect(inherited[12]).toBe(swept[12]);
+  expect(inherited[8]).toEqual(swept[8]);
+});
+
+it('protects accepted sweep reads and backdated worker replacements in the publisher', async () => {
+  const aged = new Date(1000);
+  const { producer } = await publishSweepBase(
+    {},
+    {
+      'data/read': 'read',
+      'data/unread': 'unread',
+      'data/replaced': 'original',
+    },
+    aged,
+  );
+  const artifacts = memoryArtifacts();
+  const sdk = producer.sdk.backend;
+  const worker = await fixture('maven', { 'job-mode': 'distributed-worker' });
+  worker.hooks.mockImplementation(async () => {
+    await utimes(worker.home + '/data/read', new Date(Date.now() + 60000), aged);
+    await delay(10);
+  });
+  await runStreamingPrepare({ ...worker.deps, cacheBackend: async () => sdk });
+  await writeFile(worker.home + '/data/replaced', 'changed');
+  await utimes(worker.home + '/data/replaced', aged, aged);
+  expect(
+    (await runStreamingPost({ ...worker.post, artifactBackend: async () => artifacts.api }))
+      .outcome,
+  ).toBe('worker-uploaded');
+  const publisher = await fixture('maven', {
+    'job-mode': 'distributed-aggregator',
+    'dependent-jobs': 'A',
+  });
+  await runStreamingPrepare({
+    ...publisher.deps,
+    ciProvider: {
+      ...publisher.deps.ciProvider,
+      context: { ...publisher.ci, jobName: 'publisher' },
+    },
+    artifactBackend: async () => artifacts.api,
+    cacheBackend: async () => sdk,
+    now: () => Date.now() + 1000,
+  });
+  expect((await preparedSweep(publisher)).sweep?.[0]).toBe('complete');
+  expect(
+    (await runStreamingPost({ ...publisher.post, cacheBackend: async () => sdk })).outcome,
+  ).toBe('published');
+  expect(await readFile(publisher.home + '/data/read', 'utf8')).toBe('read');
+  expect(await readFile(publisher.home + '/data/replaced', 'utf8')).toBe('changed');
+  await expect(readFile(publisher.home + '/data/unread')).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each(['partition object', 'generation record'] as const)(
+  'keeps the prior timestamp after an unconfirmed %s save',
+  async (failure) => {
+    const { producer, key, model } = await publishSweepBase();
+    const publisher = await fixture('maven');
+    const sdk = producer.sdk.backend;
+    await runStreamingPrepare({ ...publisher.deps, cacheBackend: async () => sdk });
+    await writeFile(publisher.home + '/data/added', 'new');
+    const save = sdk.saveCache.bind(sdk);
+    const mock = vi.spyOn(sdk, 'saveCache').mockImplementation((paths, key, options) => {
+      const record = paths.some((name) => path.basename(name) === 'record.json');
+      return record === (failure === 'generation record')
+        ? Promise.resolve(-1)
+        : save(paths, key, options);
+    });
+    const result = await runStreamingPost({ ...publisher.post, cacheBackend: async () => sdk });
+    expect(result).toEqual({ outcome: 'abandoned', key: null });
+    const records = mock.mock.calls.filter(([paths]) =>
+      paths.some((name) => path.basename(name) === 'record.json'),
+    );
+    expect(records).toHaveLength(failure === 'generation record' ? 1 : 0);
+    expect((await restoreGeneration(producer, key, model))[12]).toBeNull();
+  },
+);
 
 it.each([
   { state: 'during grace', expected: undefined },
@@ -760,8 +994,9 @@ it.each(['disabled', 'read-only'] as const)(
     expect(f.backend).not.toHaveBeenCalled();
   },
 );
-it('rounds fractional configured GC age conservatively once and freezes that scalar', async () => {
+it('rounds fractional worker GC age conservatively once and freezes that scalar', async () => {
   const f = await fixture('maven', {
+    'job-mode': 'distributed-worker',
     'cache-gc-mode': 'timestamp',
     'cache-gc-older-than-days': '2.3456789',
   });
@@ -1138,7 +1373,7 @@ it.each(['failure', 'cancel', 'analytics-disabled'] as const)(
 );
 
 it.each([true, false])(
-  'fresh provider post keeps prepared family policy %s despite changed current inputs',
+  'fresh provider post keeps prepared family %s and retains local files without a sweep',
   async (enabled) => {
     const inputs = { 'dependency-cache-layer': String(enabled) };
     const f = await fixture('gradle', inputs);
@@ -1167,7 +1402,7 @@ it.each([true, false])(
     expect(reopened.store.codec.options.model.dependencyCacheLayer).toBe(enabled);
     const result = await runStreamingPost({ ...f.post, lifecycle: f.deps.lifecycle });
     expect(result.outcome).toBe('published');
-    expect((await ready.store.root.stat('data/old.jar')) !== null).toBe(enabled);
+    expect(await ready.store.root.stat('data/old.jar')).not.toBeNull();
   },
 );
 
@@ -1260,6 +1495,64 @@ const layerInputs = {
   'dependency-cache-layer': 'true',
   'cache-partitions': JSON.stringify([{ id: 'metadata', writer: 'writer' }]),
 };
+
+it('sweeps a Gradle seed-eligible aggregate and preserves the authoritative metadata snapshot', async () => {
+  const inputs = {
+    ...layerInputs,
+    'cache-partitions': JSON.stringify([{ id: 'metadata', writer: 'A' }]),
+  };
+  const producer = await fixture('gradle', inputs);
+  const prepare = (f: typeof producer) =>
+    runStreamingPrepare({
+      ...f.deps,
+      buildToolAdapterFactory: () => layerAdapter(f),
+      cacheBackend: async () => producer.sdk.backend,
+      now: () => Date.now() + 1000,
+    });
+  const post = (f: typeof producer) =>
+    runStreamingPost({
+      ...f.post,
+      lifecycle: f.deps.lifecycle,
+      cacheBackend: async () => producer.sdk.backend,
+    });
+  const initial = await prepare(producer);
+  if (!('store' in initial)) {
+    throw new Error('Expected a normal Gradle prepare.');
+  }
+  for (const member of [layerArtifact, layerMetadata]) {
+    const file = path.join(producer.home, member);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, 'seed');
+    await utimes(file, 1, 1);
+  }
+  const before = await post(producer);
+  if (before.outcome !== 'published' || !before.key) {
+    throw new Error('Expected a Gradle generation.');
+  }
+  const publisher = await fixture('gradle', inputs);
+  const actual = await prepare(publisher);
+  if (!('store' in actual)) {
+    throw new Error('Expected a normal Gradle prepare.');
+  }
+  expect(actual.store.codec.options.model.family).toBe(initial.store.codec.options.model.family);
+  expect((await preparedSweep(publisher)).sweep?.[0]).toBe('complete');
+  await writeFile(path.join(publisher.home, layerMetadata), 'authoritative update');
+  const after = await post(publisher);
+  if (after.outcome !== 'published' || !after.key) {
+    throw new Error('Expected a swept Gradle generation.');
+  }
+  const model = actual.store.codec.options.model;
+  const swept = await restoreGeneration(producer, after.key, model);
+  expect(await actual.store.root.stat(layerArtifact)).toBeNull();
+  expect(swept[8][1][0]).toBe('object');
+  const reader = await fixture('gradle', { ...inputs, 'read-only': 'true' });
+  await prepare(reader);
+  expect(reader.outputs.get('restored-cache-key')).toBe(after.key);
+  expect(await readFile(path.join(reader.home, layerMetadata), 'utf8')).toBe(
+    'authoritative update',
+  );
+});
+
 async function warmLayerProvider(
   extra: Record<string, string> = {},
   sweepTime = Date.now() as number | null,

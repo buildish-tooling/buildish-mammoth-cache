@@ -147,9 +147,12 @@ partitionDecisionSha = H("partition-decisions",
   lastDependencyGcSweepAt])
 ```
 
-`lastDependencyGcSweepAt` reserves a nullable nonnegative safe-integer epoch
-timestamp in milliseconds. Current writers always emit `null`; changing the slot
-changes the partition decision and immutable generation key. The generation-v3
+`lastDependencyGcSweepAt` is a nullable nonnegative safe-integer epoch timestamp
+in milliseconds. Ordinary publication carries the selected base timestamp forward.
+A complete or forced sweep publishes its completion timestamp with the resulting
+partition references, even when all objects are reused. An abandoned publication
+grants no completion receipt. Changing the timestamp changes the partition decision
+and immutable generation key. The generation-v3
 profile changes both Gradle and Maven discovery families; old generation-v2
 records remain in their prior families. Cooperating jobs must upgrade together.
 

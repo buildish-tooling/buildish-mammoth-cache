@@ -37,7 +37,9 @@ import type { LifecycleOptions } from './lifecycle-options';
 import { uint, type Value } from './encoding';
 import { assertLifecycleWindow } from './post-admission';
 import { MetadataBaseRestore } from './metadata-base-restore';
+import type { MetadataGeneration } from './metadata-base-records';
 import { dependencyGcSchedule, type GcScheduleConfig } from './dependency-gc-schedule';
+import { InstallScratch } from './install-scratch';
 import { freezeMetadataInstallPlan } from './install-plan';
 import { executeInstall } from './install-execute';
 import { discoverWorkerArtifacts, acquireWorkerArtifacts } from './worker-service';
@@ -205,15 +207,17 @@ export async function prepareStreaming(
     );
   }
   const start = uint((request.now ?? Date.now)()),
-    age = request.policy.gcAgeMs;
+    age = request.policy.gcAgeMs,
+    publisher = request.policy.role !== 'distributed-worker',
+    ordinaryAge = publisher && request.dependencyGc ? null : age;
   const policy = policySchema.parse([
     'policy',
     1,
     request.policy.role,
     request.policy.access,
     request.policy.restoreCleanup,
-    age === null ? 'off' : 'timestamp',
-    age === null ? null : Math.max(0, start - age),
+    ordinaryAge === null ? 'off' : 'timestamp',
+    ordinaryAge === null ? null : Math.max(0, start - ordinaryAge),
     null,
     request.policy.ordinaryPolicy,
     options.maxDirectoryEntries,
@@ -244,7 +248,8 @@ export async function prepareStreaming(
   let overlay: Overlay | undefined;
   let restored: MetadataBaseRestore | undefined,
     merged: WorkerMergeResult | undefined,
-    accepted: AcceptedWorkerMerge | undefined;
+    accepted: AcceptedWorkerMerge | undefined,
+    inherited: InstallScratch | undefined;
   const snapshots = new Set<MetadataSnapshot>(),
     downloads: DownloadedWorkerArchive[] = [];
   let failure: unknown, answer: StreamingPrepareResult | undefined;
@@ -267,33 +272,39 @@ export async function prepareStreaming(
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cache = await request.cacheBackend(),
       unavailable = !cache.isFeatureAvailable();
+    const scheduleAt = uint((request.now ?? Date.now)());
+    const sweepSchedule = (generation: MetadataGeneration | null) =>
+      request.dependencyGc &&
+      dependencyGcSchedule(request.dependencyGc, generation ?? undefined, scheduleAt);
+    const writableCapture =
+      request.policy.access === 'writable' &&
+      (request.context[7] !== 'gradle' || !request.existingDependencyLayer);
     restored = await timed(
       options,
       'base discovery and admission',
       () =>
         MetadataBaseRestore.acquire(store, unavailable ? null : cache, request, {
           ...options,
-          baseSourceMode:
-            request.policy.restoreCleanup === 'none'
-              ? request.policy.access === 'read-only' ||
-                request.policy.role === 'distributed-worker'
-                ? 'trusted-boundaries'
-                : 'trusted-summary'
-              : undefined,
+          baseSourceMode: (generation) => {
+            if (
+              request.policy.restoreCleanup !== 'none' ||
+              (publisher &&
+                writableCapture &&
+                age !== null &&
+                sweepSchedule(generation)?.due === 'true')
+            ) {
+              return undefined;
+            }
+            return request.policy.access === 'read-only' || !publisher
+              ? 'trusted-boundaries'
+              : 'trusted-summary';
+          },
         }),
       (r) => (unavailable ? 'unavailable' : r.key ? 'hit' : 'miss'),
     );
-    const dependencyGc =
-      request.dependencyGc &&
-      dependencyGcSchedule(
-        request.dependencyGc,
-        restored.generation ?? undefined,
-        uint((request.now ?? Date.now)()),
-      );
+    const dependencyGc = sweepSchedule(restored.generation);
     const sweepCapture = dependencyGc?.due === 'true' && request.policy.access === 'writable';
-    const publisher = request.policy.role !== 'distributed-worker';
-    const qualifiedCapture =
-      sweepCapture && (request.context[7] !== 'gradle' || !request.existingDependencyLayer);
+    const qualifiedCapture = dependencyGc?.due === 'true' && writableCapture;
     const publisherSweep =
       publisher &&
       qualifiedCapture &&
@@ -339,7 +350,7 @@ export async function prepareStreaming(
       mountTarget !== undefined &&
       publisher &&
       downloads.length === 0 &&
-      publisherOverlayAllowed(request.model, age !== null, request.cleanupEnabled) &&
+      publisherOverlayAllowed(request.model, ordinaryAge !== null, request.cleanupEnabled) &&
       !(await hasPotentialOverlayChanges(store, store.root.path, '', options));
     const selectedJobs = new Set(downloads.map((download) => download.context[4]));
     // Pins already refer to the exact materialized base BEFORE extras or worker overlays.
@@ -410,6 +421,14 @@ export async function prepareStreaming(
         await restored.context!.declareEmpty(entry[1], signal);
       }
     }
+    if (
+      publisherSweep &&
+      (request.policy.role === 'standalone' ||
+        dependencyGc?.force ||
+        (required.size > 0 && [...required].every((job) => merged?.sweep?.jobs.includes(job))))
+    ) {
+      inherited = await InstallScratch.create(store, request.budget);
+    }
     const cold = new Set(restored.context!.cold.flat());
     if (
       request.model.partitions.some((p) => {
@@ -425,7 +444,7 @@ export async function prepareStreaming(
         }),
       );
       await timed(options, 'base install', () =>
-        executeInstall(store, plan, request.budget, { signal }),
+        executeInstall(store, plan, request.budget, { signal, inherited }),
       );
     }
     await store.fail('prepare-base-installed');
@@ -463,9 +482,20 @@ export async function prepareStreaming(
               ? 'forced'
               : undefined;
       if (mode) {
-        sweep = [mode, Math.max(0, start - age), accepted?.sweep?.activity ?? null];
+        if (!inherited) {
+          throw new Error('Missing installed sweep baseline.');
+        }
+        const baseline = await store.writeStream(
+          'sweep-baseline',
+          { ...options, partition: null },
+          inherited.rows(0, inherited.position),
+          signal,
+        );
+        sweep = [mode, Math.max(0, start - age), accepted?.sweep?.activity ?? null, baseline];
       }
     }
+    await inherited?.close();
+    inherited = undefined;
     const activity =
       accepted?.activity ??
       (await store.writeStream(
@@ -488,7 +518,7 @@ export async function prepareStreaming(
       (!publisher ||
         publisherOverlayAllowed(
           request.model,
-          age !== null && !accepted?.incompleteUsage,
+          ordinaryAge !== null && !accepted?.incompleteUsage,
           request.cleanupEnabled,
         ))
     ) {
@@ -519,7 +549,7 @@ export async function prepareStreaming(
       request.captureTempDirectory,
       request.artifactRetentionDays,
       request.cleanupEnabled ? 'enabled' : 'disabled',
-      accepted?.incompleteUsage ? null : age,
+      accepted?.incompleteUsage ? null : ordinaryAge,
       restored.key && restored.record ? [restored.key, restored.record] : null,
       activity,
       cutoff,
@@ -546,7 +576,7 @@ export async function prepareStreaming(
       ),
     );
 
-    // Retire operation-owned metadata before successful main/post handoff; only imported activity crosses per-file.
+    // Retire operation-owned metadata before the successful main/post handoff.
     await timed(options, 'cleanup and retirement', () =>
       settleNativeCleanup([
         () => accepted?.dispose(),
@@ -605,6 +635,7 @@ export async function prepareStreaming(
     await timed(options, 'cleanup and retirement', () =>
       settleNativeCleanup(
         [
+          () => inherited?.close(),
           () => merged?.dispose(),
           () => accepted?.dispose(),
           () => restored?.dispose(),

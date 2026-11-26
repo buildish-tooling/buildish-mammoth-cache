@@ -21,10 +21,10 @@ import { abortableValues, withAbort } from './abort';
 import { RecordDecoder, encodeRecord, equal, Digest, add, type Value } from './encoding';
 import type { LocalCodec } from './local-schema';
 import { shaSchema, uintSchema } from './schema';
-import { ownedReferenceSchema } from './local-schema';
+import { inheritedFileSchema, ownedReferenceSchema } from './local-schema';
 import { frozenModelHeader, resolveModel, type ResolvedModel } from './model';
 import { tuple } from './encoding';
-import { decodedRecordCharge, type WorkingBudget } from './tree-state';
+import { compareMembership, decodedRecordCharge, type WorkingBudget } from './tree-state';
 import { HandoffGrammar } from './lifecycle-handoff';
 import { LocalTreeState } from './local-tree-state';
 import { LocalInstallState, type InstallKind } from './local-install-state';
@@ -37,6 +37,7 @@ export const localPurposes = [
   'observations',
   'activity',
   'install-plan',
+  'sweep-baseline',
 ] as const;
 export type LocalPurpose = (typeof localPurposes)[number];
 
@@ -61,6 +62,7 @@ export class LocalStreamGrammar {
   private readonly handoff?: HandoffGrammar;
   private readonly install?: LocalInstallState;
   private count = 0;
+  private inheritedPath: string | undefined;
 
   constructor(
     private readonly purpose: LocalPurpose,
@@ -110,6 +112,15 @@ export class LocalStreamGrammar {
       z.tuple([z.literal('installation'), this.options.codec.schemas.rows.registration]).parse(
         value,
       );
+    } else if (this.purpose === 'sweep-baseline') {
+      const [, path] = inheritedFileSchema.parse(value);
+      if (
+        this.inheritedPath !== undefined &&
+        compareMembership(['member', 'file', this.inheritedPath], ['member', 'file', path]) >= 0
+      ) {
+        throw new Error('Duplicate/unordered inherited sweep path.');
+      }
+      this.inheritedPath = path;
     } else if (this.purpose === 'model') {
       const model = this.options.codec.options.model,
         expected =

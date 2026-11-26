@@ -96,6 +96,10 @@ it.each(['gradle', 'maven'])(
 
     const prepare = (id: string) =>
       jobs[prefix + id]!.steps.find((step) => step.id === 'prepare')!.with!;
+    expect(prepare('warm')['cache-gc-mode']).toBe('off');
+    if (tool === 'gradle') {
+      expect(prepare('change')['overlay-fs']).toBe('false');
+    }
     expect(jobs[prefix + 'change']!.needs).toContain(prefix + 'warm');
     expect(prepare('change')['github-default-branch']).toBe(
       prepare('aggregator')['github-ref-name'],

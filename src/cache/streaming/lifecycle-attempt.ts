@@ -186,24 +186,26 @@ export class PostAttempt {
     equal(await this.store.state(), this.originalState, 'post terminal original attempt');
     if (terminal[1] !== 'skipped-not-quiescent') {
       const streams = [this.handoff.header[9]];
-      const sweepActivity = this.handoff.publisherSweep?.[2];
+      const sweep = this.handoff.publisherSweep;
+      const sweepActivity = sweep?.[2];
       if (sweepActivity) {
         streams.push(sweepActivity);
       }
-      for (const activity of streams) {
+      const metadata = sweep ? [...streams, sweep[3]] : streams;
+      for (const activity of metadata) {
         if (this.store.hasAdmittedMetadata(activity)) {
           continue;
         }
         for await (const row of this.store.rows(
           activity,
-          'activity',
+          activity[1],
           { ...this.options, partition: null },
           this.signal,
         )) {
           void row;
         }
       }
-      for (const activity of streams) {
+      for (const activity of metadata) {
         await this.store.retireAdmittedMetadata(activity);
       }
     }

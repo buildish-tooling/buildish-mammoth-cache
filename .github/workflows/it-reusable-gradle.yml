@@ -749,6 +749,8 @@ jobs:
         uses: ./actions/github/gradle # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/warm
+          # This job checks exact reuse of the first published generation.
+          cache-gc-mode: 'off'
           job-mode: standalone
           cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
           cache-key-prefix: it-gradle-distributed-${{ github.run_id }}-
@@ -814,6 +816,8 @@ jobs:
         with:
           base-directory: build/integration-fixtures/change
           job-mode: standalone
+          # The post observer checks that the changed source remains on disk.
+          overlay-fs: 'false'
           cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
           cache-key-prefix: it-gradle-distributed-${{ github.run_id }}-
           github-event-name: ${{ inputs.caller-event-name }}

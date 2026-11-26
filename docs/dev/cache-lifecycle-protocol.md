@@ -120,7 +120,7 @@ policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|nul
  actualActivityRef,originalBuildCutoff,selectedWorkerCount,gradleSeedDescriptor|null,
  overlayDescriptor|null,publisherOverlayBaseline|null,sweep|null]
 publisherOverlayBaseline = pristine|other
-sweep = "worker-capture" | [complete|forced,sweepGcCutoffMs,alternateSweepActivityRef|null]
+sweep = "worker-capture" | [complete|forced,sweepGcCutoffMs,alternateSweepActivityRef|null,baselineRef]
 ["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
 provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
@@ -143,7 +143,14 @@ supplies positive usage for the partitions it restored. Its archive does not
 complete the roster. A distinct sweep stream repeats the bounded union against
 the same admitted index and adds no native directory walk. Conflicting usage
 topology in that stream closes sweep eligibility while keeping the accepted
-ordinary activity. Post retires both streams when present.
+ordinary activity. The baseline is an owned `sweep-baseline` stream of
+`["inherited",path,nativeFileIdentity]` records in files-first order. Base
+installation writes identities from guarded direct file moves and the original
+admitted index for directory moves. The stream contains no payload bytes and uses
+no second native walk. Due Gradle publishers retain per-file facts during the
+existing restore walk where ordinary admission can summarize intact subtrees.
+Post joins the stream with ordinary observation, comparing
+identity while ignoring atime, and retires the owned streams when finished.
 
 `gradleSeedDescriptor` is data bound to the exact selected generation and the two
 available source partitions. Only writable distributed Gradle workers with a selected wrapper,
@@ -205,10 +212,11 @@ removal-only directories do not produce contributions. A selected unit uses the
 ordinary Maven replacement and conflict rules. Wrapper partitions remain outside
 the mount.
 
-Upper-layer workers declare incomplete usage in their worker identity. After
-accepting all selected archives, aggregator prepare freezes timestamp GC as
-disabled if any of those identities reports incomplete usage. Restore cleanup
-and authoritative snapshot selection keep their existing policies.
+Upper-layer workers declare incomplete usage in their worker identity. Their
+contributions still participate in ordinary merge. Their usage cannot qualify
+for a sweep, and an aggregator can still run a forced sweep after the grace
+period. Restore cleanup and authoritative snapshot selection keep their existing
+policies.
 
 Writable standalone and aggregator jobs also support overlays. The mounted lower
 contains the prepared cache after installation of accepted worker contributions.
@@ -358,14 +366,14 @@ workspace markers retain their established policy. Actual deletion remains direc
 selected-target and selected-parent checked, with no intent/progress/retry format.
 A failure retains actual partial effects and grants no completion/survivor owner.
 
-A publisher in the frozen `retain-dependencies` family marks every file in a
-seed-eligible aggregate partition for retention at observation. This applies to
-standalone and distributed-aggregator post, including zero worker activations and
-new local or worker contributions. Eligibility alone in an ordinary family does
-not suppress timestamp eviction. Worker post still applies ordinary GC to its
-writable head. Purge rules, unrelated aggregate partitions and authoritative
-single-writer snapshots keep their existing decisions. Retention needs no per-file
-seed provenance index and adds no payload walk or body read.
+The action's periodic publisher policy retains aggregate entries between sweeps.
+During a sweep, existing timestamp and complete-unit criteria apply to all managed
+aggregate partitions, including the seed-eligible partitions of a
+`retain-dependencies` family. An eviction candidate must match the admitted
+baseline identity. Unproven paths, new or replaced files, and observed usage are
+retained. Worker post still applies ordinary GC to its writable head. Restore
+cleanup, explicit purge, and authoritative single-writer snapshots keep their
+existing rules.
 
 ### Shared GC parent projections
 

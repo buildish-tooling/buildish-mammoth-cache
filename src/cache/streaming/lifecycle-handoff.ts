@@ -38,6 +38,7 @@ export type PublisherSweep = readonly [
   mode: 'complete' | 'forced',
   gcCutoffMs: number,
   activity: Reference | null,
+  baseline: Reference,
 ];
 
 export function handoffSchemas(codec: LocalCodec) {
@@ -94,7 +95,12 @@ export function handoffSchemas(codec: LocalCodec) {
         z
           .union([
             z.literal('worker-capture'),
-            z.tuple([z.enum(['complete', 'forced']), uintSchema, ref('activity').nullable()]),
+            z.tuple([
+              z.enum(['complete', 'forced']),
+              uintSchema,
+              ref('activity').nullable(),
+              ref('sweep-baseline'),
+            ]),
           ])
           .nullable(),
       ]),

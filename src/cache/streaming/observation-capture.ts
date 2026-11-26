@@ -22,7 +22,7 @@ import { InstallScratch } from './install-scratch';
 import { Digest, equal, tuple, type Value } from './encoding';
 import { ObservationIndex } from './observation-index';
 import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-walk';
-import { type NativeIdentity } from './native';
+import { sameNative, type NativeIdentity } from './native';
 import { createCacheGlobMatcher } from '../glob';
 import { isCacheMetadataPath } from '../metadata-paths';
 import { isOverlayWhiteout, withinOverlay, type OverlayCapture } from './overlay';
@@ -208,14 +208,17 @@ async function capture(
     throw new Error('Observation allowance differs from frozen policy.');
   }
   await options.attempt.guard();
-  const importedActivity = options.attempt.handoff.header[9];
+  const sweep = options.attempt.handoff.publisherSweep;
+  const inherited = sweep ? new InheritedFiles(store, sweep[3], options) : undefined;
+  const importedActivity = sweep?.[2] ?? options.attempt.handoff.header[9];
+  const gcCutoffMs = sweep?.[1] ?? bindings[8][6];
   const activity = new ActivityCursor(activityFacts(store, importedActivity, options)),
     tree = await InstallScratch.create(store, options.budget),
     frames: Frame[] = [],
     work = walkWork(),
     hard = createCacheGlobMatcher(model.tuple[3]),
     cutoff = BigInt(bindings[8][7]!) * 1000000n,
-    gcCutoff = bindings[8][6] === null ? null : BigInt(bindings[8][6]) * 1000000n;
+    gcCutoff = gcCutoffMs === null ? null : BigInt(gcCutoffMs) * 1000000n;
   type Entry = {
     name: string;
     type: NativeChild['type'];
@@ -443,10 +446,11 @@ async function capture(
               : 'none';
         const decision: Decision =
           p[3] === 'aggregate' &&
-          !(model.dependencyCacheLayer && !worker && p[6] === 1) &&
+          (sweep || !(model.dependencyCacheLayer && !worker && p[6] === 1)) &&
           act === 'none' &&
           gcCutoff !== null &&
-          BigInt(e.identity[8]) < gcCutoff
+          BigInt(e.identity[8]) < gcCutoff &&
+          (!inherited || (await inherited.matches(e.path, e.identity)))
             ? 'delete'
             : 'retain';
         attach(
@@ -570,6 +574,7 @@ async function capture(
       }
     }
     await activity.finish();
+    await inherited?.finish();
     if (root === undefined) {
       throw new Error('Missing observation root.');
     }
@@ -608,6 +613,7 @@ async function capture(
       [
         () => walk.return(undefined),
         () => activity.close(),
+        () => inherited?.close(),
         () => tree.close(),
         () => (failure === undefined ? undefined : capturedIndex?.dispose()),
       ],
@@ -781,5 +787,49 @@ class ActivityCursor {
 
   async close() {
     await this.iterator.return?.();
+  }
+}
+
+/** Merge admission facts with the existing files-first native observation walk. */
+class InheritedFiles {
+  private readonly rows: AsyncIterator<readonly [string, NativeIdentity]>;
+  private head?: IteratorResult<readonly [string, NativeIdentity]>;
+
+  constructor(store: OwnedStore, ref: Reference, options: NativeOperationOptions) {
+    this.rows = (async function* () {
+      for await (const record of store.rows(
+        ref,
+        'sweep-baseline',
+        { ...options, partition: null },
+        options.signal,
+      )) {
+        const row = tuple(record.value);
+        if (row[0] === 'inherited') {
+          yield [String(row[1]), row[2] as NativeIdentity] as const;
+        }
+      }
+    })();
+  }
+
+  async matches(path: string, identity: NativeIdentity): Promise<boolean> {
+    this.head ??= await this.rows.next();
+    while (!this.head.done && compare(this.head.value[0], path) < 0) {
+      this.head = await this.rows.next();
+    }
+    return (
+      !this.head.done &&
+      this.head.value[0] === path &&
+      sameNative(this.head.value[1], identity, true)
+    );
+  }
+
+  async finish(): Promise<void> {
+    while (!(this.head ??= await this.rows.next()).done) {
+      this.head = await this.rows.next();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.rows.return?.();
   }
 }

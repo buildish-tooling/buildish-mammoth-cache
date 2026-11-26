@@ -54,6 +54,11 @@ export const nativeIdentitySchema = z.tuple([
   nanosecondSchema,
   nanosecondSchema.nullable(),
 ]);
+export const inheritedFileSchema = z.tuple([
+  z.literal('inherited'),
+  filePathSchema,
+  nativeIdentitySchema.refine((native) => native[2] === 'file'),
+]);
 export const nativePathSchema = nameSchema.refine((v) => {
   if (v.includes('\0')) {
     return false;
@@ -125,6 +130,7 @@ export const referencePurposes = [
   'installations',
   'observations',
   'install-plan',
+  'sweep-baseline',
   'worker-archive',
   'envelope',
   'generation',

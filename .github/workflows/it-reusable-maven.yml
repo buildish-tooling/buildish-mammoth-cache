@@ -708,6 +708,8 @@ jobs:
         uses: ./actions/github/maven # zizmor: ignore[self-repository] built by it-setup in this workspace
         with:
           base-directory: build/integration-fixtures/warm
+          # This job checks exact reuse of the first published generation.
+          cache-gc-mode: 'off'
           job-mode: standalone
           cache-partitions: ${{ env.IT_CACHE_PARTITIONS }}
           cache-key-prefix: it-maven-distributed-${{ github.run_id }}-

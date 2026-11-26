@@ -171,7 +171,7 @@ export async function completion(home, expected, prepare, inspectBase = false, i
   if (expected === 'no-change') assert.equal(key, restored);
   const generation = JSON.parse(await record(handoff[8][1], 'generation'));
   assert.equal(generation.length, 13);
-  assert.equal(generation[12], null);
+  assert(generation[12] === null || (Number.isSafeInteger(generation[12]) && generation[12] >= 0));
   assert.deepEqual(generation.slice(0, 3), ['generation', 3, 'generation-v3']);
   assert.equal(generation[11], restored);
   assert(Array.isArray(generation[8]) && generation[8].length <= 64);

@@ -151,6 +151,7 @@ export function createMetadataGeneration(
   decision: string,
   entries: GenerationEntry[],
   groups: string[][],
+  lastDependencyGcSweepAt: number | null = null,
 ): MetadataGeneration {
   const g: MetadataGeneration = [
     'generation',
@@ -165,7 +166,7 @@ export function createMetadataGeneration(
     groups,
     '0'.repeat(64),
     'pending',
-    null,
+    lastDependencyGcSweepAt,
   ];
   g[10] = metadataPartitionDecision(g);
   g[11] = recordKey(g[3], g[5], g[6], g[10]);

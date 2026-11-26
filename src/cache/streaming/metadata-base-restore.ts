@@ -224,7 +224,10 @@ export class MetadataBaseRestore {
     store: OwnedStore,
     backend: BaseCacheBackend | null,
     refs: GenerationSelection,
-    options: NativeOperationOptions & { baseSourceMode?: BaseSourceMode },
+    options: NativeOperationOptions & {
+      baseSourceMode?:
+        BaseSourceMode | ((generation: MetadataGeneration | null) => BaseSourceMode | undefined);
+    },
   ): Promise<MetadataBaseRestore> {
     const result = new MetadataBaseRestore(store, Object.freeze({ ...options }));
     const signal = options.signal ?? new AbortController().signal,
@@ -233,6 +236,10 @@ export class MetadataBaseRestore {
       if (backend?.isFeatureAvailable()) {
         await result.selectGeneration(backend, refs, signal, true);
       }
+      const baseSourceMode =
+        typeof options.baseSourceMode === 'function'
+          ? options.baseSourceMode(result.generation)
+          : options.baseSourceMode;
       const offered: { partition: string; root: string }[] = [];
       for (const entry of result.generation?.[8] ?? []) {
         if (entry[0] === 'object') {
@@ -258,7 +265,10 @@ export class MetadataBaseRestore {
       }
       result.context = result.generation
         ? await timed(options, 'shared base validation', () =>
-            MetadataInstallContext.discover(store, result.generation!, offered, options),
+            MetadataInstallContext.discover(store, result.generation!, offered, {
+              ...options,
+              baseSourceMode,
+            }),
           )
         : await MetadataInstallContext.empty(store, options);
       const cold = new Set(result.context.cold.flat()),

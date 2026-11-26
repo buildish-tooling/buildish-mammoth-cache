@@ -46,6 +46,9 @@ export interface MetadataPublicationRequest {
   /** LS4 supplies provenance-checked choices; default is new for nonempty selected sources. */
   readonly choices?: readonly MetadataPublicationChoice[];
   readonly groups?: readonly (readonly string[])[];
+  readonly lastDependencyGcSweepAt?: number | null;
+  /** Sample completion after the required object saves and source returns settle. */
+  readonly sweepCompleted?: boolean;
   readonly onWarning?: (message: string) => void;
   readonly summaries?: PartitionSummaries;
 }
@@ -603,6 +606,7 @@ async function publishAttempt(
         request.decision,
         entries,
         (request.groups ?? groups.groups()).map((g) => [...g]),
+        request.sweepCompleted ? Date.now() : request.lastDependencyGcSweepAt,
       );
       await control(stage + '/record.json', encodeRecord(generation));
       await scratch.flush();

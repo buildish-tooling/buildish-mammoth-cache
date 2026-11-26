@@ -115,6 +115,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
     captured: ObservationIndex | undefined,
     owner: GcSurvivorOwner | undefined;
   const overlay = attempt.handoff.header[13];
+  const sweep = attempt.handoff.publisherSweep;
   let clearProjection: (() => void) | undefined;
   let retirementStarted = false,
     overlayRetired = false;
@@ -177,6 +178,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
             .filter((entry) => entry[4] !== null)
             .map((entry) => store.root.resolve(entry[4]![1])),
           store.root.resolve(attempt.handoff.header[9][2]),
+          ...(sweep ? [store.root.resolve(sweep[3][2])] : []),
         ];
         const message =
           'Cache save skipped: ' +
@@ -331,7 +333,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           const unchanged = prior !== null && same(entries, prior[8]),
             lineage = lineageId(attempt.handoff.header[2]);
           // This exit precedes candidate groups/root plans/layouts/generation and output-only copies.
-          if (unchanged && prior[5] === lineage) {
+          if (!sweep && unchanged && prior[5] === lineage) {
             answer = { outcome: 'no-change', key: prior[11] };
           } else {
             const staged: [string, MetadataPublicationSource][] = [];
@@ -374,6 +376,8 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
                     choices,
                   ]),
                   choices,
+                  lastDependencyGcSweepAt: prior?.[12] ?? null,
+                  sweepCompleted: !!sweep,
                   summaries: request.summaries,
                   ...(unchanged && prior ? { groups: prior[9] } : {}),
                   onWarning: request.onWarning,

@@ -298,8 +298,8 @@ single-writer partition IDs in model order; it contains no member paths.
 
 An upper-layer capture uses identity version 2 to report that lower-only reads can
 be absent from its usage channel. The aggregator consumes the validated contribution
-normally and skips timestamp GC if any accepted worker reports incomplete usage.
-Ordinary captures without sweep evidence continue to write identity version 1.
+normally. This identity supplies no qualified sweep usage, and a forced sweep may
+still proceed. Ordinary captures without sweep evidence write identity version 1.
 
 Version 3 binds a completed ordinary writable capture on a due worker to its exact
 restored generation and current producer context. The cutoff and capture time are

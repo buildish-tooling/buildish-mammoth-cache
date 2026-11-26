@@ -92,12 +92,34 @@ class Mutations {
   live!: InstallParentPhase;
   owned!: InstallParentPhase;
 
-  private constructor(readonly program: InstallProgram) {}
+  private constructor(
+    readonly program: InstallProgram,
+    private readonly inherited?: { scratch: InstallScratch; partitions: ReadonlySet<string> },
+  ) {}
 
-  static async create(program: InstallProgram, admission: InstallAdmission, _signal: AbortSignal) {
-    const self = new Mutations(program),
-      store = program.store,
+  static async create(
+    program: InstallProgram,
+    admission: InstallAdmission,
+    _signal: AbortSignal,
+    inherited?: InstallScratch,
+  ) {
+    const store = program.store,
       budget = program.readers.budget;
+    const partitions =
+      inherited &&
+      new Set(
+        store.codec.options.model.partitions
+          .filter(
+            (p) =>
+              p[3] === 'aggregate' &&
+              admission.frozen.metadata.source(p[0])?.upstream.kind === 'native-metadata',
+          )
+          .map((p) => p[0]),
+      );
+    const self = new Mutations(
+      program,
+      inherited && partitions ? { scratch: inherited, partitions } : undefined,
+    );
     try {
       const prefix = store.prefix + 'mutation/' + randomUUID() + '/';
       await store.makeParents(prefix + 'pending');
@@ -220,8 +242,15 @@ class Mutations {
     if (this.activeBackup) {
       this.activeBackup.incoming = native;
     }
-    await this.move(row[3], row[2], native, source, this.live, signal);
+    const placed = await this.move(row[3], row[2], native, source, this.live, signal);
     await this.program.store.fail('install-source-renamed');
+    if (this.inherited?.partitions.has(reader.partition)) {
+      if (placed[2] === 'file') {
+        await this.inherited.scratch.append(['inherited', row[2], placed]);
+      } else {
+        await reader.recordInheritedFiles(row[4]!, this.inherited.scratch, signal);
+      }
+    }
     if (this.activeBackup) {
       await this.backups.append(['backup', row, this.activeBackup.after!]);
       this.activeBackup = null;
@@ -378,6 +407,7 @@ async function executeInstallAttempt(
     signal?: AbortSignal;
     batchOperations?: number;
     batchBytes?: number;
+    inherited?: InstallScratch;
   } = {},
 ) {
   const signal = options.signal ?? signalDefault(),
@@ -400,7 +430,7 @@ async function executeInstallAttempt(
     if (!canonical((await store.state())!).equals(canonical(admission.initialState))) {
       throw new Error('Install state changed.');
     }
-    mutations = await Mutations.create(program, admission, signal);
+    mutations = await Mutations.create(program, admission, signal, options.inherited);
     for await (const value of program.batches.rows(0, program.batches.position)) {
       signal.throwIfAborted();
       if ((value as readonly Value[])[0] !== 'batch') {
