@@ -32,6 +32,8 @@ imported stable version:
 
 ```text
 provider-snapshot.json
+release-notes/
+  1.2.3.md
 1.2.3/
   _index.md
   ...
@@ -43,6 +45,16 @@ commit. Under the accepted Mammoth Cache contract this is materialized Action co
 M; it is not
 silently substituted with the original reviewed source S. Docs bytes and relative
 links are copied unchanged. Candidate tags are excluded.
+
+Release notes come from the same tag, at
+`buildish-release-tooling/release-notes/X.Y.Z.md` (Release Tooling's
+`release_notes.path_template`). Import copies them to `release-notes/X.Y.Z.md` and sets
+the record's `releaseNotes.path`; Site Pipeline publishes them as the version's
+release-notes page. The only change to the bytes is that one leading top-level
+heading is dropped, because the site generates the page title and older tags still
+contain one. A tag without notes gets no `releaseNotes`. Hidden, withdrawn and
+tombstoned releases never gain notes. Notes should use fully qualified URLs for
+links; repository-relative links do not resolve on the website.
 
 ## Checkout and update
 
@@ -119,7 +131,8 @@ next import/rebuild write when absent. Explicit existing `artifacts: []` is pres
 inventory observation time, not a hosted release event.
 
 Incremental import appends new docs/records, preserves all existing docs and curated
-metadata, and leaves a no-op inventory byte-for-byte unchanged. Both modes reject a
+metadata, and leaves a no-op inventory byte-for-byte unchanged. It also adds missing
+notes to existing records whose tags contain them, without touching their docs. Both modes reject a
 moved selected tag. Unselected records and records without local tags are retained;
 if no tags match an existing inventory, that inventory remains unchanged.
 
@@ -145,14 +158,15 @@ configuration. Normal source builds do not need a released-docs checkout.
 tools/versioned-docs/import.sh --full-rebuild --version 1.2.3
 ```
 
-Rebuild reconstructs selected docs from their immutable tags while preserving complete
+Rebuild reconstructs selected docs and notes from their immutable tags while preserving complete
 existing records, curated URLs, publication/support state, unselected versions, and
 records whose tags are absent. It does not prune history. It replaces manual changes
 committed inside selected managed docs directories, including ignored files there.
 It may restore stored docs for excluded records; Pipeline must still exclude those
 records from ordinary original-doc publication according to their curated state.
 
-Dirty/foreign worktrees, symlinked snapshots or docs, unowned destination directories,
+Dirty/foreign worktrees, symlinked snapshots, docs or notes, unowned destination paths,
+`releaseNotes` paths other than `release-notes/X.Y.Z.md`,
 foreign/duplicate inventory records, and tags without `docs/_index.md` are rejected.
 All selected exports are validated and staged before existing docs are replaced.
 Filesystem failures during final replacements can leave partial changes: preserve

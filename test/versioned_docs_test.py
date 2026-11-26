@@ -86,8 +86,20 @@ def commit(repo: Path) -> None:
     git(repo, "commit", "-m", "fixture")
 
 
-def release(repo: Path, version: str, content: str = "release docs\n") -> None:
+LICENSED_NOTES = "<!--\nLicense header\n-->\n\n# Mammoth Cache {version}\n\nChanges in {version}.\n"
+
+
+def release(
+    repo: Path,
+    version: str,
+    content: str = "release docs\n",
+    notes: str | None = None,
+) -> None:
     (repo / "docs/_index.md").write_text(content)
+    if notes is not None:
+        path = repo / f"buildish-release-tooling/release-notes/{version}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(notes.format(version=version))
     commit(repo)
     git(repo, "tag", f"v{version}")
 
@@ -854,6 +866,117 @@ class VersionedDocsScriptsTest(unittest.TestCase):
                     (outside / "_index.md").read_text(), "external content\n"
                 )
                 self.assertFalse(git(worktree, "status", "--porcelain"))
+
+    def test_release_notes_are_imported_without_title_and_backfilled(self) -> None:
+        source = self.source
+        release(source, "0.1.4", "notes docs\n", LICENSED_NOTES)
+        run(source, "checkout", "--create")
+        worktree = source / "docs/releases"
+        run(source, "import")
+        notes = worktree / "release-notes/0.1.4.md"
+        self.assertEqual(
+            notes.read_text(), "<!--\nLicense header\n-->\n\nChanges in 0.1.4.\n"
+        )
+        snapshot_file = worktree / "provider-snapshot.json"
+        records = {
+            record["version"]: record
+            for record in json.loads(snapshot_file.read_text())["records"]
+        }
+        self.assertEqual(records["0.1.4"]["releaseNotes"], {"path": "release-notes/0.1.4.md"})
+        # Tags without notes keep publishing docs only.
+        self.assertNotIn("releaseNotes", records["0.1.3"])
+        commit(worktree)
+        before = snapshot_file.read_bytes()
+        run(source, "import")
+        self.assertEqual(snapshot_file.read_bytes(), before)
+        self.assertFalse(git(worktree, "status", "--porcelain"))
+
+        # An inventory from before notes support gains them on incremental import.
+        snapshot = json.loads(before)
+        del snapshot["records"][-1]["releaseNotes"]
+        snapshot_file.write_text(json.dumps(snapshot, indent=2) + "\n")
+        notes.unlink()
+        (worktree / "0.1.4/_index.md").write_text("curated docs\n")
+        commit(worktree)
+        run(source, "import")
+        self.assertEqual(notes.read_text().count("Changes in 0.1.4."), 1)
+        self.assertEqual(
+            json.loads(snapshot_file.read_text())["records"][-1]["releaseNotes"],
+            {"path": "release-notes/0.1.4.md"},
+        )
+        # Backfilling notes leaves existing docs alone.
+        self.assertEqual((worktree / "0.1.4/_index.md").read_text(), "curated docs\n")
+
+    def test_release_notes_are_not_added_for_excluded_releases(self) -> None:
+        source = self.source
+        release(source, "0.1.4", "notes docs\n", LICENSED_NOTES)
+        run(source, "checkout", "--create")
+        worktree = source / "docs/releases"
+        run(source, "import", "--version", "0.1.4")
+        snapshot_file = worktree / "provider-snapshot.json"
+        snapshot = json.loads(snapshot_file.read_text())
+        del snapshot["records"][0]["releaseNotes"]
+        (worktree / "release-notes/0.1.4.md").unlink()
+        for state in ("hidden", "withdrawn", "tombstoned"):
+            with self.subTest(state=state):
+                snapshot["records"][0]["publicationState"] = state
+                snapshot_file.write_text(json.dumps(snapshot))
+                commit(worktree)
+                for options in ((), ("--full-rebuild",)):
+                    run(source, "import", "--version", "0.1.4", *options)
+                    self.assertFalse((worktree / "release-notes/0.1.4.md").exists())
+                    record = json.loads(snapshot_file.read_text())["records"][0]
+                    self.assertNotIn("releaseNotes", record)
+                    if git(worktree, "status", "--porcelain"):
+                        commit(worktree)
+
+    def test_unowned_or_symlinked_release_notes_are_refused(self) -> None:
+        source = self.source
+        release(source, "0.1.4", "notes docs\n", LICENSED_NOTES)
+        run(source, "checkout", "--create")
+        worktree = source / "docs/releases"
+        run(source, "import", "--version", "0.1.3")
+        commit(worktree)
+        notes_root = worktree / "release-notes"
+        notes_root.mkdir()
+        (notes_root / "0.1.4.md").write_text("hand-written\n")
+        commit(worktree)
+        result = run(source, "import", "--version", "0.1.4", success=False)
+        self.assertIn("unowned path", result.stderr)
+        self.assertEqual((notes_root / "0.1.4.md").read_text(), "hand-written\n")
+        (notes_root / "0.1.4.md").unlink()
+        outside = self.tmp_path / "outside-notes"
+        outside.write_text("external\n")
+        (notes_root / "0.1.4.md").symlink_to(outside)
+        commit(worktree)
+        result = run(source, "import", "--version", "0.1.4", success=False)
+        self.assertIn("unowned path", result.stderr)
+        self.assertEqual(outside.read_text(), "external\n")
+        self.assertFalse(git(worktree, "status", "--porcelain"))
+
+    def test_unmanaged_release_notes_reference_is_rejected(self) -> None:
+        source = self.source
+        run(source, "checkout", "--create")
+        worktree = source / "docs/releases"
+        run(source, "import")
+        snapshot_file = worktree / "provider-snapshot.json"
+        snapshot = json.loads(snapshot_file.read_text())
+        snapshot["records"][0]["releaseNotes"] = {"path": "elsewhere.md"}
+        snapshot_file.write_text(json.dumps(snapshot))
+        commit(worktree)
+        result = run(source, "import", success=False)
+        self.assertIn("unmanaged release notes", result.stderr)
+
+    def test_strip_title_drops_only_one_leading_heading(self) -> None:
+        strip = load_manage().strip_title
+        self.assertEqual(strip("# Title\n\nBody\n"), "Body\n")
+        self.assertEqual(
+            strip("<!--\nheader\n-->\n\n# Title\n\n## Part\n"),
+            "<!--\nheader\n-->\n\n## Part\n",
+        )
+        for text in ("## Part\n\nBody\n", "Intro\n\n# Later\n", "#hashtag\n"):
+            with self.subTest(text=text):
+                self.assertEqual(strip(text), text)
 
     def test_rejects_symlink_docs_and_wrong_worktree(self) -> None:
         source = self.source

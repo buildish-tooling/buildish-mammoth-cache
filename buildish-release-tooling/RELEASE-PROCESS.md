@@ -353,6 +353,7 @@ For the requested final version `X.Y.Z`, prepare the source changes for review:
    `packages[""].version` in `package-lock.json` to `X.Y.Z`.
 2. Add `buildish-release-tooling/release-notes/X.Y.Z.md`. Use the preceding
    version's notes for structure and describe the changes in this release.
+   Do not add a top-level heading; the release and page titles provide it.
 3. Check that the version fields agree, the note describes the intended release,
    and the lockfile diff contains only the two version fields. Run
    `make release-workflow-test` and review the local diff.

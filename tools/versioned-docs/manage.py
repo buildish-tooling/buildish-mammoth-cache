@@ -36,6 +36,14 @@ PROVIDER = "mammoth-cache-tags"
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 PUBLICATION_STATES = (None, "published", "hidden", "withdrawn", "tombstoned")
+EXCLUDED_STATES = {"hidden", "withdrawn", "tombstoned"}
+# Release Tooling's release_notes.path_template in buildish-release-tooling/release-config.yaml.
+NOTES_SOURCE = "buildish-release-tooling/release-notes/{version}.md"
+NOTES_DIRECTORY = "release-notes"
+
+
+def notes_reference(version: str) -> dict:
+    return {"path": f"{NOTES_DIRECTORY}/{version}.md"}
 
 
 def artifact_identity() -> dict:
@@ -294,6 +302,10 @@ def load_snapshot(path: Path) -> dict:
             raise ValueError("Snapshot contains foreign or duplicate records")
         if record.get("publicationState") not in PUBLICATION_STATES:
             raise ValueError("Snapshot contains an invalid publication state")
+        if "releaseNotes" in record and record["releaseNotes"] != notes_reference(
+            version
+        ):
+            raise ValueError(f"Snapshot contains unmanaged release notes for {version}")
         observed = record.get("publicationState")
         curated = curated_states.get(version)
         if observed is not None and curated is not None and observed != curated:
@@ -342,13 +354,40 @@ def export_docs(source: Path, tag: str, destination: Path) -> None:
     for relative, blob in entries:
         output = destination / relative
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(
-            subprocess.run(
-                ["git", "-C", str(source), "cat-file", "blob", blob],
-                check=True,
-                capture_output=True,
-            ).stdout
-        )
+        output.write_bytes(git_blob(source, blob))
+
+
+def git_blob(source: Path, blob: str) -> bytes:
+    return subprocess.run(
+        ["git", "-C", str(source), "cat-file", "blob", blob],
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def tagged_notes_blob(source: Path, commit: str, version: str) -> str | None:
+    path = NOTES_SOURCE.format(version=version)
+    listing = git(source, "ls-tree", commit, "--", path)
+    if not listing:
+        return None
+    metadata, _path = listing.split("\t", 1)
+    mode, kind, blob = metadata.split()
+    if mode not in {"100644", "100755"} or kind != "blob":
+        raise ValueError(f"Unsupported release notes entry in {commit}: {path}")
+    return blob
+
+
+def strip_title(text: str) -> str:
+    """Drop one leading top-level heading; the site generates the page title."""
+    prefix = ""
+    if text.startswith("<!--") and "-->" in text:
+        end = text.index("-->") + 3
+        prefix, text = text[:end], text[end:]
+    body = text.lstrip("\n")
+    first, _, rest = body.partition("\n")
+    if not first.startswith("# "):
+        return prefix + text
+    return prefix + text[: len(text) - len(body)] + rest.lstrip("\n")
 
 
 def import_docs(args: argparse.Namespace) -> None:
@@ -384,6 +423,10 @@ def import_docs(args: argparse.Namespace) -> None:
     previous_artifacts = snapshot.get("artifacts", [artifact_identity()])
     artifacts = previous_artifacts
     exports = []
+    notes_exports = []
+    notes_root = worktree / NOTES_DIRECTORY
+    if notes_root.is_symlink() or (notes_root.exists() and not notes_root.is_dir()):
+        raise ValueError(f"Expected managed directory: {notes_root}")
     for version in selected:
         tag = f"v{version}"
         commit = git(
@@ -414,13 +457,31 @@ def import_docs(args: argparse.Namespace) -> None:
         }
         if args.post_release:
             record, artifacts = published_metadata(record, artifacts)
+        notes_target = notes_root / f"{version}.md"
+        if notes_target.is_symlink() or (
+            notes_target.exists()
+            and (not notes_target.is_file() or "releaseNotes" not in record)
+        ):
+            raise ValueError(f"Refusing to replace unowned path: {notes_target}")
+        excluded = (
+            curated_states.get(version) or record.get("publicationState")
+        ) in EXCLUDED_STATES
+        # Rebuilt docs refresh their notes; existing records gain missing notes.
+        if not excluded and (
+            args.full_rebuild
+            or not old
+            or "releaseNotes" not in record
+            or not notes_target.is_file()
+        ):
+            blob = tagged_notes_blob(args.source, commit, version)
+            if blob is not None:
+                notes_exports.append((version, blob))
+                record = {**record, "releaseNotes": notes_reference(version)}
         records[version] = record
         if old and not args.full_rebuild:
-            if (curated_states.get(version) or old.get("publicationState")) not in {
-                "hidden",
-                "withdrawn",
-                "tombstoned",
-            } and not (worktree / version / "_index.md").is_file():
+            if (
+                curated_states.get(version) or old.get("publicationState")
+            ) not in EXCLUDED_STATES and not (worktree / version / "_index.md").is_file():
                 raise ValueError(
                     f"Missing docs for {version}; use --full-rebuild to restore"
                 )
@@ -428,6 +489,7 @@ def import_docs(args: argparse.Namespace) -> None:
         exports.append((version, commit))
     if (
         not exports
+        and not notes_exports
         and not args.full_rebuild
         and records == previous
         and artifacts == previous_artifacts
@@ -441,6 +503,11 @@ def import_docs(args: argparse.Namespace) -> None:
         staging = Path(temp)
         for version, commit in exports:
             export_docs(args.source, commit, staging / version)
+        for version, blob in notes_exports:
+            text = git_blob(args.source, blob).decode("utf-8")
+            output = staging / NOTES_DIRECTORY / f"{version}.md"
+            output.parent.mkdir(exist_ok=True)
+            output.write_text(strip_title(text), encoding="utf-8")
         snapshot = {
             **snapshot,
             "schemaVersion": 1,
@@ -471,6 +538,11 @@ def import_docs(args: argparse.Namespace) -> None:
                     shutil.rmtree(worktree / version)
         for version, _commit in exports:
             (staging / version).rename(worktree / version)
+        for version, _blob in notes_exports:
+            notes_root.mkdir(exist_ok=True)
+            (staging / NOTES_DIRECTORY / f"{version}.md").replace(
+                notes_root / f"{version}.md"
+            )
         staged_snapshot.replace(snapshot_path)
     action = (
         f"Imported {len(exports)} version(s) into"
