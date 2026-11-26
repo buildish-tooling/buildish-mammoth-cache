@@ -6,7 +6,7 @@
       "type": "git-tags",
       "displayName": "Mammoth Cache Git tags",
       "baseUrl": "https://github.com/buildish-tooling/buildish-mammoth-cache",
-      "fetchedAt": "2026-11-26T11:06:44.267509+00:00"
+      "fetchedAt": "2026-11-26T13:10:53.974166+00:00"
     }
   ],
   "records": [
@@ -27,6 +27,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "9794ba64b65fcdc6b12999f13de382aeb43fe5bf"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.1.0.md"
       }
     },
     {
@@ -46,6 +49,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "36deaad19da243baac8f1f089d7608c78da6d428"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.1.1.md"
       }
     },
     {
@@ -65,6 +71,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "48994f88da02c380b39e717b8fa7aee7f57ce446"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.1.2.md"
       }
     },
     {
@@ -84,6 +93,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "2252f3d8421eb0fe15cbb8a00b9c42531a425bf7"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.2.0.md"
       }
     },
     {
@@ -103,6 +115,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "764097ac7b840113b968f23b0966bb8386ce1e8f"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.2.1.md"
       }
     },
     {
@@ -122,6 +137,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "00147da2c35e460d53e6b9d10be6bba35f4cf98f"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.2.2.md"
       }
     },
     {
@@ -141,6 +159,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "c13658e579d8517d7c019e2f274ebf29f4ec408a"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.3.0.md"
       }
     },
     {
@@ -160,6 +181,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "fc2e719aa94f597936a9a53f81f183e0cf1ad404"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.4.0.md"
       }
     },
     {
@@ -179,6 +203,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "59f3b1176cb9d403befca55425eea5932219e67a"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.4.1.md"
       }
     },
     {
@@ -198,6 +225,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "e9e2d45d530004e51accb7c42253f67c7b355e1a"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.4.2.md"
       }
     },
     {
@@ -217,6 +247,9 @@
         "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
         "root": "docs",
         "ref": "cb5326d4717bc6154156e7ddcce953a607c856cc"
+      },
+      "releaseNotes": {
+        "path": "release-notes/0.5.0.md"
       }
     }
   ],
