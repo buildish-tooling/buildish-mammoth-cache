@@ -16,9 +16,12 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
+import { linuxOverlayMount } from '../../src/cache/streaming/overlay-mount';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { beforeAll, afterAll, it, expect } from 'vitest';
+import { beforeAll, afterAll, it, expect, vi } from 'vitest';
+import * as nativeWalk from '../../src/cache/streaming/native-walk';
 import { streamingIntegrationJob } from '../support/streaming-integration';
 import { nativeCacheBackend, cleanupBaseFixtures } from '../cache/streaming/native-cache-fixture';
 import { memoryArtifacts } from '../cache/streaming/memory-artifact-fixture';
@@ -107,7 +110,11 @@ async function cloneSeed(name: string) {
   await cp(path.join(root, 'seed'), path.join(root, name), { recursive: true });
 }
 
-function scenario(scope: string, inputs: Record<string, string> = {}) {
+function scenario(
+  scope: string,
+  inputs: Record<string, string> = {},
+  overlayMount?: ReturnType<typeof linuxOverlayMount>,
+) {
   const artifacts = memoryArtifacts();
   function action(
     local: string,
@@ -124,10 +131,12 @@ function scenario(scope: string, inputs: Record<string, string> = {}) {
       cache: cache.backend,
       artifacts: artifacts.api,
       now,
+      overlayMount,
     });
   }
   return {
     action,
+    artifacts,
     async worker(source: string, name: string) {
       const job = await action('worker-home-' + scope + '-' + name, name, {
         'job-mode': 'distributed-worker',
@@ -146,6 +155,166 @@ function scenario(scope: string, inputs: Record<string, string> = {}) {
     },
   };
 }
+
+it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1').each([
+  [4, true],
+  [40, true],
+  [4, false],
+])(
+  'publishes complete touched coordinates with %i inherited versions and overlay-fs=%s',
+  async (width, useOverlay) => {
+    const mount = linuxOverlayMount()!;
+    const suffix = width + '-' + useOverlay;
+    const f = scenario('overlay-' + suffix, { 'overlay-fs': String(useOverlay) }, mount);
+    const seedLocal = 'overlay-seed-' + suffix;
+    const workerLocal = 'overlay-worker-' + suffix;
+    const readerLocal = 'overlay-reader-' + suffix;
+    const producer = await f.action(seedLocal, 'producer');
+    await producer.prepare();
+    await cloneSeed(seedLocal);
+    await publish('remote-a', 'example', '1.1', 'second inherited artifact');
+    expect(await resolve(seedLocal, 'test:example:jar:1.1')).toBe('second inherited artifact');
+    const unchanged = 'repository/test/example/2.0/example-2.0.jar';
+    for (let i = 0; i < width; i++) {
+      const member = path.join(producer.home, unchanged.replaceAll('2.0', '2.' + i));
+      await mkdir(path.dirname(member), { recursive: true });
+      await writeFile(member, 'unchanged inherited version');
+    }
+    const wrapper = 'wrapper/dists/wrapper.zip';
+    await mkdir(path.dirname(path.join(producer.home, wrapper)), { recursive: true });
+    await writeFile(path.join(producer.home, wrapper), 'unchanged inherited wrapper');
+    expect((await producer.post()).outcome).toBe('published');
+
+    const worker = await f.action(workerLocal, 'worker', { 'job-mode': 'distributed-worker' });
+    const target = path.join(worker.home, 'repository');
+    await worker.prepare();
+    expect(worker.outputs['base-cache-restore-status']).toBe('current-lineage-hit');
+    expect(!!(await mount.inspect(target))).toBe(useOverlay);
+    await publish('remote-a', 'example', '1.0', 'new classifier payload', '-overlay');
+    await publish('remote-a', 'example', '1.1', 'second classifier payload', '-overlay');
+    const classifier = 'test:example:jar:overlay:1.0';
+    const secondClassifier = 'test:example:jar:overlay:1.1';
+    expect(await resolve(workerLocal, classifier)).toBe('new classifier payload');
+    expect(await resolve(workerLocal, secondClassifier)).toBe('second classifier payload');
+    const origin = (await readFile(path.join(worker.home, marker), 'utf8'))
+      .split(/\r?\n/u)
+      .find((line) => line.startsWith('example-1.0.jar>'))!;
+    await writeFile(path.join(worker.home, unchanged + '.lastUpdated'), 'transient only');
+    const lastFile = unchanged.replaceAll('2.0', '2.1');
+    const removedDirectoryMember = unchanged.replaceAll('2.0', '2.2');
+    await rm(path.join(worker.home, lastFile));
+    await rm(path.dirname(path.join(worker.home, removedDirectoryMember)), { recursive: true });
+    const directories: string[] = [];
+    const listings: string[] = [];
+    const walk = nativeWalk.walkNative;
+    const spy = vi.spyOn(nativeWalk, 'walkNative').mockImplementation(async function* (...args) {
+      const list = args[2].listDirectory;
+      if (list) {
+        args[2] = {
+          ...args[2],
+          listDirectory(relative, open) {
+            return list(relative, (source) => {
+              listings.push(relative);
+              return open(source);
+            });
+          },
+        };
+      }
+      for await (const event of walk(...args)) {
+        if (
+          args[2].listDirectory &&
+          event.tag === 'directory-open' &&
+          event.path.startsWith('repository/')
+        ) {
+          directories.push(event.path);
+        }
+        yield event;
+      }
+    });
+    try {
+      expect((await worker.post()).outcome).toBe('worker-uploaded');
+    } finally {
+      spy.mockRestore();
+    }
+    if (useOverlay) {
+      expect(directories.filter((entry) => entry.startsWith('repository/test'))).toEqual([
+        'repository/test',
+        'repository/test/example',
+        'repository/test/example/1.0',
+        'repository/test/example/1.1',
+        'repository/test/example/2.0',
+        'repository/test/example/2.1',
+      ]);
+      expect(
+        listings.filter((entry) => entry === 'repository' || entry.startsWith('repository/test')),
+      ).toEqual([
+        'repository',
+        'repository/test',
+        'repository/test/example',
+        'repository/test/example/1.0',
+        'repository/test/example/1.0',
+        'repository/test/example/1.1',
+        'repository/test/example/1.1',
+        'repository/test/example/2.0',
+        'repository/test/example/2.1',
+      ]);
+    }
+    expect(await mount.inspect(target)).toBeNull();
+    const classifierPath = path.join(
+      worker.home,
+      'repository/test/example/1.0/example-1.0-overlay.jar',
+    );
+    if (useOverlay) {
+      await expect(readFile(classifierPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } else {
+      expect(await readFile(classifierPath, 'utf8')).toBe('new classifier payload');
+    }
+
+    const archive = gunzipSync([...f.artifacts.objects.values()][0].bytes);
+    expect(archive.includes('new classifier payload')).toBe(true);
+    expect(origin).toContain('origin-a');
+    expect(archive.includes(origin)).toBe(true);
+    expect(archive.includes('unchanged inherited version')).toBe(false);
+    expect(archive.includes(unchanged)).toBe(false);
+    expect(archive.includes('unchanged inherited wrapper')).toBe(false);
+    expect(archive.includes('transient only')).toBe(false);
+    if (useOverlay) {
+      expect(archive.includes('repository/test/example/2.1')).toBe(false);
+      expect(archive.includes('repository/test/example/2.2')).toBe(false);
+    }
+
+    const aggregator = await f.action('overlay-aggregator-' + suffix, 'aggregator', {
+      'job-mode': 'distributed-aggregator',
+      'dependent-jobs': 'worker',
+      'cache-gc-mode': 'timestamp',
+    });
+    await aggregator.prepare();
+    expect(aggregator.outputs['dependent-delta-artifact-count']).toBe('1');
+    expect((await aggregator.post()).outcome).toBe('published');
+    const reader = await f.action(readerLocal, 'reader', { 'read-only': 'true' });
+    await reader.prepare();
+    for (const member of [lastFile, removedDirectoryMember]) {
+      expect(await readFile(path.join(reader.home, member), 'utf8')).toBe(
+        'unchanged inherited version',
+      );
+    }
+    expect(await resolve(readerLocal, release, { offline: true })).toBe('A');
+    expect(await resolve(readerLocal, classifier, { offline: true })).toBe(
+      'new classifier payload',
+    );
+    expect(await resolve(readerLocal, secondClassifier, { offline: true })).toBe(
+      'second classifier payload',
+    );
+    await expect(
+      resolve(readerLocal, classifier, {
+        offline: true,
+        id: 'origin-b',
+        remote: 'remote-b',
+      }),
+    ).rejects.toThrow(/offline mode/u);
+    expect((await reader.post()).outcome).toBe('read-only');
+  },
+);
 
 it.each([false, true])(
   'matches native origin resolution through streaming partition-object archives (exclude markers: %s)',

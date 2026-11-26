@@ -14,56 +14,41 @@
  * limitations under the License.
  */
 
-import { cacheInvocationSeedPrefix } from '../metadata-paths';
+import type { DependencyLayerPolicy } from '../lifecycle-types';
+import { cacheInvocationSeedPrefix } from '../../cache/metadata-paths';
 import { randomUUID } from 'node:crypto';
 import { rename, mkdir } from 'node:fs/promises';
-import { z } from 'zod';
-import { equal } from './encoding';
-import { nativeIdentitySchema, ownedPathSchema, type LocalOptions } from './local-schema';
-import { keySchema } from './native-records';
+import { equal } from '../../cache/streaming/encoding';
+import type { LocalOptions } from '../../cache/streaming/local-schema';
+import {
+  dependencyLayerSchema,
+  type DependencyLayer,
+} from '../../cache/streaming/dependency-layer-descriptor';
 import {
   IndexDirectories,
   indexedEntries,
   nodeIsIntact,
   nodeMask,
   partitionBit,
-} from './install-index';
-import { InstallParentPhase } from './install-parent-phase';
-import { sameNative, sameRename, sameObject, type NativeIdentity } from './native';
-import { retireOwnedDirectory } from './owned-retirement';
-import { ownsLocalSnapshot, type ResolvedModel } from './model';
-import type { MetadataBaseRestore } from './metadata-base-restore';
-import type { IndexedMetadataInput } from './metadata-install-context';
-import type { OwnedStore } from './owned-store';
-import type { NativeOperationOptions } from './native-operation';
+} from '../../cache/streaming/install-index';
+import { InstallParentPhase } from '../../cache/streaming/install-parent-phase';
+import {
+  sameNative,
+  sameRename,
+  sameObject,
+  type NativeIdentity,
+} from '../../cache/streaming/native';
+import { retireOwnedDirectory } from '../../cache/streaming/owned-retirement';
+import { ownsLocalSnapshot, type ResolvedModel } from '../../cache/streaming/model';
+import type { MetadataBaseRestore } from '../../cache/streaming/metadata-base-restore';
+import type { IndexedMetadataInput } from '../../cache/streaming/metadata-install-context';
+import type { OwnedStore } from '../../cache/streaming/owned-store';
+import type { NativeOperationOptions } from '../../cache/streaming/native-operation';
 
 export const GRADLE_MODULES = 'caches/modules-2';
 export const GRADLE_ARTIFACTS = GRADLE_MODULES + '/files-2.1';
 
 const METADATA = /^metadata-[^/]+$/u;
-
-export function gradleSeedSchema(invocation: string) {
-  const prefix = cacheInvocationSeedPrefix(invocation);
-  return z.tuple([
-    z.literal('gradle-layer'),
-    z.literal(1),
-    ownedPathSchema(invocation).refine(
-      (p) =>
-        p.startsWith(prefix) &&
-        /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
-          p.slice(prefix.length),
-        ),
-    ),
-    nativeIdentitySchema.refine((n) => n[2] === 'directory'),
-    keySchema,
-    z.string().min(1),
-    z.string().min(1),
-    // Accept the legacy handoff value. New handoffs leave this slot unset.
-    z.literal('9.6.1').nullable(),
-  ]);
-}
-
-export type GradleSeedDescriptor = z.infer<ReturnType<typeof gradleSeedSchema>>;
 
 export function gradleLayerCandidate(
   model: ResolvedModel,
@@ -80,15 +65,15 @@ export function gradleLayerCandidate(
     !model.partitions.some((p) => ownsLocalSnapshot(p, options))
   );
 }
-export function gradleSeedPath(store: OwnedStore, descriptor: GradleSeedDescriptor): string {
+export function gradleSeedPath(store: OwnedStore, descriptor: DependencyLayer): string {
   return store.root.resolve(descriptor[2] + '/caches');
 }
 export function checkGradleSeed(
   store: OwnedStore,
-  descriptor: GradleSeedDescriptor,
+  descriptor: DependencyLayer,
   key: string | null,
 ): void {
-  gradleSeedSchema(store.codec.options.invocation).parse(descriptor);
+  dependencyLayerSchema(store.codec.options.invocation).parse(descriptor);
   if (
     !gradleLayerCandidate(store.codec.options.model, store.codec.options, 'none') ||
     descriptor[4] !== key
@@ -107,9 +92,9 @@ export function checkGradleSeed(
 }
 export async function validateGradleSeedOwner(
   store: OwnedStore,
-  descriptor: GradleSeedDescriptor,
+  descriptor: DependencyLayer,
 ): Promise<void> {
-  gradleSeedSchema(store.codec.options.invocation).parse(descriptor);
+  dependencyLayerSchema(store.codec.options.invocation).parse(descriptor);
   const actual = await store.root.stat(descriptor[2]);
   if (
     !actual ||
@@ -124,7 +109,7 @@ export async function validateGradleSeedOwner(
 }
 export async function retireGradleSeed(
   store: OwnedStore,
-  descriptor: GradleSeedDescriptor,
+  descriptor: DependencyLayer,
   options: NativeOperationOptions,
 ): Promise<void> {
   const actual = await store.root.stat(descriptor[2]);
@@ -251,13 +236,13 @@ export async function installGradleSeed(
   store: OwnedStore,
   restored: MetadataBaseRestore,
   options: NativeOperationOptions,
-): Promise<GradleSeedDescriptor | undefined> {
+): Promise<DependencyLayer | undefined> {
   const selected = await gradleDependencySources(store, restored);
   if (!selected) {
     return undefined;
   }
   const root = cacheInvocationSeedPrefix(store.codec.options.invocation) + randomUUID();
-  let descriptor: GradleSeedDescriptor | undefined;
+  let descriptor: DependencyLayer | undefined;
   const phases: InstallParentPhase[] = [],
     indexes: IndexDirectories[] = [];
   try {
@@ -375,3 +360,25 @@ export async function installGradleSeed(
     }
   }
 }
+
+export const gradleDependencyLayer: DependencyLayerPolicy = {
+  assertInputs(model, owner, cleanup, inputs) {
+    if (gradleLayerCandidate(model, owner, cleanup) && inputs.existingDependencyLayer?.length) {
+      throw new Error(
+        'GRADLE_RO_DEP_CACHE is already set. Remove the conflicting value or disable dependency-cache-layer.',
+      );
+    }
+  },
+  async prepare(store, restored, cleanup, inputs, options) {
+    if (
+      gradleLayerCandidate(store.codec.options.model, store.codec.options, cleanup) &&
+      inputs.hasWrapper?.()
+    ) {
+      return installGradleSeed(store, restored, options);
+    }
+  },
+  check: checkGradleSeed,
+  verify: validateGradleSeedOwner,
+  retire: retireGradleSeed,
+  path: gradleSeedPath,
+};

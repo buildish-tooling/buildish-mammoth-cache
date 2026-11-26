@@ -15,9 +15,7 @@
  */
 
 import { ExclusiveWindow } from './quiescence';
-import { retireGradleSeed, gradleSeedPath, validateGradleSeedOwner } from './gradle-layer';
 import { projectOverlay, retireOverlay, verifyOverlay, type OverlayCapture } from './overlay';
-import { gradleOverlayCapture } from './gradle-overlay';
 import { timed } from '../../util/timing';
 import { OpenedInvocation, type InvocationAnchor } from './invocation';
 import type { LifecycleOptions } from './lifecycle-options';
@@ -53,6 +51,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     store = attempt.store;
   let captured: ObservationIndex | undefined, owner: GcSurvivorOwner | undefined;
   const [, , , , , , , , , , , , seed, overlay] = attempt.handoff.header;
+  const dependencyLayer = attempt.layerLifecycle?.dependencyLayer;
   let overlayCapture: OverlayCapture | undefined;
   let clearProjection: (() => void) | undefined;
   let overlayRetired = false;
@@ -62,7 +61,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
   const clearCapture = () => {
     clearProjection?.();
     clearProjection = undefined;
-    overlayCapture?.dispose();
+    overlayCapture?.dispose?.();
     overlayCapture = undefined;
   };
   const finish = async (terminal: Parameters<PostAttempt['finish']>[0]) => {
@@ -75,7 +74,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     }
     if (seed && !seedSettled) {
       attempt.assert();
-      await retireGradleSeed(store, seed, request);
+      await dependencyLayer!.retire(store, seed, request);
       seedSettled = true;
     }
     await attempt.finish(terminal);
@@ -102,7 +101,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     } else {
       if (seed || overlay) {
         if (seed) {
-          await validateGradleSeedOwner(store, seed);
+          await dependencyLayer!.verify(store, seed);
         }
         if (overlay) {
           if (!request.overlayMount) {
@@ -118,7 +117,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
           throw new Error(
             'Layer consumers could not settle; ' +
               (seed
-                ? 'seed retained at ' + gradleSeedPath(store, seed)
+                ? 'seed retained at ' + dependencyLayer!.path(store, seed)
                 : 'OverlayFS state retained at ' + store.root.resolve(overlay![2])) +
               ': ' +
               gate.message,
@@ -132,13 +131,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
       await attempt.guard();
       if (overlay) {
         await verifyOverlay(store, overlay, request.overlayMount!);
-        overlayCapture = await gradleOverlayCapture(
-          store,
-          overlay,
-          request.budget,
-          request.maxDirectoryEntries,
-          attempt.signal,
-        );
+        overlayCapture = await attempt.layerLifecycle!.overlay!.capture(store, overlay, options);
         clearProjection = projectOverlay(store, overlay, overlayCapture.useMerged);
       }
       const observation = await timed(options, 'observation capture and index construction', () =>
@@ -237,17 +230,17 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
     if (settledConsumers) {
       try {
         attempt.assert();
-        await retireGradleSeed(store, seed, request);
+        await dependencyLayer!.retire(store, seed, request);
         seedSettled = true;
       } catch (cleanup) {
         failure = new AggregateError(
           [failure, cleanup],
-          'Gradle seed retained at ' + gradleSeedPath(store, seed),
+          'Gradle seed retained at ' + dependencyLayer!.path(store, seed),
         );
       }
     }
     if (!seedSettled) {
-      const message = 'Gradle seed retained at ' + gradleSeedPath(store, seed);
+      const message = 'Gradle seed retained at ' + dependencyLayer!.path(store, seed);
       try {
         request.onWarning?.(message);
       } catch (report) {
@@ -304,7 +297,8 @@ export async function postFailedPrepareLayer(
   const attempt = await PostAttempt.open(opened, input);
   const store = attempt.store,
     seed = attempt.handoff.header[12],
-    overlay = attempt.handoff.header[13];
+    overlay = attempt.handoff.header[13],
+    dependencyLayer = attempt.layerLifecycle?.dependencyLayer;
   try {
     if (
       (!seed && !overlay) ||
@@ -320,7 +314,7 @@ export async function postFailedPrepareLayer(
       return;
     }
     if (seed) {
-      await validateGradleSeedOwner(store, seed);
+      await dependencyLayer!.verify(store, seed);
     } else if (overlay && input.overlayMount) {
       await verifyOverlay(store, overlay, input.overlayMount);
     } else {
@@ -337,7 +331,7 @@ export async function postFailedPrepareLayer(
     await input.removeHooks();
     await attempt.guard();
     if (seed) {
-      await retireGradleSeed(store, seed, input);
+      await dependencyLayer!.retire(store, seed, input);
     } else {
       await retireOverlay(store, overlay!, input.overlayMount!);
     }
@@ -345,7 +339,7 @@ export async function postFailedPrepareLayer(
   } catch (error) {
     if (seed || overlay) {
       const message = seed
-        ? 'Failed-prepare Gradle seed retained at ' + gradleSeedPath(store, seed)
+        ? 'Failed-prepare Gradle seed retained at ' + dependencyLayer!.path(store, seed)
         : 'Failed-prepare OverlayFS state retained at ' + store.root.resolve(overlay![2]);
       const errors = [error];
       try {

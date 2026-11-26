@@ -26,7 +26,7 @@ const defaultResolver: LifecycleResolver = async (tool) => {
   }
   throw new Error('Unsupported build-tool lifecycle.');
 };
-/** Call only after binding the owner; a next-invocation tool cannot choose recovery. */
+/** Prepare selects from its validated context. Reopening must select from the bound owner. */
 export async function resolveLifecycle(
   tool: Context[7],
   resolver = defaultResolver,

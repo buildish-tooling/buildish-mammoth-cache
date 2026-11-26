@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { linuxOverlayMount } from '../../../cache/streaming/overlay-mount';
 import { createGitHubHost } from '../host';
 import { gitHubStreamingFactories } from '../streaming';
 import { runStreamingPost } from '../../../phases/streaming/post';
@@ -21,6 +22,9 @@ import { runStreamingPost } from '../../../phases/streaming/post';
 const runtimeHost = createGitHubHost();
 runStreamingPost({
   ...gitHubStreamingFactories(),
+  overlayMount: linuxOverlayMount(
+    process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.GITHUB_ACTIONS === 'true',
+  ),
   runtimeHost,
   // Dedicated job root/completed consumers; recovery retains its own cleanup lifetime.
   assertCurrent: (): undefined => {},

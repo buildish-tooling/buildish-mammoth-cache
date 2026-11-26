@@ -22,7 +22,6 @@ import { resolveCacheModel, lineageId } from '../../cache/streaming/model';
 import { lineagePrefix } from '../../cache/streaming/native-records';
 import { contextSchema } from '../../cache/streaming/schema';
 import { WorkingBudget } from '../../cache/streaming/tree-state';
-import { gradleSeedPath, retireGradleSeed } from '../../cache/streaming/gradle-layer';
 import { prepareStreaming, type StreamingPrepareResult } from '../../cache/streaming/prepare';
 import { reconcileDisabledRoot } from '../../cache/streaming/passive-lifecycle';
 import { disabledInvocationAnchor, encodeInvocationAnchor } from '../../cache/streaming/invocation';
@@ -172,9 +171,9 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       cacheBackend: d.cacheBackend,
       artifactBackend: d.artifactBackend,
       provision,
-      existingGradleLayer: host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE'),
+      existingDependencyLayer: host.getEnvironmentVariable('GRADLE_RO_DEP_CACHE'),
       overlayFs: config.overlayFs,
-      hasGradleWrapper: () => !!provisioning?.items.length,
+      hasWrapper: () => !!provisioning?.items.length,
       installHooks: async (store, lifecycle, layered) => {
         await lifecycle.prepareCapture(store, ci, () => adapter.installBuildHooks(ci), layered);
       },
@@ -182,7 +181,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
     layerPreparation = result;
     if (result.overlay) {
       host.saveState(STREAMING_LAYER_ADVERTISEMENT_STATE, result.store.codec.options.invocation);
-      host.info('Gradle user home OverlayFS is active.');
+      host.info('OverlayFS is active at ' + result.store.root.resolve(result.overlay[10]) + '.');
     }
     for (const warning of provisioning?.warnings ?? []) {
       host.warning(warning);
@@ -204,12 +203,12 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       result.restoreStatus,
     );
     await prepareSummary(d, result.restoreStatus);
-    if (tool === 'gradle' && !result.gradleSeed) {
+    if (tool === 'gradle' && !result.dependencyLayer) {
       host.setOutput('gradle-ro-dep-cache', '');
     }
     return result;
   } catch (error) {
-    const failure = layerPreparation?.gradleSeed
+    const failure = layerPreparation?.dependencyLayer
       ? await cleanupFailedLayer(d, layerPreparation, false, error)
       : error;
     host.saveState(JOB_PREPARE_FAILED_STATE, 'true');
@@ -270,10 +269,11 @@ async function cleanupFailedLayer(
   advertised: boolean,
   e: unknown,
 ): Promise<unknown> {
-  if (!prepared.gradleSeed) {
+  if (!prepared.dependencyLayer) {
     return e;
   }
-  const { store, gradleSeed: seed } = prepared;
+  const { store, dependencyLayer: seed } = prepared;
+  const layer = prepared.lifecycle.dependencyLayer!;
   const options = {
     ...d,
     budget: d.budget ?? new WorkingBudget(),
@@ -284,20 +284,20 @@ async function cleanupFailedLayer(
     try {
       d.runtimeHost.warning(
         'Prepare failed; advertised Gradle seed and hooks retained until owning post at ' +
-          gradleSeedPath(store, seed),
+          layer.path(store, seed),
       );
     } catch (report) {
       return new AggregateError(
         [e, report],
-        'Advertised Gradle seed retained until owning post at ' + gradleSeedPath(store, seed),
+        'Advertised Gradle seed retained until owning post at ' + layer.path(store, seed),
       );
     }
     return e;
   }
   try {
-    await retireGradleSeed(store, seed, options);
+    await layer.retire(store, seed, options);
   } catch (cleanup) {
-    const message = 'Prepare failed; Gradle seed retained at ' + gradleSeedPath(store, seed);
+    const message = 'Prepare failed; Gradle seed retained at ' + layer.path(store, seed);
     const errors = [e, cleanup];
     try {
       d.runtimeHost.warning(message);
@@ -325,8 +325,8 @@ export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
       (result) => ('restoreStatus' in result ? result.restoreStatus : result.outcome),
     );
     // Host output/environment are the last operations, after all failure-prone reporting.
-    if ('gradleSeed' in result && result.gradleSeed) {
-      const path = gradleSeedPath(result.store, result.gradleSeed);
+    if ('dependencyLayer' in result && result.dependencyLayer) {
+      const path = result.lifecycle.dependencyLayer!.path(result.store, result.dependencyLayer);
       const assertActivation = () => {
         d.signal?.throwIfAborted();
         if (d.assertCurrent() !== undefined) {
@@ -362,7 +362,7 @@ export async function runStreamingPrepare(input: StreamingPrepareDependencies) {
     return result;
   } catch (error) {
     const failure =
-      prepared && 'gradleSeed' in prepared && prepared.gradleSeed
+      prepared && 'dependencyLayer' in prepared && prepared.dependencyLayer
         ? await cleanupFailedLayer(d, prepared, advertised, error)
         : error;
     if (prepared) {

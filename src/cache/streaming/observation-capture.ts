@@ -25,7 +25,7 @@ import { walkNative, walkWork, type NativeChild, type WalkWork } from './native-
 import { type NativeIdentity } from './native';
 import { createCacheGlobMatcher } from '../glob';
 import { isCacheMetadataPath } from '../metadata-paths';
-import { isOverlayWhiteout, type OverlayCapture } from './overlay';
+import { isOverlayWhiteout, withinOverlay, type OverlayCapture } from './overlay';
 import { isMavenTransientFile } from '../maven-repository';
 import { workspaceKind } from '../immutable-workspaces';
 import { UnitMarkers } from './unit-markers';
@@ -346,6 +346,7 @@ async function capture(
       parent.directSingleWriter ||= model.partitions[pi][3] === 'single-writer';
     }
   };
+  const overlay = options.overlayCapture ? options.attempt.handoff.header[13] : undefined;
   const walk = walkNative(
     store.root,
     '',
@@ -367,9 +368,12 @@ async function capture(
           : undefined,
       inspectChild: child,
       extraDirectories: options.overlayCapture?.extraDirectories,
-      ignoreEntry: options.overlayCapture
+      listDirectory: options.overlayCapture?.listDirectory,
+      ignoreEntry: overlay
         ? async (path, raw) =>
-            String(raw.dev) === store.root.binding[3] && (await isOverlayWhiteout(store, path, raw))
+            withinOverlay(overlay[10], path) &&
+            String(raw.dev) === store.root.binding[3] &&
+            (await isOverlayWhiteout(store, path, raw))
         : undefined,
     },
     work,
@@ -429,7 +433,7 @@ async function capture(
           localSnapshot = ownsLocalSnapshot(p, codec.options);
         const act: Activity =
           localSnapshot ||
-          options.overlayCapture ||
+          (overlay && withinOverlay(overlay[10], e.path)) ||
           imported === 'upsert' ||
           BigInt(e.identity[8]) >= cutoff ||
           BigInt(e.identity[9]) >= cutoff
@@ -471,6 +475,9 @@ async function capture(
       } else {
         const frame = frames.pop()!;
         try {
+          if (!frame.files && options.overlayCapture?.omitEmptyDirectory?.(e.path)) {
+            continue;
+          }
           const { files, directFiles, directMask } = frame,
             act =
               BigInt(frame.activityTimes[0]) >= cutoff || BigInt(frame.activityTimes[1]) >= cutoff

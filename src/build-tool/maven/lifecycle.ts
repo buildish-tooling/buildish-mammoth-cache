@@ -15,10 +15,12 @@
  */
 
 import type { BuildToolLifecycle } from '../lifecycle-types';
+import { mavenOverlay } from './overlay';
 
 /** Maven retains the caller's completed-consumer lifetime and ordinary hooks. */
 export const mavenLifecycle: BuildToolLifecycle = Object.freeze({
   tool: 'maven',
+  overlay: mavenOverlay,
   async assertRestoreConsumersAbsent() {
     // The caller supplies the exclusive Maven window.
   },

@@ -126,6 +126,11 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Existing unmanaged files remain visible to the build. Post unmounts the home and discards the
   build's local changes after cache capture. Use `overlay-fs: false` if you need those changes to
   remain on disk after post. Workers that use `GRADLE_RO_DEP_CACHE` keep their existing cache path.
+- An eligible warm, writable Linux Maven worker mounts only the local `repository/` directory
+  under `maven-user-home`. Maven settings and wrapper distributions use their usual paths.
+  Mammoth captures complete changed coordinates, including repository-origin records, then
+  unmounts and discards the worker's local repository changes. Use `overlay-fs: false` to keep
+  the ordinary repository lifecycle.
 - OverlayFS workers can miss reads of inherited files. An aggregator that accepts one of these
   workers' artifacts skips timestamp GC for that invocation.
 - On GitHub-hosted Linux, Mammoth uses noninteractive `sudo` for mount operations. On other Linux

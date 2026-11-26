@@ -158,10 +158,10 @@ marker takes the same cleanup-only post, even if interruption left only the
 advertisement marker or neither host marker and no generic prepare-failed flag. Private failures before
 advertisement can retire immediately.
 
-The version 6 handoff is for the Linux Gradle worker that owns dependency metadata.
+The version 6 handoff is for eligible Linux distributed workers with an active overlay.
 The build-tool-independent descriptor records the target relative to the managed
-home, the placeholder and backing directory identities, and the mount ID and
-namespace. An empty target means the managed home itself. Its version 3 invocation
+home, the mounted view, placeholder and backing directory identities, and the mount
+ID and namespace. Gradle uses an empty target to mount the managed home. Its version 3 invocation
 anchor carries the visible root identity alongside the original root and external
 control identities. Post verifies the original home in lower separately from the
 mounted view.
@@ -173,6 +173,14 @@ and affect the merged view of complete units. After capture, post unmounts,
 restores the lower home, and retires the upper and work directories. A busy or
 uncertain mount retains its backing state. The worker archive and aggregator
 continue to use the existing payload and snapshot channels.
+
+Maven overlays `repository/` and relies on caller exclusivity. It lists upper
+directories to locate work and enumerates the merged direct files of a directory
+selected by managed upper changes. This preserves inherited artifacts and origin
+records without descending inherited version directories. Transient files and
+removal-only directories do not produce contributions. A selected unit uses the
+ordinary Maven replacement and conflict rules. Wrapper partitions remain outside
+the mount.
 
 Upper-layer workers declare incomplete usage in their worker identity. After
 accepting all selected archives, aggregator prepare freezes timestamp GC as

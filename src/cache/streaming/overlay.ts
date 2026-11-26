@@ -39,34 +39,37 @@ const dirIdentity = nativeIdentitySchema.refine((n) => n[2] === 'directory');
 const mountNamespace = z.string().regex(/^mnt:\[\d+\]$/u);
 export function overlaySchema(invocation: string) {
   const prefix = cacheInvocationPrefix(invocation) + 'overlay/';
-  return z
-    .tuple([
-      z.literal('overlay'),
-      z.literal(1),
-      ownedPathSchema(invocation).refine(
-        (value) =>
-          value.startsWith(prefix) &&
-          /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value.slice(prefix.length)),
-      ),
-      dirIdentity,
-      dirIdentity,
-      dirIdentity,
-      dirIdentity,
-      dirIdentity,
-      mountNamespace,
-      z.string().regex(/^\d+$/u),
-      pathSchema,
-      dirIdentity.nullable(),
-    ])
-    .refine((overlay) => (overlay[10] === '') === (overlay[11] !== null));
+  return z.tuple([
+    z.literal('overlay'),
+    z.literal(1),
+    ownedPathSchema(invocation).refine(
+      (value) =>
+        value.startsWith(prefix) &&
+        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value.slice(prefix.length)),
+    ),
+    dirIdentity,
+    dirIdentity,
+    dirIdentity,
+    dirIdentity,
+    dirIdentity,
+    mountNamespace,
+    z.string().regex(/^\d+$/u),
+    pathSchema,
+    dirIdentity,
+  ]);
 }
 export type Overlay = z.infer<ReturnType<typeof overlaySchema>>;
 
 export interface OverlayCapture {
   useMerged(path: string): boolean;
   extraDirectories?: WalkOptions['extraDirectories'];
-  dispose(): void;
+  listDirectory?: WalkOptions['listDirectory'];
+  omitEmptyDirectory?(path: string): boolean;
+  dispose?(): void;
 }
+
+export const withinOverlay = (target: string, relative: string): boolean =>
+  target === '' || relative === target || relative.startsWith(target + '/');
 
 async function verifyDirectory(store: OwnedStore, relative: string, expected: NativeIdentity) {
   const actual = await store.root.stat(relative);
@@ -158,6 +161,12 @@ export async function verifyOverlay(
       throw new Error('OverlayFS mounted home binding changed.');
     }
     await store.root.verifyRoot();
+  } else {
+    store.root.work.stats++;
+    const mounted = nativeIdentity(await lstat(target, { bigint: true }));
+    if (!sameObject(mounted, overlay[11]) || mounted[6] !== overlay[11][6]) {
+      throw new Error('OverlayFS mounted directory binding changed.');
+    }
   }
 }
 
@@ -290,11 +299,17 @@ export async function activateOverlay(
   pathSchema.parse(relative);
   const live = await store.root.stat(relative);
   const target = store.root.resolve(relative);
-  if (!live || !sameObject(live, expected) || live[6] !== expected[6]) {
+  if (
+    !live ||
+    live[3] !== store.root.binding[3] ||
+    !sameObject(live, expected) ||
+    live[6] !== expected[6]
+  ) {
     return undefined;
   }
-  const raw = relative === '' ? await lstat(target, { bigint: true }) : undefined;
-  if (raw && (Number(raw.uid) !== process.getuid?.() || Number(raw.gid) !== process.getgid?.())) {
+  store.root.work.stats++;
+  const raw = await lstat(target, { bigint: true });
+  if (Number(raw.uid) !== process.getuid?.() || Number(raw.gid) !== process.getgid?.()) {
     return undefined;
   }
   try {
@@ -307,9 +322,7 @@ export async function activateOverlay(
   const root = store.prefix + 'overlay/' + randomUUID();
   await store.makeParents(root + '/upper/pending');
   await store.makeParents(root + '/work/pending');
-  if (relative === '') {
-    await chmod(store.root.resolve(root + '/upper'), live[6]);
-  }
+  await chmod(store.root.resolve(root + '/upper'), live[6]);
   const owner = (await store.root.stat(root))!,
     upper = (await store.root.stat(root + '/upper'))!,
     work = (await store.root.stat(root + '/work'))!;
@@ -350,8 +363,10 @@ export async function activateOverlay(
       work: store.root.resolve(root + '/work'),
     });
     const info = checkMountContract(store, root, target, await driver.inspect(target, backing));
+    store.root.work.stats++;
+    const mountedIdentity = nativeIdentity(await lstat(target, { bigint: true }));
     if (relative === '') {
-      store.root.mountedBinding = nativeIdentity(await lstat(target, { bigint: true }));
+      store.root.mountedBinding = mountedIdentity;
     }
     const mounted = overlaySchema(store.codec.options.invocation).parse([
       'overlay',
@@ -365,7 +380,7 @@ export async function activateOverlay(
       info.namespace,
       info.id,
       relative,
-      relative === '' ? store.root.mountedBinding! : null,
+      mountedIdentity,
     ]);
     const directory = await opendir(target);
     try {
@@ -410,7 +425,7 @@ export function projectOverlay(
   overlay: Overlay,
   useMerged?: (path: string) => boolean,
 ): () => void {
-  return store.root.project(overlay[10], overlay[2] + '/upper', useMerged);
+  return store.root.project(overlay[10], overlay[2] + '/upper', useMerged, overlay[11][3]);
 }
 
 export async function isOverlayWhiteout(

@@ -187,7 +187,13 @@ function nativeRelative(relative: string): string {
 export class NativeRoot {
   private metadataIdentity: NativeIdentity | null = null;
   private projection:
-    { logical: string; physical: string; useMerged?: (path: string) => boolean } | undefined;
+    | {
+        logical: string;
+        physical: string;
+        useMerged?: (path: string) => boolean;
+        mergedDevice?: string;
+      }
+    | undefined;
   mountedBinding: NativeIdentity | undefined;
 
   private constructor(
@@ -304,23 +310,32 @@ export class NativeRoot {
 
   expectedDevice(relative: string): string {
     if (
-      relative !== CACHE_METADATA_DIRECTORY &&
-      !relative.startsWith(CACHE_METADATA_DIRECTORY + '/') &&
-      this.mountedBinding &&
-      (!this.projection || this.projection.useMerged?.(relative))
+      relative === CACHE_METADATA_DIRECTORY ||
+      relative.startsWith(CACHE_METADATA_DIRECTORY + '/')
     ) {
-      return this.mountedBinding[3];
+      return this.binding[3];
     }
-    return this.binding[3];
+    const mounted = this.mountedBinding?.[3] ?? this.binding[3];
+    if (this.projection) {
+      return this.projection.useMerged?.(relative)
+        ? (this.projection.mergedDevice ?? mounted)
+        : this.binding[3];
+    }
+    return mounted;
   }
 
   /** Redirect one logical subtree for the original, quiescent capture and replay. */
-  project(logical: string, ownedSource: string, useMerged?: (path: string) => boolean): () => void {
+  project(
+    logical: string,
+    ownedSource: string,
+    useMerged?: (path: string) => boolean,
+    mergedDevice?: string,
+  ): () => void {
     if (this.projection || !ownedSource.startsWith(CACHE_METADATA_DIRECTORY + '/')) {
       throw new Error('Invalid projected observation source.');
     }
     nativeRelative(logical);
-    this.projection = { logical, physical: this.resolve(ownedSource), useMerged };
+    this.projection = { logical, physical: this.resolve(ownedSource), useMerged, mergedDevice };
     return () => {
       this.projection = undefined;
     };

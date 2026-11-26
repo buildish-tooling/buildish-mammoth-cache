@@ -948,7 +948,7 @@ it.each([true, false])(
     const output = vi.spyOn(worker.host, 'setOutput'),
       environment = vi.spyOn(worker.host, 'exportEnvironmentVariable');
     const result = await runStreamingPrepare(dependencies);
-    if (!('gradleSeed' in result) || !result.gradleSeed) {
+    if (!('dependencyLayer' in result) || !result.dependencyLayer) {
       throw new Error('No warm seed');
     }
     expect(worker.state.get(STREAMING_LAYER_ACTIVATED_STATE)).toBe(
@@ -1167,7 +1167,7 @@ it.each(['advertisement-only', 'no-markers', 'foreign-terminal', 'aborted-work']
   async (interruption) => {
     const { worker, dependencies, inspect } = await warmLayerProvider();
     const ready = await runStreamingPrepare(dependencies);
-    if (!('gradleSeed' in ready) || !ready.gradleSeed) {
+    if (!('dependencyLayer' in ready) || !ready.dependencyLayer) {
       throw new Error('No warm seed');
     }
     expect(worker.state.get(STREAMING_LAYER_ADVERTISEMENT_STATE)).toBe(

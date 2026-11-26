@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { linuxOverlayMount } from '../../../cache/streaming/overlay-mount';
 import { MavenBuildToolAdapter } from '../../../build-tool/maven/adapter';
 import {
   readMavenActionInputs,
@@ -46,6 +47,9 @@ async function main(): Promise<void> {
 
   await runStreamingPrepare({
     ...gitHubStreamingFactories(config.mavenUserHome),
+    overlayMount: linuxOverlayMount(
+      process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.GITHUB_ACTIONS === 'true',
+    ),
     providerId: 'github',
     // Dedicated job root/completed consumers; tool inspection supplies fresh evidence.
     assertCurrent: (): undefined => {},

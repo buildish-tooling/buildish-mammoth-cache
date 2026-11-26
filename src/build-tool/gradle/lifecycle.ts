@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { gradleDependencyLayer } from './dependency-layer';
+import { gradleOverlay } from './overlay';
 import type { BuildToolLifecycle } from '../lifecycle-types';
 import type { DaemonInspection } from './process-inspection';
 import type { GradleInstallation } from './stop-client';
@@ -34,6 +36,8 @@ export function createGradleLifecycle(
   const deps = Object.freeze({ ...dependencies });
   return Object.freeze({
     tool: 'gradle' as const,
+    dependencyLayer: gradleDependencyLayer,
+    overlay: gradleOverlay,
     async assertRestoreConsumersAbsent(signal) {
       signal.throwIfAborted();
       const unavailable = (cause?: unknown) =>

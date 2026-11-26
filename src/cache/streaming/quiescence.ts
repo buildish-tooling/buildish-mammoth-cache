@@ -15,7 +15,6 @@
  */
 
 import type { OwnedStore, Reference } from './owned-store';
-import { checkGradleSeed } from './gradle-layer';
 import type { LifecycleHandoff } from './lifecycle-handoff';
 import { equal } from './encoding';
 import { checkPostRootBinding } from './post-admission';
@@ -97,9 +96,6 @@ export class ExclusiveWindow {
       if (!seed && !input.layeredWorker!.header[13]) {
         throw new Error('Worker window requires a frozen layer owner.');
       }
-      if (seed) {
-        checkGradleSeed(store, seed, input.layeredWorker!.header[8]?.[0] ?? null);
-      }
     }
     if (input.assertCurrent.constructor.name === 'AsyncFunction') {
       throw new Error('Exclusive-window assertion must be synchronous.');
@@ -143,6 +139,13 @@ export class ExclusiveWindow {
     try {
       const tool = store.codec.options.context[7],
         lifecycle = await resolveLifecycle(tool, input.lifecycle);
+      const seed = input.layeredWorker?.header[12];
+      if (seed) {
+        if (!lifecycle.dependencyLayer) {
+          throw new Error('Unsupported dependency layer.');
+        }
+        lifecycle.dependencyLayer.check(store, seed, input.layeredWorker!.header[8]?.[0] ?? null);
+      }
       assert();
       installations = await lifecycle.quiesce({
         store,

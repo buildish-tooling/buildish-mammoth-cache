@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { resolveLifecycle } from '../../build-tool/lifecycle';
+import type { BuildToolLifecycle } from '../../build-tool/lifecycle-types';
 import { OpenedInvocation } from './invocation';
 import {
   lifecycleDocuments,
@@ -46,6 +48,7 @@ export class PostAttempt {
     private readonly originalGeneration: MetadataGeneration | null,
     private readonly originalState: LifecycleState,
     readonly options: LifecycleOptions,
+    readonly layerLifecycle: BuildToolLifecycle | undefined,
     private readonly release: () => void,
   ) {
     this.#signal = AbortSignal.any([
@@ -103,7 +106,11 @@ export class PostAttempt {
       const generation = handoff.header[8]
         ? await readMetadataGeneration(store, handoff.header[8][1], handoff.header[8][0], options)
         : null;
-      handoff.checkGeneration(store, generation, bindings[8]);
+      const layerLifecycle =
+        handoff.header[12] || handoff.header[13]
+          ? await resolveLifecycle(store.codec.options.context[7], options.lifecycle)
+          : undefined;
+      handoff.checkGeneration(store, generation, bindings[8], layerLifecycle);
       release = options.budget.holdRecord(
         generation ? 512 + encodeRecord(generation).length * 8 : 0,
       );
@@ -119,6 +126,7 @@ export class PostAttempt {
         generation,
         state,
         Object.freeze({ ...options }),
+        layerLifecycle,
         release,
       );
     } catch (error) {

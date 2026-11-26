@@ -16,7 +16,7 @@
 
 import { retireOverlay } from '../../src/cache/streaming/overlay';
 import { linuxOverlayMount } from '../../src/cache/streaming/overlay-mount';
-import { GRADLE_ARTIFACTS } from '../../src/cache/streaming/gradle-layer';
+import { GRADLE_ARTIFACTS } from '../../src/build-tool/gradle/dependency-layer';
 import { test, expect, vi } from 'vitest';
 import * as nativeWalk from '../../src/cache/streaming/native-walk';
 import { runStreamingPost } from '../../src/phases/streaming/post';
@@ -60,7 +60,7 @@ import { resolveCacheModel } from '../../src/cache/streaming/model';
 import { postStreamingBase } from '../../src/cache/streaming/base-post';
 import { postStreamingWorker } from '../../src/cache/streaming/worker-post';
 import { postStreamingReadOnly } from '../../src/cache/streaming/passive-lifecycle';
-import { gradleSeedPath } from '../../src/cache/streaming/gradle-layer';
+import { gradleSeedPath } from '../../src/build-tool/gradle/dependency-layer';
 import { fixtureCi } from '../support/ci-fixture';
 
 const exec = promisify(execFile);
@@ -231,7 +231,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
           gcAgeMs: 14 * 86400000,
           ordinaryOrder: role === 'distributed-aggregator' ? ['worker', 'writer'] : [],
         },
-        hasGradleWrapper: () => true,
+        hasWrapper: () => true,
         lifecycle,
         artifactBackend: async () => artifacts.api,
         installHooks: (store, selected, layered) =>
@@ -327,8 +327,8 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     expect(initial.outcome).toBe('published');
     const worker = await prepare('worker', 'distributed-worker');
     expect(worker.restoredKey).toBe(initial.key);
-    expect(worker.gradleSeed).not.toBeNull();
-    const seed = gradleSeedPath(worker.store, worker.gradleSeed!);
+    expect(worker.dependencyLayer).not.toBeNull();
+    const seed = gradleSeedPath(worker.store, worker.dependencyLayer!);
     expect(await worker.store.root.stat(old)).toBeNull();
     const before = await digests(seed),
       priorRequests = requests.length;
@@ -345,7 +345,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     const raw = gunzipSync([...artifacts.objects.values()][0].bytes);
     expect(raw.includes(oldBody)).toBe(false);
     expect(raw.includes(newBody)).toBe(true);
-    expect(await worker.store.root.stat(worker.gradleSeed![2])).toBeNull();
+    expect(await worker.store.root.stat(worker.dependencyLayer![2])).toBeNull();
     const unmanaged = await put(
       f.directory + '/writer',
       'local/settings',
@@ -360,7 +360,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     expect(!!writer.overlay).toBe(useOverlay);
     expect(!!(await overlayMount?.inspect(mountedPath))).toBe(useOverlay);
 
-    expect(writer.gradleSeed).toBeNull();
+    expect(writer.dependencyLayer).toBeNull();
     expect(await readFile(unmanaged, 'utf8')).toBe('inherited local settings');
     const untouchedMember = untouchedWorkspace + '/transformed/retained';
     expect(await readFile(writer.store.root.resolve(untouchedMember), 'utf8')).toBe(

@@ -22,8 +22,8 @@ import {
   type LocalCodec,
   type Policy,
 } from './local-schema';
-import { gradleSeedSchema, checkGradleSeed } from './gradle-layer';
-import { gradleOverlayCandidate } from './gradle-overlay';
+import { dependencyLayerSchema } from './dependency-layer-descriptor';
+import type { BuildToolLifecycle } from '../../build-tool/lifecycle-types';
 import { overlaySchema } from './overlay';
 import { nameSchema, positiveSchema, uintSchema } from './schema';
 import { objectRefSchema, keySchema } from './native-records';
@@ -73,7 +73,7 @@ export function handoffSchemas(codec: LocalCodec) {
     ref('activity'),
     uintSchema,
     uintSchema.max(16),
-    gradleSeedSchema(invocation).nullable(),
+    dependencyLayerSchema(invocation).nullable(),
   ] as const;
   const header = z
     .union([
@@ -230,11 +230,16 @@ export class LifecycleHandoff {
     }
   }
 
-  checkGeneration(store: OwnedStore, generation: MetadataGeneration | null, policy: Policy): void {
+  checkGeneration(
+    store: OwnedStore,
+    generation: MetadataGeneration | null,
+    policy: Policy,
+    lifecycle?: BuildToolLifecycle,
+  ): void {
     if (this.#closed) {
       throw new Error('Closed handoff.');
     }
-    checkHandoffGeneration(store, this.header, this.entries, generation, policy);
+    checkHandoffGeneration(store, this.header, this.entries, generation, policy, lifecycle);
   }
 
   close(): void {
@@ -251,20 +256,22 @@ export function checkHandoffGeneration(
   entries: readonly HandoffEntry[],
   generation: MetadataGeneration | null,
   policy: Policy,
+  lifecycle?: BuildToolLifecycle,
 ): void {
   if (
     header[13] &&
     (header[12] ||
       !generation ||
       policy[4] !== 'none' ||
-      header[13][10] !== '' ||
-      !header[13][11] ||
-      !gradleOverlayCandidate(store))
+      !lifecycle?.overlay?.accepts(store, header[13][10], entries))
   ) {
     throw new Error('Invalid OverlayFS handoff.');
   }
   if (header[12]) {
-    checkGradleSeed(store, header[12], generation?.[11] ?? null);
+    if (!lifecycle?.dependencyLayer) {
+      throw new Error('Unsupported dependency layer handoff.');
+    }
+    lifecycle.dependencyLayer.check(store, header[12], generation?.[11] ?? null);
     if (policy[4] !== 'none') {
       throw new Error('Layered handoff requires ordinary restore cleanup.');
     }

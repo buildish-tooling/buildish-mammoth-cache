@@ -15,15 +15,16 @@
  */
 
 import { opendir } from 'node:fs/promises';
-import { workspaceRoot } from '../immutable-workspaces';
-import type { OwnedStore } from './owned-store';
-import { ownsLocalSnapshot } from './model';
-import { directoryBreadthError, type WorkingBudget } from './tree-state';
-import { missing } from './native';
-import type { Overlay, OverlayCapture } from './overlay';
-import { GRADLE_MODULES } from './gradle-layer';
+import { workspaceRoot } from '../../cache/immutable-workspaces';
+import type { OwnedStore } from '../../cache/streaming/owned-store';
+import { ownsLocalSnapshot } from '../../cache/streaming/model';
+import { directoryBreadthError, type WorkingBudget } from '../../cache/streaming/tree-state';
+import { missing } from '../../cache/streaming/native';
+import type { Overlay, OverlayCapture } from '../../cache/streaming/overlay';
+import { gradleDependencySources, GRADLE_MODULES } from './dependency-layer';
+import type { OverlayPolicy } from '../lifecycle-types';
 
-export function gradleOverlayCandidate(store: OwnedStore): boolean {
+function gradleOverlayCandidate(store: OwnedStore): boolean {
   const options = store.codec.options;
   return (
     options.model.tuple[2] === 'gradle' &&
@@ -36,7 +37,7 @@ export function gradleOverlayCandidate(store: OwnedStore): boolean {
 }
 
 /** Include authoritative metadata even when there are no upper changes in its hierarchy. */
-export async function gradleOverlayCapture(
+async function gradleOverlayCapture(
   store: OwnedStore,
   overlay: Overlay,
   budget: WorkingBudget,
@@ -120,3 +121,28 @@ export async function gradleOverlayCapture(
     throw error;
   }
 }
+
+export const gradleOverlay: OverlayPolicy = {
+  async prepareTarget(store, restored, inputs) {
+    if (
+      !inputs.existingDependencyLayer &&
+      inputs.hasWrapper?.() &&
+      gradleOverlayCandidate(store) &&
+      (await gradleDependencySources(store, restored))
+    ) {
+      return '';
+    }
+  },
+  accepts(store, target) {
+    return target === '' && gradleOverlayCandidate(store);
+  },
+  capture(store, overlay, options) {
+    return gradleOverlayCapture(
+      store,
+      overlay,
+      options.budget,
+      options.maxDirectoryEntries ?? 100000,
+      options.signal,
+    );
+  },
+};

@@ -27,7 +27,8 @@ import {
   readGradleActionInputs,
 } from '../../../src/build-tool/gradle/config';
 import { fixtureCi } from '../../support/ci-fixture';
-import { gradleSeedPath, gradleSeedSchema } from '../../../src/cache/streaming/gradle-layer';
+import { gradleSeedPath } from '../../../src/build-tool/gradle/dependency-layer';
+import { dependencyLayerSchema } from '../../../src/cache/streaming/dependency-layer-descriptor';
 import { OpenedInvocation } from '../../../src/cache/streaming/invocation';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
 import { postStreamingWorker } from '../../../src/cache/streaming/worker-post';
@@ -97,7 +98,7 @@ async function fixture(
   const prepare = (extra: Parameters<typeof f.prepare>[0] = {}) =>
     f.prepare({
       policy: { ...f.request.policy, role: 'distributed-worker' },
-      hasGradleWrapper: () => true,
+      hasWrapper: () => true,
       lifecycle,
       installHooks: (store, selected, layered) =>
         selected.prepareCapture(store, { tempDirectory: f.directory }, async () => {}, layered),
@@ -109,13 +110,15 @@ async function fixture(
 it('routes original artifact and metadata receipts into an owned coherent seed and settles it before worker completion', async () => {
   const f = await fixture(),
     ready = await f.prepare();
-  expect(ready.gradleSeed).not.toBeNull();
-  const seed = ready.gradleSeed!,
+  expect(ready.dependencyLayer).not.toBeNull();
+  const seed = ready.dependencyLayer!,
     path = gradleSeedPath(ready.store, seed);
   expect(seed[7]).toBeNull();
   expect(
-    gradleSeedSchema(ready.store.codec.options.invocation).safeParse([...seed.slice(0, 7), '9.6.1'])
-      .success,
+    dependencyLayerSchema(ready.store.codec.options.invocation).safeParse([
+      ...seed.slice(0, 7),
+      '9.6.1',
+    ]).success,
   ).toBe(true);
   expect(await readFile(path + '/modules-2/files-2.1/g/a/1/hash/a.jar', 'utf8')).toBe(
     'INHERITED-ARTIFACT',
@@ -160,8 +163,8 @@ it('moves multiple restored metadata formats together without selecting one for 
   const older = METADATA.replace('2.107', '2.106');
   const f = await fixture([], [METADATA, older]);
   const ready = await f.prepare();
-  expect(ready.gradleSeed).not.toBeNull();
-  const seed = gradleSeedPath(ready.store, ready.gradleSeed!);
+  expect(ready.dependencyLayer).not.toBeNull();
+  const seed = gradleSeedPath(ready.store, ready.dependencyLayer!);
   for (const path of [METADATA, older]) {
     expect(await readFile(seed + '/' + path.slice('caches/'.length), 'utf8')).toBe(
       'inherited metadata',
@@ -195,7 +198,7 @@ it.each(['no-wrapper', 'writer', 'partial', 'opt-out', 'layout'] as const)(
       f.objects.delete(entry[2][2]);
     }
     const ready = await f.prepare({
-      ...(kind === 'no-wrapper' ? { hasGradleWrapper: () => false } : {}),
+      ...(kind === 'no-wrapper' ? { hasWrapper: () => false } : {}),
       ...(kind === 'writer'
         ? {
             context: [
@@ -206,7 +209,7 @@ it.each(['no-wrapper', 'writer', 'partial', 'opt-out', 'layout'] as const)(
           }
         : {}),
     });
-    expect(ready.gradleSeed).toBeNull();
+    expect(ready.dependencyLayer).toBeNull();
     expect(await readFile(f.root + '/' + ARTIFACT, 'utf8')).toBe('INHERITED-ARTIFACT');
     expect(await readFile(f.root + '/' + SUPPORT, 'utf8')).toBe('writable support');
     expect(await ready.store.root.stat(ready.store.prefix + 'seed')).toBeNull();
@@ -252,7 +255,7 @@ it.each([false, true])(
     };
     const ready = await f.prepare({ context, overlayFs: enabled, overlayMount });
     expect(ready.overlay).toBeNull();
-    expect(ready.gradleSeed).toBeNull();
+    expect(ready.dependencyLayer).toBeNull();
     expect(overlayMount.mount).toHaveBeenCalledTimes(enabled ? 1 : 0);
     if (!enabled) {
       expect(overlayMount.inspect).not.toHaveBeenCalled();
@@ -266,7 +269,7 @@ it.each([false, true])(
 it('retains and reports an advertised seed when worker consumers cannot settle before capture', async () => {
   const f = await fixture(),
     ready = await f.prepare(),
-    seed = ready.gradleSeed!;
+    seed = ready.dependencyLayer!;
   f.inspect.mockResolvedValue({ remaining: false, uncertain: true });
   const capture = vi.spyOn(observations, 'captureObservations'),
     warnings: string[] = [];
@@ -307,7 +310,7 @@ it('keeps shared-directory seed moves constant and post capture outside the seed
         width,
       ),
       ready = await f.prepare(),
-      seed = ready.gradleSeed!;
+      seed = ready.dependencyLayer!;
     expect(seed).not.toBeNull();
     expect(ready.store.codec.options.model.purge(seed[2] + '/caches/secret.scratch')).toEqual([]);
     const stage = ready.store.root.work;
@@ -366,14 +369,14 @@ it('retires the settled seed when the worker abandons publication without an art
     assertCurrent: (): undefined => {},
   });
   expect(result.outcome).toBe('abandoned');
-  expect(await ready.store.root.stat(ready.gradleSeed![2])).toBeNull();
+  expect(await ready.store.root.stat(ready.dependencyLayer![2])).toBeNull();
   expect(f.inspect).toHaveBeenCalledTimes(2);
 });
 
 it('rejects a replaced seed owner before capture and preserves the replacement contents', async () => {
   const f = await fixture(),
     ready = await f.prepare(),
-    seed = ready.gradleSeed!;
+    seed = ready.dependencyLayer!;
   const root = ready.store.root.resolve(seed[2]);
   await rename(root, root + '.original');
   await mkdir(root);

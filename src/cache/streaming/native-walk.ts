@@ -62,6 +62,8 @@ interface AdditionalDirectories {
   readonly only?: boolean;
 }
 
+type DirectoryListing = AsyncIterable<Pick<Dirent, 'name' | 'isDirectory' | 'isFile'>>;
+
 export interface WalkOptions {
   readonly budget: WorkingBudget;
   readonly purge?: NativePurge;
@@ -81,6 +83,10 @@ export interface WalkOptions {
   readonly ignoreEntry?: (path: string, raw: BigIntStats) => Promise<boolean>;
   /** Complete units can require directories present only in the merged view. */
   readonly extraDirectories?: (path: string) => AdditionalDirectories | undefined;
+  readonly listDirectory?: (
+    path: string,
+    open: (physical: string) => DirectoryListing,
+  ) => DirectoryListing | undefined;
   readonly signal?: AbortSignal;
   /** Immediate parent held by a caller's checked ancestor scope. Rechecked at both boundaries. */
   readonly parentNative?: NativeIdentity;
@@ -179,6 +185,19 @@ export async function* walkNative(
     }
     for (const name of extra.names) {
       yield { name, isDirectory: () => true, isFile: () => false };
+    }
+  }
+  async function* countedListing(physical: string, logical: string): DirectoryListing {
+    work.listings++;
+    root.work.nativeListings++;
+    let entries = 0;
+    for await (const entry of await opendir(physical, { bufferSize: 32 })) {
+      signal.throwIfAborted();
+      work.entries++;
+      if (++entries > max) {
+        throw directoryBreadthError(logical, max, 'native walk');
+      }
+      yield entry;
     }
   }
   async function* visit(
@@ -282,19 +301,22 @@ export async function* walkNative(
       try {
         const physical = root.resolve(nativePath);
         const extra = options.extraDirectories?.(path);
-        if (!extra?.only) {
+        const custom = options.listDirectory?.(path, (source) => countedListing(source, path));
+        if (!custom && !extra?.only) {
           work.listings++;
           root.work.nativeListings++;
         }
-        const listing = extra
-          ? projectedListing(physical, extra)
-          : await opendir(physical, {
-              bufferSize: 32,
-            });
+        const listing =
+          custom ??
+          (extra
+            ? projectedListing(physical, extra)
+            : await opendir(physical, {
+                bufferSize: 32,
+              }));
         // Close the physical directory before descending.
         for await (const entry of listing) {
           signal.throwIfAborted();
-          if (!extra) {
+          if (!extra && !custom) {
             work.entries++;
           }
           const entryName = entry.name;

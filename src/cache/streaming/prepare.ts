@@ -16,7 +16,7 @@
 
 import { timed } from '../../util/timing';
 import { resolveLifecycle } from '../../build-tool/lifecycle';
-import type { BuildToolLifecycle } from '../../build-tool/lifecycle-types';
+import type { BuildToolLifecycle, LayerInputs } from '../../build-tool/lifecycle-types';
 import { mkdir, lstat } from 'node:fs/promises';
 import { lineagePrefix } from './native-records';
 import { LocalCodec, policySchema } from './local-schema';
@@ -49,22 +49,15 @@ import { MetadataPublicationSource } from './metadata-publication-source';
 import { lifecycleDocuments } from './lifecycle-documents';
 import { checkHandoffGeneration, handoffSchemas, type HandoffHeader } from './lifecycle-handoff';
 import { metadataWorkerRequests, metadataSnapshotRequirements } from './prepare-inputs';
-import {
-  installGradleSeed,
-  gradleDependencySources,
-  retireGradleSeed,
-  gradleLayerCandidate,
-  type GradleSeedDescriptor,
-} from './gradle-layer';
+import type { DependencyLayer } from './dependency-layer-descriptor';
 import { retireInstallStaging } from './owned-retirement';
 import { settleNativeCleanup } from './native-operation';
 import { assertEmptyManagedArea } from './prepare-admission';
 import { activateOverlay, retireOverlay, type Overlay } from './overlay';
-import { gradleOverlayCandidate } from './gradle-overlay';
 import type { BaseCacheBackend } from '../backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
-export interface StreamingPrepareRequest extends LifecycleOptions {
+export interface StreamingPrepareRequest extends LifecycleOptions, LayerInputs {
   readonly root: string;
   readonly model: ResolvedModel;
   readonly context: Context;
@@ -87,8 +80,6 @@ export interface StreamingPrepareRequest extends LifecycleOptions {
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   readonly artifactBackend?: () => Promise<WorkflowArtifactBackend>;
   readonly provision: () => Promise<void>;
-  readonly hasGradleWrapper?: () => boolean;
-  readonly existingGradleLayer?: string;
   readonly overlayFs?: boolean;
   readonly installHooks: (
     store: OwnedStore,
@@ -114,7 +105,8 @@ export interface StreamingPrepareResult {
   readonly cutoff: number;
   readonly restoredKey: string | null;
   readonly workerCount: number;
-  readonly gradleSeed: GradleSeedDescriptor | null;
+  readonly dependencyLayer: DependencyLayer | null;
+  readonly lifecycle: BuildToolLifecycle;
   readonly overlay: Overlay | null;
 }
 
@@ -134,18 +126,13 @@ export async function prepareStreaming(
     }),
     defaultRef: input.defaultRef === input.currentRef ? undefined : input.defaultRef,
   });
-  if (
-    gradleLayerCandidate(
-      request.model,
-      { ...request.policy, context: request.context },
-      request.policy.restoreCleanup,
-    ) &&
-    request.existingGradleLayer?.length
-  ) {
-    throw new Error(
-      'GRADLE_RO_DEP_CACHE is already set. Remove the conflicting value or disable dependency-cache-layer.',
-    );
-  }
+  const lifecycle = await resolveLifecycle(request.context[7], request.lifecycle);
+  lifecycle.dependencyLayer?.assertInputs(
+    request.model,
+    { ...request.policy, context: request.context },
+    request.policy.restoreCleanup,
+    request,
+  );
   const signal = request.signal ?? new AbortController().signal,
     options = Object.freeze({
       ...request,
@@ -237,7 +224,7 @@ export async function prepareStreaming(
     policy,
   ]);
   await store.initialize(bindings);
-  let seed: GradleSeedDescriptor | undefined;
+  let seed: DependencyLayer | undefined;
   let overlay: Overlay | undefined;
   let restored: MetadataBaseRestore | undefined,
     merged: WorkerMergeResult | undefined,
@@ -246,14 +233,12 @@ export async function prepareStreaming(
     downloads: DownloadedWorkerArchive[] = [];
   let failure: unknown, answer: StreamingPrepareResult | undefined;
   try {
-    const lifecycle = await timed(options, 'restore preconditions', async () => {
+    await timed(options, 'restore preconditions', async () => {
       await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
-      const lifecycle = await resolveLifecycle(request.context[7], options.lifecycle);
       assertCurrent();
       await lifecycle.assertRestoreConsumersAbsent(signal);
       assertCurrent();
       await assertEmptyManagedArea(store.root, request.model, options);
-      return lifecycle;
     });
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     await store.makeParents(store.prefix + 'install/pending');
@@ -282,20 +267,17 @@ export async function prepareStreaming(
         }),
       (r) => (unavailable ? 'unavailable' : r.key ? 'hit' : 'miss'),
     );
-    if (
-      gradleLayerCandidate(request.model, store.codec.options, request.policy.restoreCleanup) &&
-      request.hasGradleWrapper?.()
-    ) {
-      seed = await installGradleSeed(store, restored, options);
-    }
-    const mountHome =
-      request.overlayFs &&
-      request.overlayMount &&
-      !request.existingGradleLayer &&
-      request.policy.restoreCleanup === 'none' &&
-      request.hasGradleWrapper?.() &&
-      gradleOverlayCandidate(store) &&
-      !!(await gradleDependencySources(store, restored));
+    seed = await lifecycle.dependencyLayer?.prepare(
+      store,
+      restored,
+      request.policy.restoreCleanup,
+      request,
+      options,
+    );
+    const mountTarget =
+      !seed && request.overlayFs && request.overlayMount && request.policy.restoreCleanup === 'none'
+        ? await lifecycle.overlay?.prepareTarget(store, restored, request)
+        : undefined;
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
@@ -433,9 +415,12 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
-    if (mountHome) {
-      overlay = await activateOverlay(store, '', store.root.binding, request.overlayMount!);
-      if (overlay) {
+    if (mountTarget !== undefined) {
+      const target = mountTarget === '' ? store.root.binding : await store.root.stat(mountTarget);
+      if (target?.[2] === 'directory') {
+        overlay = await activateOverlay(store, mountTarget, target, request.overlayMount!);
+      }
+      if (overlay && mountTarget === '') {
         anchor = invocationAnchor(store.root, request.context, request.nonce);
         request.saveAnchor(encodeInvocationAnchor(anchor));
       }
@@ -465,7 +450,14 @@ export async function prepareStreaming(
       seed ?? null,
       ...(overlay ? [overlay] : []),
     ]);
-    checkHandoffGeneration(store, header, restored.entries, restored.generation, bindings[8]);
+    checkHandoffGeneration(
+      store,
+      header,
+      restored.entries,
+      restored.generation,
+      bindings[8],
+      lifecycle,
+    );
     const handoff = await timed(options, 'handoff creation', () =>
       store.writeStream(
         'handoff',
@@ -522,7 +514,8 @@ export async function prepareStreaming(
       cutoff,
       restoredKey: key,
       workerCount: downloads.length,
-      gradleSeed: seed ?? null,
+      dependencyLayer: seed ?? null,
+      lifecycle,
       overlay: overlay ?? null,
     };
   } catch (error) {
@@ -559,11 +552,11 @@ export async function prepareStreaming(
     }
     if (seed) {
       try {
-        await retireGradleSeed(store, seed, options);
+        await lifecycle.dependencyLayer!.retire(store, seed, options);
       } catch (cleanup) {
         failure = new AggregateError(
           [failure, cleanup],
-          'Private Gradle seed retained at ' + store.root.resolve(seed[2]),
+          'Private dependency layer retained at ' + store.root.resolve(seed[2]),
         );
       }
     }

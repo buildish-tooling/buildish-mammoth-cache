@@ -32,6 +32,7 @@ import {
 } from '../../src/build-tool/maven/config';
 import type { BaseCacheBackend } from '../../src/cache/backend';
 import type { WorkflowArtifactBackend } from '../../src/delta/backend';
+import type { OverlayMountDriver } from '../../src/cache/streaming/overlay-mount';
 import { createGitHubPlatform } from '../../src/ci/github';
 import { gitHubStreamingFactories } from '../../src/ci/github/streaming';
 import { runStreamingPrepare } from '../../src/phases/streaming/prepare';
@@ -48,6 +49,7 @@ export async function streamingIntegrationJob(options: {
   artifacts?: WorkflowArtifactBackend;
   now?: () => number;
   installedGradle?: string;
+  overlayMount?: OverlayMountDriver;
 }) {
   const { root, tool, name } = options;
   const home = options.home ?? path.join(root, 'home');
@@ -141,6 +143,7 @@ export async function streamingIntegrationJob(options: {
       },
     }),
     now: options.now,
+    overlayMount: options.overlayMount,
     // These fixtures wait for each no-daemon child before post. CI can run unrelated
     // integration builds concurrently. The native quiescence suites verify inspection separately.
     lifecycle:
