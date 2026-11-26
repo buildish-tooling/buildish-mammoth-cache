@@ -419,6 +419,7 @@ it('qualifies warm writable Gradle layers on every native main-branch runner aft
   expect(prepare.with!['job-mode']).toBe('distributed-worker');
   expect(prepare.with!['read-only']).toBe(false);
   expect(prepare.with!['cache-gc-mode']).toBe('off');
+  expect(prepare.with!['overlay-fs']).toBe('false');
   expect(prepare.with!['dependency-cache-layer']).toBeUndefined();
   expect(seedPrepare.with!['dependency-cache-layer']).toBeUndefined();
   const check = workers.steps.findIndex((step) => step.run?.includes('fixture.mjs layer gradle'));

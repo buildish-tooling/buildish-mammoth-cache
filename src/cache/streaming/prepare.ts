@@ -310,7 +310,15 @@ export async function prepareStreaming(
       qualifiedCapture &&
       age !== null &&
       hasCompleteSweepBaseline(request.model, restored.entries);
-    if (!sweepCapture) {
+    const mountTarget =
+      !sweepCapture &&
+      request.policy.access === 'writable' &&
+      request.overlayFs &&
+      request.overlayMount &&
+      request.policy.restoreCleanup === 'none'
+        ? await lifecycle.overlay?.prepareTarget(store, restored, request)
+        : undefined;
+    if (!sweepCapture && mountTarget === undefined) {
       seed = await lifecycle.dependencyLayer?.prepare(
         store,
         restored,
@@ -319,15 +327,6 @@ export async function prepareStreaming(
         options,
       );
     }
-    const mountTarget =
-      !sweepCapture &&
-      !seed &&
-      request.policy.access === 'writable' &&
-      request.overlayFs &&
-      request.overlayMount &&
-      request.policy.restoreCleanup === 'none'
-        ? await lifecycle.overlay?.prepareTarget(store, restored, request)
-        : undefined;
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
@@ -513,6 +512,7 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
+    // Recoverable mount failure keeps the writable home installed above.
     if (
       mountTarget !== undefined &&
       (!publisher ||

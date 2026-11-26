@@ -21,11 +21,14 @@ import { ownsLocalSnapshot } from '../../cache/streaming/model';
 import { directoryBreadthError, type WorkingBudget } from '../../cache/streaming/tree-state';
 import { missing } from '../../cache/streaming/native';
 import type { Overlay, OverlayCapture } from '../../cache/streaming/overlay';
-import { gradleDependencySources, GRADLE_MODULES } from './dependency-layer';
+import { gradleDependencySources, gradleLayerCandidate, GRADLE_MODULES } from './dependency-layer';
 import type { OverlayPolicy } from '../lifecycle-types';
 
 function gradleOverlayCandidate(store: OwnedStore): boolean {
   const options = store.codec.options;
+  if (gradleLayerCandidate(options.model, options, 'none')) {
+    return true;
+  }
   return (
     options.model.tuple[2] === 'gradle' &&
     options.model.dependencyCacheLayer &&
@@ -46,7 +49,10 @@ async function gradleOverlayCapture(
 ): Promise<OverlayCapture> {
   const modules = GRADLE_MODULES;
   const options = store.codec.options;
-  const snapshot = options.model.partitions.find((p) => ownsLocalSnapshot(p, options))!;
+  const snapshot = options.model.partitions.find((p) => ownsLocalSnapshot(p, options));
+  if (!snapshot) {
+    return { useMerged: (path) => workspaceRoot(path) !== null };
+  }
   // Prepare only enables this policy for the qualified Gradle dependency snapshot layout.
   const pattern = snapshot[1][0].slice(modules.length + 1, -3);
   const metadata = new Set<string>();

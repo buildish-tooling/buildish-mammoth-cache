@@ -330,9 +330,15 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
     await put(producer.store.root.path, inheritedMetadata, 'untouched metadata member');
     const initial = await basePost(producer);
     expect(initial.outcome).toBe('published');
-    const worker = await prepare('worker', 'distributed-worker');
+    const disabledProbe = vi.fn(overlayMount?.inspect);
+    const worker = await prepare('worker', 'distributed-worker', {
+      overlayFs: false,
+      overlayMount: overlayMount && { ...overlayMount, inspect: disabledProbe },
+    });
     expect(worker.restoredKey).toBe(initial.key);
     expect(worker.dependencyLayer).not.toBeNull();
+    expect(worker.overlay).toBeNull();
+    expect(disabledProbe).not.toHaveBeenCalled();
     const seed = gradleSeedPath(worker.store, worker.dependencyLayer!);
     expect(await worker.store.root.stat(old)).toBeNull();
     const before = await digests(seed),
@@ -581,6 +587,69 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
         }),
       ).resolves.toEqual({ outcome: 'skipped' });
       expect(await overlayMount!.inspect(failed.store.root.path)).toBeNull();
+
+      const dueProbe = vi.fn(overlayMount!.inspect);
+      const dueWorker = await prepare('due-worker', 'distributed-worker', {
+        dependencyGc: config,
+        overlayFs: true,
+        overlayMount: { ...overlayMount!, inspect: dueProbe },
+      });
+      expect(dueWorker.dependencyGc?.due).toBe('true');
+      expect(dueWorker.overlay).toBeNull();
+      expect(dueWorker.dependencyLayer).toBeNull();
+      expect(dueProbe).not.toHaveBeenCalled();
+      expect(await readFile(dueWorker.store.root.resolve(old))).toEqual(oldBody);
+      expect((await workerPost(dueWorker, memoryArtifacts().api)).outcome).toBe('worker-uploaded');
+
+      const sweep = await prepare('sweep', 'standalone', {
+        dependencyGc: config,
+        policy: { ...f.request.policy, role: 'standalone', gcAgeMs: 100 * 365 * 86400000 },
+      });
+      expect(sweep.dependencyGc?.due).toBe('true');
+      const swept = await basePost(sweep);
+      expect(swept.outcome).toBe('published');
+
+      const workerArtifacts = memoryArtifacts();
+      const nonwriter = await prepare('overlay-worker', 'distributed-worker', {
+        dependencyGc: config,
+        overlayFs: true,
+        overlayMount,
+      });
+      writerMount = nonwriter;
+      expect(nonwriter.restoredKey).toBe(swept.key);
+      expect(nonwriter.dependencyGc?.due).toBe('false');
+      expect(nonwriter.dependencyLayer).toBeNull();
+      expect(nonwriter.overlay).not.toBeNull();
+      await build(nonwriter.store.root.path, 'resolveSeed', '', true);
+      const upperMember = workspace + '/transformed/worker-added';
+      await put(nonwriter.store.root.path, upperMember, 'nonwriter workspace addition');
+      expect((await workerPost(nonwriter, workerArtifacts.api)).outcome).toBe('worker-uploaded');
+      const upperArchive = gunzipSync([...workerArtifacts.objects.values()][0].bytes);
+      expect(upperArchive.includes('nonwriter workspace addition')).toBe(true);
+      expect(upperArchive.includes('inherited workspace member')).toBe(true);
+      expect(upperArchive.includes('untouched workspace member')).toBe(false);
+      expect(upperArchive.includes('untouched metadata member')).toBe(false);
+      expect(upperArchive.includes('incomplete-usage')).toBe(true);
+      expect(await overlayMount!.inspect(nonwriter.store.root.path)).toBeNull();
+      await expect(lstat(nonwriter.store.root.resolve(upperMember))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+
+      const mount = vi.fn(async () => {
+        throw new Error('mount unavailable');
+      });
+      const fallback = await prepare('mount-fallback', 'distributed-worker', {
+        dependencyGc: config,
+        overlayFs: true,
+        overlayMount: { ...overlayMount!, mount },
+      });
+      expect(fallback.dependencyGc?.due).toBe('false');
+      expect(mount).toHaveBeenCalledOnce();
+      expect(fallback.overlay).toBeNull();
+      expect(fallback.dependencyLayer).toBeNull();
+      expect(await overlayMount!.inspect(fallback.store.root.path)).toBeNull();
+      expect(await readFile(fallback.store.root.resolve(old))).toEqual(oldBody);
+      expect((await workerPost(fallback, memoryArtifacts().api)).outcome).toBe('worker-uploaded');
     }
     completed = true;
   } finally {

@@ -1039,6 +1039,7 @@ jobs:
           read-only: false
           # This matrix verifies read-only seed consumption.
           cache-gc-mode: 'off'
+          overlay-fs: 'false'
           cache-partitions: ${{ env.LAYER_CACHE_PARTITIONS }}
           cache-key-prefix: it-gradle-layer-${{ github.run_id }}-a${{ needs.layer_seed.outputs.attempt }}-
           github-event-name: ${{ inputs.caller-event-name }}

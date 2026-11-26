@@ -293,6 +293,14 @@ failed source return, inspect both the original and retained paths and avoid
 overwriting either copy. Start a new workflow invocation on clean dedicated
 roots after diagnosing the failure.
 
+## OverlayFS problems on Linux Gradle workers
+
+If a Gradle distributed worker has trouble with OverlayFS or you prefer the
+read-only dependency seed, set `overlay-fs: false` on the Mammoth prepare step.
+This skips mount probing and lets eligible workers use the read-only seed when
+GC is fresh. When GC is due, workers use the ordinary writable cache path to
+collect dependency access times.
+
 ## Directory breadth and memory diagnostics
 
 A directory breadth error gives the phase, directory and effective

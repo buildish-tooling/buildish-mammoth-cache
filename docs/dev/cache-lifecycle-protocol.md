@@ -196,9 +196,15 @@ anchor carries the visible root identity alongside the original root and externa
 control identities. Post verifies the original home in lower separately from the
 mounted view.
 
+Eligible Gradle workers try OverlayFS first while GC is fresh. If the mount
+is skipped before live installation, eligible nonwriters can use the read-only
+seed. A recoverable mount failure after live installation restores the ordinary
+writable home. Due workers prepare the writable home directly.
+
 Post verifies the live mount, settles Gradle and removes its hook before capture.
 The upper layer selects ordinary files and changed workspaces. Affected workspaces
-and the complete owned metadata snapshot use the merged view. Whiteouts stay local
+and the complete owned metadata snapshot use the merged view. A worker without a
+snapshot uses the merged view only for affected workspaces. Whiteouts stay local
 and affect the merged view of complete units. After capture, post unmounts,
 restores the lower home, and retires the upper and work directories. A busy or
 uncertain mount retains its backing state. The worker archive and aggregator

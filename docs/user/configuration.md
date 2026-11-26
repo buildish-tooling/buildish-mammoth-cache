@@ -122,27 +122,27 @@ runtime outputs, and these reference rows cannot silently diverge.
 
 - Defaults to `true`. Accepts `true` or `false`.
 - Set `overlay-fs: false` in the action inputs or repository configuration to skip mount probing
-  and use the ordinary cache path.
-- OverlayFS can accelerate a warm, writable Linux Gradle wrapper worker that owns the dependency
-  metadata snapshot. Mammoth mounts the job's Gradle user home and uses the upper layer to find
-  changes. It captures affected workspaces and the complete dependency metadata from the merged view.
+  and allow eligible Gradle workers to use the read-only seed while GC is fresh.
+- Eligible warm, writable Linux Gradle wrapper workers try OverlayFS while GC is fresh. Mammoth
+  mounts the job's Gradle user home and uses the upper layer to find changes. It captures affected
+  workspaces from the merged view and captures complete dependency metadata for the designated writer.
 - Existing unmanaged files remain visible to the build. Post unmounts the home and discards the
   build's local changes after cache capture. Use `overlay-fs: false` if you need those changes to
-  remain on disk after post. Workers that use `GRADLE_RO_DEP_CACHE` keep their existing cache path.
+  remain on disk after post.
 - An eligible warm, writable Linux Maven worker mounts only the local `repository/` directory
   under `maven-user-home`. Maven settings and wrapper distributions use their usual paths.
   Mammoth captures complete changed coordinates, including repository-origin records, then
   unmounts and discards the worker's local repository changes. Use `overlay-fs: false` to keep
   the ordinary repository lifecycle.
-- OverlayFS workers can miss reads of inherited files. An aggregator that accepts one of these
-  workers' artifacts skips timestamp GC for that invocation.
+- OverlayFS workers can miss reads of inherited files. Their usage is ineligible for a periodic
+  sweep.
 - Warm, writable standalone and aggregator jobs can also use OverlayFS. Publishers use the
   ordinary path when timestamp GC is active, restore cleanup prunes managed files, or enabled
   cleanup has purge rules. Post discards local writes within the mount after publication. Set
   `overlay-fs: false` to keep those writes on disk after post.
 - On GitHub-hosted Linux, Mammoth uses noninteractive `sudo` for mount operations. On other Linux
-  runners, it uses the action process's existing permissions. If the mount is unavailable before
-  activation, Mammoth uses ordinary restore and capture.
+  runners, it uses the action process's existing permissions. After a recoverable mount failure,
+  Mammoth uses the ordinary writable cache path.
 - Mammoth requests the default `fsync=auto` behavior explicitly on Linux 7.0 and newer. Earlier
   kernels use their default sync behavior.
 
