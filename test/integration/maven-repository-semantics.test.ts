@@ -167,7 +167,11 @@ it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1
   async (width, useOverlay) => {
     const mount = linuxOverlayMount()!;
     const suffix = width + '-' + useOverlay;
-    const f = scenario('overlay-' + suffix, { 'overlay-fs': String(useOverlay) }, mount);
+    const f = scenario(
+      'overlay-' + suffix,
+      { 'overlay-fs': String(useOverlay), 'cache-gc-mode': 'timestamp' },
+      mount,
+    );
     const seedLocal = 'overlay-seed-' + suffix;
     const workerLocal = 'overlay-worker-' + suffix;
     const readerLocal = 'overlay-reader-' + suffix;
@@ -186,6 +190,11 @@ it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1
     await mkdir(path.dirname(path.join(producer.home, wrapper)), { recursive: true });
     await writeFile(path.join(producer.home, wrapper), 'unchanged inherited wrapper');
     expect((await producer.post()).outcome).toBe('published');
+
+    const sweep = await f.action('overlay-sweep-' + suffix, 'sweep');
+    await sweep.prepare();
+    expect(sweep.outputs['dependency-gc-due']).toBe('true');
+    expect((await sweep.post()).outcome).toBe('published');
 
     const worker = await f.action(workerLocal, 'worker', { 'job-mode': 'distributed-worker' });
     const target = path.join(worker.home, 'repository');
@@ -289,9 +298,9 @@ it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1
     const aggregator = await f.action(aggregatorLocal, 'aggregator', {
       'job-mode': 'distributed-aggregator',
       'dependent-jobs': 'worker',
-      'cache-gc-mode': 'timestamp',
     });
     await aggregator.prepare();
+    expect(aggregator.outputs['dependency-gc-due']).toBe('false');
     expect(aggregator.outputs['dependent-delta-artifact-count']).toBe('1');
     expect(!!(await mount.inspect(path.join(aggregator.home, 'repository')))).toBe(useOverlay);
     const localClassifier = 'test:example:jar:aggregator:1.0';
@@ -580,31 +589,69 @@ it('merges disjoint real worker directories and resolves their artifacts offline
 });
 
 it('GC preserves protected coordinates with old marker timestamps and evicts inactive coordinates', async () => {
-  const cutoff = Date.now() + 10000;
+  const cutoff = Date.now() + 60 * 60 * 1000;
   const old = 1700000000;
   for (const [local, used] of [
     ['gc-used', true],
     ['gc-inactive', false],
   ] as const) {
-    const f = scenario(local);
-    const owner = await f.action(local, 'owner', { 'cache-gc-mode': 'timestamp' }, () => cutoff);
-    await owner.prepare();
-    await cloneSeed(local);
+    const f = scenario(local, {
+      'cache-gc-mode': 'timestamp',
+      'dependency-gc-force-grace-days': 'off',
+    });
+    const seedLocal = local + '-seed';
+    const producer = await f.action(seedLocal, 'producer');
+    await producer.prepare();
+    await cloneSeed(seedLocal);
     for (const name of [artifact, marker]) {
-      await utimes(path.join(owner.home, name), old, old);
+      await utimes(path.join(producer.home, name), old, old);
     }
+    expect((await producer.post()).outcome).toBe('published');
+
+    const worker = await f.action(
+      local + '-worker',
+      'worker',
+      { 'job-mode': 'distributed-worker' },
+      () => cutoff,
+    );
+    await worker.prepare();
+    expect(worker.outputs['dependency-gc-due']).toBe('true');
     if (used) {
-      // Model a visible access on a noatime filesystem without changing mtime.
-      await utimes(path.join(owner.home, artifact), Math.ceil(cutoff / 1000) + 1, old);
-      await owner.post();
+      // Model a read with atime after the cutoff and mtime and ctime before it.
+      await utimes(path.join(worker.home, artifact), Math.ceil(cutoff / 1000) + 1, old);
+    }
+    // Post must record a capture time after the fixture's prepare cutoff.
+    const postClock = vi.spyOn(Date, 'now').mockReturnValue(cutoff + 2000);
+    try {
+      expect((await worker.post()).outcome).toBe('worker-uploaded');
+    } finally {
+      postClock.mockRestore();
+    }
+
+    const owner = await f.action(
+      local,
+      'owner',
+      { 'job-mode': 'distributed-aggregator', 'dependent-jobs': 'worker' },
+      () => cutoff,
+    );
+    await owner.prepare();
+    expect(owner.outputs['base-cache-restore-status']).toBe('current-lineage-hit');
+    expect(owner.outputs['dependency-gc-due']).toBe('true');
+    expect(owner.outputs['dependent-delta-artifact-count']).toBe('1');
+    expect((await owner.post()).outcome).toBe('published');
+
+    if (used) {
       expect(await resolve(local, release, { offline: true })).toBe('A');
       await expect(
         resolve(local, release, { offline: true, id: 'origin-b', remote: 'remote-b' }),
       ).rejects.toThrow(/offline mode/u);
     } else {
-      await owner.post();
-      await expect(readFile(path.join(owner.home, marker))).rejects.toThrow();
-      await expect(readFile(path.join(owner.home, artifact))).rejects.toThrow();
+      await expect(readFile(path.join(owner.home, marker))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(readFile(path.join(owner.home, artifact))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
       await expect(resolve(local, release, { offline: true })).rejects.toThrow(/offline mode/u);
     }
   }
