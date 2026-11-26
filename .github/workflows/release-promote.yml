@@ -85,7 +85,7 @@ jobs:
           name: promotion-input-${{ github.run_id }}
           path: ${{ runner.temp }}/promotion
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true
 
   stage:
@@ -139,7 +139,7 @@ jobs:
           name: promotion-stage-${{ github.run_id }}
           path: ${{ runner.temp }}/stage
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true
 
   consume-final:
@@ -195,7 +195,7 @@ jobs:
           name: promotion-consumer-${{ github.run_id }}
           path: ${{ runner.temp }}/consumer
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true
 
   publish:
@@ -282,5 +282,5 @@ jobs:
           name: promotion-sealed-${{ github.run_id }}
           path: ${{ runner.temp }}/sealed
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true

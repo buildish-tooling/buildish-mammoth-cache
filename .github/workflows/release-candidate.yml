@@ -76,7 +76,7 @@ jobs:
           name: candidate-resolution-${{ github.run_id }}
           path: ${{ runner.temp }}/resolution
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true
 
   build:
@@ -169,7 +169,7 @@ jobs:
           name: candidate-build-${{ github.run_id }}
           path: ${{ runner.temp }}/build-output
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true
 
   sign:
@@ -234,7 +234,7 @@ jobs:
           name: candidate-signed-${{ github.run_id }}
           path: ${{ runner.temp }}/signed
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true
 
   publish:
@@ -309,5 +309,5 @@ jobs:
           name: candidate-manifest-${{ github.run_id }}
           path: ${{ runner.temp }}/candidate-manifest
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
           overwrite: true
