@@ -133,6 +133,10 @@ runtime outputs, and these reference rows cannot silently diverge.
   the ordinary repository lifecycle.
 - OverlayFS workers can miss reads of inherited files. An aggregator that accepts one of these
   workers' artifacts skips timestamp GC for that invocation.
+- Warm, writable standalone and aggregator jobs can also use OverlayFS. Publishers use the
+  ordinary path when timestamp GC is active, restore cleanup prunes managed files, or enabled
+  cleanup has purge rules. Post discards local writes within the mount after publication. Set
+  `overlay-fs: false` to keep those writes on disk after post.
 - On GitHub-hosted Linux, Mammoth uses noninteractive `sudo` for mount operations. On other Linux
   runners, it uses the action process's existing permissions. If the mount is unavailable before
   activation, Mammoth uses ordinary restore and capture.

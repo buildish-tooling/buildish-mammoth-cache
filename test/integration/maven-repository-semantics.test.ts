@@ -18,6 +18,8 @@ import { promisify } from 'node:util';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { gunzipSync } from 'node:zlib';
 import { linuxOverlayMount } from '../../src/cache/streaming/overlay-mount';
+import { postStreamingBase } from '../../src/cache/streaming/base-post';
+import { WorkingBudget } from '../../src/cache/streaming/tree-state';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, afterAll, it, expect, vi } from 'vitest';
@@ -283,14 +285,22 @@ it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1
       expect(archive.includes('repository/test/example/2.2')).toBe(false);
     }
 
-    const aggregator = await f.action('overlay-aggregator-' + suffix, 'aggregator', {
+    const aggregatorLocal = 'overlay-aggregator-' + suffix;
+    const aggregator = await f.action(aggregatorLocal, 'aggregator', {
       'job-mode': 'distributed-aggregator',
       'dependent-jobs': 'worker',
       'cache-gc-mode': 'timestamp',
     });
     await aggregator.prepare();
     expect(aggregator.outputs['dependent-delta-artifact-count']).toBe('1');
+    expect(!!(await mount.inspect(path.join(aggregator.home, 'repository')))).toBe(useOverlay);
+    const localClassifier = 'test:example:jar:aggregator:1.0';
+    if (width === 40) {
+      await publish('remote-a', 'example', '1.0', 'aggregator classifier', '-aggregator');
+      expect(await resolve(aggregatorLocal, localClassifier)).toBe('aggregator classifier');
+    }
     expect((await aggregator.post()).outcome).toBe('published');
+    expect(await mount.inspect(path.join(aggregator.home, 'repository'))).toBeNull();
     const reader = await f.action(readerLocal, 'reader', { 'read-only': 'true' });
     await reader.prepare();
     for (const member of [lastFile, removedDirectoryMember]) {
@@ -305,6 +315,11 @@ it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1
     expect(await resolve(readerLocal, secondClassifier, { offline: true })).toBe(
       'second classifier payload',
     );
+    if (width === 40) {
+      expect(await resolve(readerLocal, localClassifier, { offline: true })).toBe(
+        'aggregator classifier',
+      );
+    }
     await expect(
       resolve(readerLocal, classifier, {
         offline: true,
@@ -313,6 +328,111 @@ it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1
       }),
     ).rejects.toThrow(/offline mode/u);
     expect((await reader.post()).outcome).toBe('read-only');
+  },
+);
+
+it
+  .runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1')
+  .each([true, false])(
+  'reuses an unchanged standalone generation and publishes authoritative deletions with overlay-fs=%s',
+  async (useOverlay) => {
+    const mount = linuxOverlayMount()!;
+    const suffix = 'publisher-' + useOverlay;
+    const f = scenario(
+      suffix,
+      {
+        'overlay-fs': String(useOverlay),
+        'cache-partitions': JSON.stringify([{ id: 'repository', publication: 'single-writer' }]),
+      },
+      mount,
+    );
+    const seed = await f.action(suffix + '-seed', 'producer');
+    await seed.prepare();
+    await cloneSeed(suffix + '-seed');
+    await publish('remote-a', 'publisher-other', '1.0', 'retained publisher dependency');
+    const retained = 'test:publisher-other:jar:1.0';
+    expect(await resolve(suffix + '-seed', retained)).toBe('retained publisher dependency');
+    const published = await seed.post();
+    if (published.outcome !== 'published') {
+      throw new Error('Expected the seed generation to publish.');
+    }
+
+    const idle = await f.action(suffix + '-idle', 'idle');
+    await idle.prepare();
+    expect(!!(await mount.inspect(path.join(idle.home, 'repository')))).toBe(useOverlay);
+    const walk = vi.spyOn(nativeWalk, 'walkNative');
+    try {
+      expect(await idle.post()).toMatchObject({ outcome: 'no-change', key: published.key });
+      expect(
+        walk.mock.calls.some(([native, member]) => native.path === idle.home && member === ''),
+      ).toBe(!useOverlay);
+    } finally {
+      walk.mockRestore();
+    }
+    expect(await mount.inspect(path.join(idle.home, 'repository'))).toBeNull();
+
+    const deleting = await f.action(suffix + '-deleting', 'deleting');
+    await deleting.prepare();
+    expect(!!(await mount.inspect(path.join(deleting.home, 'repository')))).toBe(useOverlay);
+    await rm(path.dirname(path.join(deleting.home, artifact)), { recursive: true });
+    const changed = await deleting.post();
+    if (changed.outcome !== 'published') {
+      throw new Error('Expected the authoritative deletion to publish.');
+    }
+    expect(changed.key).not.toBe(published.key);
+    expect(await mount.inspect(path.join(deleting.home, 'repository'))).toBeNull();
+
+    const reader = await f.action(suffix + '-reader', 'reader', { 'read-only': 'true' });
+    await reader.prepare();
+    expect(reader.outputs['restored-cache-key']).toBe(changed.key);
+    await expect(resolve(suffix + '-reader', release, { offline: true })).rejects.toThrow(
+      /offline mode/u,
+    );
+    expect(await resolve(suffix + '-reader', retained, { offline: true })).toBe(
+      'retained publisher dependency',
+    );
+    expect((await reader.post()).outcome).toBe('read-only');
+  },
+);
+
+it.runIf(process.platform === 'linux' && process.env.MAMMOTH_TEST_OVERLAY === '1')(
+  'retires publisher mounts when the cache backend is unavailable or save is unconfirmed',
+  async () => {
+    const mount = linuxOverlayMount()!;
+    const f = scenario('publisher-unavailable', {}, mount);
+    const seed = await f.action('publisher-unavailable-seed', 'producer');
+    await seed.prepare();
+    await cloneSeed('publisher-unavailable-seed');
+    expect((await seed.post()).outcome).toBe('published');
+
+    for (const available of [false, true]) {
+      const job = await f.action('publisher-unavailable-' + available, 'publisher-' + available);
+      const ready = await job.prepare();
+      if (!('anchor' in ready) || !ready.overlay) {
+        throw new Error('Expected a warm publisher with an active overlay.');
+      }
+      const target = path.join(job.home, 'repository');
+      if (available) {
+        await writeFile(path.join(job.home, artifact), 'changed but unconfirmed payload');
+      }
+      const budget = new WorkingBudget();
+      const result = await postStreamingBase({
+        anchor: ready.anchor,
+        overlayMount: mount,
+        budget,
+        cacheBackend: async () => ({
+          ...cache.backend,
+          isFeatureAvailable: () => available,
+          saveCache: async () => -1,
+        }),
+        removeHooks: async () => {},
+        assertCurrent: () => undefined,
+      });
+      expect(result.outcome).toBe(available ? 'abandoned' : 'feature-unavailable');
+      expect(await mount.inspect(target)).toBeNull();
+      expect(await readFile(path.join(job.home, artifact), 'utf8')).toBe('A');
+      expect(budget.retained).toBe(0);
+    }
   },
 );
 

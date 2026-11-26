@@ -34,6 +34,7 @@ import type { OverlayMountDriver, OverlayMountInfo } from './overlay-mount';
 import { cacheInvocationPrefix } from '../metadata-paths';
 import { retireOwnedDirectory } from './owned-retirement';
 import type { WalkOptions } from './native-walk';
+import type { ResolvedModel } from './model';
 
 const dirIdentity = nativeIdentitySchema.refine((n) => n[2] === 'directory');
 const mountNamespace = z.string().regex(/^mnt:\[\d+\]$/u);
@@ -70,6 +71,46 @@ export interface OverlayCapture {
 
 export const withinOverlay = (target: string, relative: string): boolean =>
   target === '' || relative === target || relative.startsWith(target + '/');
+
+export function publisherOverlayAllowed(
+  model: ResolvedModel,
+  timestampGc: boolean,
+  cleanupEnabled: boolean,
+): boolean {
+  return !timestampGc && (!cleanupEnabled || !model.partitions.some((p) => p[7]?.length));
+}
+
+/** A coarse absence proof. Any possible managed child requires ordinary capture. */
+export async function hasPotentialOverlayChanges(
+  store: OwnedStore,
+  physical: string,
+  logical: string,
+  options: Pick<WalkOptions, 'maxDirectoryEntries' | 'signal'>,
+  skip?: string,
+): Promise<boolean> {
+  const max = options.maxDirectoryEntries ?? 100000;
+  let scope = store.codec.options.model.admissionScope();
+  if (logical) {
+    const targetScope = scope.child(logical);
+    if (!targetScope || logical.includes('/')) {
+      return true;
+    }
+    scope = targetScope;
+  }
+  store.root.work.nativeListings++;
+  let entries = 0;
+  for await (const entry of await opendir(physical, { bufferSize: 32 })) {
+    options.signal?.throwIfAborted();
+    if (++entries > max) {
+      return true;
+    }
+    const relative = logical ? logical + '/' + entry.name : entry.name;
+    if (relative !== skip && scope.child(relative)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 async function verifyDirectory(store: OwnedStore, relative: string, expected: NativeIdentity) {
   const actual = await store.root.stat(relative);

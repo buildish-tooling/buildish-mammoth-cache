@@ -24,7 +24,7 @@ import {
 } from './local-schema';
 import { dependencyLayerSchema } from './dependency-layer-descriptor';
 import type { BuildToolLifecycle } from '../../build-tool/lifecycle-types';
-import { overlaySchema } from './overlay';
+import { overlaySchema, publisherOverlayAllowed } from './overlay';
 import { nameSchema, positiveSchema, uintSchema } from './schema';
 import { objectRefSchema, keySchema } from './native-records';
 import { pinnedPartitionMetadataSchema, decodePinnedPartitionMetadata } from './partition-metadata';
@@ -79,6 +79,13 @@ export function handoffSchemas(codec: LocalCodec) {
     .union([
       z.tuple([z.literal('handoff'), z.literal(4), ...headerFields]),
       z.tuple([z.literal('handoff'), z.literal(6), ...headerFields, overlaySchema(invocation)]),
+      z.tuple([
+        z.literal('handoff'),
+        z.literal(7),
+        ...headerFields,
+        overlaySchema(invocation),
+        z.enum(['pristine', 'other']),
+      ]),
     ])
     .refine((row) => row[2] !== row[3]);
   const entry = z
@@ -263,6 +270,15 @@ export function checkHandoffGeneration(
     (header[12] ||
       !generation ||
       policy[4] !== 'none' ||
+      store.codec.options.access !== 'writable' ||
+      (store.codec.options.role === 'distributed-worker'
+        ? header[1] !== 6
+        : header[1] !== 7 ||
+          !publisherOverlayAllowed(
+            store.codec.options.model,
+            policy[5] === 'timestamp',
+            header[6] === 'enabled',
+          )) ||
       !lifecycle?.overlay?.accepts(store, header[13][10], entries))
   ) {
     throw new Error('Invalid OverlayFS handoff.');

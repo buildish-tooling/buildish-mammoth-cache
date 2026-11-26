@@ -33,7 +33,13 @@ import type { MetadataPublicationSource } from './metadata-publication-source';
 import { WorkerNativeIndex } from './worker-native';
 import { NativeReadPhase } from './native-read-phase';
 import { walkNative } from './native-walk';
-import { nativeIdentity, sameNative, sameObject, type NativeIdentity } from './native';
+import {
+  nativeIdentity,
+  portableMtimeSeconds,
+  sameNative,
+  sameObject,
+  type NativeIdentity,
+} from './native';
 import { parentPath, joinPath } from './tree-state';
 import { handoffSchemas, type SnapshotDescriptor } from './lifecycle-handoff';
 import { retireOwnedDirectory } from './owned-retirement';
@@ -55,6 +61,7 @@ export class MetadataSnapshot {
     readonly options: NativeOperationOptions,
     private readonly descriptor: SnapshotDescriptor,
     readonly bytes: number,
+    private readonly overlaySource?: MetadataPublicationSource,
   ) {
     snapshots.add(this);
     Object.freeze(this);
@@ -73,6 +80,11 @@ export class MetadataSnapshot {
 
   assertBound(store: OwnedStore, partition: string): void {
     MetadataSnapshot.assertReceipt(this, store, partition);
+  }
+
+  isOverlayCopyOf(source: MetadataPublicationSource, partition: string): boolean {
+    this.assertBound(source.store, partition);
+    return this.overlaySource === source;
   }
 
   sourceDescriptor(): SnapshotDescriptor {
@@ -126,11 +138,36 @@ export class MetadataSnapshot {
     return indexedEntries(this.scratch, node);
   }
 
-  static async copy(
+  static copy(
     source: MetadataPublicationSource | WorkerNativeIndex,
     partition: string,
     origin: SnapshotDescriptor[4],
     options: NativeOperationOptions,
+  ): Promise<MetadataSnapshot> {
+    return MetadataSnapshot.copyFrom(source, partition, origin, options, false);
+  }
+
+  /** Owned publication staging only. Aggregate copies never enter the prepare handoff. */
+  static stageOverlay(
+    source: MetadataPublicationSource,
+    partition: string,
+    options: NativeOperationOptions,
+  ): Promise<MetadataSnapshot> {
+    return MetadataSnapshot.copyFrom(
+      source,
+      partition,
+      ['local', source.store.codec.options.invocation],
+      options,
+      true,
+    );
+  }
+
+  private static async copyFrom(
+    source: MetadataPublicationSource | WorkerNativeIndex,
+    partition: string,
+    origin: SnapshotDescriptor[4],
+    options: NativeOperationOptions,
+    publicationStaging: boolean,
   ): Promise<MetadataSnapshot> {
     const worker = source instanceof WorkerNativeIndex;
     if (worker) {
@@ -152,93 +189,114 @@ export class MetadataSnapshot {
     const signal = options.signal ?? new AbortController().signal;
     const phase = new NativeReadPhase(store.root, nativeRoot),
       bit = partitionBit(store.codec.options.model, partition);
-    return MetadataSnapshot.produce(store, partition, origin, options, async (target, accept) => {
-      async function visit(offset: number, physicalRoot = false): Promise<void> {
-        signal.throwIfAborted();
-        if (worker) {
-          WorkerNativeIndex.assert(source, store);
-        } else {
-          source.assert();
-        }
-        const lease = await source.node(offset);
-        try {
-          const node = lease.node;
-          if (!physicalRoot && !(nodeMask(node) & bit)) {
-            return;
-          }
-          const path = node[2],
-            expected = node[3] as NativeIdentity,
-            input = path ? joinPath(nativeRoot, path) : nativeRoot,
-            output = path ? target + '/' + path : target;
-          if (node[1] === 'protected') {
-            throw new Error('Protected member in independent snapshot.');
-          }
-          if (node[1] === 'file') {
-            if (store.codec.options.model.owner(path)[0] !== partition) {
-              throw new Error('Snapshot file ownership mismatch.');
-            }
-            store.root.work.opens++;
-            const handle = await open(
-              store.root.resolve(output),
-              constants.O_CREAT |
-                constants.O_EXCL |
-                constants.O_WRONLY |
-                (constants.O_NOFOLLOW ?? 0),
-              0o600,
-            );
-            try {
-              let bytes = 0;
-              for await (const chunk of phase.read(input, expected, signal)) {
-                signal.throwIfAborted();
-                await handle.writeFile(chunk);
-                bytes += chunk.length;
-                store.root.work.writeBytes += chunk.length;
-              }
-              if (BigInt(bytes) !== BigInt(expected[5])) {
-                throw new Error('Snapshot copy length mismatch.');
-              }
-              await handle.chmod(expected[6] & 0o777);
-              store.root.work.modeChanges++;
-              await handle.utimes(Number(expected[7]) / 1e9, Number(expected[8]) / 1e9);
-              store.root.work.stats++;
-              const native = nativeIdentity(await handle.stat({ bigint: true }));
-              if (native[3] !== store.root.binding[3] || BigInt(native[5]) !== BigInt(bytes)) {
-                throw new Error('Invalid copied snapshot native output.');
-              }
-              await handle.close();
-              await accept(['file', path, native]);
-            } finally {
-              await handle.close();
-            }
+    return MetadataSnapshot.produce(
+      store,
+      partition,
+      origin,
+      options,
+      async (target, accept) => {
+        async function visit(offset: number, physicalRoot = false): Promise<void> {
+          signal.throwIfAborted();
+          if (worker) {
+            WorkerNativeIndex.assert(source, store);
           } else {
-            await phase.enter(input, expected);
-            if (path) {
-              await mkdir(store.root.resolve(output), { mode: 0o700 });
-              store.root.work.directoryCreations++;
-            }
-            const created = (await store.root.stat(output))!;
-            await accept(['dir-open', path, created]);
-            for await (const edge of source.children(node)) {
-              if (edge[1] === 'file') {
-                await visit(edge[2]);
-              }
-            }
-            for await (const edge of source.children(node)) {
-              if (edge[1] === 'directory') {
-                await visit(edge[2]);
-              }
-            }
-            await phase.leave(input, expected);
-            await chmod(store.root.resolve(output), expected[6] & 0o777);
-            store.root.work.modeChanges++;
-            await accept(['dir-close', path, (await store.root.stat(output))!]);
+            source.assert();
           }
-        } finally {
-          lease.release();
+          const lease = await source.node(offset);
+          try {
+            const node = lease.node;
+            if (!physicalRoot && !(nodeMask(node) & bit)) {
+              return;
+            }
+            const path = node[2],
+              expected = node[3] as NativeIdentity,
+              input = path ? joinPath(nativeRoot, path) : nativeRoot,
+              output = path ? target + '/' + path : target;
+            if (node[1] === 'protected') {
+              throw new Error('Protected member in independent snapshot.');
+            }
+            if (node[1] === 'file') {
+              if (store.codec.options.model.owner(path)[0] !== partition) {
+                throw new Error('Snapshot file ownership mismatch.');
+              }
+              store.root.work.opens++;
+              const handle = await open(
+                store.root.resolve(output),
+                constants.O_CREAT |
+                  constants.O_EXCL |
+                  constants.O_WRONLY |
+                  (constants.O_NOFOLLOW ?? 0),
+                0o600,
+              );
+              try {
+                let bytes = 0;
+                for await (const chunk of phase.read(input, expected, signal)) {
+                  signal.throwIfAborted();
+                  await handle.writeFile(chunk);
+                  bytes += chunk.length;
+                  store.root.work.writeBytes += chunk.length;
+                }
+                if (BigInt(bytes) !== BigInt(expected[5])) {
+                  throw new Error('Snapshot copy length mismatch.');
+                }
+                await handle.chmod(expected[6] & 0o777);
+                store.root.work.modeChanges++;
+                const atime = Number(expected[7]) / 1e9;
+                await handle.utimes(atime, Number(expected[8]) / 1e9);
+                store.root.work.stats++;
+                let native = nativeIdentity(await handle.stat({ bigint: true }));
+                if (publicationStaging) {
+                  const bucket = BigInt(expected[8]) / 1000000n;
+                  if (BigInt(native[8]) / 1000000n !== bucket) {
+                    await handle.utimes(atime, portableMtimeSeconds(Number(bucket)));
+                    store.root.work.stats++;
+                    native = nativeIdentity(await handle.stat({ bigint: true }));
+                    if (BigInt(native[8]) / 1000000n !== bucket) {
+                      throw new Error(
+                        'Copied publication timestamp changed its millisecond bucket.',
+                      );
+                    }
+                  }
+                }
+                if (native[3] !== store.root.binding[3] || BigInt(native[5]) !== BigInt(bytes)) {
+                  throw new Error('Invalid copied snapshot native output.');
+                }
+                await handle.close();
+                await accept(['file', path, native]);
+              } finally {
+                await handle.close();
+              }
+            } else {
+              await phase.enter(input, expected);
+              if (path) {
+                await mkdir(store.root.resolve(output), { mode: 0o700 });
+                store.root.work.directoryCreations++;
+              }
+              const created = (await store.root.stat(output))!;
+              await accept(['dir-open', path, created]);
+              for await (const edge of source.children(node)) {
+                if (edge[1] === 'file') {
+                  await visit(edge[2]);
+                }
+              }
+              for await (const edge of source.children(node)) {
+                if (edge[1] === 'directory') {
+                  await visit(edge[2]);
+                }
+              }
+              await phase.leave(input, expected);
+              await chmod(store.root.resolve(output), expected[6] & 0o777);
+              store.root.work.modeChanges++;
+              await accept(['dir-close', path, (await store.root.stat(output))!]);
+            }
+          } finally {
+            lease.release();
+          }
         }
-      }
-      await visit(root, true);
-    });
+        await visit(root, true);
+      },
+      publicationStaging && !worker ? source : undefined,
+    );
   }
 
   static empty(
@@ -260,10 +318,10 @@ export class MetadataSnapshot {
     origin: SnapshotDescriptor[4],
     options: NativeOperationOptions,
     produce: (target: string, accept: (value: Value) => Promise<void>) => Promise<void>,
+    overlaySource?: MetadataPublicationSource,
   ): Promise<MetadataSnapshot> {
-    if (
-      store.codec.options.model.partitions.find((p) => p[0] === partition)?.[3] !== 'single-writer'
-    ) {
+    const part = store.codec.options.model.partitions.find((p) => p[0] === partition);
+    if (!part || (!overlaySource && part[3] !== 'single-writer')) {
       throw new Error('Independent snapshot requires authoritative partition.');
     }
     options = Object.freeze({ ...options });
@@ -313,6 +371,7 @@ export class MetadataSnapshot {
         options,
         descriptor,
         payloadBytes,
+        overlaySource,
       );
     } catch (error) {
       await settleNativeCleanup(

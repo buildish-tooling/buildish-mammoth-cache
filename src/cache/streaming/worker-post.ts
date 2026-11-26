@@ -32,6 +32,7 @@ import type { Failpoint } from './native';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 import type { PartitionSummaries } from './partition-summaries';
 import { settleNativeCleanup } from './native-operation';
+import { MetadataSnapshot } from './metadata-snapshot';
 
 export interface WorkerPostRequest extends LifecycleOptions {
   readonly anchor: InvocationAnchor;
@@ -302,10 +303,10 @@ export async function postFailedPrepareLayer(
   try {
     if (
       (!seed && !overlay) ||
-      store.codec.options.role !== 'distributed-worker' ||
+      (seed && store.codec.options.role !== 'distributed-worker') ||
       store.codec.options.access !== 'writable'
     ) {
-      throw new Error('Failed-prepare layer cleanup requires the frozen writable worker layer.');
+      throw new Error('Failed-prepare layer cleanup requires a frozen writable layer.');
     }
     if (attempt.state[4] === 'completed') {
       if (attempt.state[7]?.[1] !== 'abandoned') {
@@ -334,6 +335,11 @@ export async function postFailedPrepareLayer(
       await dependencyLayer!.retire(store, seed, input);
     } else {
       await retireOverlay(store, overlay!, input.overlayMount!);
+      for (const entry of attempt.handoff.entries) {
+        if (entry[4]) {
+          await MetadataSnapshot.retireHandoff(store, entry[4], input);
+        }
+      }
     }
     await attempt.finish(['outcome', 'abandoned', null, null, null]);
   } catch (error) {

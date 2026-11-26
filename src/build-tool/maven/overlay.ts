@@ -30,11 +30,11 @@ function eligible(store: OwnedStore, entries: Parameters<OverlayPolicy['accepts'
   const partition = model.partitions.find((p) => p[0] === repository);
   return (
     model.tuple[2] === 'maven' &&
-    role === 'distributed-worker' &&
     access === 'writable' &&
-    !model.partitions.some((p) => ownsLocalSnapshot(p, options)) &&
     !!partition &&
-    partition[3] === 'aggregate' &&
+    (role !== 'distributed-worker' ||
+      (partition[3] === 'aggregate' &&
+        !model.partitions.some((p) => ownsLocalSnapshot(p, options)))) &&
     partition[1].length === 1 &&
     partition[1][0] === repository + '/**' &&
     entries.some((e) => e[1] === repository && e[2] === 'available')

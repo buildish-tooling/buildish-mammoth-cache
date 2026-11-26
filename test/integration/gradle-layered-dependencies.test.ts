@@ -258,8 +258,12 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
       );
       expect(logs.stdout + logs.stderr).toContain('BUILD SUCCESSFUL');
     }
-    async function basePost(ready: Awaited<ReturnType<typeof prepare>>) {
+    async function basePost(
+      ready: Awaited<ReturnType<typeof prepare>>,
+      extra: Partial<Parameters<typeof postStreamingBase>[0]> = {},
+    ) {
       return postStreamingBase({
+        overlayMount,
         anchor: ready.anchor,
         budget: f.budget,
         lifecycle,
@@ -268,6 +272,7 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
           await cleanupGradleBuildResultCapture(ready.store.root.path);
         },
         assertCurrent: (): undefined => {},
+        ...extra,
       });
     }
     async function workerPost(ready: Awaited<ReturnType<typeof prepare>>, backend = artifacts.api) {
@@ -483,6 +488,42 @@ tasks.register('resolveBoth') { dependsOn 'resolveSeed', 'resolveMiss' }
       assertCurrent: (): undefined => {},
     });
     if (useOverlay && width === 4) {
+      const publishOverlay = await prepare('standalone-overlay', 'standalone', {
+        overlayFs: true,
+        overlayMount,
+        cleanupEnabled: false,
+        policy: { ...f.request.policy, role: 'standalone', gcAgeMs: null },
+      });
+      writerMount = publishOverlay;
+      expect(publishOverlay.overlay).not.toBeNull();
+      expect(await overlayMount!.inspect(publishOverlay.store.root.path)).not.toBeNull();
+      expect(await basePost(publishOverlay)).toMatchObject({
+        outcome: 'no-change',
+        key: published.key,
+      });
+      expect(await overlayMount!.inspect(publishOverlay.store.root.path)).toBeNull();
+
+      const unsettledPublisher = await prepare('unsettled-publisher', 'standalone', {
+        overlayFs: true,
+        overlayMount,
+        cleanupEnabled: false,
+        policy: { ...f.request.policy, role: 'standalone', gcAgeMs: null },
+      });
+      writerMount = unsettledPublisher;
+      const warnings: string[] = [];
+      await expect(
+        basePost(unsettledPublisher, {
+          lifecycle: gradleResolver({
+            inspect: async () => ({ remaining: false, uncertain: true }),
+          }),
+          onWarning: (message) => warnings.push(message),
+        }),
+      ).rejects.toThrow('not quiescent');
+      expect(warnings.join('\n')).toContain('OverlayFS state retained');
+      expect(await overlayMount!.inspect(unsettledPublisher.store.root.path)).not.toBeNull();
+      // No build ran for this fixture invocation.
+      await retireOverlay(unsettledPublisher.store, unsettledPublisher.overlay!, overlayMount!);
+
       const idleArtifacts = memoryArtifacts();
       const idle = await prepare('writer', 'distributed-worker', {
         root: f.directory + '/idle-writer',

@@ -63,6 +63,7 @@ export class MetadataPublicationSource {
     private readonly metadata: ReadonlyMap<string, PartitionMetadata>,
     private readonly borrowed: IndexedMetadataInput | null,
     private readonly hierarchy: PublicationHierarchy | null = null,
+    private readonly snapshotOwner?: MetadataSnapshot,
   ) {
     this.#releaseMetadata = options.budget.holdRecord(
       1024 + encodeRecord([...metadata.values()]).length * 4,
@@ -83,6 +84,10 @@ export class MetadataPublicationSource {
       }
       DiscoveredMetadataBase.assertReceipt(this.borrowed.upstream.source, this.store);
     }
+  }
+
+  isOverlayCopyOf(source: MetadataPublicationSource, partition: string): boolean {
+    return this.snapshotOwner?.isOverlayCopyOf(source, partition) ?? false;
   }
 
   claim(): void {
@@ -169,6 +174,7 @@ export class MetadataPublicationSource {
         metadata,
         null,
         hierarchy,
+        snapshot,
       );
     } catch (error) {
       release();
@@ -470,20 +476,23 @@ export class MetadataPublicationSet {
   static select(
     live: MetadataPublicationSource,
     overrides: readonly (readonly [string, MetadataPublicationSource])[] = [],
+    staged: readonly (readonly [string, MetadataPublicationSource])[] = [],
   ): MetadataPublicationSet {
     live.assert();
+    const replacements = [...overrides, ...staged];
     if (
-      overrides.length > live.store.codec.options.model.partitions.length ||
-      new Set(overrides.map((p) => p[0])).size !== overrides.length
+      replacements.length > live.store.codec.options.model.partitions.length ||
+      new Set(replacements.map((p) => p[0])).size !== replacements.length
     ) {
       throw new Error('Duplicate/unbounded metadata source overrides.');
     }
     const selected = new Map(live.store.codec.options.model.partitions.map((p) => [p[0], live]));
-    for (const [p, source] of overrides) {
+    for (const [p, source] of replacements) {
       source.assert();
       const partition = live.store.codec.options.model.partitions.find((part) => part[0] === p);
       if (
-        partition?.[3] !== 'single-writer' ||
+        !partition ||
+        (partition[3] !== 'single-writer' && !staged.some(([id]) => id === p)) ||
         source.store !== live.store ||
         source.options.budget !== live.options.budget ||
         (source.options.maxDirectoryEntries ?? 100000) !==
@@ -493,6 +502,16 @@ export class MetadataPublicationSet {
       }
       source.summary(p);
       selected.set(p, source);
+    }
+    for (const [p, source] of staged) {
+      // Reuse compares the frozen pre-copy summary. Node's timestamp setter can
+      // round nanoseconds in a staged copy, so a new object uses the staged data.
+      if (
+        !source.isOverlayCopyOf(live, p) ||
+        !encodeRecord(source.summary(p).slice(3)).equals(encodeRecord(live.summary(p).slice(3)))
+      ) {
+        throw new Error('Overlay publication staging differs from the frozen partition.');
+      }
     }
     for (const [p, source] of selected) {
       source.summary(p);

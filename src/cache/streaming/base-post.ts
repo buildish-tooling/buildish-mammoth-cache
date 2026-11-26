@@ -34,6 +34,14 @@ import { settleNativeCleanup } from './native-operation';
 import type { BaseCacheBackend } from '../backend';
 import type { PartitionSummaries } from './partition-summaries';
 import type { OwnedStore } from './owned-store';
+import type { HandoffEntry } from './lifecycle-handoff';
+import {
+  hasPotentialOverlayChanges,
+  projectOverlay,
+  retireOverlay,
+  verifyOverlay,
+  withinOverlay,
+} from './overlay';
 
 export interface BasePostRequest extends LifecycleOptions {
   readonly anchor: InvocationAnchor;
@@ -54,6 +62,49 @@ export interface BasePostResult {
 }
 
 const same = (a: Value, b: Value) => encodeRecord(a).equals(encodeRecord(b));
+function reusablePin(entry: HandoffEntry) {
+  const pin = entry[3]?.[0] === 'pinned-partition-metadata' ? entry[3] : null,
+    descriptor = entry[4];
+  const compatible =
+    !descriptor ||
+    (descriptor[4][0] === 'base' && pin !== null && same(descriptor[4][1], pin[7])) ||
+    (descriptor[4][0] === 'empty' && descriptor[4][1] === 'generation' && pin?.[7] === null);
+  return pin && compatible && same(pin[8], metadataSummaryProfile()) ? pin : null;
+}
+
+async function unchangedOverlay(attempt: PostAttempt, options: LifecycleOptions): Promise<boolean> {
+  const {
+    store,
+    generation,
+    handoff: { header, entries },
+  } = attempt;
+  if (
+    header[1] !== 7 ||
+    header[14] !== 'pristine' ||
+    header[11] ||
+    !generation ||
+    generation[5] !== lineageId(header[2]) ||
+    entries.some((entry) => !reusablePin(entry))
+  ) {
+    return false;
+  }
+  const overlay = header[13],
+    target = overlay[10];
+  if (
+    target &&
+    (entries.some((entry) => entry[1] !== target && reusablePin(entry)?.[7] !== null) ||
+      (await hasPotentialOverlayChanges(store, store.root.path, '', options, target)))
+  ) {
+    return false;
+  }
+  return !(await hasPotentialOverlayChanges(
+    store,
+    store.root.resolve(overlay[2] + '/upper'),
+    target,
+    options,
+  ));
+}
+
 /** Fresh post consumes the successful compact handoff and the actual GC survivor owner. */
 export async function postStreamingBase(input: BasePostRequest): Promise<BasePostResult> {
   const opened = await OpenedInvocation.open(input.anchor, input.budget, input.cleanupSignal),
@@ -63,6 +114,24 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
   let window: ExclusiveWindow | undefined,
     captured: ObservationIndex | undefined,
     owner: GcSurvivorOwner | undefined;
+  const overlay = attempt.handoff.header[13];
+  let clearProjection: (() => void) | undefined;
+  let retirementStarted = false,
+    overlayRetired = false;
+  const retireMount = async () => {
+    clearProjection?.();
+    clearProjection = undefined;
+    if (overlay) {
+      retirementStarted = true;
+      await store.assertNoIntents();
+      await retireOverlay(store, overlay, request.overlayMount!);
+      overlayRetired = true;
+    }
+  };
+  const finish = async (result: BasePostResult) => {
+    await retireMount();
+    await attempt.finish(['outcome', result.outcome, result.key, null, null]);
+  };
   const sources: MetadataPublicationSource[] = [],
     snapshots: MetadataSnapshot[] = [];
   let failure: unknown, answer: BasePostResult | undefined;
@@ -87,6 +156,12 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
       await attempt.guard();
       answer = { outcome: terminal[1] as BasePostResult['outcome'], key: terminal[2] };
     } else {
+      if (overlay) {
+        if (!request.overlayMount) {
+          throw new Error('OverlayFS mount driver unavailable in post.');
+        }
+        await verifyOverlay(store, overlay, request.overlayMount);
+      }
       const gate = await timed(
         request,
         'required quiescence',
@@ -94,7 +169,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
         (r) => r.status,
       );
       if (gate.status !== 'ready') {
-        if (request.required || role === 'distributed-aggregator') {
+        if (overlay || request.required || role === 'distributed-aggregator') {
           throw new Error('Required base post is not quiescent: ' + gate.message);
         }
         const retained = [
@@ -128,15 +203,30 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
         };
         await request.removeHooks(store);
         await attempt.guard();
-        const observation = await timed(options, 'observation capture and index construction', () =>
-          captureObservations(store, {
-            ...options,
-            retainIndex: true,
-            summaries: request.summaries,
-            purgeWindow: attempt.handoff.header[6] === 'enabled' ? window!.purgeWindow : undefined,
-          }),
-        );
-        captured = observation.index!;
+        if (overlay) {
+          await verifyOverlay(store, overlay, request.overlayMount!);
+        }
+        const provenUnchanged = overlay && (await unchangedOverlay(attempt, options));
+        if (!provenUnchanged) {
+          if (overlay) {
+            clearProjection = projectOverlay(store, overlay, (relative) =>
+              withinOverlay(overlay[10], relative),
+            );
+          }
+          const observation = await timed(
+            options,
+            'observation capture and index construction',
+            () =>
+              captureObservations(store, {
+                ...options,
+                retainIndex: true,
+                summaries: request.summaries,
+                purgeWindow:
+                  attempt.handoff.header[6] === 'enabled' ? window!.purgeWindow : undefined,
+              }),
+          );
+          captured = observation.index!;
+        }
         // Provider/confirmation admission precedes actual GC, source plans and evacuation.
         let backend: BaseCacheBackend | undefined,
           confirmation = true,
@@ -166,10 +256,21 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
               await MetadataSnapshot.retireHandoff(store, entry[4], options);
             }
           }
-          await captured.dispose();
+          await captured?.dispose();
           captured = undefined;
-          await attempt.finish(['outcome', outcome, null, null, null]);
           answer = { outcome, key: null };
+          await finish(answer);
+        } else if (provenUnchanged) {
+          for (const entry of attempt.handoff.entries) {
+            const reused = reusablePin(entry)![7] === null ? 'empty' : 'reuse';
+            request.summaries?.choice(entry[1], reused);
+            timingDecision(options, `partition publication [partition=${entry[1]}]`, reused);
+            if (entry[4]) {
+              await MetadataSnapshot.retireHandoff(store, entry[4], options);
+            }
+          }
+          answer = { outcome: 'no-change', key: attempt.generation![11] };
+          await finish(answer);
         } else {
           owner = await timed(options, 'GC', () => GcSurvivorOwner.execute(captured!, options));
           captured = undefined;
@@ -207,19 +308,8 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
             for (const entry of attempt.handoff.entries) {
               const partition = entry[1],
                 summary = set.summary(partition),
-                pin = entry[3]?.[0] === 'pinned-partition-metadata' ? entry[3] : null,
-                descriptor = entry[4];
-              const compatibleOrigin =
-                !descriptor ||
-                (descriptor[4][0] === 'base' && pin !== null && same(descriptor[4][1], pin[7])) ||
-                (descriptor[4][0] === 'empty' &&
-                  descriptor[4][1] === 'generation' &&
-                  pin?.[7] === null);
-              const reuse =
-                pin !== null &&
-                compatibleOrigin &&
-                same(pin[8], metadataSummaryProfile()) &&
-                same(pin[9], summary);
+                pin = reusablePin(entry);
+              const reuse = pin !== null && same(pin[9], summary);
               if (reuse) {
                 choices.push(pin[7] === null ? ['empty', partition] : ['reuse', partition, pin[7]]);
               } else {
@@ -244,10 +334,17 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
           if (unchanged && prior[5] === lineage) {
             answer = { outcome: 'no-change', key: prior[11] };
           } else {
+            const staged: [string, MetadataPublicationSource][] = [];
             for (const choice of choices) {
               if (choice[0] === 'new') {
                 const partition = model.partitions.find((p) => p[0] === choice[1])!;
-                if (ownsLocalSnapshot(partition, store.codec.options)) {
+                if (overlay && !overrides.some(([id]) => id === partition[0])) {
+                  const copy = await MetadataSnapshot.stageOverlay(live, partition[0], options);
+                  snapshots.push(copy);
+                  const source = await MetadataPublicationSource.snapshot(copy);
+                  sources.push(source);
+                  staged.push([partition[0], source]);
+                } else if (ownsLocalSnapshot(partition, store.codec.options)) {
                   const snapshot = await MetadataSnapshot.copy(
                     live,
                     partition[0],
@@ -261,7 +358,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
                 }
               }
             }
-            set = MetadataPublicationSet.select(live, overrides);
+            set = MetadataPublicationSet.select(live, overrides, staged);
             const result = await timed(
               options,
               'base publication',
@@ -296,7 +393,7 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
             ]),
           );
           owner = undefined;
-          await attempt.finish(['outcome', answer.outcome, answer.key, null, null]);
+          await finish(answer);
         }
       }
     }
@@ -315,9 +412,26 @@ export async function postStreamingBase(input: BasePostRequest): Promise<BasePos
         failure,
       ),
     );
+    if (failure !== undefined && overlay && window && !retirementStarted) {
+      await retireMount();
+    }
+  } catch (cleanup) {
+    failure =
+      failure === undefined
+        ? cleanup
+        : new AggregateError([failure, cleanup], 'Base post cleanup failed.');
   } finally {
-    window?.close();
-    attempt.close();
+    clearProjection?.();
+    try {
+      if (failure !== undefined && overlay && !overlayRetired) {
+        request.onWarning?.('OverlayFS state retained at ' + store.root.resolve(overlay[2]));
+      }
+    } catch (report) {
+      failure = new AggregateError([failure, report], 'OverlayFS retention reporting failed.');
+    } finally {
+      window?.close();
+      attempt.close();
+    }
   }
   if (failure !== undefined) {
     throw failure;

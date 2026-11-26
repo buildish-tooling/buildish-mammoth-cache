@@ -192,7 +192,7 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
       },
       onWarning: (message) => host.warning(message),
     });
-    host.info('Incomplete Gradle layer activation settled without cache capture or publication.');
+    host.info('Incomplete cache layer activation settled without cache capture or publication.');
     return { outcome: 'skipped' as const };
   }
   const summaries = new PartitionSummaries(opened.store.codec.options.model, budget, d.analytics);

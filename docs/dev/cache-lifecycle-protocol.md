@@ -118,6 +118,9 @@ policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|nul
 ["handoff",6,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef],
  actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,overlayDescriptor]
+["handoff",7,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+ cleanupEnabled,null,[exactGenerationKey,generationRef],
+ actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,overlayDescriptor,pristine|other]
 ["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
 provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
@@ -186,6 +189,23 @@ Upper-layer workers declare incomplete usage in their worker identity. After
 accepting all selected archives, aggregator prepare freezes timestamp GC as
 disabled if any of those identities reports incomplete usage. Restore cleanup
 and authoritative snapshot selection keep their existing policies.
+
+Version 7 adds writable standalone and aggregator overlays. The mounted lower
+contains the prepared cache after installation of accepted worker contributions.
+Publisher eligibility requires ordinary restore cleanup, disabled timestamp GC,
+and no enabled purge rules. Post verifies the frozen mount and settles consumers
+before capture. A proven unchanged job can reuse the current-lineage generation
+from the exact compatible pins without walking inherited payload. That decision
+requires a pristine pre-install managed projection, zero accepted worker archives
+and no possible managed changes in upper or outside the mount.
+
+Other publisher cases compare complete merged-view summaries with the original
+generation pins, including worker contributions and local deletions. New
+partitions that use that view are copied into private staging before SDK save.
+The new object's metadata reflects the staged copy, whose timestamp precision
+can be lower than the native merged view. Reuse compares the pre-copy summary.
+Post releases publication readers before unmounting and retains the mount when
+settlement or safe retirement fails.
 
 The header is followed by exactly one ordered row per model partition. All bounded
 controls are O(P), with P at most 64 and worker count at most 16. The exact generation

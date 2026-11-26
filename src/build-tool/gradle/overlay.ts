@@ -127,14 +127,18 @@ export const gradleOverlay: OverlayPolicy = {
     if (
       !inputs.existingDependencyLayer &&
       inputs.hasWrapper?.() &&
-      gradleOverlayCandidate(store) &&
-      (await gradleDependencySources(store, restored))
+      restored.generation &&
+      (store.codec.options.role !== 'distributed-worker' ||
+        (gradleOverlayCandidate(store) && (await gradleDependencySources(store, restored))))
     ) {
       return '';
     }
   },
   accepts(store, target) {
-    return target === '' && gradleOverlayCandidate(store);
+    return (
+      target === '' &&
+      (store.codec.options.role !== 'distributed-worker' || gradleOverlayCandidate(store))
+    );
   },
   capture(store, overlay, options) {
     return gradleOverlayCapture(

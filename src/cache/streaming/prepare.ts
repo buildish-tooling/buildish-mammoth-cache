@@ -53,7 +53,13 @@ import type { DependencyLayer } from './dependency-layer-descriptor';
 import { retireInstallStaging } from './owned-retirement';
 import { settleNativeCleanup } from './native-operation';
 import { assertEmptyManagedArea } from './prepare-admission';
-import { activateOverlay, retireOverlay, type Overlay } from './overlay';
+import {
+  activateOverlay,
+  hasPotentialOverlayChanges,
+  publisherOverlayAllowed,
+  retireOverlay,
+  type Overlay,
+} from './overlay';
 import type { BaseCacheBackend } from '../backend';
 import type { WorkflowArtifactBackend } from '../../delta/backend';
 
@@ -275,9 +281,14 @@ export async function prepareStreaming(
       options,
     );
     const mountTarget =
-      !seed && request.overlayFs && request.overlayMount && request.policy.restoreCleanup === 'none'
+      !seed &&
+      request.policy.access === 'writable' &&
+      request.overlayFs &&
+      request.overlayMount &&
+      request.policy.restoreCleanup === 'none'
         ? await lifecycle.overlay?.prepareTarget(store, restored, request)
         : undefined;
+    const publisher = request.policy.role !== 'distributed-worker';
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
       required = new Set(request.policy.ordinaryOrder);
@@ -296,6 +307,12 @@ export async function prepareStreaming(
         })),
       );
     }
+    const pristine =
+      mountTarget !== undefined &&
+      publisher &&
+      downloads.length === 0 &&
+      publisherOverlayAllowed(request.model, age !== null, request.cleanupEnabled) &&
+      !(await hasPotentialOverlayChanges(store, store.root.path, '', options));
     const selectedJobs = new Set(downloads.map((download) => download.context[4]));
     // Pins already refer to the exact materialized base BEFORE extras or worker overlays.
     const fallback = new Map<string, MetadataSnapshot>();
@@ -415,7 +432,15 @@ export async function prepareStreaming(
     await timed(options, 'install staging retirement', () =>
       retireInstallStaging(store, installOwner, options, assertCurrent),
     );
-    if (mountTarget !== undefined) {
+    if (
+      mountTarget !== undefined &&
+      (!publisher ||
+        publisherOverlayAllowed(
+          request.model,
+          age !== null && !accepted?.incompleteUsage,
+          request.cleanupEnabled,
+        ))
+    ) {
       const target = mountTarget === '' ? store.root.binding : await store.root.stat(mountTarget);
       if (target?.[2] === 'directory') {
         overlay = await activateOverlay(store, mountTarget, target, request.overlayMount!);
@@ -436,7 +461,7 @@ export async function prepareStreaming(
     }
     const header: HandoffHeader = handoffSchemas(codec).header.parse([
       'handoff',
-      overlay ? 6 : 4,
+      overlay ? (publisher ? 7 : 6) : 4,
       request.currentRef,
       request.defaultRef ?? null,
       request.captureTempDirectory,
@@ -448,7 +473,7 @@ export async function prepareStreaming(
       cutoff,
       downloads.length,
       seed ?? null,
-      ...(overlay ? [overlay] : []),
+      ...(overlay ? (publisher ? [overlay, pristine ? 'pristine' : 'other'] : [overlay]) : []),
     ]);
     checkHandoffGeneration(
       store,
