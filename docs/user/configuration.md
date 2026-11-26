@@ -171,14 +171,16 @@ runtime outputs, and these reference rows cannot silently diverge.
 - Controls cache coordination behavior.
 - Use `prepare-only` in a planning job to emit `dependency-gc-due` before selecting worker jobs.
   It reads only the generation record and skips cache installation, build-tool provisioning, and
-  cache publication. Compare the output with the string `'true'` when selecting all workers.
-  The output is `unknown` when the cache backend cannot distinguish a miss from a lookup failure.
+  cache publication. See [periodic GC in distributed jobs](../distributed-jobs/#periodic-gc)
+  for wiring the output into a workflow.
 
 ### `dependent-jobs`
 
-- Default: empty
-- Comma- or newline-separated job names.
-- Only valid with distributed job modes.
+- Comma- or newline-separated Mammoth job names consumed by a distributed aggregator.
+- Defaults to empty. Mammoth uses the effective list both to require ordinary worker envelopes
+  and to check coverage for a complete periodic sweep.
+- Use the workflow job IDs or the exact names supplied by `github-job-name`. An empty list cannot
+  establish full coverage. See [periodic GC in distributed jobs](../distributed-jobs/#periodic-gc).
 
 ### `worker-artifact-retention-days`
 
@@ -259,11 +261,16 @@ or process memory guarantee.
 
 - Default: `timestamp`
 - Supported values: `off`, `timestamp`
-- Controls best-effort garbage collection of managed cache files before standalone or
-  distributed-aggregator jobs save the base cache.
-- `timestamp` deletes old-mtime files without activity protection during this build.
-- Activity uses ctime/mtime/atime crossing the post-prepare cutoff. No historical last-use grace is stored; filesystem/clock misses can cause redownloads.
-- `off` disables deletion only, retaining tracking, exchange and otherwise required publication.
+- `timestamp` enables periodic sweeps of inherited files in managed aggregate partitions before
+  a writable standalone or aggregator job saves the base cache. A sweep can evict an old file
+  when capture observed no activity. The existing worker-local cleanup and single-writer snapshot
+  rules still apply.
+- Activity is best effort. It uses ctime, mtime, and atime relative to the post-prepare cutoff.
+  Filesystem or clock behavior can hide access. Gradle or Maven build-cache hits can also skip
+  work that would have read a dependency. GC can then evict a dependency that a later build needs
+  to download again.
+- `off` disables timestamp eviction and reports GC as fresh. Tracking, exchange, and otherwise
+  required publication continue.
 - Set `off` when jobs must retain rarely used old cache entries, for example offline-style builds that cannot redownload pruned dependencies.
 
 ### `cache-gc-older-than-days`
@@ -273,6 +280,25 @@ or process memory guarantee.
 - Age threshold for `cache-gc-mode: timestamp`.
 - Grace measures file age, not historical inactivity. Deferred/coalesced atime and `noatime` can hide current use.
 - Increase this value if your Gradle or Maven build uses a large dependency set with artifacts that are valid but touched infrequently.
+
+### `dependency-gc-interval-days`
+
+- Default: `3`. Accepts a positive duration in days, including fractions.
+- Measured from the last completed sweep in the selected cache generation. A generation with no
+  recorded completion is due immediately. When restore falls back to the default ref, the schedule
+  uses that generation's timestamp.
+- A successful sweep advances the timestamp even if every partition object can be reused.
+  Ordinary publication carries the previous timestamp forward.
+
+### `dependency-gc-force-grace-days`
+
+- Default: `1`. Accepts a nonnegative duration in days, including fractions, or `off`.
+- An aggregator can sweep with incomplete coverage after this grace period elapses past the
+  regular due time. With the defaults that is four days after the last completed sweep.
+  `0` allows forcing as soon as GC is due. A generation with no recorded completion can be forced
+  immediately unless forcing is `off`.
+- A forced sweep still requires an admitted base, usable writable capture, and successful
+  publication. The aggregator still applies its ordinary worker artifact requirements.
 
 ### `restore-cleanup-mode`
 
@@ -463,7 +489,8 @@ Both actions expose the same cache lifecycle outputs after prepare:
 | `base-cache-restore-status`      | `feature-unavailable`, `miss`, `current-lineage-hit`, `fallback-lineage-hit`, `current-lineage-partial-hit`, or `fallback-lineage-partial-hit` |
 | `restored-cache-key`             | Selected generation with at least one restored/explicit-empty partition, or empty on a miss                                                    |
 | `read-only`                      | Effective write policy as `true` or `false`                                                                                                    |
-| `job-mode`                       | Effective standalone or distributed mode                                                                                                       |
+| `job-mode`                       | Effective mode for ordinary prepare                                                                                                            |
+| `dependency-gc-due`              | Whether a sweep is due for the selected generation, as `true`, `false`, or `unknown`                                                           |
 | `dependent-delta-status`         | `not-configured`, `applied`, or `skipped-read-only`                                                                                            |
 | `dependent-delta-artifact-count` | Number of worker artifacts applied during prepare                                                                                              |
 
@@ -472,6 +499,12 @@ another service lookup. Historical backend unavailability is not stored solely f
 reporting. Freshly observed unavailability reports `feature-unavailable`. A generation
 whose partitions are all missing is also a miss with no restored key; an explicitly
 empty partition counts as a successful restore.
+
+`dependency-gc-due` is available in all job modes, including read-only jobs. `true` means the
+generation is due. `false` means it is fresh or timestamp GC is disabled. `unknown` means no
+generation record could be selected and admitted. An admitted record supplies the due signal
+even if its partition objects are missing. `prepare-only` emits only this output. Each participant
+checks the generation it selects during its own prepare.
 
 Generation keys are finalize outcomes and are intentionally not planned prepare outputs. The job
 summary and finalize log report the exact key only after a successful publication.
@@ -483,10 +516,10 @@ summary and finalize log report the exact key only after a successful publicatio
 ### `dependency-cache-layer`
 
 - Default: `true`.
-- Use the same value in every cooperating publisher and worker. It selects a distinct cache family
-  whose publishers retain eligible dependency partitions, including when no seed activates.
-- Set `false` across cooperating jobs to use the ordinary Gradle cache family and its timestamp GC
-  policy. Upgrading an ordinary family to the new default starts the layered family cold unless
+- Use the same value in every cooperating publisher and worker. It selects a distinct cache family.
+  Periodic GC applies to aggregate dependency partitions within that family.
+- Set `false` across cooperating jobs to use the ordinary Gradle cache family. Upgrading an ordinary
+  family to the new default starts the layered family cold unless
   caches from a previous opt-in are available.
 - Activation requires a writable distributed worker, a selected wrapper, `restore-cleanup-mode: none`,
   no selected single-writer ownership, and both dependency partitions in the supported layout.

@@ -309,6 +309,15 @@ capture can supply evidence even if the build step was skipped. Readers supporti
 version 3 accept versions 1 and 2 for ordinary merge. A worker emitting version 3
 needs an aggregator that supports it.
 
+The aggregator qualifies version 3 evidence before combining usage streams.
+Full coverage requires an admitted contribution from every effective `dependent-jobs`
+name in the aggregator's run and attempt, tied to its exact restored generation
+and covering every in-scope aggregate partition. An admitted snapshot writer
+outside that list can supply positive usage for its covered partitions. Older
+attempts, generation mismatches, and incomplete captures remain eligible for
+ordinary merge under the existing rules. A forced sweep imports qualified positive
+usage and preserves accepted upserts from all ordinary contributions.
+
 All intermediate controls have names `.mammoth-meta/<sequence>.json`, where sequence
 starts at 1 and increases by exactly 1, using decimal digits without leading zeros.
 Sequence counts controls, not payloads. There are no physical metadata-directory

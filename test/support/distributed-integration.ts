@@ -18,7 +18,7 @@ import { execFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 import { nativeCacheBackend, cleanupBaseFixtures } from '../cache/streaming/native-cache-fixture';
 import { memoryArtifacts } from '../cache/streaming/memory-artifact-fixture';
 import { gradleExecutable } from './gradle-executable';
@@ -30,10 +30,16 @@ export async function distributedReuse(tool: 'gradle' | 'maven') {
   const root = await mkdtemp(path.resolve('build/integration-' + tool + '-reuse-'));
   let passed = false;
   try {
-    const { backend: cache } = await nativeCacheBackend();
+    const { backend: cache, calls } = await nativeCacheBackend();
     const artifacts = memoryArtifacts();
     const fixture = path.resolve('test/fixtures/integration', tool + '-project');
-    async function job(name: string, mode: string, readOnly = false) {
+    async function job(
+      name: string,
+      mode: string,
+      readOnly = false,
+      inputs: Record<string, string> = {},
+      now?: () => number,
+    ) {
       const rootDirectory = path.join(root, name);
       const result = await streamingIntegrationJob({
         root: rootDirectory,
@@ -42,6 +48,7 @@ export async function distributedReuse(tool: 'gradle' | 'maven') {
         name,
         cache,
         artifacts: artifacts.api,
+        now,
         inputs: {
           'job-mode': mode,
           'read-only': String(readOnly),
@@ -53,6 +60,7 @@ export async function distributedReuse(tool: 'gradle' | 'maven') {
               : [{ id: 'repository', 'conflict-handling': 'choose-worker-directory' }]),
             { id: 'proof', includes: ['proof/**'] },
           ]),
+          ...inputs,
         },
       });
       await cp(fixture, result.workspace, { recursive: true });
@@ -144,9 +152,60 @@ export async function distributedReuse(tool: 'gradle' | 'maven') {
     await verify(parent);
     expect(artifacts.api.deleteArtifact).not.toHaveBeenCalled();
     expect(artifacts.objects.size).toBe(2);
-    const reader = await job('reader', 'standalone', true);
+    const timestampGc = { 'cache-gc-mode': 'timestamp' };
+    const afterGrace = Date.now() + 4 * 86400000 + 60 * 60 * 1000;
+    let sweptKey: string | undefined;
+    if (tool === 'maven') {
+      const bootstrap = await job('initial-sweep', 'standalone', false, timestampGc);
+      await bootstrap.prepare();
+      expect(bootstrap.outputs['dependency-gc-due']).toBe('true');
+      expect((await bootstrap.post()).outcome).toBe('published');
+
+      const planner = await job('planner', 'prepare-only', true, timestampGc, () => afterGrace);
+      calls.length = 0;
+      expect(await planner.prepare()).toEqual({ outcome: 'generation-checked' });
+      expect(planner.outputs).toEqual({ 'dependency-gc-due': 'true' });
+      expect(calls.filter(({ kind }) => kind === 'restore').map(({ paths }) => paths)).toEqual([
+        ['record.json'],
+      ]);
+      expect((await planner.post()).outcome).toBe('skipped');
+
+      // Workers were gated off. The aggregator performs its own lookup after the force deadline.
+      const forced = await job(
+        'forced-sweep',
+        'distributed-aggregator',
+        false,
+        { ...timestampGc, 'dependent-jobs': '' },
+        () => afterGrace,
+      );
+      await forced.prepare();
+      expect(forced.outputs['dependency-gc-due']).toBe('true');
+      expect(forced.outputs['dependent-delta-artifact-count']).toBe('0');
+      calls.length = 0;
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(afterGrace);
+      const result = await forced.post().finally(() => clock.mockRestore());
+      if (result.outcome !== 'published' || !result.key) {
+        throw new Error('Expected the forced sweep to publish a generation.');
+      }
+      sweptKey = result.key;
+      expect(sweptKey).not.toBe(forced.outputs['restored-cache-key']);
+      expect(calls.filter(({ kind }) => kind === 'save').map(({ paths }) => paths)).toEqual([
+        ['record.json'],
+      ]);
+    }
+    const reader = await job(
+      'reader',
+      'standalone',
+      true,
+      sweptKey ? timestampGc : {},
+      sweptKey ? () => afterGrace + 1000 : undefined,
+    );
     await reader.prepare();
     expect(reader.outputs['base-cache-restore-status']).toBe('current-lineage-hit');
+    if (sweptKey) {
+      expect(reader.outputs['restored-cache-key']).toBe(sweptKey);
+      expect(reader.outputs['dependency-gc-due']).toBe('false');
+    }
     await verify(reader);
     await resolveBoth(reader);
     expect((await reader.post()).outcome).toBe('read-only');

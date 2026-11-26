@@ -62,10 +62,12 @@ sequenceDiagram
 2. The build runs normally.
 3. Worker finalize scans metadata before its own content reads and uploads selected upserts/usage.
    Empty observation sets still produce completion envelopes. Workers never save the base.
-4. Aggregate prepare validates/applies selected envelopes and retains upstream activity before C.
+4. Aggregate prepare validates and applies selected envelopes and retains upstream activity
+   before recording its own cutoff.
    Used-only paths do not recreate absent files.
 5. Aggregate finalize performs eligible GC and requires successful publication for upserts, GC
-   removal or a nonempty miss. Usage alone does not require a generation. Base reuse follows
+   removal or a nonempty miss. A successful sweep also publishes its completion timestamp.
+   Usage alone does not require a generation. Base reuse follows
    observed metadata and may miss byte rewrites with identical metadata. Aggregate partitions exchange no deletion tombstones. A
    single-writer snapshot replaces its complete configured membership, including removals, and
    metadata-only changes independently require publication.
@@ -313,6 +315,76 @@ jobs:
           dependent-jobs: worker-a, worker-b
 ```
 
+## Periodic GC
+
+Workers and aggregators check `dependency-gc-due` during prepare. Each job discovers its own
+generation in the shared cache family. While GC is fresh, eligible workers can use OverlayFS or
+the Gradle read-only seed. Due writable jobs use the ordinary writable capture path to observe
+dependency access times. An aggregator may still publish ordinary changes when coverage is
+insufficient for a sweep.
+
+The aggregator checks full coverage against its effective `dependent-jobs` list. Include every
+worker whose workload you expect to count, including conditional workers and the metadata writer
+where applicable. Each listed worker must provide usable sweep evidence from the current run and
+attempt for the exact generation the aggregator restored. If workers restore different generations,
+Mammoth warns and excludes the mismatched evidence from sweep coverage. A snapshot writer discovered
+outside the list can still supply usable activity. A subset passed to `dependent-jobs` is the subset
+the aggregator checks. An empty list cannot establish full coverage.
+
+Coverage uses Mammoth job names, which default to workflow job IDs. If you set `github-job-name`,
+use those exact names in `dependent-jobs`. Mammoth does not expand a matrix job name into its cells
+or infer which cells ran. Matrix contributions count by their distinct configured producer names.
+
+With the defaults, GC is due three days after the last completed sweep. An aggregator can sweep
+with incomplete coverage after one more day, provided it can still prepare and publish under the
+ordinary artifact rules. A required envelope missing from `dependent-jobs` still fails ordinary
+prepare. A generation with no recorded sweep is due immediately, and forcing is immediately eligible
+when enabled. See [`dependency-gc-interval-days`](../configuration/#dependency-gc-interval-days)
+and [`dependency-gc-force-grace-days`](../configuration/#dependency-gc-force-grace-days).
+
+Access evidence is best effort. A Gradle or Maven build-cache hit can skip work that would have read
+a dependency. A worker can complete capture even if its build step was skipped. An old dependency
+can then be evicted and downloaded again on a later build.
+
+### Use the due hint with conditional jobs
+
+Workflows that already run their full worker set can keep their existing job graph. If you select
+workers using change detection, you can add an earlier job with `job-mode: prepare-only`. Use the
+same cache-family inputs and ref settings that the workers and aggregator use. This mode reads the
+generation record and emits `dependency-gc-due`. It skips restoring partitions and provisioning the
+build tool. Expose the step output as a job output and let an explicit `'true'` run all worker jobs
+that contribute to the full set. Keep your existing gates for `false` and `unknown`, including any
+trusted event or ref conditions.
+
+For example, add this job alongside an existing `changes` job and add the planner to each gated
+worker's `needs`. This excerpt shows one worker gate. Keep each worker's normal prepare, build, and
+post lifecycle.
+
+```yaml
+jobs:
+  cache-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      dependency-gc-due: ${{ steps.mammoth.outputs.dependency-gc-due }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        id: mammoth
+        with:
+          job-mode: prepare-only
+          config-file: .github/buildish-mammoth-gradle.yml
+
+  worker-a:
+    needs: [changes, cache-plan]
+    if: ${{ needs.cache-plan.outputs.dependency-gc-due == 'true' || needs.changes.outputs.run-worker-a == 'true' }}
+    # Keep the existing runner and worker steps here.
+```
+
+Each job still performs its own lookup. The planner output is a scheduling hint. The aggregator
+checks the artifacts it actually admits before deciding whether to sweep. If your aggregator also
+runs after some workers were skipped, pass the effective producer list for that execution. Pass the
+full list when the due hint opens all gates.
+
 ## Requirements and constraints
 
 Upgrade all workers, snapshot writers, aggregators and cache readers together
@@ -422,11 +494,12 @@ cache-partitions:
 
 The Gradle dependency layer is enabled by default. An eligible writable distributed worker can
 consume an invocation-owned read-only dependency seed while keeping misses in its writable user
-home. Standalone jobs and aggregators can publish to the same retained family. The designated
-dependency-metadata writer uses an ordinary writable installation.
+home. Eligible Linux workers try OverlayFS first while GC is fresh. Due runs use ordinary writable
+capture. Standalone jobs and aggregators publish to the same family, and the designated writer keeps
+authority over the complete dependency metadata snapshot.
 
-Keep the same setting across cooperating jobs. To use the ordinary cache family and timestamp GC
-policy, set `dependency-cache-layer: false` on every publisher and worker.
+Keep the same setting across cooperating jobs. To use the ordinary cache family, set
+`dependency-cache-layer: false` on every publisher and worker.
 
 ```yaml
 - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
@@ -458,8 +531,7 @@ runs cleanup only and publishes no worker envelope. Uncertain ownership or quies
 reported diagnostic state rather than deleting a potentially live or replaced path.
 
 Inherited dependency bytes still download and extract once into the seed. They avoid writable
-capture and worker-delta upload; new dependencies use the writable head. Publishers retain marked
-aggregate dependency partitions instead of timestamp eviction in this family. This can grow backend
-storage; seed sweeps and capacity eviction are deferred. Metadata retains its complete snapshot and
+capture and worker-delta upload. New dependencies use the writable cache. Publisher sweeps apply
+to aggregate dependency partitions in this family. Metadata retains its complete snapshot and
 designated-writer semantics. Gradle workflows moving from the ordinary family start the layered
 family cold unless a previous opt-in has already populated it.
