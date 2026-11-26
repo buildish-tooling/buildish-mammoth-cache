@@ -58,7 +58,7 @@ The [accepted release contract](RELEASE-CONTRACT.md) fixes the following terms:
 | Source and notes | S reachable from main, successful trusted push CI, and required notes read from S at `buildish-release-tooling/release-notes/{version}.md`.                                                    |
 | Approval         | Manual approval by an authorized maintainer, recorded against exact candidate tag/digest; GitHub repository/workflow permissions authorize dispatch and reruns.                                |
 | Legal            | Existing conservative dependency-license gate plus bundled LICENSE/NOTICE verification form the initial release policy.                                                                        |
-| Docs             | Group by `X.Y`; explicitly curate line/latest recommendations after successful promotion, with no implied support windows.                                                                     |
+| Docs             | Group by `X.Y`; run the verified post-release import after successful promotion. Support windows require explicit curation.                                                                    |
 
 The first version remains a dispatch input. Approver identities, deployment settings,
 actual signing usability, hosted workflow/environment behavior, and deployment bindings
@@ -452,15 +452,16 @@ release completion and the applicable branch/worktree/import authorization:
 tools/versioned-docs/checkout.sh --create
 # For an existing published branch instead, use checkout.sh without --create,
 # followed by update.sh when an explicit fetch/fast-forward is intended.
-tools/versioned-docs/import.sh --version "$RELEASE_VERSION"
+tools/versioned-docs/import.sh --post-release --version "$RELEASE_VERSION"
 git -C docs/releases status --short --untracked-files=all
 git -C docs/releases diff
 python3 -m json.tool docs/releases/provider-snapshot.json
 ```
 
 Set `RELEASE_VERSION` to the completed stable version. Acquire its exact final tag
-separately before import; import does not fetch. Docs come from that final tag's
-`docs/` tree and inventory records the resolved final commit M. Review all generated
+separately before import. The post-release mode checks the published GitHub Release
+and matches the hosted tag commit to the local tag. Docs come from that final tag's
+`docs/` tree and the snapshot records the resolved final commit M. Review all generated
 records and copies; inspect untracked files directly because `git diff` omits them.
 Then commit and publish the docs branch only with separate
 authorization. A tag is not proof of publication. Retain incomplete attempts as hidden
@@ -469,9 +470,9 @@ deleting records and allowing the next import to rediscover them.
 
 Component `site/component.yaml` defines the shared `mammoth-cache` artifact and its
 static version stream. The snapshot's scoped `artifacts[]` entry owns release lines,
-exact release policy, and explicit latest designations. Group versions by `X.Y` in metadata and explicitly curate recommendations only after
-successful promotion. No support windows are implied. Importing tags does not advance `latestStable` or a line's `latest`.
-Preserve prior scoped policy during import/rebuild and validate the complete snapshot
+exact release policy, and explicit latest designations. Post-release import records
+the version's `X.Y` membership and advances the line and overall pointers when
+appropriate. Tag-only import and rebuild preserve prior scoped policy. Validate the complete snapshot
 and its line/target relationships with Pipeline before publishing it.
 
 The aggregate website owns source/layout bindings and publication selection, binds

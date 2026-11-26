@@ -26,11 +26,13 @@ import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.request import Request, urlopen
 
-DEFAULT_REMOTE = "https://github.com/buildish-tooling/buildish-mammoth-cache.git"
+GITHUB_REPOSITORY = "buildish-tooling/buildish-mammoth-cache"
+REPOSITORY = f"https://github.com/{GITHUB_REPOSITORY}"
+DEFAULT_REMOTE = f"{REPOSITORY}.git"
 COMPONENT = "mammoth-cache"
 PROVIDER = "mammoth-cache-tags"
-REPOSITORY = "https://github.com/buildish-tooling/buildish-mammoth-cache"
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 PUBLICATION_STATES = (None, "published", "hidden", "withdrawn", "tombstoned")
@@ -165,6 +167,98 @@ def version_key(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.split("."))
 
 
+def github_json(endpoint: str) -> dict:
+    request = Request(
+        f"https://api.github.com/repos/{GITHUB_REPOSITORY}/{endpoint}",
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            data = json.load(response)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"GitHub lookup failed for {endpoint}: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a GitHub object for {endpoint}")
+    return data
+
+
+def hosted_tag_commit(tag: str) -> str:
+    ref = f"refs/tags/{tag}"
+    response = github_json(f"git/ref/tags/{tag}")
+    if response.get("ref") != ref:
+        raise ValueError(f"GitHub did not return the exact ref {ref}")
+    target = response.get("object")
+    seen = set()
+    while isinstance(target, dict):
+        sha = target.get("sha")
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+            break
+        if target.get("type") == "commit":
+            return sha
+        if target.get("type") != "tag" or sha in seen:
+            break
+        seen.add(sha)
+        target = github_json(f"git/tags/{sha}").get("object")
+    raise ValueError(f"GitHub ref {ref} does not resolve to a commit")
+
+
+def verified_publication_time(tag: str, commit: str) -> str:
+    release = github_json(f"releases/tags/{tag}")
+    if (
+        release.get("tag_name") != tag
+        or release.get("draft") is not False
+        or release.get("prerelease") is not False
+    ):
+        raise ValueError(f"GitHub does not report a final published release for {tag}")
+    published_at = release.get("published_at")
+    try:
+        if not isinstance(published_at, str):
+            raise ValueError
+        datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        raise ValueError(
+            f"GitHub release {tag} has no valid publication timestamp"
+        ) from None
+    # target_commitish may name a branch. Resolve the hosted tag itself.
+    if hosted_tag_commit(tag) != commit:
+        raise ValueError(f"GitHub tag {tag} does not match the local commit {commit}")
+    return published_at
+
+
+def published_metadata(record: dict, artifacts: list) -> tuple[dict, list]:
+    version = record["version"]
+    line_key = version.rsplit(".", 1)[0]
+    artifact = artifacts[0] if artifacts else artifact_identity()
+    for facts in (record, *(artifact.get("releases") or [])):
+        if facts["version"] != version:
+            continue
+        if facts.get("publicationState") not in (None, "published"):
+            raise ValueError(
+                f"Release {version} is excluded by snapshot publication policy"
+            )
+        if facts.get("releaseLine") not in (None, line_key):
+            raise ValueError(f"Release {version} has a conflicting primary release line")
+
+    commit = record["commitSha"]
+    published_at = verified_publication_time(record["tag"], commit)
+    record = {
+        **record,
+        "releaseLine": line_key,
+        "publicationState": "published",
+        "publishedAt": published_at,
+        "docsSource": {"repository": REPOSITORY, "root": "docs", "ref": commit},
+    }
+    lines = {line["key"]: line for line in artifact.get("releaseLines") or []}
+    line = lines.get(line_key, {"key": line_key})
+    if "latest" not in line or version_key(version) > version_key(line["latest"]):
+        lines[line_key] = {**line, "latest": version}
+    artifact = {**artifact, "releaseLines": list(lines.values())}
+    latest = artifact.get("latestStable")
+    if latest is None or version_key(version) > version_key(latest):
+        artifact["latestStable"] = version
+    return record, [artifact]
+
+
 def load_snapshot(path: Path) -> dict:
     if path.is_symlink():
         raise ValueError("Snapshot must not be a symlink")
@@ -287,6 +381,8 @@ def import_docs(args: argparse.Namespace) -> None:
             "No matching local stable tags; fetch tags or use --version X.Y.Z"
         )
     records = previous.copy()
+    previous_artifacts = snapshot.get("artifacts", [artifact_identity()])
+    artifacts = previous_artifacts
     exports = []
     for version in selected:
         tag = f"v{version}"
@@ -305,17 +401,7 @@ def import_docs(args: argparse.Namespace) -> None:
             raise ValueError(f"Refusing to replace unowned path: {target}")
         if target.exists() and any(item.is_symlink() for item in target.rglob("*")):
             raise ValueError(f"Existing docs must not contain symlinks: {target}")
-        if old and not args.full_rebuild:
-            if (curated_states.get(version) or old.get("publicationState")) not in {
-                "hidden",
-                "withdrawn",
-                "tombstoned",
-            } and not (worktree / version / "_index.md").is_file():
-                raise ValueError(
-                    f"Missing docs for {version}; use --full-rebuild to restore"
-                )
-            continue
-        records[version] = old or {
+        record = old or {
             "provider": PROVIDER,
             "kind": "released",
             "componentSlug": COMPONENT,
@@ -326,8 +412,26 @@ def import_docs(args: argparse.Namespace) -> None:
             "externalId": f"git:buildish-mammoth-cache:{tag}",
             "externalUrl": f"{REPOSITORY}/releases/tag/{tag}",
         }
+        if args.post_release:
+            record, artifacts = published_metadata(record, artifacts)
+        records[version] = record
+        if old and not args.full_rebuild:
+            if (curated_states.get(version) or old.get("publicationState")) not in {
+                "hidden",
+                "withdrawn",
+                "tombstoned",
+            } and not (worktree / version / "_index.md").is_file():
+                raise ValueError(
+                    f"Missing docs for {version}; use --full-rebuild to restore"
+                )
+            continue
         exports.append((version, commit))
-    if not exports and not args.full_rebuild:
+    if (
+        not exports
+        and not args.full_rebuild
+        and records == previous
+        and artifacts == previous_artifacts
+    ):
         sys.stdout.write("Release docs already up to date\n")
         return
     # Validate and export all tags before replacing any existing docs.
@@ -337,20 +441,10 @@ def import_docs(args: argparse.Namespace) -> None:
         staging = Path(temp)
         for version, commit in exports:
             export_docs(args.source, commit, staging / version)
-        if args.full_rebuild:
-            for version, _commit in exports:
-                target = worktree / version
-                if target.is_symlink() or (target.exists() and not target.is_dir()):
-                    raise ValueError(f"Expected managed directory: {target}")
-            for version, _commit in exports:
-                if (worktree / version).exists():
-                    shutil.rmtree(worktree / version)
-        for version, _commit in exports:
-            (staging / version).rename(worktree / version)
         snapshot = {
             **snapshot,
             "schemaVersion": 1,
-            "artifacts": snapshot.get("artifacts", [artifact_identity()]),
+            "artifacts": artifacts,
             "providers": [
                 {
                     **(snapshot["providers"][0] if snapshot["providers"] else {}),
@@ -363,12 +457,27 @@ def import_docs(args: argparse.Namespace) -> None:
             ],
             "records": [records[v] for v in sorted(records, key=version_key)],
         }
-        snapshot_path.write_text(
+        staged_snapshot = staging / snapshot_path.name
+        staged_snapshot.write_text(
             json.dumps(snapshot, indent=2) + "\n", encoding="utf-8"
         )
-    sys.stdout.write(
-        f"Imported {len(exports)} version(s) into {worktree}; review and commit separately\n"
+        if args.full_rebuild:
+            for version, _commit in exports:
+                target = worktree / version
+                if target.is_symlink() or (target.exists() and not target.is_dir()):
+                    raise ValueError(f"Expected managed directory: {target}")
+            for version, _commit in exports:
+                if (worktree / version).exists():
+                    shutil.rmtree(worktree / version)
+        for version, _commit in exports:
+            (staging / version).rename(worktree / version)
+        staged_snapshot.replace(snapshot_path)
+    action = (
+        f"Imported {len(exports)} version(s) into"
+        if exports
+        else "Updated release metadata in"
     )
+    sys.stdout.write(f"{action} {worktree}; review and commit separately\n")
 
 
 def main() -> int:
@@ -402,6 +511,11 @@ def main() -> int:
                 help="Import only this version; repeatable, overrides minimum",
             )
             command.add_argument(
+                "--post-release",
+                action="store_true",
+                help="Verify one exact --version on GitHub and update release metadata",
+            )
+            command.add_argument(
                 "--minimum-version",
                 help="Optional minimum stable version for tag discovery; default scans all stable tags",
             )
@@ -411,6 +525,11 @@ def main() -> int:
                 help="Rebuild selected docs directories, preserving existing inventory metadata",
             )
     args = parser.parse_args()
+    if args.command == "import" and args.post_release:
+        if len(args.version or []) != 1 or args.minimum_version is not None:
+            parser.error(
+                "--post-release requires exactly one --version and no --minimum-version"
+            )
     args.source = args.source.resolve()
     args.worktree = args.worktree or args.source / "docs/releases"
     try:

@@ -79,24 +79,37 @@ have the applicable authorization.
 
 ## Manual post-release import
 
-After successful release completion, verify hosted release facts and acquire the
-exact final tags through the approved Git process. A tag alone is discovery evidence,
-not proof of completed publication. Then, in a clean docs worktree:
+After successful release completion, acquire the exact final tag through the
+approved Git process. Then, in a clean docs worktree:
 
 ```sh
-tools/versioned-docs/import.sh --version 1.2.3
+tools/versioned-docs/import.sh --post-release --version 1.2.3
 ```
 
-Use explicit versions while incomplete historical attempts need curation. For normal
-incremental maintenance:
+This mode queries the public GitHub API. It checks that the
+exact tag has a published final Release and that the hosted tag resolves to the
+same commit as the local tag. It then imports the docs and records `publishedAt`,
+`publicationState: published`, and the exact `docsSource`. It assigns the version
+to its `X.Y` release line, creating the line if needed, and advances that line's
+`latest` and the artifact's `latestStable` when the imported version is newer.
+Existing newer pointers and curated exclusion decisions are preserved.
+
+Use the same command to complete metadata for a version previously imported from
+its tag. Existing docs are reused, and a repeat of a completed import leaves the
+inventory unchanged. A failed verification leaves the docs worktree unchanged.
+
+## Tag-only import
+
+Use tag-only imports for historical inventory work, including incomplete attempts:
 
 ```sh
 tools/versioned-docs/import.sh
+tools/versioned-docs/import.sh --version 1.2.3
 ```
 
 Default discovery scans all local stable `vX.Y.Z` tags without a cutoff. Optional
 `--minimum-version X.Y.Z` narrows discovery; repeatable `--version X.Y.Z` selects exact
-versions and overrides that floor. Import performs no fetch or live GitHub lookup.
+versions and overrides that floor. Tag-only imports use local Git data.
 New records contain Git identity and a canonical release URL, with no publication
 timestamp or successful-publication assertion. New inventories include an owned
 `artifacts[]` identity for `mammoth-cache`, with no release lines, exact release policy,
@@ -171,12 +184,10 @@ components:
 
 The component metadata owns artifact definitions, docs roots, and static versioning.
 The snapshot's matching `artifacts[]` entry owns `releaseLines`, exact `releases[]`
-policy, and explicit `latestStable`. Curate those only after verifying completed
-release facts, grouping by the accepted `X.Y` release-line policy. Overall/line
-recommendations are manual after successful promotion; no support windows are implied. Each line's
-`latest` is explicit; importing a newer tag never advances it or `latestStable`.
-Incremental import and full rebuild preserve these scoped blocks, including ancestry,
-withdrawal decisions, support facts, and records whose tags are absent locally.
+policy, and explicit `latestStable`. Post-release import updates the designated
+pointers for the verified version. Tag-only import and rebuild preserve these scoped
+blocks, including ancestry, withdrawal decisions, support facts, and records whose
+tags are absent locally. Support windows require explicit curation.
 
 The helpers check scoped ownership, container shape, unique identities, stable
 versions, and conflicting publication states before writing. Site Pipeline remains

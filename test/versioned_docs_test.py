@@ -29,8 +29,20 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "tools/versioned-docs"
+PUBLISHED_AT = "2026-11-25T08:06:43Z"
+
+
+def load_manage():
+    spec = importlib.util.spec_from_file_location(
+        "versioned_docs_manage", SCRIPTS / "manage.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def git(repo: Path, *args: str) -> str:
@@ -125,6 +137,8 @@ class VersionedDocsScriptsTest(unittest.TestCase):
             )
             self.assertNotIn("publishedAt", record)
             self.assertNotIn("publicationState", record)
+            self.assertNotIn("releaseLine", record)
+            self.assertNotIn("docsSource", record)
         self.assertEqual(
             next(
                 record for record in snapshot["records"] if record["version"] == "0.1.3"
@@ -153,6 +167,158 @@ class VersionedDocsScriptsTest(unittest.TestCase):
                 )
             )
         self.assertEqual(git(source, "branch", "--show-current"), "main")
+
+    def post_release(self, version: str, responses: dict | None = None):
+        module = load_manage()
+        tag = f"v{version}"
+        captured_commit = git(self.source, "rev-parse", f"{tag}^{{commit}}")
+        api = "https://api.github.com/repos/buildish-tooling/buildish-mammoth-cache"
+        tag_object = "1" * 40
+        payloads = {
+            f"{api}/releases/tags/{tag}": {
+                "tag_name": tag,
+                "draft": False,
+                "prerelease": False,
+                "published_at": PUBLISHED_AT,
+                "target_commitish": "main",
+            },
+            f"{api}/git/ref/tags/{tag}": {
+                "ref": f"refs/tags/{tag}",
+                "object": {"type": "tag", "sha": tag_object},
+            },
+            f"{api}/git/tags/{tag_object}": {
+                "object": {"type": "commit", "sha": captured_commit},
+            },
+        }
+        for endpoint, payload in (responses or {}).items():
+            payloads[f"{api}/{endpoint}"] = payload
+
+        def open_response(request, *, timeout):
+            payload = payloads[request.full_url]
+            if payload is None:
+                raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+            return io.BytesIO(json.dumps(payload).encode())
+
+        args = [
+            "manage.py",
+            "import",
+            "--source",
+            str(self.source),
+            "--post-release",
+            "--version",
+            version,
+        ]
+        with (
+            patch("sys.argv", args),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            patch.object(module, "urlopen", side_effect=open_response),
+        ):
+            status = module.main()
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def test_post_release_backfills_and_advances_latest(self) -> None:
+        source = self.source
+        run(source, "checkout", "--create")
+        run(source, "import", "--version", "0.1.3")
+        worktree = source / "docs/releases"
+        path = worktree / "provider-snapshot.json"
+        docs = worktree / "0.1.3/_index.md"
+        docs_inode = docs.stat().st_ino
+        commit(worktree)
+
+        status, out, error = self.post_release("0.1.3")
+        self.assertEqual(status, 0, error)
+        self.assertIn("Updated release metadata", out)
+        self.assertEqual(docs.stat().st_ino, docs_inode)
+        snapshot = json.loads(path.read_text())
+        record = snapshot["records"][0]
+        self.assertEqual(record["publishedAt"], PUBLISHED_AT)
+        self.assertEqual(record["publicationState"], "published")
+        self.assertEqual(record["releaseLine"], "0.1")
+        self.assertEqual(
+            record["docsSource"],
+            {
+                "repository": "https://github.com/buildish-tooling/buildish-mammoth-cache",
+                "root": "docs",
+                "ref": git(source, "rev-parse", "v0.1.3^{commit}"),
+            },
+        )
+        artifact = snapshot["artifacts"][0]
+        self.assertEqual(artifact["latestStable"], "0.1.3")
+        self.assertEqual(artifact["releaseLines"], [{"key": "0.1", "latest": "0.1.3"}])
+        artifact["releaseLines"][0]["supportStatus"] = "maintained"
+        path.write_text(json.dumps(snapshot))
+        commit(worktree)
+        before = path.read_bytes()
+        self.assertEqual(self.post_release("0.1.3")[0], 0)
+        self.assertEqual(path.read_bytes(), before)
+
+        self.assertEqual(self.post_release("0.1.2")[0], 0)
+        self.assertEqual(json.loads(path.read_text())["artifacts"][0], artifact)
+        commit(worktree)
+        release(source, "0.1.4", "new patch\n")
+        self.assertEqual(self.post_release("0.1.4")[0], 0)
+        self.assertEqual((worktree / "0.1.4/_index.md").read_text(), "new patch\n")
+        current = json.loads(path.read_text())["artifacts"][0]
+        self.assertEqual(current["latestStable"], "0.1.4")
+        self.assertEqual(
+            current["releaseLines"],
+            [{"key": "0.1", "latest": "0.1.4", "supportStatus": "maintained"}],
+        )
+
+    def test_post_release_verification_failure_leaves_worktree_clean(self) -> None:
+        run(self.source, "checkout", "--create")
+        worktree = self.source / "docs/releases"
+        release_facts = {
+            "tag_name": "v0.1.3",
+            "draft": False,
+            "prerelease": False,
+            "published_at": PUBLISHED_AT,
+        }
+        cases = (
+            ({"releases/tags/v0.1.3": None}, "404"),
+            ({"releases/tags/v0.1.3": {**release_facts, "draft": True}}, "final published"),
+            (
+                {"releases/tags/v0.1.3": {**release_facts, "prerelease": True}},
+                "final published",
+            ),
+            (
+                {"releases/tags/v0.1.3": {**release_facts, "published_at": None}},
+                "timestamp",
+            ),
+            (
+                {
+                    "git/ref/tags/v0.1.3": {
+                        "ref": "refs/tags/v0.1.3",
+                        "object": {"type": "commit", "sha": "0" * 40},
+                    }
+                },
+                "does not match",
+            ),
+        )
+        for responses, message in cases:
+            with self.subTest(responses=responses):
+                status, _, error = self.post_release("0.1.3", responses)
+                self.assertEqual(status, 1)
+                self.assertIn(message, error)
+                self.assertEqual(git(worktree, "status", "--porcelain"), "")
+
+    def test_post_release_preserves_curated_exclusion(self) -> None:
+        run(self.source, "checkout", "--create")
+        run(self.source, "import", "--version", "0.1.3")
+        worktree = self.source / "docs/releases"
+        path = worktree / "provider-snapshot.json"
+        snapshot = json.loads(path.read_text())
+        snapshot["artifacts"][0]["releases"] = [
+            {"version": "0.1.3", "publicationState": "withdrawn"}
+        ]
+        path.write_text(json.dumps(snapshot))
+        commit(worktree)
+        status, _, error = self.post_release("0.1.3")
+        self.assertEqual(status, 1)
+        self.assertIn("excluded by snapshot publication policy", error)
+        self.assertEqual(git(worktree, "status", "--porcelain"), "")
 
     def test_dirty_refused_and_full_rebuild_scope(self) -> None:
         source = self.source
@@ -436,12 +602,7 @@ class VersionedDocsScriptsTest(unittest.TestCase):
         source = self.source
         run(source, "checkout", "--create")
         worktree = source / "docs/releases"
-        spec = importlib.util.spec_from_file_location(
-            "versioned_docs_manage", SCRIPTS / "manage.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = load_manage()
         original_export = module.export_docs
         captured_commit = git(source, "rev-parse", "v0.1.3^{commit}")
 
@@ -456,6 +617,7 @@ class VersionedDocsScriptsTest(unittest.TestCase):
             version=["0.1.3"],
             minimum_version=None,
             full_rebuild=False,
+            post_release=False,
         )
         with patch.object(module, "export_docs", side_effect=move_tag_then_export):
             module.import_docs(args)

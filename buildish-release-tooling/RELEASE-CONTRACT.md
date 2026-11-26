@@ -162,11 +162,12 @@ owns the shared artifact/static stream, and the component snapshot owns exact re
 policy, line `latest`, and overall `latestStable` designations. Catalogs own source,
 layout, and publication selection.
 
-After successful promotion, maintainers explicitly curate line/latest recommendations
-in the versioned-docs branch, verify facts/content, and publish through the separately
-authorized docs process. Neither a newly discovered tag nor the numerical highest
-version automatically changes a recommendation. No support window, maintenance
-promise, or end-of-life date is implied; add such policy only by explicit decision.
+After successful promotion, maintainers run the post-release import for the exact
+version. The import verifies the published Release and tag commit, then advances the
+line and overall recommendations if the version is newer than their current targets.
+Tag-only discovery leaves recommendations unchanged. Maintainers review the docs
+and snapshot and publish through the separately authorized docs process. Support
+windows, maintenance promises, and end-of-life dates require explicit decisions.
 Hidden/withdrawn/tombstoned records remain retained and excluded as appropriate.
 
 Docs maintenance is a separate post-release operation. Its failure does not authorize
