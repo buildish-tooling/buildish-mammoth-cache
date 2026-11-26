@@ -414,7 +414,6 @@ jobs:
       needs.required_checks.result == 'success' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
-      && false
     runs-on: ubuntu-26.04
     permissions: {}
     steps:
