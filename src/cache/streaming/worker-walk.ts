@@ -29,10 +29,12 @@ import { isCacheMetadataPath } from '../metadata-paths';
 import { isMavenTransientFile } from '../maven-repository';
 import { WorkerSpool } from './worker-spool';
 import type { WorkerEvent } from './worker-codec';
+import type { WorkerSweepEvidence } from './worker-state';
 
 export interface WorkerSourceView {
   readonly survivors: GcSurvivorOwner;
   readonly incompleteUsage?: boolean;
+  readonly sweep?: WorkerSweepEvidence;
 }
 
 interface Frame {

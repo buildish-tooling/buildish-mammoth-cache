@@ -121,9 +121,16 @@ policy = ["policy",1,role,access,restoreCleanup,gcMode,gcAgeMs|null,cutoffMs|nul
 ["handoff",7,currentRef,defaultRef|null,captureTemp|null,retentionDays,
  cleanupEnabled,null,[exactGenerationKey,generationRef],
  actualActivityRef,originalBuildCutoff,selectedWorkerCount,null,overlayDescriptor,pristine|other]
+["handoff",8,currentRef,defaultRef|null,captureTemp|null,retentionDays,
+ cleanupEnabled,gcAgeMs|null,[exactGenerationKey,generationRef],
+ actualActivityRef,originalBuildCutoff,selectedWorkerCount,null]
 ["partition",partitionId,available|empty|cold|miss,provenance|null,snapshotDescriptor|null]
 provenance = pinnedPartitionMetadata | ["restored-object",exactObjectRef]
 ```
+
+Handoff version 8 identifies a writable distributed worker that selected ordinary
+capture for a due generation. Post uses the reopened generation and partition
+availability to bind completed capture to that generation in the worker archive.
 
 `gradleSeedDescriptor` is data bound to the exact selected generation and the two
 available source partitions. Only writable distributed Gradle workers with a selected wrapper,

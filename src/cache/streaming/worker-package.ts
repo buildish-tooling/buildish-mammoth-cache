@@ -131,6 +131,7 @@ export class FrozenWorkerArchive {
           membership,
           snapshots: sources.snapshots,
           incompleteUsage: view.incompleteUsage,
+          sweep: view.sweep,
           maxDirectoryEntries: options.maxDirectoryEntries,
           assertStable: (s) => sources.assertStable(s),
           work,

@@ -251,6 +251,8 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
       captureTempDirectory: ci.tempDirectory,
       artifactRetentionDays: config.workerArtifactRetentionDays,
       cleanupEnabled: config.cleanupEnabled,
+      dependencyGc: config,
+      now: d.now,
       onWorkerWarnings: (warnings) => {
         if (warnings.count) {
           host.warning(
@@ -296,7 +298,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
         ),
       result.restoreStatus,
     );
-    sweepOutputs(d, result.selectedGeneration);
+    host.setOutput('dependency-gc-due', result.dependencyGc!.due);
     await prepareSummary(d, result.restoreStatus);
     if (tool === 'gradle' && !result.dependencyLayer) {
       host.setOutput('gradle-ro-dep-cache', '');

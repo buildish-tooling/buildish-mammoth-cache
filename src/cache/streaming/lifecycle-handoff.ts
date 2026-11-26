@@ -78,6 +78,7 @@ export function handoffSchemas(codec: LocalCodec) {
   const header = z
     .union([
       z.tuple([z.literal('handoff'), z.literal(4), ...headerFields]),
+      z.tuple([z.literal('handoff'), z.literal(8), ...headerFields]),
       z.tuple([z.literal('handoff'), z.literal(6), ...headerFields, overlaySchema(invocation)]),
       z.tuple([
         z.literal('handoff'),
@@ -265,6 +266,15 @@ export function checkHandoffGeneration(
   policy: Policy,
   lifecycle?: BuildToolLifecycle,
 ): void {
+  if (
+    header[1] === 8 &&
+    (!generation ||
+      header[12] ||
+      store.codec.options.role !== 'distributed-worker' ||
+      store.codec.options.access !== 'writable')
+  ) {
+    throw new Error('Invalid writable sweep capture handoff.');
+  }
   if (
     header[13] &&
     (header[12] ||

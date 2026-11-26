@@ -33,6 +33,7 @@ import type { WorkflowArtifactBackend } from '../../delta/backend';
 import type { PartitionSummaries } from './partition-summaries';
 import { settleNativeCleanup } from './native-operation';
 import { MetadataSnapshot } from './metadata-snapshot';
+import type { WorkerSweepEvidence } from './worker-state';
 
 export interface WorkerPostRequest extends LifecycleOptions {
   readonly anchor: InvocationAnchor;
@@ -144,6 +145,24 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
         }),
       );
       captured = observation.index!;
+      const capturedAt = Date.now();
+      const { header, entries } = attempt.handoff;
+      const sweep: WorkerSweepEvidence | undefined =
+        header[1] === 8 && capturedAt >= header[10]
+          ? [
+              'sweep-usage',
+              header[8]![0],
+              header[10],
+              capturedAt,
+              entries
+                .filter(
+                  (entry, i) =>
+                    store.codec.options.model.partitions[i][3] === 'aggregate' &&
+                    (entry[2] === 'available' || entry[2] === 'empty'),
+                )
+                .map((entry) => entry[1]),
+            ]
+          : undefined;
       let backend: WorkflowArtifactBackend | undefined;
       try {
         backend = await request.artifactBackend();
@@ -169,7 +188,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
           freezeWorkerArtifact(
             backend,
             store,
-            { survivors: owner!, incompleteUsage: !!overlayCapture },
+            { survivors: owner!, incompleteUsage: !!overlayCapture, sweep },
             request.budget,
             options,
           ),

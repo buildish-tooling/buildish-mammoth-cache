@@ -21,7 +21,12 @@ import { createGzip } from 'node:zlib';
 import { pack } from '../../../build/patched-tar-stream/index.js';
 import { add, decodeRecord, encodeRecord, tuple, type Value } from './encoding';
 import { readWorkerTransport, type WorkerTarHeader } from './worker-transport';
-import { WorkerState, type WorkerContext, type WorkerSummary } from './worker-state';
+import {
+  WorkerState,
+  type WorkerContext,
+  type WorkerSummary,
+  type WorkerSweepEvidence,
+} from './worker-state';
 import type { Unit } from './schema';
 import { withAbort, abortableValues } from './abort';
 
@@ -155,6 +160,7 @@ export interface WorkerWriter extends WorkerContext {
   readonly work?: WorkerWriteWork;
   readonly snapshots: readonly string[];
   readonly incompleteUsage?: boolean;
+  readonly sweep?: WorkerSweepEvidence;
   assertStable(signal: AbortSignal): Promise<void>;
 }
 
@@ -228,7 +234,7 @@ export async function writeWorkerArchive(
   try {
     signal.throwIfAborted();
     await withAbort(options.assertStable(signal), signal);
-    await control(state.identityTuple(options.snapshots, options.incompleteUsage));
+    await control(state.identityTuple(options.snapshots, options.incompleteUsage, options.sweep));
     iterator = events(signal)[Symbol.asyncIterator]();
     while (true) {
       pendingNext = true;

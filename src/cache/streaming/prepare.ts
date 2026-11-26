@@ -37,7 +37,7 @@ import type { LifecycleOptions } from './lifecycle-options';
 import { uint, type Value } from './encoding';
 import { assertLifecycleWindow } from './post-admission';
 import { MetadataBaseRestore } from './metadata-base-restore';
-import type { MetadataGeneration } from './metadata-base-records';
+import { dependencyGcSchedule, type GcScheduleConfig } from './dependency-gc-schedule';
 import { freezeMetadataInstallPlan } from './install-plan';
 import { executeInstall } from './install-execute';
 import { discoverWorkerArtifacts, acquireWorkerArtifacts } from './worker-service';
@@ -82,6 +82,7 @@ export interface StreamingPrepareRequest extends LifecycleOptions, LayerInputs {
   readonly captureTempDirectory: string | null;
   readonly artifactRetentionDays: number;
   readonly cleanupEnabled: boolean;
+  readonly dependencyGc?: GcScheduleConfig;
   readonly onWorkerWarnings?: (warnings: WorkerMergeResult['warnings']) => void;
   readonly saveAnchor: (anchor: string) => void;
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
@@ -111,7 +112,7 @@ export interface StreamingPrepareResult {
   readonly anchor: InvocationAnchor;
   readonly cutoff: number;
   readonly restoredKey: string | null;
-  readonly selectedGeneration: MetadataGeneration | undefined;
+  readonly dependencyGc: ReturnType<typeof dependencyGcSchedule> | undefined;
   readonly workerCount: number;
   readonly dependencyLayer: DependencyLayer | null;
   readonly lifecycle: BuildToolLifecycle;
@@ -275,14 +276,25 @@ export async function prepareStreaming(
         }),
       (r) => (unavailable ? 'unavailable' : r.key ? 'hit' : 'miss'),
     );
-    seed = await lifecycle.dependencyLayer?.prepare(
-      store,
-      restored,
-      request.policy.restoreCleanup,
-      request,
-      options,
-    );
+    const dependencyGc =
+      request.dependencyGc &&
+      dependencyGcSchedule(
+        request.dependencyGc,
+        restored.generation ?? undefined,
+        uint((request.now ?? Date.now)()),
+      );
+    const sweepCapture = dependencyGc?.due === 'true' && request.policy.access === 'writable';
+    if (!sweepCapture) {
+      seed = await lifecycle.dependencyLayer?.prepare(
+        store,
+        restored,
+        request.policy.restoreCleanup,
+        request,
+        options,
+      );
+    }
     const mountTarget =
+      !sweepCapture &&
       !seed &&
       request.policy.access === 'writable' &&
       request.overlayFs &&
@@ -455,6 +467,10 @@ export async function prepareStreaming(
     await request.installHooks(store, lifecycle, !!(seed || overlay));
     await assertLifecycleWindow(store, bindings, { signal, assertCurrent });
     const cutoff = uint((request.now ?? Date.now)());
+    const workerSweepCapture =
+      sweepCapture &&
+      !publisher &&
+      (request.context[7] !== 'gradle' || !request.existingDependencyLayer);
     bindings = docs.bindings.parse(bindings);
     bindings[8][7] = cutoff;
     if (accepted?.incompleteUsage) {
@@ -463,7 +479,7 @@ export async function prepareStreaming(
     }
     const header: HandoffHeader = handoffSchemas(codec).header.parse([
       'handoff',
-      overlay ? (publisher ? 7 : 6) : 4,
+      overlay ? (publisher ? 7 : 6) : workerSweepCapture ? 8 : 4,
       request.currentRef,
       request.defaultRef ?? null,
       request.captureTempDirectory,
@@ -540,7 +556,7 @@ export async function prepareStreaming(
       anchor,
       cutoff,
       restoredKey: key,
-      selectedGeneration: restored.generation ?? undefined,
+      dependencyGc,
       workerCount: downloads.length,
       dependencyLayer: seed ?? null,
       lifecycle,

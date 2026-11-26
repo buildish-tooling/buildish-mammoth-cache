@@ -17,7 +17,7 @@
 import type { NormalizedActionConfig } from '../../config/types';
 import type { MetadataGeneration } from './metadata-base-records';
 
-type ScheduleConfig = Pick<
+export type GcScheduleConfig = Pick<
   NormalizedActionConfig,
   | 'cacheEnabled'
   | 'cleanupEnabled'
@@ -27,7 +27,7 @@ type ScheduleConfig = Pick<
 >;
 
 export function dependencyGcSchedule(
-  config: ScheduleConfig,
+  config: GcScheduleConfig,
   generation: MetadataGeneration | undefined,
   now: number,
 ): { due: 'true' | 'false' | 'unknown'; force: boolean } {

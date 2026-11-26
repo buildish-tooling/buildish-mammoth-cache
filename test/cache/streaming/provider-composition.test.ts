@@ -28,6 +28,9 @@ import {
   STREAMING_LAYER_ACTIVATED_STATE,
 } from '../../../src/phases/streaming/state';
 import { Digest, encodeRecord, rawSha, type Value } from '../../../src/cache/streaming/encoding';
+import { readWorkerArchive } from '../../../src/cache/streaming/worker-codec';
+import type { ResolvedModel } from '../../../src/cache/streaming/model';
+import { byteSource, FixtureMembership } from './protocol-fixtures';
 import * as observationCapture from '../../../src/cache/streaming/observation-capture';
 import * as basePost from '../../../src/cache/streaming/base-post';
 import {
@@ -191,6 +194,55 @@ function captureLines(f: Awaited<ReturnType<typeof fixture>>) {
     .flat()
     .filter((line) => /^(?:Mammoth capture summary|data: captured=)/.test(line));
 }
+
+async function restoreGeneration(
+  f: Awaited<ReturnType<typeof fixture>>,
+  key: string,
+  model: ResolvedModel,
+) {
+  const saved = path.join(f.root, 'record.json');
+  await f.sdk.backend.restoreCache([saved], key, [], { archiveRoot: f.root });
+  return decodeMetadataGeneration(await readFile(saved), model, key);
+}
+
+async function setGenerationSweepAt(
+  f: Awaited<ReturnType<typeof fixture>>,
+  key: string,
+  model: ResolvedModel,
+  timestamp: number,
+) {
+  const generation = await restoreGeneration(f, key, model);
+  generation[12] = timestamp;
+  generation[10] = metadataPartitionDecision(generation);
+  generation[11] = recordKey(model.family, generation[5], generation[6], generation[10]);
+  const saved = path.join(f.root, 'record.json');
+  await writeFile(saved, encodeRecord(generation));
+  await f.sdk.backend.saveCache([saved], generation[11], { archiveRoot: f.root });
+  return generation;
+}
+
+async function readUploadedWorker(
+  f: Awaited<ReturnType<typeof fixture>>,
+  {
+    context,
+    model,
+  }: { context: Parameters<typeof readWorkerArchive>[1]['context']; model: ResolvedModel },
+  authorizedSnapshots: readonly string[] = [],
+) {
+  const archive = [...f.artifacts.objects.values()][0].bytes;
+  return readWorkerArchive(byteSource(archive), {
+    model,
+    context,
+    authorizedSnapshots,
+    budget: f.budget,
+    membership: new FixtureMembership(),
+    async consumeFile({ body }) {
+      for await (const chunk of body) {
+        expect(Buffer.isBuffer(chunk)).toBe(true);
+      }
+    },
+  });
+}
 it.each(['maven', 'gradle'] as const)(
   'uses the guarded %s prepare/post composition and reports only after frozen post completion',
   async (tool) => {
@@ -251,16 +303,9 @@ it.each(['gradle', 'maven'] as const)(
       throw new Error('Expected a published generation.');
     }
     const model = prepared.store.codec.options.model;
-    const saved = path.join(publisher.root, 'record.json');
     const sdk = publisher.sdk.backend;
-    await sdk.restoreCache([saved], published.key, [], { archiveRoot: publisher.root });
-    const generation = decodeMetadataGeneration(await readFile(saved), model, published.key);
+    const generation = await setGenerationSweepAt(publisher, published.key, model, 1000);
     expect(generation[8].some((entry) => entry[0] === 'object')).toBe(true);
-    generation[12] = 1000;
-    generation[10] = metadataPartitionDecision(generation);
-    generation[11] = recordKey(model.family, generation[5], generation[6], generation[10]);
-    await writeFile(saved, encodeRecord(generation));
-    await sdk.saveCache([saved], generation[11], { archiveRoot: publisher.root });
 
     const planner = await fixture(tool, { 'job-mode': 'prepare-only', 'read-only': 'true' });
     const backend = vi.spyOn(sdk, 'restoreCache');
@@ -1063,9 +1108,12 @@ const layerInputs = {
   'dependency-cache-layer': 'true',
   'cache-partitions': JSON.stringify([{ id: 'metadata', writer: 'writer' }]),
 };
-async function warmLayerProvider(extra: Record<string, string> = {}) {
+async function warmLayerProvider(
+  extra: Record<string, string> = {},
+  sweepTime = Date.now() as number | null,
+) {
   const producer = await fixture('gradle', layerInputs);
-  await runStreamingPrepare({
+  const ready = await runStreamingPrepare({
     ...producer.deps,
     buildToolAdapterFactory: () => layerAdapter(producer),
   });
@@ -1073,9 +1121,17 @@ async function warmLayerProvider(extra: Record<string, string> = {}) {
     await mkdir(path.dirname(producer.home + '/' + member), { recursive: true });
     await writeFile(producer.home + '/' + member, 'seed');
   }
-  expect(
-    (await runStreamingPost({ ...producer.post, lifecycle: producer.deps.lifecycle })).outcome,
-  ).toBe('published');
+  const published = await runStreamingPost({
+    ...producer.post,
+    lifecycle: producer.deps.lifecycle,
+  });
+  if (!('store' in ready) || published.outcome !== 'published' || !published.key) {
+    throw new Error('Expected a published Gradle generation.');
+  }
+  const model = ready.store.codec.options.model;
+  if (sweepTime !== null) {
+    await setGenerationSweepAt(producer, published.key, model, sweepTime);
+  }
   const worker = await fixture('gradle', {
     ...layerInputs,
     'job-mode': 'distributed-worker',
@@ -1088,8 +1144,112 @@ async function warmLayerProvider(extra: Record<string, string> = {}) {
     buildToolAdapterFactory: () => layerAdapter(worker),
     lifecycle: gradleResolver({ inspect }),
   };
-  return { producer, worker, dependencies, inspect };
+  return { producer, worker, dependencies, inspect, family: model.family };
 }
+
+it.each(['writable', 'read-only'] as const)(
+  'suppresses the Gradle seed during the force grace on %s runs in the same family',
+  async (access) => {
+    const { worker, dependencies, family } = await warmLayerProvider(
+      { 'read-only': String(access === 'read-only') },
+      Date.now() - 3 * 86400000 - 60000,
+    );
+    const result = await runStreamingPrepare(dependencies);
+    if (!('store' in result)) {
+      throw new Error('Expected normal prepare.');
+    }
+    expect(worker.outputs.get('dependency-gc-due')).toBe('true');
+    expect(result.dependencyGc).toEqual({ due: 'true', force: false });
+    expect(result.store.codec.options.model.family).toBe(family);
+    expect(result.dependencyLayer).toBeNull();
+    expect(await readFile(worker.home + '/' + layerArtifact, 'utf8')).toBe('seed');
+    const outcome = await runStreamingPost({ ...worker.post, lifecycle: dependencies.lifecycle });
+    if (access === 'read-only') {
+      expect(outcome.outcome).toBe('read-only');
+      expect(worker.artifacts.upload).not.toHaveBeenCalled();
+    } else {
+      expect(outcome.outcome).toBe('worker-uploaded');
+      const resultSummary = await readUploadedWorker(worker, result.store.codec.options);
+      expect(resultSummary.identity[1]).toBe(3);
+      expect(resultSummary.identity[8]).toEqual([
+        'sweep-usage',
+        result.restoredKey,
+        result.cutoff,
+        expect.any(Number),
+        ['data'],
+      ]);
+    }
+  },
+);
+
+it('reports available and explicitly empty sweep partitions while omitting cold partitions', async () => {
+  const inputs = {
+    'cache-partitions': JSON.stringify([
+      { id: 'cold', includes: ['cold/**'] },
+      { id: 'empty', includes: ['empty/**'] },
+    ]),
+  };
+  const producer = await fixture('maven', inputs);
+  const prepared = await runStreamingPrepare(producer.deps);
+  if (!('store' in prepared)) {
+    throw new Error('Expected normal prepare.');
+  }
+  for (const partition of ['data', 'cold']) {
+    await mkdir(path.join(producer.home, partition));
+    await writeFile(path.join(producer.home, partition, 'file'), 'cached');
+  }
+  const published = await runStreamingPost(producer.post);
+  if (published.outcome !== 'published' || !published.key) {
+    throw new Error('Expected publication.');
+  }
+  const generation = await restoreGeneration(
+    producer,
+    published.key,
+    prepared.store.codec.options.model,
+  );
+  const cold = generation[8].find((entry) => entry[0] === 'object' && entry[1] === 'cold');
+  if (!cold || cold[0] !== 'object') {
+    throw new Error('Expected cold fixture object.');
+  }
+  expect(producer.sdk.objects.delete(cold[2][2])).toBe(true);
+
+  const worker = await fixture('maven', { ...inputs, 'job-mode': 'distributed-worker' });
+  const ready = await runStreamingPrepare({
+    ...worker.deps,
+    cacheBackend: async () => producer.sdk.backend,
+  });
+  if (!('store' in ready)) {
+    throw new Error('Expected normal prepare.');
+  }
+  expect(ready.restoreStatus).toBe('current-lineage-partial-hit');
+  expect(worker.outputs.get('dependency-gc-due')).toBe('true');
+  expect((await runStreamingPost(worker.post)).outcome).toBe('worker-uploaded');
+  const { identity } = await readUploadedWorker(worker, ready.store.codec.options);
+  expect(identity[1]).toBe(3);
+  if (identity[1] === 3) {
+    expect(identity[8][4]).toEqual(['data', 'empty']);
+  }
+});
+
+it('keeps ordinary archive identity for a due Gradle writer using an external seed', async () => {
+  const { worker, dependencies } = await warmLayerProvider({}, null);
+  worker.host.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', '/external-seed');
+  const ready = await runStreamingPrepare({
+    ...dependencies,
+    ciProvider: { ...dependencies.ciProvider, context: { ...worker.ci, jobName: 'writer' } },
+  });
+  if (!('store' in ready)) {
+    throw new Error('Expected normal prepare.');
+  }
+  expect(worker.outputs.get('dependency-gc-due')).toBe('true');
+  expect(ready.dependencyLayer).toBeNull();
+  expect(await readFile(worker.home + '/' + layerArtifact, 'utf8')).toBe('seed');
+  expect(
+    (await runStreamingPost({ ...worker.post, lifecycle: dependencies.lifecycle })).outcome,
+  ).toBe('worker-uploaded');
+  const { identity } = await readUploadedWorker(worker, ready.store.codec.options, ['metadata']);
+  expect(identity[1]).toBe(1);
+});
 
 it.each([true, false])(
   'publishes a warm seed last and honors export-layer-environment=%s',

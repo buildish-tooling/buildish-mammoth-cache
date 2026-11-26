@@ -17,6 +17,7 @@
 import { z } from 'zod';
 import { add, Digest, equal, tuple, type Value } from './encoding';
 import { STREAMING_PROFILES } from './profiles';
+import { keySchema } from './native-records';
 import type { ResolvedModel } from './model';
 import {
   componentSchema,
@@ -79,9 +80,21 @@ const identityFields = [
   familySchema,
   z.array(partitionSchema).max(64),
 ] as const;
+const workerSweepEvidenceSchema = z
+  .tuple([
+    z.literal('sweep-usage'),
+    keySchema,
+    uintSchema,
+    uintSchema,
+    z.array(partitionSchema).max(64),
+  ])
+  .refine((evidence) => evidence[2] <= evidence[3]);
+export type WorkerSweepEvidence = z.infer<typeof workerSweepEvidenceSchema>;
+
 const identitySchema = z.union([
   z.tuple([z.literal('identity'), z.literal(1), ...identityFields]),
   z.tuple([z.literal('identity'), z.literal(2), ...identityFields, z.literal('incomplete-usage')]),
+  z.tuple([z.literal('identity'), z.literal(3), ...identityFields, workerSweepEvidenceSchema]),
 ]);
 const summarySchema = z.tuple([
   uintSchema,
@@ -289,17 +302,24 @@ export class WorkerState {
     ];
   }
 
-  identityTuple(snapshots: readonly string[], incompleteUsage = false): Value[] {
+  identityTuple(
+    snapshots: readonly string[],
+    incompleteUsage = false,
+    sweep?: WorkerSweepEvidence,
+  ): Value[] {
+    if (incompleteUsage && sweep) {
+      throw new Error('Incomplete worker usage cannot qualify for a sweep.');
+    }
     return [
       'identity',
-      incompleteUsage ? 2 : 1,
+      incompleteUsage ? 2 : sweep ? 3 : 1,
       STREAMING_PROFILES.worker,
       'gzip',
       this.options.context,
       this.options.model.id,
       this.options.model.family,
       snapshots,
-      ...(incompleteUsage ? ['incomplete-usage'] : []),
+      ...(incompleteUsage ? ['incomplete-usage'] : sweep ? [sweep] : []),
     ];
   }
 
@@ -523,6 +543,16 @@ export class WorkerState {
           throw new Error('Unauthorized/unordered snapshot channel.');
         }
         previous = index;
+      }
+      if (identity[1] === 3) {
+        let last = -1;
+        for (const id of identity[8][4]) {
+          const index = this.options.model.partitions.findIndex((p) => p[0] === id);
+          if (index <= last || this.options.model.partitions[index]?.[3] !== 'aggregate') {
+            throw new Error('Unauthorized/unordered sweep partition.');
+          }
+          last = index;
+        }
       }
       this.identity = identity;
       this.events.update(identity);

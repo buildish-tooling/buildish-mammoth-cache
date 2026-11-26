@@ -27,7 +27,11 @@ import {
   type WorkerEvent,
   type WorkerWriter,
 } from '../../../src/cache/streaming/worker-codec';
-import { globalChannelKey, type WorkerContext } from '../../../src/cache/streaming/worker-state';
+import {
+  globalChannelKey,
+  type WorkerContext,
+  type WorkerSweepEvidence,
+} from '../../../src/cache/streaming/worker-state';
 import { resolveModel } from '../../../src/cache/streaming/model';
 import { WorkingBudget, TreeState } from '../../../src/cache/streaming/tree-state';
 import { Digest, type Value } from '../../../src/cache/streaming/encoding';
@@ -79,6 +83,36 @@ async function write(options: WorkerWriter, events: AsyncIterable<WorkerEvent>) 
   return { bytes: Buffer.concat(chunks), result };
 }
 const guard = async () => {};
+it('reads completed sweep evidence with the current worker context', async () => {
+  const options = expected();
+  const sweep: WorkerSweepEvidence = ['sweep-usage', 'generation-key', 12, 34, ['data']];
+  const output = await write(
+    { ...options, snapshots: [], sweep, assertStable: guard },
+    eventsFromTrace(workerTrace('W0')),
+  );
+  const { result } = await read(output.bytes);
+  expect(result.identity[1]).toBe(3);
+  expect(result.identity[4]).toEqual(context);
+  expect(result.identity[8]).toEqual(sweep);
+});
+
+it.each(
+  (
+    [
+      ['sweep-usage', 'generation-key', 34, 12, ['data']],
+      ['sweep-usage', 'generation-key', 12, 34, ['data', 'data']],
+      ['sweep-usage', 'generation-key', 12, 34, ['metadata']],
+    ] satisfies WorkerSweepEvidence[]
+  ).map((sweep) => [sweep] as const),
+)('rejects malformed sweep evidence %j', async (sweep) => {
+  await expect(
+    write(
+      { ...expected(), snapshots: [], sweep, assertStable: guard },
+      eventsFromTrace(workerTrace('W0')),
+    ),
+  ).rejects.toThrow();
+});
+
 describe('independent literal worker vectors', () => {
   for (const [name, sha] of [
     ['W0', '13063138dacc3f472efdf4011d4ca6318746c4b6389620b00338032bf3674422'],

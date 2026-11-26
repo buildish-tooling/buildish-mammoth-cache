@@ -286,6 +286,8 @@ The first effective member is `.mammoth-meta/identity.json`, containing:
 ```text
 ["identity",1,"worker-tar-v2","gzip",context,modelId,familyId,snapshotPartitions]
 ["identity",2,"worker-tar-v2","gzip",context,modelId,familyId,snapshotPartitions,"incomplete-usage"]
+["identity",3,"worker-tar-v2","gzip",context,modelId,familyId,snapshotPartitions,
+ ["sweep-usage",exactGenerationKey,cutoffMs,capturedAtMs,availableAggregatePartitions]]
 context = [provider,repository,workflow,runId,jobName,attempt,revision,buildTool]
 ```
 
@@ -297,7 +299,15 @@ single-writer partition IDs in model order; it contains no member paths.
 An upper-layer capture uses identity version 2 to report that lower-only reads can
 be absent from its usage channel. The aggregator consumes the validated contribution
 normally and skips timestamp GC if any accepted worker reports incomplete usage.
-Ordinary captures continue to write identity version 1.
+Ordinary captures without sweep evidence continue to write identity version 1.
+
+Version 3 binds a completed ordinary writable capture on a due worker to its exact
+restored generation and current producer context. The cutoff and capture time are
+epoch milliseconds with `cutoffMs <= capturedAtMs`. The partition list contains
+available and explicitly empty aggregate partitions in model order. A completed
+capture can supply evidence even if the build step was skipped. Readers supporting
+version 3 accept versions 1 and 2 for ordinary merge. A worker emitting version 3
+needs an aggregator that supports it.
 
 All intermediate controls have names `.mammoth-meta/<sequence>.json`, where sequence
 starts at 1 and increases by exactly 1, using decimal digits without leading zeros.

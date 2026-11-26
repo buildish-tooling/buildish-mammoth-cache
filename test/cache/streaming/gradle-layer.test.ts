@@ -240,31 +240,47 @@ it.each(['seed-rename-before-stat', 'prepare-between-seed-and-live'])(
   },
 );
 
-it.each([false, true])(
-  'keeps ordinary writer restore on overlay opt-out or mount refusal (%s)',
-  async (enabled) => {
-    const f = await fixture();
-    const context = [...f.request.context] as typeof f.request.context;
-    context[4] = 'writer';
-    const overlayMount = {
-      inspect: vi.fn(async () => null),
-      mount: vi.fn(async () => {
-        throw new Error('mount unavailable');
-      }),
-      unmount: vi.fn(async () => {}),
-    };
-    const ready = await f.prepare({ context, overlayFs: enabled, overlayMount });
-    expect(ready.overlay).toBeNull();
-    expect(ready.dependencyLayer).toBeNull();
-    expect(overlayMount.mount).toHaveBeenCalledTimes(enabled ? 1 : 0);
-    if (!enabled) {
-      expect(overlayMount.inspect).not.toHaveBeenCalled();
-    }
-    expect(overlayMount.unmount).not.toHaveBeenCalled();
-    expect(await readFile(ready.store.root.resolve(ARTIFACT), 'utf8')).toBe('INHERITED-ARTIFACT');
-    expect(await readFile(ready.store.root.resolve(METADATA), 'utf8')).toBe('inherited metadata');
-  },
-);
+it.each([
+  [false, false],
+  [true, false],
+  [true, true],
+])('keeps ordinary writer restore with overlay enabled=%s and GC due=%s', async (enabled, due) => {
+  const f = await fixture();
+  const context = [...f.request.context] as typeof f.request.context;
+  context[4] = 'writer';
+  const overlayMount = {
+    inspect: vi.fn(async () => null),
+    mount: vi.fn(async () => {
+      throw new Error('mount unavailable');
+    }),
+    unmount: vi.fn(async () => {}),
+  };
+  const ready = await f.prepare({
+    context,
+    overlayFs: enabled,
+    overlayMount,
+    ...(due && {
+      dependencyGc: {
+        cacheEnabled: true,
+        cleanupEnabled: true,
+        cacheGcMode: 'timestamp' as const,
+        dependencyGcIntervalMs: 3 * 86400000,
+        dependencyGcForceGraceMs: null,
+      },
+    }),
+  });
+  expect(ready.dependencyGc?.due).toBe(due ? 'true' : undefined);
+  expect(ready.dependencyGc?.force).toBe(due ? false : undefined);
+  expect(ready.overlay).toBeNull();
+  expect(ready.dependencyLayer).toBeNull();
+  expect(overlayMount.mount).toHaveBeenCalledTimes(enabled && !due ? 1 : 0);
+  if (!enabled || due) {
+    expect(overlayMount.inspect).not.toHaveBeenCalled();
+  }
+  expect(overlayMount.unmount).not.toHaveBeenCalled();
+  expect(await readFile(ready.store.root.resolve(ARTIFACT), 'utf8')).toBe('INHERITED-ARTIFACT');
+  expect(await readFile(ready.store.root.resolve(METADATA), 'utf8')).toBe('inherited metadata');
+});
 
 it('retains and reports an advertised seed when worker consumers cannot settle before capture', async () => {
   const f = await fixture(),
