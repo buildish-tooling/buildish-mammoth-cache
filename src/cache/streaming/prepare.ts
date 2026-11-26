@@ -37,6 +37,7 @@ import type { LifecycleOptions } from './lifecycle-options';
 import { uint, type Value } from './encoding';
 import { assertLifecycleWindow } from './post-admission';
 import { MetadataBaseRestore } from './metadata-base-restore';
+import type { MetadataGeneration } from './metadata-base-records';
 import { freezeMetadataInstallPlan } from './install-plan';
 import { executeInstall } from './install-execute';
 import { discoverWorkerArtifacts, acquireWorkerArtifacts } from './worker-service';
@@ -110,6 +111,7 @@ export interface StreamingPrepareResult {
   readonly anchor: InvocationAnchor;
   readonly cutoff: number;
   readonly restoredKey: string | null;
+  readonly selectedGeneration: MetadataGeneration | undefined;
   readonly workerCount: number;
   readonly dependencyLayer: DependencyLayer | null;
   readonly lifecycle: BuildToolLifecycle;
@@ -538,6 +540,7 @@ export async function prepareStreaming(
       anchor,
       cutoff,
       restoredKey: key,
+      selectedGeneration: restored.generation ?? undefined,
       workerCount: downloads.length,
       dependencyLayer: seed ?? null,
       lifecycle,

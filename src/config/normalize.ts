@@ -48,6 +48,7 @@ export function normalizeSharedActionConfig(
   if (dependentJobs.length > 0 && jobMode === 'standalone') {
     throw new Error('dependent-jobs can only be used with distributed job modes.');
   }
+  const forceGrace = rawInputs.dependencyGcForceGraceDays || '1';
 
   return {
     phase: options.phase,
@@ -88,7 +89,30 @@ export function normalizeSharedActionConfig(
       'cache-gc-mode',
     ),
     cacheGcOlderThanDays: parseCacheGcOlderThanDays(rawInputs.cacheGcOlderThanDays || '14'),
+    dependencyGcIntervalMs: parseGcDays(
+      rawInputs.dependencyGcIntervalDays || '3',
+      'dependency-gc-interval-days',
+      1,
+    ),
+    dependencyGcForceGraceMs:
+      forceGrace === 'off' ? null : parseGcDays(forceGrace, 'dependency-gc-force-grace-days', 0),
   };
+}
+
+function parseGcDays(input: string, name: string, minimumMs: number): number {
+  const days = Number(input);
+  const milliseconds = Math.ceil(days * 86400000);
+  if (
+    !input.trim() ||
+    days < 0 ||
+    !Number.isSafeInteger(milliseconds) ||
+    milliseconds < minimumMs
+  ) {
+    throw new Error(
+      `${name} must specify ${minimumMs ? 'a positive' : 'a nonnegative'} duration in days.`,
+    );
+  }
+  return milliseconds;
 }
 
 function parseDirectoryEntryLimit(input: string): number {

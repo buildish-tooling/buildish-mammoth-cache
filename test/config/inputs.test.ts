@@ -30,6 +30,41 @@ import { fixtureCi } from '../support/ci-fixture';
 
 describe('canonical raw action inputs', () => {
   it.each(['gradle', 'maven'] as const)(
+    'normalizes the %s periodic GC settings from config',
+    async (tool) => {
+      await withConfigFile(
+        'cache.yml',
+        'job-mode: prepare-only\ndependency-gc-interval-days: 2.5\ndependency-gc-force-grace-days: off\n',
+        async (workspace) => {
+          const direct = readActionInputs(tool, {
+            getInput: (name) => (name === 'config-file' ? 'cache.yml' : ''),
+          });
+          const inputs = await resolveActionInputsFromConfigFile(tool, direct, { workspace });
+          const config = normalizeSharedActionConfig(inputs, {
+            phase: 'prepare',
+            ciContext: fixtureCi(workspace),
+          });
+          expect(config.jobMode).toBe('prepare-only');
+          expect(config.dependencyGcIntervalMs).toBe(216000000);
+          expect(config.dependencyGcForceGraceMs).toBeNull();
+        },
+      );
+    },
+  );
+
+  it('rejects a negative force grace smaller than a millisecond', () => {
+    const raw = readActionInputs('gradle', {
+      getInput: (name) => (name === 'dependency-gc-force-grace-days' ? '-0.000000001' : ''),
+    });
+    expect(() =>
+      normalizeSharedActionConfig(raw, {
+        phase: 'prepare',
+        ciContext: fixtureCi('/workspace'),
+      }),
+    ).toThrow(/dependency-gc-force-grace-days/u);
+  });
+
+  it.each(['gradle', 'maven'] as const)(
     'preserves %s worker retention precedence when GitHub supplies metadata defaults',
     async (buildTool) => {
       const descriptor = parseYaml(

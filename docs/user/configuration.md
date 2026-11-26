@@ -46,7 +46,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `dependency-cache-layer`                | Gradle        | `true`                                        | yes         | Enables eligible Gradle wrapper workers to use a dependency seed and selects a family whose publishers retain eligible partitions. All cooperating jobs use the same value.  |
 | `export-layer-environment`              | Gradle        | `true`                                        | yes         | Exports the activated Gradle dependency seed as GRADLE_RO_DEP_CACHE for later steps. False emits only the seed-path output; the workflow configures every consumer.          |
 | `read-only`                             | Gradle, Maven | `event-dependent or unset`                    | yes         | Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor. |
-| `job-mode`                              | Gradle, Maven | `standalone`                                  | yes         | Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.                                                                                          |
+| `job-mode`                              | Gradle, Maven | `standalone`                                  | yes         | Cache coordination mode: standalone, distributed-worker, distributed-aggregator, or prepare-only.                                                                            |
 | `dependent-jobs`                        | Gradle, Maven | `event-dependent or unset`                    | yes         | Comma- or newline-separated worker job names consumed by a distributed aggregator.                                                                                           |
 | `worker-artifact-retention-days`        | Gradle, Maven | `7`                                           | yes         | Requested worker artifact retention in whole days (1–400). Backend limits may shorten it; shorter retention narrows the retry window.                                        |
 | `allow-duplicate-dependent-delta-paths` | Gradle, Maven | `false`                                       | yes         | Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.  |
@@ -57,6 +57,8 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `restore-cleanup-mode`                  | Gradle, Maven | `none`                                        | yes         | Restore-time cleanup mode: none or prune-managed.                                                                                                                            |
 | `cache-gc-mode`                         | Gradle, Maven | `timestamp`                                   | yes         | Managed-cache GC: timestamp uses file age and current-build activity; off disables deletion only.                                                                            |
 | `cache-gc-older-than-days`              | Gradle, Maven | `14`                                          | yes         | File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days.                                                                               |
+| `dependency-gc-interval-days`           | Gradle, Maven | `3`                                           | yes         | Days between completed periodic GC sweeps. Defaults to 3 days.                                                                                                               |
+| `dependency-gc-force-grace-days`        | Gradle, Maven | `1`                                           | yes         | Additional days before an aggregator can sweep with incomplete worker coverage. Defaults to 1 day. Use off to disable forcing.                                               |
 | `github-token`                          | Gradle, Maven | `event-dependent or unset`                    | no          | Optional GitHub token for authenticated API requests. Pass secrets directly, never through repository config.                                                                |
 | `github-job-check-run-id`               | Gradle, Maven | `event-dependent or unset`                    | no          | Optional check-run ID used to create a direct current-job link.                                                                                                              |
 | `github-event-name`                     | Gradle, Maven | `event-dependent or unset`                    | no          | Optional triggering-event override for reusable workflows. Pass the trusted caller event.                                                                                    |
@@ -78,6 +80,7 @@ runtime outputs, and these reference rows cannot silently diverge.
 | `cache-family-key`               | Stable compatibility family shared by structurally compatible generations.                          |
 | `cache-lineage-prefix`           | Current-ref prefix used to restore the newest immutable generation.                                 |
 | `base-cache-restore-status`      | Classified base-cache restore outcome for prepare.                                                  |
+| `dependency-gc-due`              | Whether periodic GC is due for the selected generation. Values are true, false, or unknown.         |
 | `restored-cache-key`             | Exact immutable generation restored during prepare, when any.                                       |
 | `read-only`                      | Whether cache and delta writes are disabled.                                                        |
 | `job-mode`                       | Effective standalone or distributed job mode.                                                       |
@@ -164,7 +167,12 @@ runtime outputs, and these reference rows cannot silently diverge.
   - `standalone`
   - `distributed-worker`
   - `distributed-aggregator`
+  - `prepare-only`
 - Controls cache coordination behavior.
+- Use `prepare-only` in a planning job to emit `dependency-gc-due` before selecting worker jobs.
+  It reads only the generation record and skips cache installation, build-tool provisioning, and
+  cache publication. Compare the output with the string `'true'` when selecting all workers.
+  The output is `unknown` when the cache backend cannot distinguish a miss from a lookup failure.
 
 ### `dependent-jobs`
 

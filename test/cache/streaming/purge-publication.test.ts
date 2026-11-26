@@ -64,6 +64,8 @@ const config: NormalizedGradleConfig = {
   restoreCleanupMode: 'none',
   cacheGcMode: 'off',
   cacheGcOlderThanDays: 14,
+  dependencyGcIntervalMs: 259200000,
+  dependencyGcForceGraceMs: 86400000,
   wrapperSelectionMode: 'default',
   wrapperPropertiesGlob: '**/gradle-wrapper.properties',
   defaultWrapperPropertiesFile: 'gradle/wrapper/gradle-wrapper.properties',

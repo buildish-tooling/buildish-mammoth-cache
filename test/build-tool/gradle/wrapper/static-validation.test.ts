@@ -380,6 +380,8 @@ function createConfig(overrides: Partial<NormalizedGradleConfig> = {}): Normaliz
     restoreCleanupMode: 'none',
     cacheGcMode: 'off',
     cacheGcOlderThanDays: 14,
+    dependencyGcIntervalMs: 259200000,
+    dependencyGcForceGraceMs: 86400000,
     gradleUserHome: '/home/runner/.gradle',
     ...overrides,
   };

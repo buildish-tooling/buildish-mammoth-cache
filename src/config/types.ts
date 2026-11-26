@@ -29,7 +29,12 @@ export type CoreExecutionPhase = 'prepare' | 'finalize';
  * These values intentionally mirror the flat string inputs exposed from the current
  * GitHub action descriptor so parsing can stay simple and explicit.
  */
-export const JOB_MODES = ['standalone', 'distributed-worker', 'distributed-aggregator'] as const;
+export const JOB_MODES = [
+  'standalone',
+  'distributed-worker',
+  'distributed-aggregator',
+  'prepare-only',
+] as const;
 /**
  * Normalized job-mode value.
  *
@@ -159,6 +164,10 @@ export interface RawSharedActionInputs {
   readonly cacheGcMode: string;
   /** Raw cache GC age threshold in days. Empty string later defaults to `'14'`. */
   readonly cacheGcOlderThanDays: string;
+  /** Raw periodic GC interval in days. Empty string defaults to `'3'`. */
+  readonly dependencyGcIntervalDays: string;
+  /** Raw force grace in days or `'off'`. Empty string defaults to `'1'`. */
+  readonly dependencyGcForceGraceDays: string;
 }
 
 /**
@@ -277,6 +286,10 @@ export interface NormalizedActionConfig {
   readonly cacheGcMode: CacheGcMode;
   /** Age threshold in days for timestamp-based cache garbage collection. */
   readonly cacheGcOlderThanDays: number;
+  /** Time between completed sweeps in milliseconds. Defaults to three days. */
+  readonly dependencyGcIntervalMs: number;
+  /** Additional time before forcing in milliseconds. Defaults to one day. Null disables forcing. */
+  readonly dependencyGcForceGraceMs: number | null;
 }
 
 /**

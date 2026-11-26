@@ -56,6 +56,11 @@ export async function readMetadataGeneration(
   }
 }
 
+interface GenerationSelection {
+  readonly currentRef: string;
+  readonly defaultRef?: string;
+}
+
 /** Owns SDK extraction roots until independent snapshots and installation finish. */
 export class MetadataBaseRestore {
   #disposed = false;
@@ -104,10 +109,121 @@ export class MetadataBaseRestore {
     }
   }
 
+  private async selectGeneration(
+    backend: BaseCacheBackend,
+    refs: GenerationSelection,
+    signal: AbortSignal,
+    persist: boolean,
+  ): Promise<void> {
+    const { store, options } = this,
+      model = store.codec.options.model;
+    if (!backend.capabilities.supportsNewestPrefixRestore) {
+      throw new Error('Native generation discovery unavailable.');
+    }
+    const allowed = [nameSchema.parse(refs.currentRef)];
+    if (refs.defaultRef && refs.defaultRef !== refs.currentRef) {
+      allowed.push(nameSchema.parse(refs.defaultRef));
+    }
+    const lineages = allowed.map(lineageId);
+    const prefixes = lineages.map((lineage) => lineagePrefix(model.family, lineage));
+    const owner = await this.root();
+    const key = await timed(
+      options,
+      'generation SDK restore',
+      () =>
+        backend.restoreCache(baseRecordPaths(store, owner.path), prefixes[0], prefixes.slice(1), {
+          archiveRoot: store.root.resolve(owner.path),
+        }),
+      (key) => (key === undefined ? 'miss' : 'hit'),
+    );
+    signal.throwIfAborted();
+    await this.checkedExtraction(owner, key !== undefined);
+    if (key !== undefined) {
+      await timed(options, 'generation control admission', async () => {
+        if (!prefixes.some((prefix) => key.startsWith(prefix))) {
+          throw new Error('Unauthorized generation lineage.');
+        }
+        const file = owner.path + '/record.json',
+          before = await nativeBaseFile(store, file, 65536);
+        const release = options.budget.holdRecord(Number(before[5]));
+        try {
+          const chunks: Buffer[] = [];
+          for await (const bytes of store.root.read(file, before)) {
+            signal.throwIfAborted();
+            chunks.push(bytes);
+          }
+          if (!sameNative(before, await nativeBaseFile(store, file, 65536), true)) {
+            throw new Error('Generation changed during control admission.');
+          }
+          const bytes = Buffer.concat(chunks),
+            generation = decodeMetadataGeneration(bytes, model, key);
+          if (!lineages.includes(generation[5])) {
+            throw new Error('Unauthorized generation lineage.');
+          }
+          store.root.work.nativeListings++;
+          let recordSeen = false;
+          for await (const entry of await opendir(store.root.resolve(owner.path), {
+            bufferSize: 2,
+          })) {
+            if (recordSeen || entry.name !== 'record.json') {
+              throw new Error('Unexpected generation extraction member.');
+            }
+            recordSeen = true;
+          }
+          if (!recordSeen) {
+            throw new Error('Missing generation extraction record.');
+          }
+          this.generation = generation;
+          this.key = key;
+          if (persist) {
+            this.record = await store.write(
+              'generation',
+              (async function* () {
+                yield bytes;
+              })(),
+              signal,
+            );
+          }
+        } finally {
+          release();
+        }
+      });
+    }
+  }
+
+  /** Check the record and retire its extraction without opening any partition objects. */
+  static async lookupGeneration(
+    store: OwnedStore,
+    backend: BaseCacheBackend,
+    refs: GenerationSelection,
+    options: NativeOperationOptions,
+    onLookupError: (error: unknown) => void,
+  ): Promise<MetadataGeneration | undefined> {
+    const result = new MetadataBaseRestore(store, Object.freeze({ ...options }));
+    try {
+      if (!backend.isFeatureAvailable()) {
+        return undefined;
+      }
+      await result.selectGeneration(
+        backend,
+        refs,
+        options.signal ?? new AbortController().signal,
+        false,
+      );
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      onLookupError(error);
+      return undefined;
+    } finally {
+      await result.dispose();
+    }
+    return result.generation ?? undefined;
+  }
+
   static async acquire(
     store: OwnedStore,
     backend: BaseCacheBackend | null,
-    refs: { currentRef: string; defaultRef?: string },
+    refs: GenerationSelection,
     options: NativeOperationOptions & { baseSourceMode?: BaseSourceMode },
   ): Promise<MetadataBaseRestore> {
     const result = new MetadataBaseRestore(store, Object.freeze({ ...options }));
@@ -115,78 +231,7 @@ export class MetadataBaseRestore {
       model = store.codec.options.model;
     try {
       if (backend?.isFeatureAvailable()) {
-        if (!backend.capabilities.supportsNewestPrefixRestore) {
-          throw new Error('Native generation discovery unavailable.');
-        }
-        const allowed = [nameSchema.parse(refs.currentRef)];
-        if (refs.defaultRef && refs.defaultRef !== refs.currentRef) {
-          allowed.push(nameSchema.parse(refs.defaultRef));
-        }
-        const prefixes = allowed.map((ref) => lineagePrefix(model.family, lineageId(ref))),
-          owner = await result.root();
-        const key = await timed(
-          options,
-          'generation SDK restore',
-          () =>
-            backend.restoreCache(
-              baseRecordPaths(store, owner.path),
-              prefixes[0],
-              prefixes.slice(1),
-              { archiveRoot: store.root.resolve(owner.path) },
-            ),
-          (key) => (key === undefined ? 'miss' : 'hit'),
-        );
-        signal.throwIfAborted();
-        await result.checkedExtraction(owner, key !== undefined);
-        if (key !== undefined) {
-          await timed(options, 'generation control admission', async () => {
-            if (!prefixes.some((prefix) => key.startsWith(prefix))) {
-              throw new Error('Unauthorized generation lineage.');
-            }
-            const file = owner.path + '/record.json',
-              before = await nativeBaseFile(store, file, 65536);
-            const release = options.budget.holdRecord(Number(before[5]));
-            try {
-              const chunks: Buffer[] = [];
-              for await (const bytes of store.root.read(file, before)) {
-                signal.throwIfAborted();
-                chunks.push(bytes);
-              }
-              if (!sameNative(before, await nativeBaseFile(store, file, 65536), true)) {
-                throw new Error('Generation changed during control admission.');
-              }
-              const bytes = Buffer.concat(chunks),
-                generation = decodeMetadataGeneration(bytes, model, key);
-              if (!allowed.map(lineageId).includes(generation[5])) {
-                throw new Error('Unauthorized generation lineage.');
-              }
-              store.root.work.nativeListings++;
-              let recordSeen = false;
-              for await (const entry of await opendir(store.root.resolve(owner.path), {
-                bufferSize: 2,
-              })) {
-                if (recordSeen || entry.name !== 'record.json') {
-                  throw new Error('Unexpected generation extraction member.');
-                }
-                recordSeen = true;
-              }
-              if (!recordSeen) {
-                throw new Error('Missing generation extraction record.');
-              }
-              result.generation = generation;
-              result.key = key;
-              result.record = await store.write(
-                'generation',
-                (async function* () {
-                  yield bytes;
-                })(),
-                signal,
-              );
-            } finally {
-              release();
-            }
-          });
-        }
+        await result.selectGeneration(backend, refs, signal, true);
       }
       const offered: { partition: string; root: string }[] = [];
       for (const entry of result.generation?.[8] ?? []) {

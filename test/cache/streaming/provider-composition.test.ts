@@ -37,6 +37,13 @@ import {
 import { decodeInvocationAnchor, OpenedInvocation } from '../../../src/cache/streaming/invocation';
 import { ObservationIndex } from '../../../src/cache/streaming/observation-index';
 import { LifecycleHandoff } from '../../../src/cache/streaming/lifecycle-handoff';
+import { dependencyGcSchedule } from '../../../src/cache/streaming/dependency-gc-schedule';
+import {
+  decodeMetadataGeneration,
+  metadataPartitionDecision,
+} from '../../../src/cache/streaming/metadata-base-records';
+import { MetadataBaseRestore } from '../../../src/cache/streaming/metadata-base-restore';
+import { recordKey } from '../../../src/cache/streaming/native-records';
 import {
   installGradleBuildResultCapture,
   cleanupGradleBuildResultCapture,
@@ -192,6 +199,7 @@ it.each(['maven', 'gradle'] as const)(
     const raw = f.state.get(STREAMING_INVOCATION_STATE)!;
     expect(raw.length).toBeLessThan(4096);
     expect(f.outputs.get('base-cache-restore-status')).toBe('miss');
+    expect(f.outputs.get('dependency-gc-due')).toBe('unknown');
     await mkdir(f.home + '/data');
     await writeFile(f.home + '/data/file', 'built');
     if (tool === 'gradle') {
@@ -224,6 +232,150 @@ it.each(['maven', 'gradle'] as const)(
     expect(f.provision).toHaveBeenCalledTimes(1);
   },
 );
+
+it.each(['gradle', 'maven'] as const)(
+  'checks only the %s fallback record before ordinary workers restore its objects',
+  async (tool) => {
+    const publisher = await fixture(tool);
+    const prepared = await runStreamingPrepare(publisher.deps);
+    if (!('store' in prepared)) {
+      throw new Error('Expected a normal prepare.');
+    }
+    await mkdir(publisher.home + '/data');
+    await writeFile(publisher.home + '/data/file', 'built');
+    const published = await runStreamingPost({
+      ...publisher.post,
+      lifecycle: publisher.deps.lifecycle,
+    });
+    if (published.outcome !== 'published' || !published.key) {
+      throw new Error('Expected a published generation.');
+    }
+    const model = prepared.store.codec.options.model;
+    const saved = path.join(publisher.root, 'record.json');
+    const sdk = publisher.sdk.backend;
+    await sdk.restoreCache([saved], published.key, [], { archiveRoot: publisher.root });
+    const generation = decodeMetadataGeneration(await readFile(saved), model, published.key);
+    expect(generation[8].some((entry) => entry[0] === 'object')).toBe(true);
+    generation[12] = 1000;
+    generation[10] = metadataPartitionDecision(generation);
+    generation[11] = recordKey(model.family, generation[5], generation[6], generation[10]);
+    await writeFile(saved, encodeRecord(generation));
+    await sdk.saveCache([saved], generation[11], { archiveRoot: publisher.root });
+
+    const planner = await fixture(tool, { 'job-mode': 'prepare-only', 'read-only': 'true' });
+    const backend = vi.spyOn(sdk, 'restoreCache');
+    const ci = {
+      ...planner.ci,
+      resolvedRefName: 'feature',
+      defaultBranch: publisher.ci.resolvedRefName,
+    };
+    const dueAt = 1000 + planner.config.dependencyGcIntervalMs;
+    const deps = {
+      ...planner.deps,
+      ciProvider: { ...planner.deps.ciProvider, context: ci },
+      cacheBackend: async () => sdk,
+      now: () => dueAt - 1,
+    };
+    expect(await runStreamingPrepare(deps)).toEqual({ outcome: 'generation-checked' });
+    expect([...planner.outputs]).toEqual([['dependency-gc-due', 'false']]);
+    expect(backend).toHaveBeenCalledTimes(1);
+    expect(backend.mock.calls[0]![0].map((entry) => path.basename(entry))).toEqual(['record.json']);
+    expect(planner.provision).not.toHaveBeenCalled();
+    expect(planner.hooks).not.toHaveBeenCalled();
+    expect(planner.artifacts.list).not.toHaveBeenCalled();
+    expect(planner.state.size).toBe(0);
+    expect(await readdir(planner.ci.tempDirectory!)).toEqual([]);
+    await expect(readdir(planner.home)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await runStreamingPost(planner.post)).outcome).toBe('skipped');
+    expect(planner.backend).not.toHaveBeenCalled();
+
+    backend.mockClear();
+    const worker = await fixture(tool, { 'job-mode': 'distributed-worker' });
+    await runStreamingPrepare({
+      ...worker.deps,
+      ciProvider: {
+        ...worker.deps.ciProvider,
+        context: { ...ci, tempDirectory: worker.ci.tempDirectory },
+      },
+      cacheBackend: async () => sdk,
+      now: () => dueAt,
+    });
+    expect(worker.outputs.get('restored-cache-key')).toBe(generation[11]);
+    expect(worker.outputs.get('dependency-gc-due')).toBe('true');
+    expect(backend).toHaveBeenCalledTimes(2);
+    expect(await readFile(worker.home + '/data/file', 'utf8')).toBe('built');
+    expect(dependencyGcSchedule(planner.config, generation, dueAt)).toEqual({
+      due: 'true',
+      force: false,
+    });
+    const forceAt = dueAt + planner.config.dependencyGcForceGraceMs!;
+    expect(dependencyGcSchedule(planner.config, generation, forceAt - 1).force).toBe(false);
+    expect(dependencyGcSchedule(planner.config, generation, forceAt).force).toBe(true);
+    generation[12] = null;
+    expect(dependencyGcSchedule(planner.config, generation, dueAt)).toEqual({
+      due: 'true',
+      force: true,
+    });
+    expect(
+      dependencyGcSchedule(
+        { ...planner.config, dependencyGcForceGraceMs: null },
+        generation,
+        dueAt,
+      ),
+    ).toEqual({
+      due: 'true',
+      force: false,
+    });
+  },
+);
+
+it.each([
+  [{}, true, 'unknown'],
+  [{}, false, 'unknown'],
+  [{ 'cache-gc-mode': 'off' }, false, 'false'],
+  [{ 'cache-enabled': 'false' }, true, 'false'],
+  [{ 'cleanup-enabled': 'false' }, true, 'false'],
+] as const)(
+  'reports the prepare-only hint for settings %o, availability %s',
+  async (settings, available, due) => {
+    const f = await fixture('maven', { 'job-mode': 'prepare-only', ...settings });
+    f.sdk.backend.isFeatureAvailable = () => available;
+    await runStreamingPrepare(f.deps);
+    expect([...f.outputs]).toEqual([['dependency-gc-due', due]]);
+  },
+);
+
+it.each(['availability probe', 'restore'] as const)(
+  'reports an indeterminate prepare-only %s and retires its empty scratch',
+  async (operation) => {
+    const f = await fixture('maven', { 'job-mode': 'prepare-only' });
+    const reason = new Error('backend unavailable');
+    if (operation === 'availability probe') {
+      vi.spyOn(f.sdk.backend, 'isFeatureAvailable').mockImplementation(() => {
+        throw reason;
+      });
+    } else {
+      vi.spyOn(f.sdk.backend, 'restoreCache').mockRejectedValue(reason);
+    }
+    await runStreamingPrepare(f.deps);
+    expect([...f.outputs]).toEqual([['dependency-gc-due', 'unknown']]);
+    expect(f.warning).toHaveBeenCalledWith(expect.stringContaining('backend unavailable'));
+    expect(await readdir(f.ci.tempDirectory!)).toEqual([]);
+  },
+);
+
+it('retains prepare-only scratch when guarded retirement fails', async () => {
+  const f = await fixture('maven', { 'job-mode': 'prepare-only' });
+  vi.spyOn(MetadataBaseRestore.prototype, 'dispose').mockRejectedValueOnce(
+    new Error('retirement failed'),
+  );
+  await expect(runStreamingPrepare(f.deps)).rejects.toThrow('retirement failed');
+  expect([...f.outputs]).toEqual([]);
+  expect(await readdir(f.ci.tempDirectory!)).toEqual([
+    expect.stringMatching(/^mammoth-generation-/u),
+  ]);
+});
+
 it('canonicalizes repeated configured producers before freezing and requests them once in first-occurrence order', async () => {
   const service = memoryArtifacts();
   for (const job of ['A', 'B']) {

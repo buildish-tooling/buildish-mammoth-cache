@@ -39,6 +39,8 @@ export type RawActionInputProperty =
   | 'restoreCleanupMode'
   | 'cacheGcMode'
   | 'cacheGcOlderThanDays'
+  | 'dependencyGcIntervalDays'
+  | 'dependencyGcForceGraceDays'
   | 'processAllWrapperFiles'
   | 'wrapperPropertiesGlob'
   | 'wrapperPropertiesFiles'
@@ -168,7 +170,7 @@ export const PUBLIC_ACTION_INPUTS = [
     configFile: 'allowed',
     configFileValueKind: 'string',
     description:
-      'Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.',
+      'Cache coordination mode: standalone, distributed-worker, distributed-aggregator, or prepare-only.',
   },
   {
     name: 'dependent-jobs',
@@ -265,6 +267,25 @@ export const PUBLIC_ACTION_INPUTS = [
     configFileValueKind: 'number',
     description:
       'File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days.',
+  },
+  {
+    name: 'dependency-gc-interval-days',
+    property: 'dependencyGcIntervalDays',
+    tools: BOTH,
+    runtimeDefault: '3',
+    configFile: 'allowed',
+    configFileValueKind: 'number',
+    description: 'Days between completed periodic GC sweeps. Defaults to 3 days.',
+  },
+  {
+    name: 'dependency-gc-force-grace-days',
+    property: 'dependencyGcForceGraceDays',
+    tools: BOTH,
+    runtimeDefault: '1',
+    configFile: 'allowed',
+    configFileValueKind: 'number',
+    description:
+      'Additional days before an aggregator can sweep with incomplete worker coverage. Defaults to 1 day. Use off to disable forcing.',
   },
   {
     name: 'github-token',
@@ -385,6 +406,11 @@ export const PUBLIC_ACTION_OUTPUTS = [
   {
     name: 'base-cache-restore-status',
     description: 'Classified base-cache restore outcome for prepare.',
+  },
+  {
+    name: 'dependency-gc-due',
+    description:
+      'Whether periodic GC is due for the selected generation. Values are true, false, or unknown.',
   },
   {
     name: 'restored-cache-key',

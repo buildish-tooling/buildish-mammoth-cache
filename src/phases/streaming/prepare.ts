@@ -17,12 +17,25 @@
 import { timed } from '../../util/timing';
 import { hostTiming } from '../../host/timing';
 import { randomBytes } from 'node:crypto';
+import { mkdir, mkdtemp, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createCachePartitions } from '../../cache/model';
-import { resolveCacheModel, lineageId } from '../../cache/streaming/model';
+import { resolveCacheModel, lineageId, invocationId } from '../../cache/streaming/model';
 import { lineagePrefix } from '../../cache/streaming/native-records';
 import { contextSchema } from '../../cache/streaming/schema';
 import { WorkingBudget } from '../../cache/streaming/tree-state';
 import { prepareStreaming, type StreamingPrepareResult } from '../../cache/streaming/prepare';
+import { dependencyGcSchedule } from '../../cache/streaming/dependency-gc-schedule';
+import { MetadataBaseRestore } from '../../cache/streaming/metadata-base-restore';
+import type { MetadataGeneration } from '../../cache/streaming/metadata-base-records';
+import { LocalCodec } from '../../cache/streaming/local-schema';
+import { OwnedStore } from '../../cache/streaming/owned-store';
+import { NativeRoot } from '../../cache/streaming/native';
+import {
+  CACHE_METADATA_DIRECTORY,
+  CACHE_METADATA_VERSION_DIRECTORY,
+} from '../../cache/metadata-paths';
 import { reconcileDisabledRoot } from '../../cache/streaming/passive-lifecycle';
 import { disabledInvocationAnchor, encodeInvocationAnchor } from '../../cache/streaming/invocation';
 import {
@@ -56,15 +69,120 @@ export interface StreamingPrepareDependencies extends Omit<LifecycleOptions, 'bu
   readonly ciProvider: CiPlatformAdapter;
   readonly config: NormalizedActionConfig;
   readonly buildToolAdapterFactory: () => BuildToolAdapter;
-  readonly cacheBackend: () => Promise<BaseCacheBackend>;
+  readonly cacheBackend: (operationRoot?: string) => Promise<BaseCacheBackend>;
   readonly artifactBackend: () => Promise<WorkflowArtifactBackend>;
   readonly nonce?: string;
+  readonly now?: () => number;
   readonly reportSink?: () => Promise<ReportSink>;
+}
+
+function cacheModel(adapter: BuildToolAdapter, config: NormalizedActionConfig) {
+  const hard = adapter.getHardCacheExcludeGlobs();
+  return resolveCacheModel(
+    {
+      buildToolId: adapter.getBuildToolId(),
+      hardCacheExcludeGlobs: hard,
+      partitions: createCachePartitions(
+        config.cachePartitions,
+        adapter.getBuiltInPartitionPresets(),
+        hard,
+      ),
+      dependencyCacheLayer: config.dependencyCacheLayer,
+    },
+    config.cacheKeyPrefix,
+    config.cacheSchemaVersion,
+  );
+}
+
+function sweepOutputs(d: StreamingPrepareDependencies, generation: MetadataGeneration | undefined) {
+  const { due } = dependencyGcSchedule(d.config, generation, (d.now ?? Date.now)());
+  d.runtimeHost.setOutput('dependency-gc-due', due);
+}
+
+async function checkGeneration(d: StreamingPrepareDependencies) {
+  if (!d.config.cacheEnabled || !d.config.cleanupEnabled || d.config.cacheGcMode === 'off') {
+    sweepOutputs(d, undefined);
+    return { outcome: 'generation-checked' as const };
+  }
+  const adapter = d.buildToolAdapterFactory();
+  const ci = d.ciProvider.context;
+  const context = cacheContext(d, adapter.getBuildToolId());
+  const codec = new LocalCodec({
+    model: cacheModel(adapter, d.config),
+    context,
+    invocation: invocationId(context, d.nonce ?? randomBytes(16).toString('hex')),
+    role: 'standalone',
+    access: 'read-only',
+  });
+  const scratch = await NativeRoot.bind(
+    await mkdtemp(join(ci.tempDirectory ?? tmpdir(), 'mammoth-generation-')),
+  );
+  const root = join(scratch.path, 'root');
+  await mkdir(root);
+  const store = await OwnedStore.bind(root, codec);
+  const warnLookupError = (error: unknown) =>
+    d.runtimeHost.warning(
+      'Unable to check the cache generation for periodic GC: ' +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  let backend: BaseCacheBackend | undefined;
+  try {
+    backend = await d.cacheBackend(root);
+  } catch (error) {
+    warnLookupError(error);
+  }
+  const generation =
+    backend &&
+    (await MetadataBaseRestore.lookupGeneration(
+      store,
+      backend,
+      { currentRef: ci.resolvedRefName, defaultRef: ci.defaultBranch },
+      { ...d, budget: d.budget ?? new WorkingBudget() },
+      warnLookupError,
+    ));
+  await scratch.verifyRoot(true);
+  for (const relative of [
+    store.prefix + 'base',
+    store.prefix.slice(0, -1),
+    CACHE_METADATA_VERSION_DIRECTORY,
+    CACHE_METADATA_DIRECTORY,
+  ]) {
+    if (await store.root.stat(relative)) {
+      await rmdir(store.root.resolve(relative));
+    }
+  }
+  await store.root.verifyRoot(true);
+  await rmdir(root);
+  await rmdir(scratch.path);
+  d.signal?.throwIfAborted();
+  sweepOutputs(d, generation);
+  return { outcome: 'generation-checked' as const };
+}
+
+function cacheContext(
+  d: StreamingPrepareDependencies,
+  tool: ReturnType<BuildToolAdapter['getBuildToolId']>,
+) {
+  const ci = d.ciProvider.context;
+  return contextSchema.parse([
+    d.providerId,
+    ci.repository,
+    ci.workflowName,
+    String(ci.runId ?? ''),
+    ci.jobName,
+    ci.runAttempt,
+    ci.sourceRevision,
+    tool,
+  ]);
 }
 
 // Protocol: docs/dev/cache-lifecycle-protocol.md#provider-composition-and-activation-boundary.
 // Action prepare composition. Never calls legacy bootstrap, snapshots or cutoff inventory.
 async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
+  const config = d.config;
+  if (config.jobMode === 'prepare-only') {
+    return checkGeneration(d);
+  }
   const host = d.runtimeHost,
     ci = d.ciProvider.context,
     claim = await claimSingleRunPrepareExecution({ ciContext: ci, saveState: host.saveState });
@@ -74,18 +192,8 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
   let layerPreparation: StreamingPrepareResult | undefined;
   try {
     const adapter = d.buildToolAdapterFactory(),
-      config = d.config,
       tool = adapter.getBuildToolId(),
-      context = contextSchema.parse([
-        d.providerId,
-        ci.repository,
-        ci.workflowName,
-        String(ci.runId ?? ''),
-        ci.jobName,
-        ci.runAttempt,
-        ci.sourceRevision,
-        tool,
-      ]),
+      context = cacheContext(d, tool),
       budget = d.budget ?? new WorkingBudget(),
       options = { ...d, budget },
       root = adapter.getCacheRoot();
@@ -112,28 +220,14 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
         host.setOutput(key, value);
       }
       outputs(host, config, null, null, 0, '', false);
+      sweepOutputs(d, undefined);
       await prepareSummary(d, 'disabled');
       if (tool === 'gradle') {
         host.setOutput('gradle-ro-dep-cache', '');
       }
       return { outcome: 'disabled' as const };
     }
-    const hard = adapter.getHardCacheExcludeGlobs(),
-      partitions = createCachePartitions(
-        config.cachePartitions,
-        adapter.getBuiltInPartitionPresets(),
-        hard,
-      );
-    const model = resolveCacheModel(
-      {
-        buildToolId: tool,
-        hardCacheExcludeGlobs: hard,
-        partitions,
-        dependencyCacheLayer: config.dependencyCacheLayer,
-      },
-      config.cacheKeyPrefix,
-      config.cacheSchemaVersion,
-    );
+    const model = cacheModel(adapter, config);
     const result = await prepareStreaming({
       ...options,
       maxDirectoryEntries: config.cacheMaxDirectoryEntries,
@@ -202,6 +296,7 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
         ),
       result.restoreStatus,
     );
+    sweepOutputs(d, result.selectedGeneration);
     await prepareSummary(d, result.restoreStatus);
     if (tool === 'gradle' && !result.dependencyLayer) {
       host.setOutput('gradle-ro-dep-cache', '');

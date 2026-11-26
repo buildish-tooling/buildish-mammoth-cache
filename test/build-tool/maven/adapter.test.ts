@@ -46,6 +46,8 @@ function makeConfig(overrides: Partial<NormalizedMavenConfig> = {}): NormalizedM
     restoreCleanupMode: 'none',
     cacheGcMode: 'off',
     cacheGcOlderThanDays: 14,
+    dependencyGcIntervalMs: 259200000,
+    dependencyGcForceGraceMs: 86400000,
     mavenUserHome: path.join(os.homedir(), '.m2'),
     ...overrides,
   };

@@ -36,7 +36,7 @@ inputs:
     description: Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor.
     required: false
   job-mode:
-    description: 'Cache coordination mode: standalone, distributed-worker, or distributed-aggregator.'
+    description: 'Cache coordination mode: standalone, distributed-worker, distributed-aggregator, or prepare-only.'
     required: false
     default: standalone
   dependent-jobs:
@@ -75,6 +75,12 @@ inputs:
     description: File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days.
     required: false
     default: '14'
+  dependency-gc-interval-days:
+    description: 'Days between completed periodic GC sweeps. Defaults to 3 days.'
+    required: false
+  dependency-gc-force-grace-days:
+    description: 'Additional days before an aggregator can sweep with incomplete worker coverage. Defaults to 1 day. Use off to disable forcing.'
+    required: false
   github-token:
     description: Optional GitHub token for authenticated API requests. Pass secrets directly, never through repository config.
     required: false
@@ -103,6 +109,8 @@ outputs:
     description: Current-ref prefix used to restore the newest immutable generation.
   base-cache-restore-status:
     description: Classified base-cache restore outcome for prepare.
+  dependency-gc-due:
+    description: 'Whether periodic GC is due for the selected generation. Values are true, false, or unknown.'
   restored-cache-key:
     description: Exact immutable generation restored during prepare, when any.
   read-only:
