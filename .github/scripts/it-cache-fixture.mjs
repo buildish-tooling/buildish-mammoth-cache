@@ -97,11 +97,13 @@ if (operation === 'empty') {
   assert.equal(prepare['read-only'], 'false');
   assert.equal(prepare['base-cache-restore-status'], 'current-lineage-hit');
   assert.equal(prepare['restored-cache-key'], producer.key, 'Selected the wrong layer generation');
-  const seed = prepare['gradle-ro-dep-cache'];
-  assert(
-    typeof seed === 'string' && path.isAbsolute(seed),
-    'Cold/fallback restore did not activate a seed',
+  assert.equal(
+    prepare['dependency-gc-due'],
+    'false',
+    'Seed proof requires dependency-gc-due to be false',
   );
+  const seed = prepare['gradle-ro-dep-cache'];
+  assert(typeof seed === 'string' && path.isAbsolute(seed), 'Warm restore did not activate a seed');
   assert.equal(process.env.GRADLE_RO_DEP_CACHE, seed);
   assert.equal(await realpath(seed), seed);
   assert(

@@ -414,6 +414,7 @@ it('qualifies warm writable Gradle layers on every native main-branch runner aft
   const seedPrepare = producer.steps.find((step) => step.id === 'prepare')!;
   expect(prepare.with!['job-mode']).toBe('distributed-worker');
   expect(prepare.with!['read-only']).toBe(false);
+  expect(prepare.with!['cache-gc-mode']).toBe('off');
   expect(prepare.with!['dependency-cache-layer']).toBeUndefined();
   expect(seedPrepare.with!['dependency-cache-layer']).toBeUndefined();
   const check = workers.steps.findIndex((step) => step.run?.includes('fixture.mjs layer gradle'));
@@ -468,6 +469,7 @@ it('rejects cold, wrong-generation and writable-copy substitutes for the hosted 
       'read-only': 'false',
       'base-cache-restore-status': 'current-lineage-hit',
       'restored-cache-key': key,
+      'dependency-gc-due': 'false',
       'gradle-ro-dep-cache': seed,
     };
     const run = () =>
@@ -487,8 +489,11 @@ it('rejects cold, wrong-generation and writable-copy substitutes for the hosted 
       });
     const valid = run();
     expect(valid.status, valid.stderr).toBe(0);
+    prepare['dependency-gc-due'] = 'true';
+    expect(run().stderr).toContain('Seed proof requires dependency-gc-due to be false');
+    prepare['dependency-gc-due'] = 'false';
     prepare['gradle-ro-dep-cache'] = '';
-    expect(run().stderr).toContain('Cold/fallback');
+    expect(run().stderr).toContain('Warm restore did not activate a seed');
     prepare['gradle-ro-dep-cache'] = seed;
     prepare['restored-cache-key'] = key + 'wrong';
     expect(run().stderr).toContain('wrong layer generation');

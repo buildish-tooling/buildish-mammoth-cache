@@ -1403,18 +1403,24 @@ it('keeps ordinary archive identity for a due Gradle writer using an external se
   expect(identity[1]).toBe(1);
 });
 
-it.each([true, false])(
-  'publishes a warm seed last and honors export-layer-environment=%s',
-  async (exportEnvironment) => {
-    const { worker, dependencies, inspect } = await warmLayerProvider({
-      'export-layer-environment': String(exportEnvironment),
-    });
+it.each([
+  [true, 'timestamp'],
+  [false, 'timestamp'],
+  [true, 'off'],
+] as const)(
+  'publishes a warm seed last with export-layer-environment=%s and cache-gc-mode=%s',
+  async (exportEnvironment, gcMode) => {
+    const { worker, dependencies, inspect } = await warmLayerProvider(
+      { 'export-layer-environment': String(exportEnvironment), 'cache-gc-mode': gcMode },
+      gcMode === 'off' ? null : undefined,
+    );
     const output = vi.spyOn(worker.host, 'setOutput'),
       environment = vi.spyOn(worker.host, 'exportEnvironmentVariable');
     const result = await runStreamingPrepare(dependencies);
     if (!('dependencyLayer' in result) || !result.dependencyLayer) {
       throw new Error('No warm seed');
     }
+    expect(worker.outputs.get('dependency-gc-due')).toBe('false');
     expect(worker.state.get(STREAMING_LAYER_ACTIVATED_STATE)).toBe(
       result.store.codec.options.invocation,
     );

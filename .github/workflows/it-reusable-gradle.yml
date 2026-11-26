@@ -1033,6 +1033,8 @@ jobs:
           base-directory: build/integration-fixtures/${{ matrix.worker.id }}
           job-mode: distributed-worker
           read-only: false
+          # This matrix verifies read-only seed consumption.
+          cache-gc-mode: 'off'
           cache-partitions: ${{ env.LAYER_CACHE_PARTITIONS }}
           cache-key-prefix: it-gradle-layer-${{ github.run_id }}-a${{ needs.layer_seed.outputs.attempt }}-
           github-event-name: ${{ inputs.caller-event-name }}
