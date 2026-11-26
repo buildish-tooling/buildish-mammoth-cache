@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -33,6 +34,7 @@ from urllib.error import HTTPError
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "tools/versioned-docs"
 PUBLISHED_AT = "2026-11-25T08:06:43Z"
+API = "https://api.github.com/repos/buildish-tooling/buildish-mammoth-cache"
 
 
 def load_manage():
@@ -68,17 +70,80 @@ def git(repo: Path, *args: str) -> str:
 
 
 def run(
-    repo: Path, command: str, *args: str, success: bool = True
+    repo: Path,
+    command: str,
+    *args: str,
+    success: bool | None = True,
+    github: dict | None = None,
+    github_calls: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        [str(SCRIPTS / f"{command}.sh"), "--source", str(repo), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if (result.returncode == 0) != success:
+    if command == "import":
+        result = import_with_github(repo, args, github or {}, github_calls)
+    else:
+        result = subprocess.run(
+            [str(SCRIPTS / f"{command}.sh"), "--source", str(repo), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    if success is not None and (result.returncode == 0) != success:
         raise AssertionError(result.stdout + result.stderr)
     return result
+
+
+def fake_github(repo: Path, responses: dict, calls: list[str] | None):
+    """GitHub API stand-in that, by default, reports each local tag as released."""
+    tag_objects = {}
+
+    def payload(endpoint: str):
+        if endpoint in responses:
+            return responses[endpoint]
+        kind, _, tag = endpoint.rpartition("/")
+        if kind == "releases/tags":
+            return {
+                "tag_name": tag,
+                "draft": False,
+                "prerelease": False,
+                "published_at": PUBLISHED_AT,
+                "target_commitish": "main",
+            }
+        if kind == "git/ref/tags":
+            sha = hashlib.sha1(tag.encode()).hexdigest()
+            tag_objects[sha] = tag
+            return {"ref": f"refs/tags/{tag}", "object": {"type": "tag", "sha": sha}}
+        if kind == "git/tags":
+            local = git(repo, "rev-parse", f"{tag_objects[tag]}^{{commit}}")
+            return {"object": {"type": "commit", "sha": local}}
+        raise AssertionError(f"Unexpected GitHub endpoint {endpoint}")
+
+    def open_response(request, *, timeout):
+        endpoint = request.full_url.removeprefix(f"{API}/")
+        if calls is not None:
+            calls.append(endpoint)
+        data = payload(endpoint)
+        if data is None:
+            raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+        return io.BytesIO(json.dumps(data).encode())
+
+    return open_response
+
+
+def import_with_github(
+    repo: Path, args: tuple[str, ...], responses: dict, calls: list[str] | None
+) -> subprocess.CompletedProcess[str]:
+    """Run import in-process so GitHub can be replaced; the wrapper only execs it."""
+    module = load_manage()
+    argv = ["manage.py", "import", "--source", str(repo), *args]
+    with (
+        patch("sys.argv", argv),
+        patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        patch.object(
+            module, "urlopen", side_effect=fake_github(repo, responses, calls)
+        ),
+    ):
+        status = module.main()
+    return subprocess.CompletedProcess(argv, status, stdout.getvalue(), stderr.getvalue())
 
 
 def commit(repo: Path) -> None:
@@ -132,7 +197,14 @@ class VersionedDocsScriptsTest(unittest.TestCase):
         snapshot = json.loads((worktree / "provider-snapshot.json").read_text())
         self.assertEqual(
             snapshot["artifacts"],
-            [{"componentSlug": "mammoth-cache", "artifactKey": "mammoth-cache"}],
+            [
+                {
+                    "componentSlug": "mammoth-cache",
+                    "artifactKey": "mammoth-cache",
+                    "releaseLines": [{"key": "0.1", "latest": "0.1.3"}],
+                    "latestStable": "0.1.3",
+                }
+            ],
         )
         self.assertEqual(snapshot["providers"][0]["key"], "mammoth-cache-tags")
         self.assertEqual(snapshot["providers"][0]["type"], "git-tags")
@@ -147,10 +219,10 @@ class VersionedDocsScriptsTest(unittest.TestCase):
                 record["externalUrl"],
                 f"https://github.com/buildish-tooling/buildish-mammoth-cache/releases/tag/{record['tag']}",
             )
-            self.assertNotIn("publishedAt", record)
-            self.assertNotIn("publicationState", record)
-            self.assertNotIn("releaseLine", record)
-            self.assertNotIn("docsSource", record)
+            self.assertEqual(record["publishedAt"], PUBLISHED_AT)
+            self.assertEqual(record["publicationState"], "published")
+            self.assertEqual(record["releaseLine"], "0.1")
+            self.assertEqual(record["docsSource"]["ref"], record["commitSha"])
         self.assertEqual(
             next(
                 record for record in snapshot["records"] if record["version"] == "0.1.3"
@@ -181,68 +253,18 @@ class VersionedDocsScriptsTest(unittest.TestCase):
         self.assertEqual(git(source, "branch", "--show-current"), "main")
 
     def post_release(self, version: str, responses: dict | None = None):
-        module = load_manage()
-        tag = f"v{version}"
-        captured_commit = git(self.source, "rev-parse", f"{tag}^{{commit}}")
-        api = "https://api.github.com/repos/buildish-tooling/buildish-mammoth-cache"
-        tag_object = "1" * 40
-        payloads = {
-            f"{api}/releases/tags/{tag}": {
-                "tag_name": tag,
-                "draft": False,
-                "prerelease": False,
-                "published_at": PUBLISHED_AT,
-                "target_commitish": "main",
-            },
-            f"{api}/git/ref/tags/{tag}": {
-                "ref": f"refs/tags/{tag}",
-                "object": {"type": "tag", "sha": tag_object},
-            },
-            f"{api}/git/tags/{tag_object}": {
-                "object": {"type": "commit", "sha": captured_commit},
-            },
-        }
-        for endpoint, payload in (responses or {}).items():
-            payloads[f"{api}/{endpoint}"] = payload
+        result = run(
+            self.source, "import", "--version", version, success=None, github=responses
+        )
+        return result.returncode, result.stdout, result.stderr
 
-        def open_response(request, *, timeout):
-            payload = payloads[request.full_url]
-            if payload is None:
-                raise HTTPError(request.full_url, 404, "Not Found", {}, None)
-            return io.BytesIO(json.dumps(payload).encode())
-
-        args = [
-            "manage.py",
-            "import",
-            "--source",
-            str(self.source),
-            "--post-release",
-            "--version",
-            version,
-        ]
-        with (
-            patch("sys.argv", args),
-            patch("sys.stdout", new_callable=io.StringIO) as stdout,
-            patch("sys.stderr", new_callable=io.StringIO) as stderr,
-            patch.object(module, "urlopen", side_effect=open_response),
-        ):
-            status = module.main()
-        return status, stdout.getvalue(), stderr.getvalue()
-
-    def test_post_release_backfills_and_advances_latest(self) -> None:
+    def test_import_verifies_publication_and_advances_latest(self) -> None:
         source = self.source
         run(source, "checkout", "--create")
-        run(source, "import", "--version", "0.1.3")
+        status, _, error = self.post_release("0.1.3")
+        self.assertEqual(status, 0, error)
         worktree = source / "docs/releases"
         path = worktree / "provider-snapshot.json"
-        docs = worktree / "0.1.3/_index.md"
-        docs_inode = docs.stat().st_ino
-        commit(worktree)
-
-        status, out, error = self.post_release("0.1.3")
-        self.assertEqual(status, 0, error)
-        self.assertIn("Updated release metadata", out)
-        self.assertEqual(docs.stat().st_ino, docs_inode)
         snapshot = json.loads(path.read_text())
         record = snapshot["records"][0]
         self.assertEqual(record["publishedAt"], PUBLISHED_AT)
@@ -316,21 +338,92 @@ class VersionedDocsScriptsTest(unittest.TestCase):
                 self.assertIn(message, error)
                 self.assertEqual(git(worktree, "status", "--porcelain"), "")
 
-    def test_post_release_preserves_curated_exclusion(self) -> None:
+    def test_curated_exclusion_skips_hosted_verification(self) -> None:
         run(self.source, "checkout", "--create")
-        run(self.source, "import", "--version", "0.1.3")
         worktree = self.source / "docs/releases"
         path = worktree / "provider-snapshot.json"
+        # Curate an attempt as excluded before its first import: no hosted release needed.
+        path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "providers": [],
+                    "records": [],
+                    "artifacts": [
+                        {
+                            "componentSlug": "mammoth-cache",
+                            "artifactKey": "mammoth-cache",
+                            "releases": [{"version": "0.1.2", "publicationState": "hidden"}],
+                        }
+                    ],
+                }
+            )
+        )
+        commit(worktree)
+        calls: list[str] = []
+        unpublished = {"releases/tags/v0.1.2": None}
+        run(self.source, "import", "--version", "0.1.2", github=unpublished, github_calls=calls)
+        self.assertEqual(calls, [])
+        record = json.loads(path.read_text())["records"][0]
+        self.assertNotIn("publishedAt", record)
+        self.assertNotIn("publicationState", record)
+        commit(worktree)
         snapshot = json.loads(path.read_text())
-        snapshot["artifacts"][0]["releases"] = [
+        snapshot["artifacts"][0]["releases"].append(
             {"version": "0.1.3", "publicationState": "withdrawn"}
-        ]
+        )
         path.write_text(json.dumps(snapshot))
         commit(worktree)
-        status, _, error = self.post_release("0.1.3")
-        self.assertEqual(status, 1)
-        self.assertIn("excluded by snapshot publication policy", error)
-        self.assertEqual(git(worktree, "status", "--porcelain"), "")
+        run(self.source, "import", github_calls=calls)
+        self.assertEqual(calls, [])
+        records = json.loads(path.read_text())["records"]
+        self.assertEqual([record["version"] for record in records], ["0.1.2", "0.1.3"])
+        self.assertNotIn("publishedAt", records[1])
+
+    def test_complete_records_are_not_verified_again(self) -> None:
+        source = self.source
+        run(source, "checkout", "--create")
+        run(source, "import")
+        worktree = source / "docs/releases"
+        path = worktree / "provider-snapshot.json"
+        commit(worktree)
+        before = path.read_bytes()
+        calls: list[str] = []
+        for options in ((), ("--full-rebuild",)):
+            with self.subTest(options=options):
+                run(source, "import", *options, github_calls=calls)
+                self.assertEqual(calls, [])
+                records = json.loads(path.read_text())["records"]
+                self.assertEqual(records, json.loads(before)["records"])
+                if git(worktree, "status", "--porcelain"):
+                    commit(worktree)
+
+        # A record imported from its tag alone is completed by the next import.
+        snapshot = json.loads(before)
+        for field in ("publishedAt", "publicationState", "releaseLine", "docsSource"):
+            del snapshot["records"][1][field]
+        path.write_text(json.dumps(snapshot, indent=2) + "\n")
+        commit(worktree)
+        run(source, "import", github_calls=calls)
+        self.assertEqual(
+            calls,
+            ["releases/tags/v0.1.3", "git/ref/tags/v0.1.3", f"git/tags/{hashlib.sha1(b'v0.1.3').hexdigest()}"],
+        )
+        self.assertEqual(json.loads(path.read_text())["records"], json.loads(before)["records"])
+
+    def test_unpublished_tag_fails_the_import_before_writes(self) -> None:
+        source = self.source
+        run(source, "checkout", "--create")
+        run(source, "import")
+        worktree = source / "docs/releases"
+        commit(worktree)
+        release(source, "0.1.4", "new docs\n")
+        result = run(
+            source, "import", success=False, github={"releases/tags/v0.1.4": None}
+        )
+        self.assertIn("GitHub lookup failed for releases/tags/v0.1.4", result.stderr)
+        self.assertFalse((worktree / "0.1.4").exists())
+        self.assertFalse(git(worktree, "status", "--porcelain"))
 
     def test_dirty_refused_and_full_rebuild_scope(self) -> None:
         source = self.source
@@ -629,17 +722,17 @@ class VersionedDocsScriptsTest(unittest.TestCase):
             version=["0.1.3"],
             minimum_version=None,
             full_rebuild=False,
-            post_release=False,
         )
-        with patch.object(module, "export_docs", side_effect=move_tag_then_export):
+        with (
+            patch.object(module, "export_docs", side_effect=move_tag_then_export),
+            patch.object(module, "urlopen", side_effect=fake_github(source, {}, None)),
+        ):
             module.import_docs(args)
         snapshot = json.loads((worktree / "provider-snapshot.json").read_text())
         self.assertEqual(snapshot["records"][0]["commitSha"], captured_commit)
         self.assertEqual((worktree / "0.1.3/_index.md").read_text(), "release docs\n")
 
-    def test_scoped_release_facts_survive_append_and_rebuild_without_latest_inference(
-        self,
-    ) -> None:
+    def test_scoped_release_facts_survive_append_and_rebuild(self) -> None:
         source = self.source
         run(source, "checkout", "--create")
         run(source, "import")
@@ -677,11 +770,16 @@ class VersionedDocsScriptsTest(unittest.TestCase):
             ],
         }
         snapshot["artifacts"] = [facts]
+        snapshot["records"][0]["publicationState"] = "hidden"
         snapshot_file.write_text(json.dumps(snapshot))
         shutil.rmtree(worktree / "0.1.2")
         commit(worktree)
         git(source, "tag", "-d", "v0.1.2")
         release(source, "0.1.4", "new docs\n")
+        # Verified 0.1.4 advances only its own line and latestStable.
+        advanced = copy.deepcopy(facts)
+        advanced["latestStable"] = "0.1.4"
+        advanced["releaseLines"][1]["latest"] = "0.1.4"
         for options in (
             (),
             ("--full-rebuild", "--version", "0.1.4"),
@@ -690,7 +788,7 @@ class VersionedDocsScriptsTest(unittest.TestCase):
             with self.subTest(options=options):
                 run(source, "import", *options)
                 current = json.loads(snapshot_file.read_text())
-                self.assertEqual(current["artifacts"], [facts])
+                self.assertEqual(current["artifacts"], [advanced])
                 self.assertEqual(len(current["records"]), 3)
                 self.assertFalse((worktree / "0.1.2").exists())
                 self.assertEqual(
@@ -698,9 +796,7 @@ class VersionedDocsScriptsTest(unittest.TestCase):
                 )
                 commit(worktree)
 
-    def test_records_only_inventory_is_preserved_then_upgraded_without_release_claims(
-        self,
-    ) -> None:
+    def test_records_only_inventory_is_preserved_then_upgraded(self) -> None:
         source = self.source
         run(source, "checkout", "--create")
         run(source, "import")
@@ -718,11 +814,20 @@ class VersionedDocsScriptsTest(unittest.TestCase):
         current = json.loads(snapshot_file.read_text())
         self.assertEqual(
             current["artifacts"],
-            [{"componentSlug": "mammoth-cache", "artifactKey": "mammoth-cache"}],
+            [
+                {
+                    "componentSlug": "mammoth-cache",
+                    "artifactKey": "mammoth-cache",
+                    "releaseLines": [{"key": "0.1", "latest": "0.1.4"}],
+                    "latestStable": "0.1.4",
+                }
+            ],
         )
         self.assertEqual(current["records"][:2], snapshot["records"])
 
-    def test_explicit_empty_artifact_policy_is_preserved(self) -> None:
+    def test_explicit_empty_artifact_policy_gains_verified_release_pointers(
+        self,
+    ) -> None:
         source = self.source
         run(source, "checkout", "--create")
         run(source, "import")
@@ -732,11 +837,23 @@ class VersionedDocsScriptsTest(unittest.TestCase):
         snapshot["artifacts"] = []
         snapshot_file.write_text(json.dumps(snapshot))
         commit(worktree)
+        before = snapshot_file.read_bytes()
+        run(source, "import")
+        self.assertEqual(snapshot_file.read_bytes(), before)
         release(source, "0.1.4", "new docs\n")
+        expected = [
+            {
+                "componentSlug": "mammoth-cache",
+                "artifactKey": "mammoth-cache",
+                "releaseLines": [{"key": "0.1", "latest": "0.1.4"}],
+                "latestStable": "0.1.4",
+            }
+        ]
         for options in ((), ("--full-rebuild",)):
             run(source, "import", *options)
-            self.assertEqual(json.loads(snapshot_file.read_text())["artifacts"], [])
-            commit(worktree)
+            self.assertEqual(json.loads(snapshot_file.read_text())["artifacts"], expected)
+            if git(worktree, "status", "--porcelain"):
+                commit(worktree)
 
     def test_invalid_scoped_artifacts_fail_before_any_write(self) -> None:
         source = self.source
@@ -792,6 +909,7 @@ class VersionedDocsScriptsTest(unittest.TestCase):
                 snapshot["artifacts"][0]["releases"] = [
                     {"version": "0.1.2", "publicationState": state}
                 ]
+                snapshot["records"][0]["publicationState"] = state
                 snapshot_file.write_text(json.dumps(snapshot))
                 commit(worktree)
                 before = snapshot_file.read_bytes()

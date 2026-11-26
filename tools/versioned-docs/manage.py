@@ -233,6 +233,16 @@ def verified_publication_time(tag: str, commit: str) -> str:
     return published_at
 
 
+def publication_complete(record: dict) -> bool:
+    return (
+        record.get("publicationState") == "published"
+        and "publishedAt" in record
+        and record.get("releaseLine") == record["version"].rsplit(".", 1)[0]
+        and record.get("docsSource")
+        == {"repository": REPOSITORY, "root": "docs", "ref": record["commitSha"]}
+    )
+
+
 def published_metadata(record: dict, artifacts: list) -> tuple[dict, list]:
     version = record["version"]
     line_key = version.rsplit(".", 1)[0]
@@ -455,7 +465,11 @@ def import_docs(args: argparse.Namespace) -> None:
             "externalId": f"git:buildish-mammoth-cache:{tag}",
             "externalUrl": f"{REPOSITORY}/releases/tag/{tag}",
         }
-        if args.post_release:
+        excluded = (
+            curated_states.get(version) or record.get("publicationState")
+        ) in EXCLUDED_STATES
+        # Excluded attempts need no hosted release; complete records were verified before.
+        if not excluded and not publication_complete(record):
             record, artifacts = published_metadata(record, artifacts)
         notes_target = notes_root / f"{version}.md"
         if notes_target.is_symlink() or (
@@ -463,9 +477,6 @@ def import_docs(args: argparse.Namespace) -> None:
             and (not notes_target.is_file() or "releaseNotes" not in record)
         ):
             raise ValueError(f"Refusing to replace unowned path: {notes_target}")
-        excluded = (
-            curated_states.get(version) or record.get("publicationState")
-        ) in EXCLUDED_STATES
         # Rebuilt docs refresh their notes; existing records gain missing notes.
         if not excluded and (
             args.full_rebuild
@@ -583,11 +594,6 @@ def main() -> int:
                 help="Import only this version; repeatable, overrides minimum",
             )
             command.add_argument(
-                "--post-release",
-                action="store_true",
-                help="Verify one exact --version on GitHub and update release metadata",
-            )
-            command.add_argument(
                 "--minimum-version",
                 help="Optional minimum stable version for tag discovery; default scans all stable tags",
             )
@@ -597,11 +603,6 @@ def main() -> int:
                 help="Rebuild selected docs directories, preserving existing inventory metadata",
             )
     args = parser.parse_args()
-    if args.command == "import" and args.post_release:
-        if len(args.version or []) != 1 or args.minimum_version is not None:
-            parser.error(
-                "--post-release requires exactly one --version and no --minimum-version"
-            )
     args.source = args.source.resolve()
     args.worktree = args.worktree or args.source / "docs/releases"
     try:

@@ -163,9 +163,9 @@ policy, line `latest`, and overall `latestStable` designations. Catalogs own sou
 layout, and publication selection.
 
 After successful promotion, maintainers run the post-release import for the exact
-version. The import verifies the published Release and tag commit, then advances the
-line and overall recommendations if the version is newer than their current targets.
-Tag-only discovery leaves recommendations unchanged. Maintainers review the docs
+version. Every import verifies the published Release and tag commit of each version
+that is not curated as excluded and not already verified, then advances the line and
+overall recommendations if the version is newer than their current targets. Maintainers review the docs
 and snapshot and publish through the separately authorized docs process. Support
 windows, maintenance promises, and end-of-life dates require explicit decisions.
 Hidden/withdrawn/tombstoned records remain retained and excluded as appropriate.

@@ -95,51 +95,48 @@ After successful release completion, acquire the exact final tag through the
 approved Git process. Then, in a clean docs worktree:
 
 ```sh
-tools/versioned-docs/import.sh --post-release --version 1.2.3
-```
-
-This mode queries the public GitHub API. It checks that the
-exact tag has a published final Release and that the hosted tag resolves to the
-same commit as the local tag. It then imports the docs and records `publishedAt`,
-`publicationState: published`, and the exact `docsSource`. It assigns the version
-to its `X.Y` release line, creating the line if needed, and advances that line's
-`latest` and the artifact's `latestStable` when the imported version is newer.
-Existing newer pointers and curated exclusion decisions are preserved.
-
-Use the same command to complete metadata for a version previously imported from
-its tag. Existing docs are reused, and a repeat of a completed import leaves the
-inventory unchanged. A failed verification leaves the docs worktree unchanged.
-
-## Tag-only import
-
-Use tag-only imports for historical inventory work, including incomplete attempts:
-
-```sh
-tools/versioned-docs/import.sh
 tools/versioned-docs/import.sh --version 1.2.3
 ```
 
-Default discovery scans all local stable `vX.Y.Z` tags without a cutoff. Optional
-`--minimum-version X.Y.Z` narrows discovery; repeatable `--version X.Y.Z` selects exact
-versions and overrides that floor. Tag-only imports use local Git data.
-New records contain Git identity and a canonical release URL, with no publication
-timestamp or successful-publication assertion. New inventories include an owned
-`artifacts[]` identity for `mammoth-cache`, with no release lines, exact release policy,
-or latest designation inferred from tag discovery. Existing records-only inventories
-remain valid and unchanged on a no-op import; the identity section is added on their
-next import/rebuild write when absent. Explicit existing `artifacts: []` is preserved. Provider `fetchedAt` records the local
-inventory observation time, not a hosted release event.
+Every import verifies each selected version against the public GitHub API, unless
+the version is curated as hidden, withdrawn or tombstoned, or its record already
+has complete publication metadata. Verification checks that the exact tag has a
+published final Release and that the hosted tag resolves to the same commit as the
+local tag. The import then records `publishedAt`, `publicationState: published`, the
+`X.Y` `releaseLine` and the exact `docsSource`, creating the release line if needed.
+It advances that line's `latest` and the artifact's `latestStable` when the version
+is newer. Existing newer pointers, other lines and curated exclusion decisions are
+preserved. A tag without a published Release fails the whole import before any
+write, and a failed verification leaves the docs worktree unchanged.
+
+Without `--version`, discovery scans all local stable `vX.Y.Z` tags without a
+cutoff. Optional `--minimum-version X.Y.Z` narrows discovery; repeatable
+`--version X.Y.Z` selects exact versions and overrides that floor. Complete records
+are not verified again, so a repeated import makes no GitHub requests and leaves the
+inventory byte-for-byte unchanged. A record imported from its tag alone, for example
+by an older version of these scripts, is verified and completed by the next import.
+Provider `fetchedAt` records the local inventory observation time, not a hosted
+release event.
+
+To record an incomplete attempt (a tag without a published Release), curate its
+`artifacts[].releases[]` entry as `hidden` before importing it. Excluded versions are
+imported from their tags alone, without hosted verification or release pointers.
+
+New inventories include an owned `artifacts[]` identity for `mammoth-cache`.
+Records-only inventories and explicit `artifacts: []` stay unchanged on a no-op
+import; the first verified release adds the identity with its release pointers.
 
 Incremental import appends new docs/records, preserves all existing docs and curated
-metadata, and leaves a no-op inventory byte-for-byte unchanged. It also adds missing
-notes to existing records whose tags contain them, without touching their docs. Both modes reject a
-moved selected tag. Unselected records and records without local tags are retained;
-if no tags match an existing inventory, that inventory remains unchanged.
+metadata, and adds missing notes to existing records whose tags contain them, without
+touching their docs. It rejects a moved selected tag. Unselected records and records
+without local tags are retained; if no tags match an existing inventory, that
+inventory remains unchanged.
 
 Curate component release policy under the matching scoped `artifacts[].releases[]`
 entries: incomplete attempts use `publicationState: hidden`, retracted releases use
 `withdrawn`, and removed content uses `tombstoned` as appropriate. Existing per-record
-curation is retained; explicit scoped and provider-record states must agree. Keep their records so
+curation is retained; explicit scoped and provider-record states must agree, so
+excluding a verified release changes its record's `publicationState` as well. Keep their records so
 future discovery cannot reintroduce them. Their original docs may be absent during
 incremental import. Missing ordinary published/unspecified docs fail with instructions
 to rebuild. These states concern documentation publication, not remote deletion or
@@ -198,9 +195,8 @@ components:
 
 The component metadata owns artifact definitions, docs roots, and static versioning.
 The snapshot's matching `artifacts[]` entry owns `releaseLines`, exact `releases[]`
-policy, and explicit `latestStable`. Post-release import updates the designated
-pointers for the verified version. Tag-only import and rebuild preserve these scoped
-blocks, including ancestry, withdrawal decisions, support facts, and records whose
+policy, and explicit `latestStable`. Import updates the designated pointers for each
+newly verified version. Import and rebuild otherwise preserve these scoped blocks, including ancestry, withdrawal decisions, support facts, and records whose
 tags are absent locally. Support windows require explicit curation.
 
 The helpers check scoped ownership, container shape, unique identities, stable
@@ -217,10 +213,9 @@ publish original docs or receive ordinary latest links. Development staging must
 exclude historical docs, the inventory JSON, and the worktree `.git` file. Those
 consumer changes and aggregate checks remain separately owned.
 
-No real docs branch, release inventory, or snapshots are populated by this adoption
-slice. Do not invent a successful first release. A manual post-release update is
-sufficient initially; any later publication automation needs its own permissions
-and failure/recovery contract.
+Do not invent a successful release. A manual import after each release is
+sufficient; any later publication automation needs its own permissions and
+failure/recovery contract.
 
 ## Checks
 
@@ -230,6 +225,7 @@ make check
 ```
 
 The standard-library tests use disposable local repositories, fixture-only commits
-and refs, and local repositories standing in for remotes. No network, installed
+and refs, local repositories standing in for remotes, and an in-process GitHub API
+stand-in for imports. No network, installed
 Python packages, configured identity, signing key, or real component branch is needed.
 `make test` (and therefore `make check` and the CI unit-test step) includes this suite.

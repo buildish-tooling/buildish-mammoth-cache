@@ -453,14 +453,14 @@ release completion and the applicable branch/worktree/import authorization:
 tools/versioned-docs/checkout.sh --create
 # For an existing published branch instead, use checkout.sh without --create,
 # followed by update.sh when an explicit fetch/fast-forward is intended.
-tools/versioned-docs/import.sh --post-release --version "$RELEASE_VERSION"
+tools/versioned-docs/import.sh --version "$RELEASE_VERSION"
 git -C docs/releases status --short --untracked-files=all
 git -C docs/releases diff
 python3 -m json.tool docs/releases/provider-snapshot.json
 ```
 
 Set `RELEASE_VERSION` to the completed stable version. Acquire its exact final tag
-separately before import. The post-release mode checks the published GitHub Release
+separately before import. The import checks the published GitHub Release
 and matches the hosted tag commit to the local tag. Docs come from that final tag's
 `docs/` tree and the snapshot records the resolved final commit M. Review all generated
 records and copies; inspect untracked files directly because `git diff` omits them.
@@ -471,9 +471,9 @@ deleting records and allowing the next import to rediscover them.
 
 Component `site/component.yaml` defines the shared `mammoth-cache` artifact and its
 static version stream. The snapshot's scoped `artifacts[]` entry owns release lines,
-exact release policy, and explicit latest designations. Post-release import records
-the version's `X.Y` membership and advances the line and overall pointers when
-appropriate. Tag-only import and rebuild preserve prior scoped policy. Validate the complete snapshot
+exact release policy, and explicit latest designations. Import records each newly
+verified version's `X.Y` membership and advances the line and overall pointers when
+appropriate; it otherwise preserves prior scoped policy. Validate the complete snapshot
 and its line/target relationships with Pipeline before publishing it.
 
 The aggregate website owns source/layout bindings and publication selection, binds
