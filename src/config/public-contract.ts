@@ -54,8 +54,12 @@ export type ConfigFileValueKind = 'string' | 'boolean' | 'number' | 'list' | 'st
 interface PublicActionInputContractBase {
   readonly name: string;
   readonly tools: readonly ActionBuildTool[];
-  readonly default?: string;
-  /** Default applied after config-file resolution, omitted from action metadata. */
+  /**
+   * Default applied after config-file resolution, intentionally omitted from action metadata.
+   *
+   * GitHub passes metadata defaults to the action as if the workflow had set them, which would
+   * make them indistinguishable from direct inputs and prevent config-file values from applying.
+   */
   readonly runtimeDefault?: string;
   readonly description: string;
 }
@@ -108,7 +112,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'base-directory',
     property: 'baseDirectory',
     tools: BOTH,
-    default: '.',
+    runtimeDefault: '.',
     configFile: 'allowed',
     configFileValueKind: 'string',
     description:
@@ -118,7 +122,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'cache-enabled',
     property: 'cacheEnabled',
     tools: BOTH,
-    default: 'true',
+    runtimeDefault: 'true',
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description: 'Enables cache orchestration. Accepted values: true or false.',
@@ -166,7 +170,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'job-mode',
     property: 'jobMode',
     tools: BOTH,
-    default: 'standalone',
+    runtimeDefault: 'standalone',
     configFile: 'allowed',
     configFileValueKind: 'string',
     description:
@@ -195,7 +199,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'allow-duplicate-dependent-delta-paths',
     property: 'allowDuplicateDependentDeltaPaths',
     tools: BOTH,
-    default: 'false',
+    runtimeDefault: 'false',
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description:
@@ -205,7 +209,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'cache-key-prefix',
     property: 'cacheKeyPrefix',
     tools: BOTH,
-    default: 'buildish-mammoth-cache-',
+    runtimeDefault: 'buildish-mammoth-cache-',
     configFile: 'allowed',
     configFileValueKind: 'string',
     description:
@@ -227,14 +231,13 @@ export const PUBLIC_ACTION_INPUTS = [
     runtimeDefault: String(DEFAULT_MAX_DIRECTORY_ENTRIES),
     configFile: 'allowed',
     configFileValueKind: 'number',
-    description:
-      'Maximum direct entries per managed directory. Must be a positive safe integer. Defaults to 100000.',
+    description: 'Maximum direct entries per managed directory. Must be a positive safe integer.',
   },
   {
     name: 'cleanup-enabled',
     property: 'cleanupEnabled',
     tools: BOTH,
-    default: 'true',
+    runtimeDefault: 'true',
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description: 'Enables restore cleanup and timestamp garbage collection.',
@@ -243,7 +246,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'restore-cleanup-mode',
     property: 'restoreCleanupMode',
     tools: BOTH,
-    default: 'none',
+    runtimeDefault: 'none',
     configFile: 'allowed',
     configFileValueKind: 'string',
     description: 'Restore-time cleanup mode: none or prune-managed.',
@@ -252,7 +255,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'cache-gc-mode',
     property: 'cacheGcMode',
     tools: BOTH,
-    default: 'timestamp',
+    runtimeDefault: 'timestamp',
     configFile: 'allowed',
     configFileValueKind: 'string',
     description:
@@ -262,7 +265,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'cache-gc-older-than-days',
     property: 'cacheGcOlderThanDays',
     tools: BOTH,
-    default: '14',
+    runtimeDefault: '14',
     configFile: 'allowed',
     configFileValueKind: 'number',
     description:
@@ -275,7 +278,7 @@ export const PUBLIC_ACTION_INPUTS = [
     runtimeDefault: '3',
     configFile: 'allowed',
     configFileValueKind: 'number',
-    description: 'Days between completed periodic GC sweeps. Defaults to 3 days.',
+    description: 'Days between completed periodic GC sweeps.',
   },
   {
     name: 'dependency-gc-force-grace-days',
@@ -285,7 +288,7 @@ export const PUBLIC_ACTION_INPUTS = [
     configFile: 'allowed',
     configFileValueKind: 'number',
     description:
-      'Additional days before an aggregator can sweep with incomplete worker coverage. Defaults to 1 day. Use off to disable forcing.',
+      'Additional days before an aggregator can sweep with incomplete worker coverage. Use off to disable forcing.',
   },
   {
     name: 'github-token',
@@ -335,7 +338,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'process-all-wrapper-files',
     property: 'processAllWrapperFiles',
     tools: GRADLE,
-    default: 'false',
+    runtimeDefault: 'false',
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description:
@@ -345,7 +348,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'wrapper-properties-glob',
     property: 'wrapperPropertiesGlob',
     tools: GRADLE,
-    default: '**/gradle/wrapper/gradle-wrapper.properties',
+    runtimeDefault: '**/gradle/wrapper/gradle-wrapper.properties',
     configFile: 'allowed',
     configFileValueKind: 'string',
     description: 'Repository-relative Gradle wrapper properties discovery glob.',
@@ -371,7 +374,7 @@ export const PUBLIC_ACTION_INPUTS = [
     name: 'setup-java',
     property: 'setupJava',
     tools: GRADLE,
-    default: 'false',
+    runtimeDefault: 'false',
     configFile: 'allowed',
     configFileValueKind: 'boolean',
     description:
@@ -437,6 +440,18 @@ export const PUBLIC_ACTION_OUTPUTS = [
 /** Exact public prepare-output name union derived from the canonical contract. */
 export type PublicActionOutputName = (typeof PUBLIC_ACTION_OUTPUTS)[number]['name'];
 
+/**
+ * Returns the input description published in action metadata.
+ *
+ * Action metadata cannot declare defaults without masking config-file values, so the runtime default
+ * is stated in the description instead.
+ */
+export function getActionMetadataDescription(input: PublicActionInputContract): string {
+  return input.runtimeDefault === undefined
+    ? input.description
+    : `${input.description} Defaults to \`${input.runtimeDefault}\`.`;
+}
+
 /** Returns the complete ordered input contract for one action variant. */
 export function getPublicActionInputs(
   buildTool: ActionBuildTool,
@@ -493,7 +508,7 @@ export function renderPublicActionContractReference(): string {
   const inputs: readonly PublicActionInputContract[] = PUBLIC_ACTION_INPUTS;
   const inputRows = inputs.map((input) => {
     const variants = input.tools.map(capitalize).join(', ');
-    const defaultValue = input.default ?? input.runtimeDefault ?? 'event-dependent or unset';
+    const defaultValue = input.runtimeDefault ?? 'event-dependent or unset';
     const configFile = input.configFile === 'allowed' ? 'yes' : 'no';
     return `| \`${input.name}\` | ${variants} | \`${defaultValue}\` | ${configFile} | ${input.description} |`;
   });

@@ -99,6 +99,50 @@ describe('canonical raw action inputs', () => {
     },
   );
 
+  it.each(['gradle', 'maven'] as const)(
+    'applies %s config-file values over runtime defaults when GitHub supplies metadata defaults',
+    async (buildTool) => {
+      const descriptor = parseYaml(
+        await readFile(`actions/github/${buildTool}/action.yml`, 'utf8'),
+      ) as { inputs: Record<string, { default?: string | number | boolean }> };
+      await withConfigFile(
+        'cache.yml',
+        [
+          'cache-enabled: false',
+          'job-mode: prepare-only',
+          'cache-key-prefix: custom-',
+          'cleanup-enabled: false',
+          'restore-cleanup-mode: prune-managed',
+          'cache-gc-mode: "off"',
+          'cache-gc-older-than-days: 30',
+          '',
+        ].join('\n'),
+        async (workspace) => {
+          const direct = readActionInputs(buildTool, {
+            getInput: (name) =>
+              name === 'config-file' ? 'cache.yml' : String(descriptor.inputs[name]?.default ?? ''),
+          });
+          const resolved = await resolveActionInputsFromConfigFile(buildTool, direct, {
+            workspace,
+          });
+          const config = normalizeSharedActionConfig(resolved, {
+            phase: 'prepare',
+            ciContext: fixtureCi(workspace),
+          });
+          expect(config).toMatchObject({
+            cacheEnabled: false,
+            jobMode: 'prepare-only',
+            cacheKeyPrefix: 'custom-',
+            cleanupEnabled: false,
+            restoreCleanupMode: 'prune-managed',
+            cacheGcMode: 'off',
+            cacheGcOlderThanDays: 30,
+          });
+        },
+      );
+    },
+  );
+
   it('returns the original input object without touching the filesystem when config-file is unset', async () => {
     const directInputs = readActionInputs('maven', { getInput: () => '' });
     const resolvedInputs = await resolveActionInputsFromConfigFile('maven', directInputs, {

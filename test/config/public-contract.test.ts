@@ -20,6 +20,7 @@ import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
 import {
+  getActionMetadataDescription,
   getPublicActionInputs,
   PUBLIC_ACTION_OUTPUTS,
   getPublicActionOutputs,
@@ -45,11 +46,7 @@ describe('canonical public action contract', () => {
       const expectedInputs = Object.fromEntries(
         getPublicActionInputs(buildTool).map((input) => [
           input.name,
-          {
-            description: input.description,
-            required: false,
-            ...(input.default === undefined ? {} : { default: input.default }),
-          },
+          { description: getActionMetadataDescription(input), required: false },
         ]),
       );
       const expectedOutputs = Object.fromEntries(
@@ -59,6 +56,8 @@ describe('canonical public action contract', () => {
         ]),
       );
 
+      // Metadata defaults reach the action as direct inputs and would mask config-file values,
+      // so defaults are published only in descriptions.
       expect(descriptor.inputs).toEqual(expectedInputs);
       expect(descriptor.outputs).toEqual(expectedOutputs);
     });

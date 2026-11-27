@@ -22,64 +22,55 @@ inputs:
     description: Optional workspace-relative JSON or YAML configuration file. Direct action inputs override file values; secrets and GitHub context inputs are direct-only.
     required: false
   base-directory:
-    description: Repository-relative project base directory. Rooted paths and paths that escape the workspace are rejected.
+    description: Repository-relative project base directory. Rooted paths and paths that escape the workspace are rejected. Defaults to `.`.
     required: false
-    default: .
   cache-enabled:
-    description: 'Enables cache orchestration. Accepted values: true or false.'
+    description: 'Enables cache orchestration. Accepted values: true or false. Defaults to `true`.'
     required: false
-    default: 'true'
   overlay-fs:
-    description: Allows OverlayFS for eligible cache operations. Set to false to use the ordinary cache path.
+    description: Allows OverlayFS for eligible cache operations. Set to false to use the ordinary cache path. Defaults to `true`.
     required: false
   read-only:
     description: Disables cache and delta writes. Pull-request events default to true; repository config may make the policy stricter, but only a direct workflow input may lower that floor.
     required: false
   job-mode:
-    description: 'Cache coordination mode: standalone, distributed-worker, distributed-aggregator, or prepare-only.'
+    description: 'Cache coordination mode: standalone, distributed-worker, distributed-aggregator, or prepare-only. Defaults to `standalone`.'
     required: false
-    default: standalone
   dependent-jobs:
     description: Comma- or newline-separated worker job names consumed by a distributed aggregator.
     required: false
   worker-artifact-retention-days:
-    description: Requested worker artifact retention in whole days (1–400). Backend limits may shorten it; shorter retention narrows the retry window.
+    description: Requested worker artifact retention in whole days (1–400). Backend limits may shorten it; shorter retention narrows the retry window. Defaults to `7`.
     required: false
   allow-duplicate-dependent-delta-paths:
-    description: Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.
+    description: Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option. Defaults to `false`.
     required: false
-    default: 'false'
   cache-key-prefix:
-    description: Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically.
+    description: Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically. Defaults to `buildish-mammoth-cache-`.
     required: false
-    default: buildish-mammoth-cache-
   cache-partitions:
     description: JSON array of cache partition overrides and custom partitions. Hard safety exclusions remain non-overridable.
     required: false
   cache-max-directory-entries:
-    description: Maximum direct entries per managed directory. Must be a positive safe integer. Defaults to 100000.
+    description: Maximum direct entries per managed directory. Must be a positive safe integer. Defaults to `100000`.
     required: false
   cleanup-enabled:
-    description: Enables restore cleanup and timestamp garbage collection.
+    description: Enables restore cleanup and timestamp garbage collection. Defaults to `true`.
     required: false
-    default: 'true'
   restore-cleanup-mode:
-    description: 'Restore-time cleanup mode: none or prune-managed.'
+    description: 'Restore-time cleanup mode: none or prune-managed. Defaults to `none`.'
     required: false
-    default: none
   cache-gc-mode:
-    description: 'Managed-cache GC: timestamp uses file age and current-build activity; off disables deletion only.'
+    description: 'Managed-cache GC: timestamp uses file age and current-build activity; off disables deletion only. Defaults to `timestamp`.'
     required: false
-    default: timestamp
   cache-gc-older-than-days:
-    description: File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days.
+    description: File-mtime age threshold for timestamp GC, not historical inactivity. Must be at least 2 days. Defaults to `14`.
     required: false
-    default: '14'
   dependency-gc-interval-days:
-    description: 'Days between completed periodic GC sweeps. Defaults to 3 days.'
+    description: 'Days between completed periodic GC sweeps. Defaults to `3`.'
     required: false
   dependency-gc-force-grace-days:
-    description: 'Additional days before an aggregator can sweep with incomplete worker coverage. Defaults to 1 day. Use off to disable forcing.'
+    description: 'Additional days before an aggregator can sweep with incomplete worker coverage. Use off to disable forcing. Defaults to `1`.'
     required: false
   github-token:
     description: Optional GitHub token for authenticated API requests. Pass secrets directly, never through repository config.

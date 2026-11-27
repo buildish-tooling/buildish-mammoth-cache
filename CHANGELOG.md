@@ -18,6 +18,9 @@ limitations under the License.
 
 ## Unreleased
 
+- Fix config-file values being ignored for inputs that declared a default in `action.yml`.
+  Defaults now apply after config-file resolution, so direct inputs, then config-file values,
+  then defaults take effect.
 - Enable the Gradle dependency layer by default. Set `dependency-cache-layer: false` across
   cooperating jobs to keep the ordinary cache family and its timestamp GC policy.
 - Let Gradle select among the metadata layouts in the read-only dependency seed, removing the
