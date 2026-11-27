@@ -18,6 +18,8 @@ limitations under the License.
 
 ## Unreleased
 
+## 0.6.0
+
 - Let a distributed aggregator merge the available workers when a job in `dependent-jobs` uploaded
   no artifact, for example because it was skipped or failed before the Mammoth step. Previously the
   whole aggregation failed. The aggregator warns about missing jobs, and a missing job prevents full
@@ -31,6 +33,12 @@ limitations under the License.
 - Fix config-file values being ignored for inputs that declared a default in `action.yml`.
   Defaults now apply after config-file resolution, so direct inputs, then config-file values,
   then defaults take effect.
+
+## 0.5.1 and earlier
+
+Entries below were released in 0.5.1 or earlier versions. See the release notes of each version
+for details.
+
 - Enable the Gradle dependency layer by default. Set `dependency-cache-layer: false` across
   cooperating jobs to keep the ordinary cache family and its timestamp GC policy.
 - Let Gradle select among the metadata layouts in the read-only dependency seed, removing the
