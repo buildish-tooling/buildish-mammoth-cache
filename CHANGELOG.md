@@ -18,6 +18,11 @@ limitations under the License.
 
 ## Unreleased
 
+- Let a distributed aggregator merge the available workers when a job in `dependent-jobs` uploaded
+  no artifact, for example because it was skipped or failed before the Mammoth step. Previously the
+  whole aggregation failed. The aggregator warns about missing jobs, and a missing job prevents full
+  sweep coverage. Pass the full producer list even when some workers are skipped. Set the new
+  `allow-missing-dependent-jobs: false` to restore the previous failure.
 - Withhold a Gradle worker's sweep evidence when one of its captured builds failed or started
   without recording a result, such as a settings-plugin resolution failure. The worker's changes
   are still published, but it no longer counts towards full sweep coverage, so a sweep is deferred

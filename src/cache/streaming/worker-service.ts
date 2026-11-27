@@ -61,7 +61,8 @@ export async function freezeWorkerArtifact(
 }
 // Protocol: docs/dev/cache-protocol.md#worker-artifact-names-and-discovery.
 // Eligibility/ambiguity follows delta/discovery.ts: greatest attempt <= selected
-// execution attempt, optional ONLY when no candidate exists. No legacy file/byte caps.
+// execution attempt, optional ONLY when no candidate exists. A required producer is skipped
+// the same way when missing producers are allowed. No legacy file/byte caps.
 export async function discoverWorkerArtifacts(
   backend: WorkflowArtifactBackend,
   model: ResolvedModel,
@@ -71,6 +72,7 @@ export async function discoverWorkerArtifacts(
     readonly timing?: TimingOptions['timing'];
     readonly scope?: ArtifactLookupScope;
     readonly signal?: AbortSignal;
+    readonly allowMissingRequired?: boolean;
   } = {},
 ): Promise<readonly SelectedWorkerArtifact[]> {
   if (requests.length > 16) {
@@ -130,7 +132,7 @@ export async function discoverWorkerArtifacts(
   const result: SelectedWorkerArtifact[] = [];
   for (const s of state) {
     if (!s.best) {
-      if (!s.request.required && !s.candidate) {
+      if ((!s.request.required || options.allowMissingRequired) && !s.candidate) {
         continue;
       }
       throw new Error('Worker has no artifact at or before the selected attempt: ' + s.request.job);

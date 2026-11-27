@@ -151,6 +151,8 @@ export interface RawSharedActionInputs {
   readonly workerArtifactRetentionDays: string;
   /** Raw `allow-duplicate-dependent-delta-paths` input. Empty string later defaults to `'false'`. */
   readonly allowDuplicateDependentDeltaPaths: string;
+  /** Raw `allow-missing-dependent-jobs` input. Empty string later defaults to `'true'`. */
+  readonly allowMissingDependentJobs: string;
   /** Raw `cache-key-prefix` input. Empty string uses the shared default namespace prefix. */
   readonly cacheKeyPrefix: string;
   /** Raw JSON array of built-in partition overrides and custom partition definitions. */
@@ -258,6 +260,12 @@ export interface NormalizedActionConfig {
    * when this flag is disabled.
    */
   readonly allowDuplicateDependentDeltaPaths: boolean;
+  /**
+   * Whether a distributed aggregator proceeds when a dependent job uploaded no artifact.
+   *
+   * Defaults to `true`. A missing job still counts against full sweep coverage.
+   */
+  readonly allowMissingDependentJobs: boolean;
   /**
    * Stable cache-key prefix.
    *

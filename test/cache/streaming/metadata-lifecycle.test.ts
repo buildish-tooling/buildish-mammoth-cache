@@ -121,6 +121,8 @@ async function prepare(
     now?: () => number;
     budget?: WorkingBudget;
     hooks?: () => Promise<void>;
+    allowMissingDependentJobs?: boolean;
+    onMissingDependentJobs?: (jobs: readonly string[]) => void;
   } = {},
 ) {
   const root = config.root ?? path.join(await directory('root'), 'home'),
@@ -161,6 +163,8 @@ async function prepare(
     defaultRef: config.defaultRef,
     captureTempDirectory: null,
     now: config.now,
+    allowMissingDependentJobs: config.allowMissingDependentJobs,
+    onMissingDependentJobs: config.onMissingDependentJobs,
     artifactRetentionDays: 7,
     cleanupEnabled: true,
     lifecycle: model.tuple[2] === 'gradle' ? gradleLifecycle : undefined,
@@ -525,6 +529,39 @@ it('copies only absent optional fallback, never an unused baseline before a pres
   expect(copy.mock.calls.filter(([source]) => source instanceof WorkerNativeIndex)).toHaveLength(0);
   await post(absent, sdk.api);
   await assertNoCatalogue(absent, true);
+});
+
+it('falls back to the base snapshot for a listed snapshot writer without an artifact', async () => {
+  const sdk = await backend();
+  await seedSnapshots(sdk);
+  const model = snapshotModel(),
+    artifacts = memoryArtifacts();
+  await expect(
+    prepare(sdk.api, 'b1'.repeat(16), {
+      model,
+      role: 'distributed-aggregator',
+      order: ['A'],
+      artifacts: artifacts.api,
+    }),
+  ).rejects.toThrow('Worker has no artifact at or before the selected attempt: A');
+  const copy = vi.spyOn(MetadataSnapshot, 'copy'),
+    onMissingDependentJobs = vi.fn();
+  const allowed = await prepare(sdk.api, 'b2'.repeat(16), {
+    model,
+    role: 'distributed-aggregator',
+    order: ['A'],
+    artifacts: artifacts.api,
+    allowMissingDependentJobs: true,
+    onMissingDependentJobs,
+  });
+  expect(onMissingDependentJobs).toHaveBeenCalledWith(['A']);
+  expect(
+    copy.mock.calls.filter(([source]) => source instanceof MetadataPublicationSource),
+  ).toHaveLength(1);
+  // The inherited snapshot equals the base, so there is nothing new to publish.
+  expect((await post(allowed, sdk.api)).outcome).toBe('no-change');
+  await assertNoCatalogue(allowed, true);
+  copy.mockRestore();
 });
 
 it('explicitly permits same-metadata aggregate worker body rewrites to reuse the old base while still verifying the delta body', async () => {

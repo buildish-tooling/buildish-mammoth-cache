@@ -73,6 +73,10 @@ export function normalizeSharedActionConfig(
       rawInputs.allowDuplicateDependentDeltaPaths || 'false',
       'allow-duplicate-dependent-delta-paths',
     ),
+    allowMissingDependentJobs: parseBooleanInput(
+      rawInputs.allowMissingDependentJobs || 'true',
+      'allow-missing-dependent-jobs',
+    ),
     cacheKeyPrefix: validateCacheKeyPrefix(rawInputs.cacheKeyPrefix || 'buildish-mammoth-cache-'),
     cachePartitions: parseCachePartitionsInput(rawInputs.cachePartitions),
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,

@@ -56,8 +56,9 @@ including disabling overlapping caching in setup actions while retaining their t
 Mammoth before any Gradle or Maven invocation in the job.
 
 In distributed mode, assign stable, unique producer names to matrix jobs. Align `github-job-name`,
-`dependent-jobs`, the metadata writer identity and the aggregator's `needs`. Required producers
-must actually run and upload envelopes. A skipped worker or a missing post upload, including after
+`dependent-jobs`, the metadata writer identity and the aggregator's `needs`. Listed producers
+that do not upload an envelope are reported and prevent full sweep coverage, or fail aggregation
+with `allow-missing-dependent-jobs: false`. A skipped worker or a missing post upload, including after
 cancellation, differs from a failed build whose post action produced a valid envelope.
 
 Decide whether aggregation should run after failures. `always()` combined with trusted event/ref

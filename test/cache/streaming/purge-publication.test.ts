@@ -56,6 +56,7 @@ const config: NormalizedGradleConfig = {
   dependentJobs: [],
   workerArtifactRetentionDays: 7,
   allowDuplicateDependentDeltaPaths: false,
+  allowMissingDependentJobs: true,
   cacheKeyPrefix: 'test-',
   cachePartitions: [],
   cacheSchemaVersion: 2,

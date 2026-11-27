@@ -32,6 +32,7 @@ export type RawActionInputProperty =
   | 'dependentJobs'
   | 'workerArtifactRetentionDays'
   | 'allowDuplicateDependentDeltaPaths'
+  | 'allowMissingDependentJobs'
   | 'cacheKeyPrefix'
   | 'cachePartitions'
   | 'cacheMaxDirectoryEntries'
@@ -204,6 +205,16 @@ export const PUBLIC_ACTION_INPUTS = [
     configFileValueKind: 'boolean',
     description:
       'Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option.',
+  },
+  {
+    name: 'allow-missing-dependent-jobs',
+    property: 'allowMissingDependentJobs',
+    tools: BOTH,
+    runtimeDefault: 'true',
+    configFile: 'allowed',
+    configFileValueKind: 'boolean',
+    description:
+      'Lets a distributed aggregator merge the available workers when a dependent job uploaded no artifact, for example because it was skipped. A missing job prevents full sweep coverage. Set to false to fail aggregation instead.',
   },
   {
     name: 'cache-key-prefix',

@@ -38,6 +38,7 @@ function makeConfig(overrides: Partial<NormalizedMavenConfig> = {}): NormalizedM
     dependentJobs: [],
     workerArtifactRetentionDays: 7,
     allowDuplicateDependentDeltaPaths: false,
+    allowMissingDependentJobs: true,
     cacheKeyPrefix: 'buildish-mammoth-cache-',
     cachePartitions: [],
     cacheSchemaVersion: 2,

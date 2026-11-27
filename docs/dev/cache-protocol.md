@@ -73,7 +73,9 @@ one indivisible unit is invalid.
 A valid digest establishes consistency, not permission to contribute. Validate the
 expected repository, workflow/run, job, attempt, revision, build tool and family
 before considering a contribution. A missing required completion artifact is an
-error. An absent optional snapshot writer preserves the existing snapshot.
+error unless the aggregator allows missing dependent jobs. An absent optional snapshot
+writer, or an allowed missing one, preserves the existing snapshot. A missing dependent
+job always prevents full sweep coverage.
 
 ### Scalar encoding
 
@@ -173,7 +175,8 @@ For each configured producer, select the unique artifact at the greatest attempt
 not exceeding the selected execution attempt. Listing order cannot change that
 choice. A same-attempt ambiguity or malformed matching candidate rejects selection.
 Optional absence applies only when no candidate exists; a producer with only future
-candidates is not silently treated as absent. Validate all admitted artifacts,
+candidates is not silently treated as absent. When missing dependent jobs are allowed,
+required producers follow the same absence rule. Validate all admitted artifacts,
 including optional and snapshot-only producers. There is no total cache-byte or
 legacy package/manifest-entry admission gate in this path.
 
@@ -751,5 +754,6 @@ readback or retry. Retain the current immutable package and report its path when
 confirmation is unavailable; SDK rejection does not establish reader closure.
 Confirmed uploads permit known-file identity-checked package cleanup after SDK
 settlement. Local package, filesystem and cleanup errors still fail the operation.
-Required incoming workers remain fatal when missing or invalid, and all delta body
+Required incoming workers remain fatal when invalid, and when missing unless missing
+dependent jobs are allowed. All delta body
 hashes, losing contributors, complete-unit checks, seals and EOF gates are unchanged.

@@ -263,6 +263,11 @@ async function runStreamingPrepareImpl(d: StreamingPrepareDependencies) {
           }
         }
       },
+      allowMissingDependentJobs: config.allowMissingDependentJobs,
+      onMissingDependentJobs: (jobs) =>
+        host.warning(
+          `Dependent jobs without a worker artifact: ${jobs.join(', ')}. The available workers are merged, but this run cannot reach full sweep coverage.`,
+        ),
       onWorkerGenerationMismatch: (job) =>
         host.warning(
           `Worker '${job}' observed a different cache generation. Its usage does not qualify for periodic GC.`,

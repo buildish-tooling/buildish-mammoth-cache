@@ -249,6 +249,7 @@ describe('normalizeActionConfig', () => {
       jobMode: 'standalone',
       workerArtifactRetentionDays: 7,
       allowDuplicateDependentDeltaPaths: false,
+      allowMissingDependentJobs: true,
       cacheKeyPrefix: 'buildish-mammoth-cache-',
       cacheSchemaVersion: 8,
       cachePartitions: [],

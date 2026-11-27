@@ -240,8 +240,9 @@ produces a warning and GitHub summary entry. If no previous snapshot exists, met
 absent. If the metadata job does run, only its metadata snapshot is imported; its ordinary artifact
 updates are ignored because it is not in `dependent-jobs`.
 
-If that job is also required for ordinary cached files, list it in `dependent-jobs`; skipping it
-will then fail aggregation as a missing required worker. A malformed, ambiguous, corrupt, or
+If that job is also required for ordinary cached files, list it in `dependent-jobs`. Skipping it
+then keeps the previous snapshot as above and prevents full sweep coverage for that run; with
+`allow-missing-dependent-jobs: false` it fails aggregation instead. A malformed, ambiguous, corrupt, or
 incompatible writer contribution fails validation rather than silently falling back. An explicit
 empty snapshot is valid and clears the configured partition; it differs from an absent snapshot.
 
@@ -337,8 +338,8 @@ or infer which cells ran. Matrix contributions count by their distinct configure
 
 With the defaults, GC is due three days after the last completed sweep. An aggregator can sweep
 with incomplete coverage after one more day, provided it can still prepare and publish under the
-ordinary artifact rules. A required envelope missing from `dependent-jobs` still fails ordinary
-prepare. A generation with no recorded sweep is due immediately, and forcing is immediately eligible
+ordinary artifact rules. A job in `dependent-jobs` without an envelope prevents full coverage; it
+fails prepare only with `allow-missing-dependent-jobs: false`. A generation with no recorded sweep is due immediately, and forcing is immediately eligible
 when enabled. See [`dependency-gc-interval-days`](../configuration/#dependency-gc-interval-days)
 and [`dependency-gc-force-grace-days`](../configuration/#dependency-gc-force-grace-days).
 
@@ -390,9 +391,10 @@ jobs:
 ```
 
 Each job still performs its own lookup. The planner output is a scheduling hint. The aggregator
-checks the artifacts it actually admits before deciding whether to sweep. If your aggregator also
-runs after some workers were skipped, pass the effective producer list for that execution. Pass the
-full list when the due hint opens all gates.
+checks the artifacts it actually admits before deciding whether to sweep. Pass the full producer
+list even when some workers are skipped. Skipped workers produce a warning and prevent a complete
+sweep for that run. A shortened list would also shorten the coverage requirement and let a sweep
+evict entries that only the omitted workers use.
 
 ## Requirements and constraints
 
@@ -414,7 +416,10 @@ before the aggregator starts and consumes them during prepare.
 **Choose whether aggregation should run after worker failures.** Use `if: always()` together with
 trusted event/ref conditions when you want to consume valid envelopes from failed builds or report
 missing envelopes. A skipped worker or a missing post upload, including after cancellation, leaves
-a required envelope absent. Pull-request aggregators may be omitted entirely; if they do run, their
+its envelope absent. By default the aggregator warns, merges the available envelopes and does not
+count the run towards full sweep coverage. Set `allow-missing-dependent-jobs: false` to fail
+aggregation instead, for example to catch a misspelled job name or a missing `needs` entry early.
+Pull-request aggregators may be omitted entirely; if they do run, their
 read-only result is the explicit no-op described above.
 
 **Workers do not need the aggregator in their `needs`.** Workers are independent of each other;
@@ -446,8 +451,9 @@ temporary artifact storage until removal. Normal completion retires known
 operation-local staging. Failed or unconfirmed worker uploads can leave an
 immutable package at a reported path.
 
-If a required envelope is missing or expired, aggregation fails with the worker name even if a base
-cache was restored. Rerun the affected worker and then the aggregator within the same workflow run.
+If a listed envelope is missing or expired, the aggregator warns with the worker name and merges
+the others; with `allow-missing-dependent-jobs: false` aggregation fails even if a base cache was
+restored. Rerun the affected worker and then the aggregator within the same workflow run.
 Use fresh dedicated roots for the affected invocations. Retained remote artifacts
 remain eligible for selection under the workflow/run and cache family rules.
 Mammoth does not resume local staging or attempt to salvage interrupted uploads.

@@ -45,6 +45,9 @@ inputs:
   allow-duplicate-dependent-delta-paths:
     description: Allows a distributed aggregator to resolve non-identical overlapping worker paths by newest modification time. Exact same-content overlaps remain safe without this option. Defaults to `false`.
     required: false
+  allow-missing-dependent-jobs:
+    description: Lets a distributed aggregator merge the available workers when a dependent job uploaded no artifact, for example because it was skipped. A missing job prevents full sweep coverage. Set to false to fail aggregation instead. Defaults to `true`.
+    required: false
   cache-key-prefix:
     description: Namespace prefix for action-owned cache families; build, partition, ref-lineage, and generation identity are appended automatically. Defaults to `buildish-mammoth-cache-`.
     required: false

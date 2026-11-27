@@ -802,6 +802,8 @@ it.each([
   { workerState: 'stale', mode: undefined, differs: false },
   { workerState: 'mismatched', mode: 'forced', differs: true },
   { workerState: 'missing', mode: undefined, differs: false },
+  { workerState: 'missing-strict', mode: undefined, differs: false },
+  { workerState: 'partial', mode: undefined, differs: false },
 ])(
   'preserves ordinary artifact admission for a $workerState worker',
   async ({ workerState, mode, differs }) => {
@@ -809,7 +811,8 @@ it.each([
     const timestamp = Date.now() - 3 * 86400000 - 60000;
     const selected = await setGenerationSweepAt(producer, key, model, timestamp);
     const artifacts = memoryArtifacts();
-    if (workerState !== 'missing') {
+    const missing = workerState.startsWith('missing');
+    if (!missing) {
       const worker = await fixture('maven', { 'job-mode': 'distributed-worker' });
       await runStreamingPrepare({ ...worker.deps, cacheBackend: async () => producer.sdk.backend });
       await writeFile(worker.home + '/data/contribution', 'ordinary');
@@ -823,7 +826,8 @@ it.each([
       : selected;
     const f = await fixture('maven', {
       'job-mode': 'distributed-aggregator',
-      'dependent-jobs': 'A',
+      'dependent-jobs': workerState === 'partial' ? 'A, B' : 'A',
+      ...(workerState === 'missing-strict' && { 'allow-missing-dependent-jobs': 'false' }),
     });
     const start =
       base[12]! +
@@ -839,12 +843,25 @@ it.each([
       cacheBackend: async () => producer.sdk.backend,
       now: () => start,
     });
-    if (workerState === 'missing') {
+    if (workerState === 'missing-strict') {
       await expect(preparing).rejects.toThrow(/no artifact/i);
       return;
     }
     await preparing;
-    expect(await readFile(f.home + '/data/contribution', 'utf8')).toBe('ordinary');
+    if (missing) {
+      // The missing job keeps the aggregation going but prevents a complete sweep.
+      expect(f.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Dependent jobs without a worker artifact: A.'),
+      );
+      await expect(readFile(f.home + '/data/contribution', 'utf8')).rejects.toThrow();
+    } else {
+      expect(await readFile(f.home + '/data/contribution', 'utf8')).toBe('ordinary');
+    }
+    if (workerState === 'partial') {
+      expect(f.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Dependent jobs without a worker artifact: B.'),
+      );
+    }
     const { sweep, key: frozenKey, root } = await preparedSweep(f);
     expect(sweep?.[0]).toBe(mode);
     expect(frozenKey).toBe(base[11]);
@@ -862,6 +879,12 @@ it.each([
         ).toBe('published');
         expect(await root.stat(alt[2])).toBeNull();
       }
+    } else if (workerState === 'partial') {
+      // The available worker's contribution is published without the missing one.
+      expect(
+        (await runStreamingPost({ ...f.post, cacheBackend: async () => producer.sdk.backend }))
+          .outcome,
+      ).toBe('published');
     } else {
       expect(f.warning).not.toHaveBeenCalledWith(
         expect.stringContaining('different cache generation'),

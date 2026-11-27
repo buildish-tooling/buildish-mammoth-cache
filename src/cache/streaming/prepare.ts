@@ -93,6 +93,9 @@ export interface StreamingPrepareRequest extends LifecycleOptions, LayerInputs {
   readonly dependencyGc?: GcScheduleConfig;
   readonly onWorkerWarnings?: (warnings: WorkerMergeResult['warnings']) => void;
   readonly onWorkerGenerationMismatch?: (job: string) => void;
+  /** Lets an aggregator proceed without dependent jobs that uploaded no artifact. */
+  readonly allowMissingDependentJobs?: boolean;
+  readonly onMissingDependentJobs?: (jobs: readonly string[]) => void;
   readonly saveAnchor: (anchor: string) => void;
   readonly cacheBackend: () => Promise<BaseCacheBackend>;
   readonly artifactBackend?: () => Promise<WorkflowArtifactBackend>;
@@ -329,15 +332,28 @@ export async function prepareStreaming(
     }
     await store.fail('prepare-between-seed-and-live');
     const requests = metadataWorkerRequests(store, policy),
-      required = new Set(request.policy.ordinaryOrder);
+      required = new Set(request.policy.ordinaryOrder),
+      admitted = new Set(required);
     if (requests.length) {
       if (!request.artifactBackend) {
         throw new Error('Required artifact backend is missing.');
       }
       const backend = await request.artifactBackend();
       const selected = await timed(options, 'worker discovery', () =>
-        discoverWorkerArtifacts(backend, request.model, request.context, requests, { signal }),
+        discoverWorkerArtifacts(backend, request.model, request.context, requests, {
+          signal,
+          allowMissingRequired: request.allowMissingDependentJobs,
+        }),
       );
+      // A missing job contributes nothing, and its authoritative snapshots fall back to the base.
+      // It stays in the required set, so it still prevents full sweep coverage.
+      const missing = [...required].filter(
+        (job) => !selected.some((artifact) => artifact.context[4] === job),
+      );
+      if (missing.length) {
+        missing.forEach((job) => admitted.delete(job));
+        request.onMissingDependentJobs?.(missing);
+      }
       downloads.push(
         ...(await acquireWorkerArtifacts(store, backend, selected, {
           signal,
@@ -399,7 +415,7 @@ export async function prepareStreaming(
             ...options,
             ordinaryOrder: request.policy.ordinaryOrder,
             ordinaryPolicy: request.policy.ordinaryPolicy,
-            snapshots: metadataSnapshotRequirements(store, required, fallback),
+            snapshots: metadataSnapshotRequirements(store, admitted, fallback),
             sweep: restored!.key
               ? {
                   generationKey: restored!.key,

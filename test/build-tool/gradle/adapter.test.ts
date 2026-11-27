@@ -37,6 +37,7 @@ function createTestGradleConfig(gradleUserHome: string): NormalizedGradleConfig 
     dependentJobs: [],
     workerArtifactRetentionDays: 7,
     allowDuplicateDependentDeltaPaths: false,
+    allowMissingDependentJobs: true,
     cacheKeyPrefix: 'test-prefix',
     cachePartitions: [],
     cacheSchemaVersion: 2,
