@@ -25,6 +25,8 @@
 export const BUILD_RESULTS_SUBDIRECTORY = 'build-results';
 /** Capture-root directory containing per-invocation build scan JSON files. */
 export const BUILD_SCANS_SUBDIRECTORY = 'build-scans';
+/** Capture-root directory containing per-invocation build start JSON files. */
+export const BUILD_STARTS_SUBDIRECTORY = 'build-starts';
 /** File name installed into Gradle's `init.d` directory for capture orchestration. */
 export const INIT_SCRIPT_FILE_NAME = 'buildish-mammoth-cache.build-result-capture.init.gradle';
 /** File name installed beside the init script for the capture build service. */
@@ -278,6 +280,23 @@ def invocId = "-" + java.util.UUID.randomUUID().toString()
 // Its settingsEvaluated hook, which runs before the ones below, publishes the recorder service
 // as gradle.ext.buildResultsRecorder.
 gradle.ext.invocationId = invocId
+
+// Record the start before settings evaluation. A build that fails before the recorder service
+// is registered, or is interrupted, leaves a start without a matching result. A
+// configuration-cache hit does not run init scripts, so it records a result without a start.
+def startsRootDir = ${captureRootLiteral}
+if (startsRootDir) {
+    try {
+        def startsDir = new File(startsRootDir, "${BUILD_STARTS_SUBDIRECTORY}").toPath()
+        java.nio.file.Files.createDirectories(startsDir)
+        def start = groovy.json.JsonOutput.toJson([requestedTasks: gradle.startParameter.taskNames.join(" ")])
+        java.nio.file.Files.write(startsDir.resolve("${DEFAULT_CAPTURE_INVOCATION_NAMESPACE}" + invocId + ".json"),
+            start.getBytes("UTF-8"), java.nio.file.StandardOpenOption.CREATE_NEW)
+    } catch (Exception ex) {
+        logger.warn("buildish/mammoth-cache/gradle: Could not record the build start. Will continue. > ${'$'}{ex.getLocalizedMessage()}")
+    }
+}
+
 apply from: '${SERVICE_PLUGIN_FILE_NAME}'
 
 // Attach scan-published / scan-error callbacks for settings-level plugins (Develocity / GE)

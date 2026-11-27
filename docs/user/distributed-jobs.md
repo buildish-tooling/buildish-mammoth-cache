@@ -346,6 +346,15 @@ Access evidence is best effort. A Gradle or Maven build-cache hit can skip work 
 a dependency. A worker can complete capture even if its build step was skipped. An old dependency
 can then be evicted and downloaded again on a later build.
 
+A Gradle worker whose build failed, or started but recorded no result (for example a failure while
+resolving settings plugins), withholds its sweep evidence. Its cache changes are still published, but
+it does not count towards full coverage, so the sweep waits for a run in which every listed worker
+succeeds. A forced sweep after the grace period still proceeds without that worker's usage. With
+forcing disabled, a worker that fails every run prevents sweeps. Maven workers have no build-result
+capture and count towards coverage regardless of the build outcome. To keep a deliberately failing
+Gradle build from withholding evidence, see
+[expected child-build failures](../troubleshooting/#expected-child-build-failures-in-the-gradle-summary).
+
 ### Use the due hint with conditional jobs
 
 Workflows that already run their full worker set can keep their existing job graph. If you select

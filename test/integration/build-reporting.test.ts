@@ -109,6 +109,8 @@ async function main(): Promise<void> {
       tempDirectory: runtime.env.RUNNER_TEMP!,
     });
     assert.deepEqual(successfulReport.warnings, []);
+    // Configuration-cache hits record results without starts; no build is unfinished.
+    assert.deepEqual(successfulReport.unfinishedBuilds, []);
     for (const requestedTasks of [':tests:test', 'publishFakeBuildScan']) {
       const builds = successfulReport.builds.filter(
         (build) => build.requestedTasks === requestedTasks,
@@ -138,6 +140,7 @@ async function main(): Promise<void> {
       1,
     );
     await runGradle(runtime, ['failingVerification'], 'Fail verification task', 1);
+    await runGradle(runtime, ['help', '-PfailSettings=true'], 'Fail settings evaluation', 1);
 
     const report = await loadGradleBuildReport({ tempDirectory: job.env.RUNNER_TEMP });
     assert.equal((await job.post()).outcome, 'disabled');
@@ -149,6 +152,11 @@ async function main(): Promise<void> {
       successfulReport.builds.length,
     );
     assert.equal(report.builds.filter((build) => build.buildFailed).length, 2);
+    // A settings failure happens before the recorder exists, so only its start is recorded.
+    assert.deepEqual(
+      report.unfinishedBuilds.map((build) => build.requestedTasks),
+      ['help'],
+    );
     assert.ok(
       report.builds.some((build) => build.buildFailed && build.requestedTasks === ':tests:test'),
     );
@@ -164,6 +172,7 @@ async function main(): Promise<void> {
     const summaryText = await readFile(summaryPath, 'utf8');
     assert.match(summaryText, /## Mammoth cache post/u);
     assert.match(summaryText, /- Build outcomes: \d+ succeeded, 2 failed/u);
+    assert.match(summaryText, /- Unfinished builds: 1 started but recorded no result/u);
     // createGradleBuildSummaryLines renders a markdown list, not an HTML table.
     assert.match(summaryText, /### Performed Gradle builds/u);
     // escapeSummaryText escapes hyphens as \- in Markdown, so project names appear with
@@ -250,7 +259,14 @@ async function stageProject(
 async function writeFixtureProject(projectDirectory: string): Promise<void> {
   await writeFile(
     path.join(projectDirectory, 'settings.gradle'),
-    `rootProject.name = 'mammoth-cache-gradle-it'\ninclude 'tests'\n`,
+    [
+      "rootProject.name = 'mammoth-cache-gradle-it'",
+      "include 'tests'",
+      "if (startParameter.projectProperties.failSettings == 'true') {",
+      "  throw new GradleException('expected settings failure')",
+      '}',
+      '',
+    ].join('\n'),
     'utf8',
   );
   await writeFile(

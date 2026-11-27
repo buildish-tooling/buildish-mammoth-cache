@@ -196,6 +196,9 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
     return { outcome: 'skipped' as const };
   }
   const summaries = new PartitionSummaries(opened.store.codec.options.model, budget, d.analytics);
+  let report: Promise<BuildReport> | undefined;
+  const loadReport = () =>
+    (report ??= d.loadReport(opened.store.codec.options.context[7], facts.header[4]));
   const onCaptureInfo = (message: string) => host.info(message);
   const warnings: string[] = [];
   const onWarning = (message: string) => {
@@ -226,6 +229,7 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
               onCaptureInfo,
               onWarning,
               removeHooks,
+              buildFailed: async () => (await loadReport()).anyBuildFailed,
             })
           : await postStreamingBase({
               ...options,
@@ -252,8 +256,8 @@ async function runStreamingPostImpl(d: StreamingPostDependencies) {
       await removeHooks();
     }
     // Core recovery, observation/purge, source return and receipt precede these content/provider reads.
-    const report = await d.loadReport(opened.store.codec.options.context[7], facts.header[4]);
-    const sink = await emit(host, d, report, [], result.outcome);
+    // A due worker reads the build report earlier, after its capture, to decide on sweep evidence.
+    const sink = await emit(host, d, await loadReport(), [], result.outcome);
     try {
       summaries.emit(host, sink);
     } catch {

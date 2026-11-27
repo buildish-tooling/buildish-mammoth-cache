@@ -43,6 +43,8 @@ export interface WorkerPostRequest extends LifecycleOptions {
   readonly summaries?: PartitionSummaries;
   readonly onCaptureInfo?: (message: string) => void;
   readonly onWarning?: (message: string) => void;
+  /** Whether a build in this job failed or did not finish; read only for sweep evidence. */
+  readonly buildFailed?: () => Promise<boolean>;
 }
 
 /** One fresh post operation; no source/package pointer can authorize replay or upload retry. */
@@ -148,7 +150,7 @@ export async function postStreamingWorker(input: WorkerPostRequest) {
       const capturedAt = Date.now();
       const { header, entries, workerSweepCapture } = attempt.handoff;
       const sweep: WorkerSweepEvidence | undefined =
-        workerSweepCapture && capturedAt >= header[10]
+        workerSweepCapture && capturedAt >= header[10] && !(await withholdSweepEvidence(request))
           ? [
               'sweep-usage',
               header[8]![0],
@@ -378,4 +380,24 @@ export async function postFailedPrepareLayer(
   } finally {
     attempt.close();
   }
+}
+
+/**
+ * A failed or unfinished build may have skipped work that reads dependencies, so its usage cannot
+ * establish sweep coverage. The worker still publishes its changes. An unreadable outcome counts
+ * as failed: deferring a sweep is cheaper than evicting entries that are still in use.
+ */
+async function withholdSweepEvidence(request: WorkerPostRequest): Promise<boolean> {
+  let failed: boolean;
+  try {
+    failed = (await request.buildFailed?.()) ?? false;
+  } catch {
+    failed = true;
+  }
+  if (failed) {
+    request.onWarning?.(
+      'Sweep evidence withheld: a build in this job failed or did not finish, so its dependency usage may be incomplete. Its cache changes are still published.',
+    );
+  }
+  return failed;
 }

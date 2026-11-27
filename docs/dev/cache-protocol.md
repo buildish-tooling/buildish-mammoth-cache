@@ -305,7 +305,9 @@ Version 3 binds a completed ordinary writable capture on a due worker to its exa
 restored generation and current producer context. The cutoff and capture time are
 epoch milliseconds with `cutoffMs <= capturedAtMs`. The partition list contains
 available and explicitly empty aggregate partitions in model order. A completed
-capture can supply evidence even if the build step was skipped. Readers supporting
+capture can supply evidence even if the build step was skipped, unless a captured
+Gradle build failed or started without recording a result. Such a worker writes
+version 1, so its changes merge but it cannot establish coverage. Readers supporting
 version 3 accept versions 1 and 2 for ordinary merge. A worker emitting version 3
 needs an aggregator that supports it.
 

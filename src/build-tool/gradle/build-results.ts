@@ -28,6 +28,7 @@ import { parseSerializedJson, parseWithZod } from '../../util/serialization';
 import {
   BUILD_RESULTS_SUBDIRECTORY,
   BUILD_SCANS_SUBDIRECTORY,
+  BUILD_STARTS_SUBDIRECTORY,
   INIT_SCRIPT_FILE_NAME,
   SERVICE_PLUGIN_FILE_NAME,
   createInitScriptContents,
@@ -76,9 +77,21 @@ export interface CapturedGradleBuild {
   readonly buildScanFailed: boolean;
 }
 
+/**
+ * A top-level Gradle invocation that started but recorded no result.
+ *
+ * It failed before its settings were evaluated, for example while resolving settings plugins, or
+ * it was interrupted.
+ */
+export interface UnfinishedGradleBuild {
+  readonly invocationKey: string;
+  readonly requestedTasks: string;
+}
+
 /** Aggregated report covering all Gradle invocations captured during the current job. */
 export interface GradleBuildReport {
   readonly builds: readonly CapturedGradleBuild[];
+  readonly unfinishedBuilds: readonly UnfinishedGradleBuild[];
   /** Non-fatal warnings encountered while loading or parsing the capture files. */
   readonly warnings: readonly string[];
 }
@@ -111,6 +124,10 @@ const capturedBuildResultFileSchema = z.object({
   configCacheHit: z.boolean(),
 });
 
+const capturedBuildStartFileSchema = z.object({
+  requestedTasks: z.string(),
+});
+
 const capturedBuildScanFileSchema = z.object({
   buildScanUri: z.union([buildScanUriSchema, z.null()]),
   buildScanFailed: z.boolean(),
@@ -119,6 +136,8 @@ const capturedBuildScanFileSchema = z.object({
 type CapturedBuildResultFile = z.infer<typeof capturedBuildResultFileSchema>;
 
 type CapturedBuildScanFile = z.infer<typeof capturedBuildScanFileSchema>;
+
+type CapturedBuildStartFile = z.infer<typeof capturedBuildStartFileSchema>;
 
 /**
  * Installs the Gradle build-result capture init script and Groovy service plugin into the
@@ -199,6 +218,7 @@ export async function loadGradleBuildReport(
   if (!resultsRoot) {
     return {
       builds: [],
+      unfinishedBuilds: [],
       warnings: ['Gradle build reporting is unavailable because the CI temp directory is not set.'],
     };
   }
@@ -214,6 +234,13 @@ export async function loadGradleBuildReport(
     'build scan',
     warnings,
     validateCapturedBuildScanFile,
+  );
+
+  const buildStarts = await loadFilesByInvocationKey<CapturedBuildStartFile>(
+    path.join(resultsRoot, BUILD_STARTS_SUBDIRECTORY),
+    'build start',
+    warnings,
+    validateCapturedBuildStartFile,
   );
 
   for (const invocationKey of buildScans.keys()) {
@@ -246,7 +273,14 @@ export async function loadGradleBuildReport(
         left.invocationKey.localeCompare(right.invocationKey),
     );
 
-  return { builds, warnings };
+  const unfinishedBuilds = [...buildStarts.entries()]
+    .filter(([invocationKey]) => !buildResults.has(invocationKey))
+    .map(([invocationKey, buildStart]) => ({
+      invocationKey,
+      requestedTasks: buildStart.requestedTasks,
+    }));
+
+  return { builds, unfinishedBuilds, warnings };
 }
 
 /**
@@ -277,6 +311,15 @@ export function createGradleBuildSummaryLines(report: GradleBuildReport): readon
     '### Performed Gradle builds',
     `- Captured Gradle builds: ${report.builds.length}`,
     `- Build outcomes: ${successfulBuildCount} succeeded, ${failedBuildCount} failed`,
+    ...(report.unfinishedBuilds.length > 0
+      ? [
+          `- Unfinished builds: ${report.unfinishedBuilds.length} started but recorded no result (failed before settings evaluation or interrupted)`,
+          ...report.unfinishedBuilds.map(
+            (build) =>
+              `  - ${escapeSummaryText(truncateSummaryText(displayText(build.requestedTasks, '(default tasks)'), 200))}`,
+          ),
+        ]
+      : []),
     `- Build scans: ${buildScanCounts.published} published, ${buildScanCounts.failed} failed, ${buildScanCounts.notAttempted} not attempted`,
     `- Build reporting warnings: ${report.warnings.length}`,
     ...report.warnings.map((warning) => `- Warning: ${escapeSummaryText(warning)}`),
@@ -365,6 +408,17 @@ function validateCapturedBuildResultFile(
   );
 }
 
+function validateCapturedBuildStartFile(
+  contents: string,
+  filePath: string,
+): CapturedBuildStartFile {
+  return parseWithZod(
+    capturedBuildStartFileSchema,
+    parseSerializedJson(contents, `Gradle build start file '${filePath}'`),
+    `Gradle build start file '${filePath}'`,
+  );
+}
+
 function validateCapturedBuildScanFile(contents: string, filePath: string): CapturedBuildScanFile {
   return parseWithZod(
     capturedBuildScanFileSchema,
@@ -397,7 +451,9 @@ function truncateSummaryText(value: string, maxLength: number): string {
 }
 
 export function buildReportFromGradleReport(report: GradleBuildReport): BuildReport {
-  const anyBuildFailed = report.builds.some((build) => build.buildFailed);
+  // An unfinished build failed before it could record a result, or was interrupted.
+  const anyBuildFailed =
+    report.unfinishedBuilds.length > 0 || report.builds.some((build) => build.buildFailed);
   const summaryLines = createGradleBuildSummaryLines(report);
   const logLines = createGradleBuildLogLines(report);
 
@@ -416,19 +472,25 @@ export function buildReportFromGradleReport(report: GradleBuildReport): BuildRep
 }
 
 function createGradleBuildLogLines(report: GradleBuildReport): readonly string[] {
+  const unfinishedLines = report.unfinishedBuilds.map(
+    (build) => `Gradle UNFINISHED tasks='${build.requestedTasks}' (started but recorded no result)`,
+  );
   if (report.builds.length === 0) {
-    return ['No Gradle build invocations were captured.'];
+    return [...unfinishedLines, 'No Gradle build invocations were captured.'];
   }
 
-  return report.builds.map((build) => {
-    const outcome = build.buildFailed ? 'FAILED' : 'SUCCESS';
-    const configCache = build.configCacheHit ? ' (config-cache hit)' : ' (config-cache miss)';
-    const scanSuffix = build.buildScanUri ? ` scan=${build.buildScanUri}` : '';
-    return (
-      `Gradle ${build.gradleVersion} ${outcome}${configCache}` +
-      ` tasks='${build.requestedTasks}'` +
-      ` project='${build.rootProjectName}'` +
-      scanSuffix
-    );
-  });
+  return [
+    ...unfinishedLines,
+    ...report.builds.map((build) => {
+      const outcome = build.buildFailed ? 'FAILED' : 'SUCCESS';
+      const configCache = build.configCacheHit ? ' (config-cache hit)' : ' (config-cache miss)';
+      const scanSuffix = build.buildScanUri ? ` scan=${build.buildScanUri}` : '';
+      return (
+        `Gradle ${build.gradleVersion} ${outcome}${configCache}` +
+        ` tasks='${build.requestedTasks}'` +
+        ` project='${build.rootProjectName}'` +
+        scanSuffix
+      );
+    }),
+  ];
 }

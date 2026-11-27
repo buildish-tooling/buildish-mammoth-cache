@@ -1676,6 +1676,51 @@ it('reports available and explicitly empty sweep partitions while omitting cold 
   }
 });
 
+it.each(['failed', 'unreadable'] as const)(
+  'withholds sweep evidence but publishes changes when the build outcome is %s',
+  async (outcome) => {
+    const producer = await fixture('maven');
+    if (!('store' in (await runStreamingPrepare(producer.deps)))) {
+      throw new Error('Expected normal prepare.');
+    }
+    await mkdir(path.join(producer.home, 'data'));
+    await writeFile(path.join(producer.home, 'data', 'file'), 'cached');
+    expect((await runStreamingPost(producer.post)).outcome).toBe('published');
+
+    const worker = await fixture('maven', { 'job-mode': 'distributed-worker' });
+    const ready = await runStreamingPrepare({
+      ...worker.deps,
+      cacheBackend: async () => producer.sdk.backend,
+    });
+    if (!('store' in ready)) {
+      throw new Error('Expected normal prepare.');
+    }
+    expect(worker.outputs.get('dependency-gc-due')).toBe('true');
+    await writeFile(path.join(worker.home, 'data', 'added'), 'worker');
+    worker.loadReport.mockImplementation(async () => {
+      if (outcome === 'unreadable') {
+        throw new Error('unreadable report');
+      }
+      return { anyBuildFailed: true, warnings: [], summaryLines: [], logLines: [], builds: [] };
+    });
+
+    const post = runStreamingPost(worker.post);
+    if (outcome === 'unreadable') {
+      // Publication precedes reporting, which still surfaces the unreadable report.
+      await expect(post).rejects.toThrow('unreadable report');
+    } else {
+      expect((await post).outcome).toBe('worker-uploaded');
+    }
+    expect(worker.artifacts.upload).toHaveBeenCalledTimes(1);
+    expect(worker.loadReport).toHaveBeenCalledTimes(1);
+    expect(worker.warning).toHaveBeenCalledWith(
+      expect.stringContaining('Sweep evidence withheld: a build in this job failed'),
+    );
+    const { identity } = await readUploadedWorker(worker, ready.store.codec.options);
+    expect(identity[1]).toBe(1);
+  },
+);
+
 it('keeps ordinary archive identity for a due Gradle writer using an external seed', async () => {
   const { worker, dependencies } = await warmLayerProvider({}, null);
   worker.host.exportEnvironmentVariable('GRADLE_RO_DEP_CACHE', '/external-seed');

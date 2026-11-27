@@ -27,7 +27,8 @@ tasks, including TestKit fixtures. Tests can deliberately invoke failing builds 
 `buildAndFail()`; the enclosing test task determines whether those outcomes are correct.
 The enclosing build is still reported, so an unexpected test failure remains visible.
 
-Builds launched by `Exec` and other tasks remain reportable by default. If a task deliberately
+Builds launched by `Exec` and other tasks remain reportable by default. A reported failure also
+withholds a distributed worker's sweep evidence when GC is due. If a task deliberately
 launches a failing Gradle build and checks its outcome, set
 `BUILDISH_MAMMOTH_CACHE_GRADLE_SKIP_BUILD_RESULT_CAPTURE=true` in the child process environment:
 

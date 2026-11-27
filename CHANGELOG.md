@@ -18,6 +18,11 @@ limitations under the License.
 
 ## Unreleased
 
+- Withhold a Gradle worker's sweep evidence when one of its captured builds failed or started
+  without recording a result, such as a settings-plugin resolution failure. The worker's changes
+  are still published, but it no longer counts towards full sweep coverage, so a sweep is deferred
+  to a run in which every listed worker succeeds or to the forced sweep after the grace period. The
+  build summary now also lists builds that started but recorded no result.
 - Fix config-file values being ignored for inputs that declared a default in `action.yml`.
   Defaults now apply after config-file resolution, so direct inputs, then config-file values,
   then defaults take effect.

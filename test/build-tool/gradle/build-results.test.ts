@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   MAX_CAPTURE_FILE_BYTES,
+  buildReportFromGradleReport,
   cleanupGradleBuildResultCapture,
   createGradleBuildSummaryLines,
   installGradleBuildResultCapture,
@@ -115,8 +116,71 @@ describe('Gradle build reporting', () => {
     ]);
   });
 
+  it('reports builds that started without recording a result as unfinished and failed', async () => {
+    const runnerTemp = await createRunnerTemp(temporaryDirectories);
+    const captureRoot = path.join(runnerTemp, '.buildish-mammoth-cache');
+    const buildResultsDirectory = path.join(captureRoot, 'build-results');
+    const buildStartsDirectory = path.join(captureRoot, 'build-starts');
+    await mkdir(buildResultsDirectory, { recursive: true });
+    await mkdir(buildStartsDirectory, { recursive: true });
+
+    await writeFile(
+      path.join(buildResultsDirectory, '__run-1.json'),
+      JSON.stringify({
+        capturedAtEpochMillis: 1000,
+        rootProjectName: 'demo',
+        requestedTasks: 'build',
+        gradleVersion: '9.1.0',
+        buildFailed: false,
+        configCacheHit: false,
+      }),
+      'utf8',
+    );
+    // A configuration-cache hit records a result without a start; neither is unfinished.
+    await writeFile(
+      path.join(buildResultsDirectory, '__run-cc-hit.json'),
+      JSON.stringify({
+        capturedAtEpochMillis: 2000,
+        rootProjectName: 'demo',
+        requestedTasks: 'build',
+        gradleVersion: '9.1.0',
+        buildFailed: false,
+        configCacheHit: true,
+      }),
+      'utf8',
+    );
+    for (const [key, requestedTasks] of [
+      ['__run-1', 'build'],
+      ['__run-2', 'help'],
+    ]) {
+      await writeFile(
+        path.join(buildStartsDirectory, `${key}.json`),
+        JSON.stringify({ requestedTasks }),
+        'utf8',
+      );
+    }
+
+    const report = await loadGradleBuildReport({ tempDirectory: runnerTemp });
+
+    expect(report.warnings).toEqual([]);
+    expect(report.builds.map((build) => build.invocationKey)).toEqual(['__run-1', '__run-cc-hit']);
+    expect(report.unfinishedBuilds).toEqual([{ invocationKey: '__run-2', requestedTasks: 'help' }]);
+    const buildReport = buildReportFromGradleReport(report);
+    expect(buildReport.anyBuildFailed).toBe(true);
+    expect(buildReport.summaryLines).toContain(
+      '- Unfinished builds: 1 started but recorded no result (failed before settings evaluation or interrupted)',
+    );
+    expect(buildReport.logLines).toContain(
+      "Gradle UNFINISHED tasks='help' (started but recorded no result)",
+    );
+    expect(buildReportFromGradleReport({ ...report, unfinishedBuilds: [] }).anyBuildFailed).toBe(
+      false,
+    );
+  });
+
   it('renders a compact build summary with outcomes and build scan states', () => {
     const lines = createGradleBuildSummaryLines({
+      unfinishedBuilds: [],
       builds: [
         {
           invocationKey: '__run-1',
@@ -202,6 +266,7 @@ describe('Gradle build reporting', () => {
       path.join(runnerTemp, '.buildish-mammoth-cache'),
     );
     expect(initScript).toContain(`def captureRootDir = ${expectedCaptureRootLiteral}`);
+    expect(initScript).toContain(`def startsRootDir = ${expectedCaptureRootLiteral}`);
     expect(servicePlugin).toContain(`def captureRootDir = ${expectedCaptureRootLiteral}`);
     expect(servicePlugin).toContain('def captureInvocationNamespace = "buildish-mammoth-cache"');
   });
@@ -209,6 +274,7 @@ describe('Gradle build reporting', () => {
   it('renders "not attempted" scan state, displayText fallbacks, and truncates overlong titles', () => {
     const longTask = 'x'.repeat(210);
     const lines = createGradleBuildSummaryLines({
+      unfinishedBuilds: [],
       builds: [
         {
           invocationKey: '__run-1',
@@ -252,6 +318,7 @@ describe('Gradle build reporting', () => {
   it('HTML-escapes Markdown-special characters in the build scan URI', () => {
     // '&' is valid in URLs (query parameters) and must be escaped as '&amp;' inside href.
     const lines = createGradleBuildSummaryLines({
+      unfinishedBuilds: [],
       builds: [
         {
           invocationKey: '__run-1',
