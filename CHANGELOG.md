@@ -18,6 +18,8 @@ limitations under the License.
 
 ## Unreleased
 
+## 0.6.1
+
 - Explain producer-name collisions between matrix cells. When an aggregator finds several worker
   artifacts for one producer in the same attempt, or a worker upload is rejected because the run
   already has an artifact with that name, the message now says to give each cell its own
