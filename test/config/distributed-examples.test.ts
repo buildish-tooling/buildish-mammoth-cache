@@ -84,3 +84,48 @@ describe('distributed Gradle workflow examples', () => {
     },
   );
 });
+
+describe('distributed Gradle matrix example', () => {
+  it('names every matrix cell and lists each name as a dependent job', async () => {
+    const text = await readFile('examples/gradle-distributed-matrix.yml', 'utf8');
+    const workflow = parse(text) as Workflow & {
+      jobs: Record<string, { strategy?: { matrix: { 'java-version': string[] } } }>;
+    };
+    const guide = await readFile('docs/user/distributed-jobs.md', 'utf8');
+    expect(guide).toContain(text.slice(text.indexOf('name: ')).trim());
+    const writer = parseCachePartitionsInput(workflow.env.MAMMOTH_CACHE_PARTITIONS)[0]!.writer!;
+    const build = workflow.jobs.build!;
+    const worker = build.steps.find((step) => step.uses?.includes('/actions/github/gradle@'))!;
+    const names = build.strategy!.matrix['java-version'].map((version) =>
+      worker.with!['github-job-name']!.replace('${{ matrix.java-version }}', version),
+    );
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toContain(writer);
+    const aggregator = workflow.jobs.aggregator!;
+    const action = aggregator.steps.find((step) => step.uses?.includes('/actions/github/gradle@'))!;
+    expect(aggregator.needs).toEqual(['build']);
+    expect(aggregator.if).toContain('always()');
+    for (const [jobName, job] of [
+      ...names.map((name) => [name, worker] as const),
+      ['aggregator', action] as const,
+    ]) {
+      expect(job.with?.['cache-partitions']).toBe('${{ env.MAMMOTH_CACHE_PARTITIONS }}');
+      const source = {
+        getInput: (key: string) =>
+          key === 'cache-partitions'
+            ? workflow.env.MAMMOTH_CACHE_PARTITIONS
+            : key === 'github-job-name' && job === worker
+              ? jobName
+              : (job.with?.[key] ?? ''),
+      };
+      const config = normalizeGradleActionConfig(readGradleActionInputs(source), {
+        phase: 'prepare',
+        ciContext: fixtureCi(process.cwd(), 'build'),
+        env: {},
+      });
+      if (job === action) {
+        expect(config.dependentJobs).toEqual(names);
+      }
+    }
+  });
+});

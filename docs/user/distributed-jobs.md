@@ -259,6 +259,72 @@ continues independently, so metadata can refer to evicted artifacts and offline 
 not guaranteed. See [Cache partitions](../cache-partitions/#publication-policies) and
 [Gradle cache internals](../../architecture/gradle-cache-internals/).
 
+## Matrix jobs
+
+Every cell of a matrix job runs with the same workflow job ID, and Mammoth's producer name defaults
+to that ID. Without an explicit name, the cells of a matrix job collide:
+
+- If two cells upload an identical artifact name, the second upload is rejected. That worker warns
+  that its upload is unconfirmed, and its contribution is lost without failing the job.
+- If the names differ, the aggregator finds several artifacts for one producer in the same attempt
+  and fails with `Ambiguous raw worker artifacts`.
+
+Give each cell its own `github-job-name`, built from the matrix values, and list every resulting
+name in the aggregator's `dependent-jobs`. Keep the matrix job ID in the aggregator's `needs`. The
+following workflow is also available in the repository as `examples/gradle-distributed-matrix.yml`.
+
+```yaml
+name: Gradle distributed cache with a Java matrix
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+env:
+  MAMMOTH_CACHE_PARTITIONS: '[{"id":"dependency-metadata","writer":"build-java-21"}]'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java-version: ['21', '25']
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java-version }}
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-worker
+          github-job-name: build-java-${{ matrix.java-version }}
+          cache-partitions: ${{ env.MAMMOTH_CACHE_PARTITIONS }}
+      - run: ./gradlew build
+
+  aggregator:
+    needs: [build]
+    if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-aggregator
+          cache-partitions: ${{ env.MAMMOTH_CACHE_PARTITIONS }}
+          dependent-jobs: build-java-21, build-java-25
+```
+
+Mammoth does not expand a matrix into its cells. When you add or remove a matrix value, update
+`dependent-jobs` too. A listed name without an envelope prevents full sweep coverage, or fails
+aggregation with `allow-missing-dependent-jobs: false`. A cell missing from the list is ignored
+for ordinary artifacts.
+
+The metadata `writer` names one cell, not the whole matrix. Choose the cell whose dependency
+resolution is most representative, for example the one that runs the most tasks. The matrix cells
+share one cache family unless their `cache-key-prefix` differs; see
+[sharing across Java versions, operating systems and architectures](#sharing-across-java-versions-operating-systems-and-architectures).
+
 ## Maven workflow example
 
 ```yaml
@@ -399,7 +465,7 @@ rules. See [restore admission failures](../troubleshooting/#restore-admission-fa
 
 **Job names must be unique within the workflow run.** Delta artifacts are identified by job name.
 Two worker jobs with the same name would produce the same artifact name and the aggregator would
-only see one of them.
+only see one of them. Matrix cells share their job ID; see [Matrix jobs](#matrix-jobs).
 
 **The aggregator must declare `needs` for every consumed worker and optional metadata writer.** This ensures all deltas are uploaded
 before the aggregator starts and consumes them during prepare.

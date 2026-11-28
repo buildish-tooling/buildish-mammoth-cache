@@ -39,6 +39,7 @@ import {
 import { DownloadedWorkerArchive, type SelectedWorkerArtifact } from './worker-download';
 import type { ResolvedModel } from './model';
 import type { Value } from './encoding';
+import { MATRIX_JOBS_DOCS_URL } from '../../util/docs-links';
 export { DownloadedWorkerArchive } from './worker-download';
 export { workerArtifactName, workerArtifactPrefix } from './worker-artifact-identity';
 export interface WorkerRequest {
@@ -138,7 +139,14 @@ export async function discoverWorkerArtifacts(
       throw new Error('Worker has no artifact at or before the selected attempt: ' + s.request.job);
     }
     if (s.ambiguous) {
-      throw new Error('Ambiguous raw worker artifacts for ' + s.request.job);
+      throw new Error(
+        'Ambiguous raw worker artifacts for ' +
+          s.request.job +
+          ': several workers uploaded under this producer name in the same attempt. ' +
+          'Matrix cells share their job ID; give each cell its own `github-job-name` and ' +
+          'list those names in `dependent-jobs`. See ' +
+          MATRIX_JOBS_DOCS_URL,
+      );
     }
     s.context[5] = s.attempt;
     result.push(
@@ -209,9 +217,25 @@ export interface WorkerUploadReceipt {
 
 /** Only SDK/direct-response failures use this type; local source/cleanup failures remain hard. */
 export class WorkerUploadUnconfirmed extends Error {
-  constructor(readonly retainedPath: string) {
-    super('Raw worker upload unconfirmed; retain immutable package at ' + retainedPath);
+  constructor(
+    readonly retainedPath: string,
+    hint?: string,
+  ) {
+    super(
+      'Raw worker upload unconfirmed; retain immutable package at ' +
+        retainedPath +
+        (hint ? '. ' + hint : ''),
+    );
   }
+}
+/** The artifact service answers 409 when the run already has an artifact with this name. */
+function duplicateProducerHint(error: unknown): string | undefined {
+  return error instanceof Error && /\(409\)/.test(error.message)
+    ? 'The workflow run already has a worker artifact with this name, usually because matrix ' +
+        'cells share their job ID. Give each cell its own `github-job-name` and list those names ' +
+        'in `dependent-jobs`. See ' +
+        MATRIX_JOBS_DOCS_URL
+    : undefined;
 }
 /** One direct attempt consumes ONLY the immutable package; no discovery or readback. */
 export async function uploadWorkerArtifact(
@@ -261,10 +285,10 @@ export async function uploadWorkerArtifact(
     ) {
       throw new Error('Worker service size/digest differs from frozen package.');
     }
-  } catch {
+  } catch (error) {
     // SDK rejection does not expose closure of inaccessible readers. Keep this exact package.
     archive.settleUpload(false);
-    throw new WorkerUploadUnconfirmed(file);
+    throw new WorkerUploadUnconfirmed(file, duplicateProducerHint(error));
   }
   signal.throwIfAborted();
   await archive.assertStable(signal);

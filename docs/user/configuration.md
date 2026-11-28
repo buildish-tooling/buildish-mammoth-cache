@@ -360,7 +360,8 @@ Omit `includes` and `excludes` to inherit the built-in patterns. Explicit lists 
 corresponding defaults; an empty include list disables a built-in. Custom partitions must supply
 nonempty includes and can opt into `publication: single-writer` with their own `writer`.
 A writer is a trimmed producer identity, including an explicit `github-job-name` when supplied.
-Matrix jobs must have distinct producer identities.
+Matrix jobs must have distinct producer identities; see
+[Matrix jobs](../distributed-jobs/#matrix-jobs).
 
 `writer` identifies an optional snapshot contribution. It does not make an entry in
 `dependent-jobs` optional. If a job is also listed there for ordinary artifacts, its envelope remains
@@ -465,6 +466,8 @@ resolved conflicts with bounded winner/discarded-producer details.
 - Default: unset (the action reads `GITHUB_JOB` from the runner environment)
 - **Reusable workflows and matrix jobs.** Assigns a stable, predictable job name for cache
   coordination and artifact naming, independent of the GitHub Actions job key or matrix label.
+- Required for distributed matrix workers: every cell shares one `GITHUB_JOB`, so derive the name
+  from the matrix values. See [Matrix jobs](../distributed-jobs/#matrix-jobs).
 - Example:
   ```yaml
   github-job-name: aggregator

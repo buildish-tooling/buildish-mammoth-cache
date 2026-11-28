@@ -25,6 +25,27 @@ replacing the existing cache steps; keep the setup and services the build still 
 [Getting Started](../getting-started/#workflow-shape) covers executable release/candidate refs and
 the initial action wiring.
 
+## Allow the actions in restricted organizations
+
+Repositories and organizations that allow only specified actions must list each Mammoth action
+by its full path:
+
+```text
+buildish-tooling/buildish-mammoth-cache/actions/github/gradle@*,
+buildish-tooling/buildish-mammoth-cache/actions/github/maven@*
+```
+
+Pin the actions to full-length commit SHAs in workflows, as the examples do. An allow-list entry
+that names a SHA instead of `@*` must be updated on every Mammoth upgrade.
+
+See GitHub's
+[allowing and blocking actions](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#allowing-select-actions-and-reusable-workflows-to-run)
+for the pattern syntax.
+
+Apache Software Foundation projects use the allow-list maintained in
+[`apache/infrastructure-actions`](https://github.com/apache/infrastructure-actions), which approves
+actions per commit SHA.
+
 ## Choose a topology and owner
 
 | Workflow need                                              | Starting choice                                                          | Coverage tradeoff                                                                                          |
@@ -56,7 +77,8 @@ including disabling overlapping caching in setup actions while retaining their t
 Mammoth before any Gradle or Maven invocation in the job.
 
 In distributed mode, assign stable, unique producer names to matrix jobs. Align `github-job-name`,
-`dependent-jobs`, the metadata writer identity and the aggregator's `needs`. Listed producers
+`dependent-jobs`, the metadata writer identity and the aggregator's `needs`, as in the
+[matrix example](../distributed-jobs/#matrix-jobs). Listed producers
 that do not upload an envelope are reported and prevent full sweep coverage, or fail aggregation
 with `allow-missing-dependent-jobs: false`. A skipped worker or a missing post upload, including after
 cancellation, differs from a failed build whose post action produced a valid envelope.

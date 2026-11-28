@@ -1,0 +1,53 @@
+# Copyright 2026 The Buildish Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Gradle distributed cache with a Java matrix
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+env:
+  MAMMOTH_CACHE_PARTITIONS: '[{"id":"dependency-metadata","writer":"build-java-21"}]'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java-version: ['21', '25']
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java-version }}
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-worker
+          github-job-name: build-java-${{ matrix.java-version }}
+          cache-partitions: ${{ env.MAMMOTH_CACHE_PARTITIONS }}
+      - run: ./gradlew build
+
+  aggregator:
+    needs: [build]
+    if: ${{ always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
+        with:
+          job-mode: distributed-aggregator
+          cache-partitions: ${{ env.MAMMOTH_CACHE_PARTITIONS }}
+          dependent-jobs: build-java-21, build-java-25

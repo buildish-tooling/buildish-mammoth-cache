@@ -8,6 +8,7 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.d.mts"],

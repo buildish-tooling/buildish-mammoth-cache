@@ -41,6 +41,7 @@ import {
 } from '../../../src/cache/streaming/worker-service';
 import { workerArtifactName } from '../../../src/cache/streaming/worker-artifact-identity';
 import { DownloadedWorkerArchive } from '../../../src/cache/streaming/worker-download';
+import { MATRIX_JOBS_DOCS_URL } from '../../../src/util/docs-links';
 import { NativeReadPhase } from '../../../src/cache/streaming/native-read-phase';
 import { OwnedStore } from '../../../src/cache/streaming/owned-store';
 import { LocalCodec } from '../../../src/cache/streaming/local-schema';
@@ -260,6 +261,26 @@ it.each([true, false])(
     expect(read).not.toHaveBeenCalled();
   },
 );
+it('explains a duplicate artifact name as a shared matrix producer name', async () => {
+  const f = await fixture();
+  f.b.upload.mockRejectedValue(
+    new Error(
+      'Failed to CreateArtifact: Received non-retryable error: Failed request: (409) Conflict',
+    ),
+  );
+  await expect(uploadWorkerArtifact(f.b.api, f.archive)).rejects.toThrow(
+    new RegExp(
+      '^Raw worker upload unconfirmed; retain immutable package at .*`github-job-name`.*' +
+        MATRIX_JOBS_DOCS_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+        '$',
+    ),
+  );
+  const g = await fixture();
+  g.b.upload.mockRejectedValue(new Error('Failed request: (500) Internal Server Error'));
+  await expect(uploadWorkerArtifact(g.b.api, g.archive)).rejects.toThrow(
+    /^Raw worker upload unconfirmed; retain immutable package at [^ ]+$/,
+  );
+});
 it('retains immutable package after raw SDK rejection while an inaccessible reader remains live', async () => {
   const f = await fixture();
   let release!: () => void;
@@ -309,7 +330,7 @@ it('discovers latest eligible attempts deterministically without legacy total-by
     discoverWorkerArtifacts(f.b.api, f.model, execution, [
       { job: 'A', required: true, authorizedSnapshots: [] },
     ]),
-  ).rejects.toThrow('Ambiguous');
+  ).rejects.toThrow(/^Ambiguous raw worker artifacts for A: .*`github-job-name`.*#matrix-jobs$/);
   f.b.list.mockResolvedValue([]);
   expect(
     await discoverWorkerArtifacts(f.b.api, f.model, execution, [

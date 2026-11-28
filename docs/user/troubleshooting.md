@@ -134,24 +134,25 @@ being useful, or old cache entries are evicted before later jobs can reuse them.
    will report every missing or invalid configured worker rather than silently producing a broken
    cache. A successful writable worker uploads an explicit envelope even when it made no changes.
 
-4. **Check for matrix job names with special characters.** Matrix dimension values such as
-   `ubuntu-latest / Java 21` contain spaces and slashes that are sanitized when constructing
-   the artifact name, but the `dependent-jobs` input must use the original unsanitized job key
-   (e.g. `build (ubuntu-latest, 21)`). Use the `github-job-name` input on both worker and
-   aggregator to assign simple, stable names that are independent of matrix labeling:
+4. **Give each matrix cell its own producer name.** All cells of a matrix job report the same job
+   key, for example `build`, so without `github-job-name` they publish under one producer name.
+   The aggregator then fails with `Ambiguous raw worker artifacts for build`, or a worker warns
+   `Raw worker upload unconfirmed` because another cell already uploaded the same artifact name.
+   Both messages link to the matrix guidance. Set `github-job-name` from the matrix values on the
+   worker and list every resulting name on the aggregator; see
+   [Matrix jobs](../distributed-jobs/#matrix-jobs):
 
    ```yaml
    # worker
    - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<sha>
      with:
        job-mode: distributed-worker
-       github-job-name: worker-a
+       github-job-name: build-java-${{ matrix.java-version }}
    # aggregator
    - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<sha>
      with:
        job-mode: distributed-aggregator
-       dependent-jobs: worker-a, worker-b
-       github-job-name: aggregator
+       dependent-jobs: build-java-21, build-java-25
    ```
 
 5. **Check rerun selection diagnostics.** The aggregator selects the newest unambiguous worker
@@ -213,6 +214,23 @@ If prepare fails during wrapper provisioning, finalize logs that it is skipping 
 saves no caches or artifacts. Resolve the original prepare error first. Older Mammoth Cache
 versions may also report `Cache lifecycle state is missing` in the post action after prepare
 failed. This follow-on error does not indicate that anything was saved without validated state.
+
+---
+
+## Action not allowed by the repository or organization
+
+**Symptom:** The job fails while setting up, before any step runs, with an error that the
+`buildish-tooling/buildish-mammoth-cache/actions/github/...` action is not allowed, or that actions
+must be pinned to a full-length commit SHA. Mammoth writes no log output or summary.
+
+**Explanation:** GitHub enforces the repository or organization actions policy before Mammoth
+starts. The allow-list must name the full action path, and an entry pinned to a commit SHA does not
+match a newer pin after an upgrade.
+
+**Fix:** Add the entries listed in
+[Allow the actions in restricted organizations](../adoption/#allow-the-actions-in-restricted-organizations),
+or update SHA-pinned entries to the pinned revision. If SHA pinning is required, pin the action to
+a full-length commit SHA instead of a tag.
 
 ---
 

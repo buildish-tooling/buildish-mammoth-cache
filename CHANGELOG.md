@@ -18,6 +18,15 @@ limitations under the License.
 
 ## Unreleased
 
+- Explain producer-name collisions between matrix cells. When an aggregator finds several worker
+  artifacts for one producer in the same attempt, or a worker upload is rejected because the run
+  already has an artifact with that name, the message now says to give each cell its own
+  `github-job-name` and links to the new matrix-jobs section of the released docs. Add the
+  `examples/gradle-distributed-matrix.yml` workflow.
+- Document the allow-list entries needed in repositories and organizations that allow only
+  specified actions, with a pointer for Apache Software Foundation projects, and the resulting
+  setup failure in the troubleshooting guide.
+
 ## 0.6.0
 
 - Let a distributed aggregator merge the available workers when a job in `dependent-jobs` uploaded
