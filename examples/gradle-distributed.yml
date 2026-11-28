@@ -56,10 +56,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
-        with:
-          distribution: temurin
-          java-version: '21'
       - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-aggregator

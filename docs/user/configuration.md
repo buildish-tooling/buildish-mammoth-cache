@@ -670,8 +670,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
-        with: { distribution: temurin, java-version: '21' }
       - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-aggregator
@@ -722,8 +720,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
-        with: { distribution: temurin, java-version: '21' }
       - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-aggregator

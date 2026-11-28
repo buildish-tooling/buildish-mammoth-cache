@@ -146,10 +146,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
-        with:
-          distribution: temurin
-          java-version: '21'
       - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-aggregator
@@ -160,6 +156,9 @@ jobs:
 This chooses `worker-a` without an extra job. Because both workers are also listed in
 `dependent-jobs`, both ordinary completion envelopes remain required. `needs` ensures their
 post actions finish before aggregate prepare performs artifact discovery.
+
+The aggregator does not need `actions/setup-java`: Mammoth itself does not run Java, and the
+aggregator runs no build. Add a JDK only when the aggregator job also runs Gradle or Maven.
 
 ### Optional metadata writer that can be skipped
 
@@ -223,10 +222,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
-        with:
-          distribution: temurin
-          java-version: '21'
       - uses: buildish-tooling/buildish-mammoth-cache/actions/github/gradle@<commit-sha>
         with:
           job-mode: distributed-aggregator
@@ -306,10 +301,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
-        with:
-          distribution: temurin
-          java-version: '21'
       - uses: buildish-tooling/buildish-mammoth-cache/actions/github/maven@<commit-sha>
         with:
           job-mode: distributed-aggregator
